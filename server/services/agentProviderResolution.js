@@ -329,7 +329,7 @@ async function resolveOrdinaryProviderAndModel(task) {
     };
   }
 
-  // Select optimal model for this task (async to allow learning-based suggestions).
+  // Resolve the task's model: its explicit pin or tier, else the provider default.
   // Routed through the ARCHITECT role so an orchestrated task's planning model
   // wins here; with no profile this is `selectModelForTask` unchanged.
   const modelSelection = await selectModelForRole(task, PRIMARY_ORCHESTRATION_ROLE, provider);

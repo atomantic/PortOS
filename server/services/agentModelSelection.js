@@ -1,62 +1,28 @@
 /**
  * Agent Model Selection
  *
- * Handles task type key extraction and optimal model selection based on
- * task complexity, thinking levels, and historical performance data.
+ * Resolves the model a task runs on from what the user EXPLICITLY asked for —
+ * a model id or a capability tier on the task (or on an orchestration role) —
+ * and otherwise the provider's own default. Nothing here picks a tier on the
+ * user's behalf (#8149): the description-regex heuristics, the priority-driven
+ * thinking-level mapping, and the learning store's tier substitution all used
+ * to, which let a task configured for "default model" silently run on a
+ * lighter model (#8148). The learning store's per-tier success rates are still
+ * recorded and shown in the CoS Learning view as advice; they never apply here.
  */
 
 import { MODEL_TIERS, resolveProviderModelTier } from '../lib/aiToolkit/constants.js';
-import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
-import { suggestModelTier } from './taskLearning.js';
-// Imported from the store submodule (not the mocked barrel) so the spawn-time key
-// mirrors the exact same classification the completion records under.
-import { classifyUntypedTask } from './taskLearning/store.js';
-import { taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { ORCHESTRATION_ROLES, roleAssignment } from '../lib/orchestrationProfile.js';
 
-/**
- * Extract task type key for learning lookup.
- *
- * Mirrors the domain `extractTaskType`/`classifyUntypedTask` record in the
- * learning store so the spawn-time routing lookup keys off the SAME bucket the
- * completion will later be recorded under (issue #2333). The fallback delegates
- * to `classifyUntypedTask` — inferring a concrete domain (or the sandboxed
- * `external/untyped` bucket) instead of the old blind `'unknown'`, which would
- * miss the recorded domain and defeat the learning lookup on every untyped task.
- */
-export function extractTaskTypeKey(task) {
-  if (task?.metadata?.analysisType) {
-    return `self-improve:${task.metadata.analysisType}`;
-  }
-  if (task?.metadata?.reviewType === 'idle') {
-    return 'idle-review';
-  }
-  const desc = (task?.description || '').toLowerCase();
-  if (desc.includes('[self-improvement]')) {
-    const typeMatch = desc.match(/\[self-improvement\]\s*(\w+)/i);
-    if (typeMatch) return `self-improve:${typeMatch[1]}`;
-  }
-  if (task?.taskType === 'user') return 'user-task';
-  return classifyUntypedTask(task);
-}
+const isModelTier = (value) => Object.values(MODEL_TIERS).includes(value);
 
-/**
- * Select optimal model for a task based on complexity analysis and historical performance.
- * User can override by specifying Model: and/or Provider: in task metadata.
- *
- * Enhanced with:
- * - Thinking levels hierarchy (task → agent → provider)
- * - Learning-based model suggestions from historical success rates
- * - Automatic upgrades when task type has <60% success rate
- */
 /**
  * Select the model for ONE ROLE of an orchestrated run (#5992).
  *
  * An orchestration profile pins architect / implementer / reviewer separately so
  * the planning pass can run on a strong model while the mechanical editing runs
- * on a cheap one. A role that pins a model wins outright — it is a user choice,
- * exactly like `metadata.model`, and the complexity heuristics and learning
- * store below have no role dimension to reason about it with.
+ * on a cheap one. A role that pins a model (id or tier) wins outright — it is a
+ * user choice, exactly like `metadata.model`.
  *
  * Everything else falls through to `selectModelForTask`, so a `direct` task, an
  * unpinned role, or an unknown role all resolve exactly as they did before this
@@ -65,13 +31,12 @@ export function extractTaskTypeKey(task) {
  * @param {object} task
  * @param {string} role - one of ORCHESTRATION_ROLES
  * @param {object} provider - resolved provider config
- * @param {object} [agent]
  * @returns {Promise<object>} the same selection shape `selectModelForTask` returns
  */
-export async function selectModelForRole(task, role, provider, agent = {}) {
+export async function selectModelForRole(task, role, provider) {
   const assignment = ORCHESTRATION_ROLES.includes(role) ? roleAssignment(task, role) : null;
   if (assignment?.model) {
-    const isTier = Object.values(MODEL_TIERS).includes(assignment.model);
+    const isTier = isModelTier(assignment.model);
     console.log(`🎼 Orchestrated ${role} model: ${assignment.model}`);
     return {
       model: isTier ? resolveProviderModelTier(provider, assignment.model) : assignment.model,
@@ -82,162 +47,26 @@ export async function selectModelForRole(task, role, provider, agent = {}) {
       ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}),
     };
   }
-  const selection = await selectModelForTask(task, provider, agent);
+  const selection = await selectModelForTask(task, provider);
   return assignment ? { ...selection, orchestrationRole: role, ...(assignment.effort ? { orchestrationEffort: assignment.effort } : {}) } : selection;
 }
 
-export async function selectModelForTask(task, provider, agent = {}) {
-  const desc = (task.description || '').toLowerCase();
-  // Prompt payload + human note (#4153) — complexity scales with everything the
-  // agent is handed, and a legacy `metadata.context`-as-prompt still counts.
-  const context = taskContextBlock(task) || '';
-  const contextLen = context.length;
-  const priority = task.priority || 'MEDIUM';
-
-  // Check for user-specified model preference (highest priority)
+/**
+ * Select the model for a task: an explicit `metadata.model` (a tier resolves on
+ * THIS provider, so a fallback provider re-resolves it), else the provider's
+ * `defaultModel`. Async so callers keep one await shape with the role variant.
+ */
+export async function selectModelForTask(task, provider) {
   const userModel = task.metadata?.model;
-  const userProvider = task.metadata?.provider;
-
   if (userModel) {
-    const isTier = Object.values(MODEL_TIERS).includes(userModel);
+    const isTier = isModelTier(userModel);
     console.log(`👤 User specified model: ${userModel}`);
     return {
       model: isTier ? resolveProviderModelTier(provider, userModel) : userModel,
       tier: isTier ? userModel : 'user-specified',
       reason: 'user-preference',
-      userProvider: userProvider || null
+      userProvider: task.metadata?.provider || null
     };
   }
-
-  // Check thinking level hierarchy (task → agent → provider)
-  const thinkingResult = resolveThinkingLevel(task, agent, provider);
-  if (thinkingResult.resolvedFrom !== 'default') {
-    const modelFromLevel = getModelForLevel(thinkingResult.level, provider);
-    if (modelFromLevel) {
-      const isLocal = isLocalPreferred(thinkingResult.level);
-      console.log(`🧠 Thinking level: ${thinkingResult.level} → ${modelFromLevel} (from ${thinkingResult.resolvedFrom}${isLocal ? ', local-preferred' : ''})`);
-      return {
-        model: modelFromLevel,
-        tier: thinkingResult.level,
-        reason: `thinking-level-${thinkingResult.resolvedFrom}`,
-        thinkingLevel: thinkingResult.level,
-        localPreferred: isLocal
-      };
-    }
-  }
-
-  // Image/visual analysis → would route to gemini if available
-  if (/image|screenshot|visual|photo|picture/.test(desc)) {
-    return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'visual-analysis' };
-  }
-
-  // Critical priority → always use opus/heavy
-  if (priority === 'CRITICAL') {
-    return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'critical-priority' };
-  }
-
-  // Complex reasoning tasks → opus/heavy
-  if (/architect|refactor|design|complex|optimize|security|audit|review.*code|performance/.test(desc)) {
-    return { model: provider.heavyModel || provider.defaultModel, tier: 'heavy', reason: 'complex-task' };
-  }
-
-  // Long context → needs more capable model
-  if (contextLen > 500) {
-    return { model: provider.heavyModel || provider.mediumModel || provider.defaultModel, tier: 'heavy', reason: 'long-context' };
-  }
-
-  // Detect coding/development tasks - these should NEVER use light model.
-  // Intentionally inclusive: if a task mentions any coding-related term (even in
-  // broader context like "bug report template"), we err on the side of using
-  // a stronger model since misclassifying a coding task is more costly than
-  // over-allocating resources for a documentation task.
-  const isCodingTask = /\b(fix|bug|implement|develop|code|refactor|test|feature|function|class|module|api|endpoint|component|service|route|schema|migration|script|build|deploy|debug|error|exception|crash|issue|patch)\b/.test(desc);
-
-  // Simple/quick tasks → haiku/light (ONLY for non-coding tasks)
-  // Light model is reserved for documentation, text updates, and formatting only
-  if (!isCodingTask && /fix typo|update text|update docs|edit readme|update readme|write docs|documentation only|format text/.test(desc)) {
-    return { model: provider.lightModel || provider.defaultModel, tier: 'light', reason: 'documentation-task' };
-  }
-
-  // Check historical performance for this task type and select optimal model tier
-  const taskTypeKey = extractTaskTypeKey(task);
-  const learningSuggestion = await suggestModelTier(taskTypeKey).catch(() => null);
-
-  if (learningSuggestion) {
-    const { suggested, avoidTiers = [], reason: learningReason, failureSignal } = learningSuggestion;
-    // Provider/model attribution from the enriched failure signatures (#2329):
-    // names WHICH provider/model recently failed for this task type so the
-    // routing decision is legible, not just "avoid tier X".
-    const failureNote = failureSignal
-      ? ` [recent failures: ${failureSignal.failures}× ${failureSignal.tier}${failureSignal.provider ? ` via ${failureSignal.provider}${failureSignal.model ? `/${failureSignal.model}` : ''}` : ''}]`
-      : '';
-
-    // Map tier names to provider model keys
-    const tierToModel = {
-      heavy: provider.heavyModel,
-      medium: provider.mediumModel || provider.defaultModel,
-      default: provider.defaultModel,
-      light: provider.lightModel
-    };
-
-    // The learning store also records thinking-level tier names (minimal/low/
-    // high/xhigh) that aren't in tierToModel — resolve those through
-    // getModelForLevel so a proven thinking-level suggestion is honored
-    // instead of silently falling through to the provider default.
-    //
-    // EXCEPT the local-preferred levels (minimal/low): getModelForLevel maps
-    // them to the cross-provider 'lmstudio' sentinel, but this path keeps the
-    // active provider as-is (the localPreferred flag isn't wired to switch
-    // providers). Handing resolveAgentProviderAndModel a sentinel a cloud
-    // provider can't run makes it fall back to the default model while still
-    // recording the local tier — polluting routing accuracy. So treat the
-    // sentinel as unresolvable here: such a suggestion falls through to the
-    // provider default with an accurate tier, exactly as before this change.
-    const LOCAL_SENTINEL_MODELS = new Set(['lmstudio']);
-    const resolveTierModel = (tier) => {
-      const model = tierToModel[tier] ?? getModelForLevel(tier, provider);
-      return model && !LOCAL_SENTINEL_MODELS.has(model) ? model : null;
-    };
-
-    // If we have a specific tier suggestion, use it
-    const suggestedModel = suggested ? resolveTierModel(suggested) : null;
-    if (suggestedModel) {
-      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})${failureNote}`);
-      return {
-        model: suggestedModel,
-        tier: suggested,
-        reason: 'learning-suggested',
-        // Stated here, at the moment this module substitutes a tier the task
-        // never asked for, rather than left for a downstream caller to infer
-        // by matching this `reason` string — a fragile proxy a future third
-        // learning-tier reason could silently bypass (#8148).
-        isLearningTierOverride: true,
-        learningReason,
-        avoidedTiers: avoidTiers.length > 0 ? avoidTiers : undefined
-      };
-    }
-
-    // If no specific suggestion but we have tiers to avoid, pick the best available tier
-    if (avoidTiers.length > 0) {
-      // Try tiers in order of preference: heavy → medium → default → light
-      // Skip any that are in avoidTiers
-      const tierPreference = ['heavy', 'medium', 'default', 'light'];
-      for (const tier of tierPreference) {
-        if (!avoidTiers.includes(tier) && tierToModel[tier]) {
-          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})${failureNote}`);
-          return {
-            model: tierToModel[tier],
-            tier,
-            reason: 'learning-avoid-bad-tier',
-            isLearningTierOverride: true,
-            learningReason,
-            avoidedTiers: avoidTiers
-          };
-        }
-      }
-    }
-  }
-
-  // Standard tasks → use provider's default model
-  return { model: provider.defaultModel, tier: 'default', reason: 'standard-task' };
+  return { model: provider.defaultModel, tier: 'default', reason: 'provider-default' };
 }

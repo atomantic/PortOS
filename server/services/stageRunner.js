@@ -38,22 +38,8 @@ import { clampToRuntimeContextWindow } from '../lib/aiToolkit/internal/ollamaBac
 // ambient `OLLAMA_CONTEXT_LENGTH` PortOS launches the daemon with (#7472).
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { createRun, patchRunMetadata } from './runner.js';
+import { canonicalStageModelTier, isStageModelTier } from '../lib/stageModelTiers.js';
 import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
-
-// Stage configs name a model by tier (PromptManager UI). Map each tier name
-// to the provider's per-tier model field; an unset tier falls through to
-// `defaultModel`.
-const TIER_TO_MODEL_KEY = Object.freeze({
-  default: 'defaultModel',
-  quick: 'lightModel',
-  coding: 'mediumModel',
-  heavy: 'heavyModel',
-  ultra: 'ultraModel',
-  light: 'lightModel',
-  medium: 'mediumModel',
-});
-
-const isTierName = (m) => typeof m === 'string' && m in TIER_TO_MODEL_KEY;
 
 // Every stage-config field that names a ROUTE. `withStagePinsIgnored`
 // (lib/stagePinPolicy.js) strips exactly these so a run told to use ONE
@@ -67,7 +53,7 @@ const ROUTING_PIN_FIELDS = Object.freeze(['provider', 'effort', 'judgeProvider',
 // run asked to ignore pins, in which case the routing fields above are dropped.
 //
 // Two fields deliberately SURVIVE:
-//   - a `model` TIER (default/quick/coding/heavy) — a per-provider mapping, not
+//   - a `model` TIER (default/light/medium/heavy/ultra) — a per-provider mapping, not
 //     a pin. It already loses to `modelDefault`, and it is the right fallback
 //     for a run that forced a provider without naming a model. Only an explicit
 //     model id is dropped.
@@ -80,7 +66,7 @@ export function effectiveStage(stage) {
   if (!stage || !stagePinsIgnored()) return stage;
   const stripped = { ...stage };
   for (const field of ROUTING_PIN_FIELDS) delete stripped[field];
-  if (stripped.model && !isTierName(stripped.model)) delete stripped.model;
+  if (stripped.model && !isStageModelTier(stripped.model)) delete stripped.model;
   return stripped;
 }
 
@@ -126,8 +112,8 @@ function normalizeTimeout(raw) {
 
 export function resolveModel(provider, modelHint) {
   if (!modelHint) return providerFallbackModel(provider);
-  if (isTierName(modelHint)) {
-    return resolveProviderModelTier(provider, modelHint) || provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
+  if (isStageModelTier(modelHint)) {
+    return resolveProviderModelTier(provider, canonicalStageModelTier(modelHint)) || providerFallbackModel(provider);
   }
   return modelHint;
 }
@@ -138,8 +124,8 @@ export function resolveModel(provider, modelHint) {
 // `stage.provider` is opt-in — almost no stage sets one — so a run-level
 // `providerDefault` applies to the common (unpinned) case and only loses to the
 // rare deliberate `stage.provider` pin. But nearly every stage in the shipped
-// `stage-config.json` carries a `stage.model` *tier* value (`default`/`quick`/
-// `coding`/`heavy`) — that tier is the model-dimension equivalent of "no
+// `stage-config.json` carries a `stage.model` *tier* value (`default`/`light`/
+// `medium`/`heavy`/`ultra`) — that tier is the model-dimension equivalent of "no
 // provider pinned", a default mapping, NOT a deliberate per-stage model choice.
 // So a run-level `modelDefault` must OVERRIDE a stage's tier (otherwise
 // launching Series Autopilot with a model would be a no-op on ~every stage),
@@ -150,15 +136,15 @@ export function resolveModel(provider, modelHint) {
 //   1. modelOverride        — hard per-call model id (manual "regenerate with model X")
 //   2. explicit stage.model — a deliberate pin (non-tier model id) beats the run default
 //   3. modelDefault         — the run-level soft default (Series Autopilot's run model)
-//   4. stage.model tier     — the stage's default tier mapping (default/quick/coding/heavy)
+//   4. stage.model tier     — the stage's default tier mapping (default/light/medium/heavy/ultra)
 //   5. provider default     — resolveModel's own fallback
 //
 // Takes an `effectiveStage`-masked stage, so step 2 is already gone for a run
 // that forced one model across every stage.
 function resolveModelHint(stage, options = {}) {
   const stageModel = stage?.model;
-  const stagePin = stageModel && !isTierName(stageModel) ? stageModel : null;
-  const stageTier = isTierName(stageModel) ? stageModel : null;
+  const stagePin = stageModel && !isStageModelTier(stageModel) ? stageModel : null;
+  const stageTier = isStageModelTier(stageModel) ? stageModel : null;
   return options.modelOverride || stagePin || options.modelDefault || stageTier || null;
 }
 
@@ -498,7 +484,7 @@ export function extractJson(text, { promptToStrip } = {}) {
  *     provider if unavailable (see resolveProviderForStage)
  *   - modelOverride: explicit model id (hard), beats everything
  *   - modelDefault: blanket run-level model id (Series Autopilot's run model,
- *     #1558). Soft: it OVERRIDES a stage's tier value (default/quick/coding/heavy)
+ *     #1558). Soft: it OVERRIDES a stage's tier value (default/light/medium/heavy/ultra)
  *     but LOSES to a deliberate explicit-model pin (a non-tier model id) and to a
  *     hard modelOverride. See resolveModelHint for the full precedence — the model
  *     dimension is deliberately NOT symmetric with providerDefault because nearly

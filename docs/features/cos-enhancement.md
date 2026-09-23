@@ -2,7 +2,7 @@
 
 > **Status:** This M35 milestone spec shipped, except the Phase 5 agent-architecture services (`agentGateway.js`, `errorRecovery.js`, `agentRunCache.js`, `contextUpgrader.js`) and `sessionDelta.js`, which were never built under those names. Their rows below are marked "(not built)" and kept for historical legibility.
 
-Comprehensive upgrade from reactive task executor to proactive autonomous agent with hybrid memory, missions, local model integration, and dynamic thinking levels.
+Comprehensive upgrade from reactive task executor to proactive autonomous agent with hybrid memory, missions, and local model integration.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 | `server/services/missions.js` | Long-term goal and mission management (removed, #6826 — nothing in production ever created a mission; superseded by the Goals system) |
 | `server/services/lmStudioManager.js` | LM Studio model discovery and health |
 | `server/services/localThinking.js` | Local model completions |
-| `server/services/thinkingLevels.js` | Dynamic model selection |
+| `server/services/thinkingLevels.js` | Dynamic model selection (removed, #8149 — tier/model choice is explicit; see [MODEL_TIERS.md](../MODEL_TIERS.md)) |
 | `server/services/contextUpgrader.js` | Complexity analysis for model upgrade (not built) |
 
 ## Features
@@ -48,12 +48,11 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 - Memory classification using local models
 - Embeddings via local LM Studio
 
-### Phase 4: Dynamic Model Selection
+### Phase 4: Dynamic Model Selection (removed)
 
-- Thinking levels: off, minimal, low, medium, high, xhigh
-- Level resolution hierarchy: task → hooks → agent → provider
-- Context upgrader with complexity analysis
-- COS self-evolution with automatic model changes
+Priority/description-driven thinking levels and automatic tier changes were
+removed in #8149: a task runs on the model or tier it names, else the provider
+default. See [MODEL_TIERS.md](../MODEL_TIERS.md).
 
 ### Phase 5: Agent Architecture
 
@@ -69,17 +68,6 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 | critical | 1 | Emergency fixes, blocking issues |
 | standard | 2 | Normal development tasks |
 | background | 3 | Self-improvement, documentation |
-
-## Thinking Levels
-
-| Level | Description | Model Tier |
-|-------|-------------|------------|
-| off | No extended thinking | light |
-| minimal | Brief analysis | light |
-| low | Standard analysis | medium |
-| medium | Thorough analysis | medium |
-| high | Deep analysis | heavy |
-| xhigh | Maximum analysis | heavy |
 
 ## Error Recovery Strategies
 
@@ -188,7 +176,6 @@ opening line. Off by default.
 |-----------|--------|
 | `server/lib/bm25.test.js` | BM25 Algorithm |
 | `server/services/toolStateMachine.test.js` | Tool State Machine |
-| `server/services/thinkingLevels.test.js` | Thinking Levels |
 | `server/services/executionLanes.test.js` | Execution Lanes |
 | `server/services/errorRecovery.test.js` | Error Recovery (not built) |
 | `server/services/agentRunCache.test.js` | Agent Run Cache (not built) |
