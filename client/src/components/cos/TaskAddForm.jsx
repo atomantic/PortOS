@@ -861,6 +861,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-base min-h-[44px]"
           aria-required="true"
         />
+        {renderTargetApplicationPicker()}
         <p className="text-xs text-gray-400 break-words" aria-label="Task execution summary">
           {selectedApp?.name || 'PortOS'} · {orchestrationMode === 'orchestrated'
             ? `Orchestrated: ${ORCHESTRATION_ROLES_META.map(({ key, label }) => {
@@ -1145,6 +1146,19 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     );
   }
 
+  function renderTargetApplicationPicker() {
+    return (
+      <AppContextPicker
+        apps={apps}
+        value={newTask.app}
+        onChange={handleAppChange}
+        label="Target application"
+        placeholder="PortOS (default)"
+        showRepoPath
+      />
+    );
+  }
+
   function renderFullFormFields(section = 'all') {
     return (
       <>
@@ -1335,16 +1349,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           </div>
         )}
 
-        {!compact && (
-          <AppContextPicker
-            apps={apps}
-            value={newTask.app}
-            onChange={handleAppChange}
-            label="Target application"
-            placeholder="PortOS (default)"
-            showRepoPath
-          />
-        )}
+        {!compact && !queueFirst && renderTargetApplicationPicker()}
         {isFederated && (
           <InstancePicker
             id="task-target-instance"
