@@ -3,18 +3,22 @@
 //
 // Each managed app carries a `workTracker` field (default `'auto'`). `'auto'`
 // resolves to a concrete tracker from the app's git `origin` host: a github.com
-// remote → GitHub issues, a gitlab.* remote → GitLab issues, anything else (or
-// no remote) → PLAN.md. JIRA is never auto-selected — it requires explicit
+// remote → GitHub issues, a gitlab.* remote → GitLab issues, and a custom host
+// known to the matching forge CLI → that forge's issues. Unknown hosts (or no
+// remote) fall back to PLAN.md. JIRA is never auto-selected — it requires
 // per-app JIRA config (`app.jira`) — so a user picks it deliberately.
 //
 // The pure mappers (hostToWorkTracker / forgeCliForTracker / trackerToClaimTaskType
 // / resolveWorkTracker / hostFromOriginUrl) are side-effect-free and unit-tested.
 // resolveAppWorkTracker is the async wrapper that reads the app's origin URL via
-// readOriginRemoteUrl and extracts the host with hostFromOriginUrl — it shells
-// out to git, mirroring gitRemote.js (which also lives in lib/ despite running
-// `git`). See server/services/cosTaskGenerator.js for the claim-work router
-// that consumes trackerToClaimTaskType.
+// readOriginRemoteUrl, extracts the host with hostFromOriginUrl, and checks CLI host
+// maps only when the host-pattern fast path cannot identify a forge. See
+// server/services/cosTaskGenerator.js for the claim-work router that consumes
+// trackerToClaimTaskType.
 
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import {
   DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
@@ -474,6 +478,91 @@ export function resolveWorkTracker({ configured, host } = {}) {
 }
 
 /**
+ * Read a CLI YAML config without exposing its contents or failing resolution
+ * when the file is missing, malformed, or unreadable.
+ * @param {string} configPath
+ * @returns {Promise<{found:boolean, config:object|null}>}
+ */
+async function readForgeCliConfig(configPath) {
+  let contents;
+  try {
+    contents = await readFile(configPath, 'utf8');
+  } catch (error) {
+    return { found: error?.code !== 'ENOENT', config: null };
+  }
+
+  try {
+    const yaml = await import('js-yaml');
+    const parseYaml = yaml.load || yaml.default?.load;
+    const parsed = parseYaml(contents);
+    return {
+      found: true,
+      config: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null,
+    };
+  } catch {
+    return { found: true, config: null };
+  }
+}
+
+function configHasHost(config, host, hostMapKey = null) {
+  const hosts = hostMapKey ? config?.[hostMapKey] : config?.hosts || config;
+  if (!hosts || typeof hosts !== 'object' || Array.isArray(hosts)) return false;
+  const normalizedHost = host.toLowerCase();
+  return Object.entries(hosts).some(([configuredHost, settings]) => (
+    configuredHost.toLowerCase() === normalizedHost
+      && settings
+      && typeof settings === 'object'
+      && !Array.isArray(settings)
+  ));
+}
+
+function glabConfigPaths() {
+  if (process.env.GLAB_CONFIG_DIR) {
+    return [path.join(process.env.GLAB_CONFIG_DIR, 'config.yml')];
+  }
+
+  const home = homedir();
+  const directories = [path.join(home, '.config', 'glab-cli')];
+  if (process.env.XDG_CONFIG_HOME) {
+    directories.push(path.join(process.env.XDG_CONFIG_HOME, 'glab-cli'));
+  } else if (process.platform === 'darwin') {
+    directories.push(path.join(home, 'Library', 'Application Support', 'glab-cli'));
+  } else if (process.platform === 'win32') {
+    directories.push(path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'glab-cli'));
+  }
+  const systemConfigDirs = process.env.XDG_CONFIG_DIRS || '/etc/xdg';
+  directories.push(...systemConfigDirs.split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, 'glab-cli')));
+  return [...new Set(directories.map((dir) => path.join(dir, 'config.yml')))];
+}
+
+/**
+ * Detect a custom forge host from the CLI host maps without launching a CLI.
+ * The config values can contain credentials; only host keys are inspected.
+ * @param {string|null} host
+ * @returns {Promise<'github'|'gitlab'|null>}
+ */
+async function hostKnownToForgeCli(host) {
+  if (!host) return null;
+  let defaultGhConfigDir = path.join(homedir(), '.config', 'gh');
+  if (process.env.XDG_CONFIG_HOME) {
+    defaultGhConfigDir = path.join(process.env.XDG_CONFIG_HOME, 'gh');
+  } else if (process.platform === 'win32' && process.env.APPDATA) {
+    defaultGhConfigDir = path.join(process.env.APPDATA, 'GitHub CLI');
+  }
+  const ghConfigDir = process.env.GH_CONFIG_DIR
+    || defaultGhConfigDir;
+  const ghConfig = await readForgeCliConfig(path.join(ghConfigDir, 'hosts.yml'));
+  if (configHasHost(ghConfig.config, host)) return 'github';
+
+  for (const configPath of glabConfigPaths()) {
+    const glabConfig = await readForgeCliConfig(configPath);
+    if (!glabConfig.found) continue;
+    return configHasHost(glabConfig.config, host, 'hosts') ? 'gitlab' : null;
+  }
+  return null;
+}
+
+/**
  * Extract just the host from a git origin URL — only the host is needed to
  * classify the forge, so this handles EVERY remote form in one pass rather than
  * chaining structure-validating owner/repo parsers (which variously reject
@@ -511,8 +600,10 @@ export function hostFromOriginUrl(url) {
 /**
  * Resolve a managed app's effective work tracker, reading its git origin host
  * when needed. Returns `{ configured, resolved, host, forge, source }` where
- * `forge` is the CLI ('gh' | 'glab' | null) for the resolved tracker. Never
- * throws — a missing repo / origin degrades to host=null (→ PLAN.md fallback).
+ * `forge` is the CLI ('gh' | 'glab' | null) for the resolved tracker.
+ * `source` is `cli-config` when an existing CLI host entry identifies a custom host.
+ * Never throws — missing repo/origin data, config errors, and unknown hosts
+ * degrade to PLAN.md.
  */
 export async function resolveAppWorkTracker(app) {
   const configured = app?.workTracker;
@@ -522,6 +613,18 @@ export async function resolveAppWorkTracker(app) {
     host = hostFromOriginUrl(url);
   }
   const base = resolveWorkTracker({ configured, host });
+  if (base.source === 'fallback' && host) {
+    const fromForgeCli = await hostKnownToForgeCli(host);
+    if (fromForgeCli) {
+      return {
+        ...base,
+        resolved: fromForgeCli,
+        source: 'cli-config',
+        host,
+        forge: forgeCliForTracker(fromForgeCli),
+      };
+    }
+  }
   return { ...base, host, forge: forgeCliForTracker(base.resolved) };
 }
 
@@ -563,15 +666,15 @@ function gitlabProjectPath(originUrl) {
  *   `repoSpec` is therefore null for GitLab — the caller must run `glab` in
  *   `repoPath`.
  *
- * `preferredForge` ('github' | 'gitlab' | null) is the app's EXPLICITLY
- * configured work tracker (never 'auto' — that already flows through the same
- * `hostToWorkTracker` classification above, so it would already have matched
- * here if it could). It's a fallback, tried only once both host-pattern checks
- * above have failed: a self-hosted GitHub Enterprise Server or GitLab instance
- * can run on ANY domain the operator picked (`git.mycompany.com`,
+ * `preferredForge` ('github' | 'gitlab' | null) is the concrete tracker result
+ * supplied by `resolveAppForgeTarget`: it comes from an explicit app setting or
+ * from a CLI host config entry for an otherwise-unmatched host, never directly from 'auto'.
+ * It's a fallback, tried only once both host-pattern checks above have failed:
+ * a self-hosted GitHub Enterprise Server or GitLab instance can run on ANY
+ * domain the operator picked (`git.mycompany.com`,
  * `scm.mycompany.com`, …) — there is no hostname heuristic that can tell such a
- * host apart from a non-forge remote, so the user's own pin is the only signal
- * left. A genuinely wrong pin (e.g. a bitbucket.org origin pinned to 'github')
+ * host apart from a non-forge remote, so the app setting or CLI host config is
+ * the only signal left. A genuinely wrong preference (e.g. a bitbucket.org origin pinned to 'github')
  * still degrades gracefully: the resulting `gh`/`glab` call fails and the
  * caller reports a transient "couldn't reach" error rather than PortOS lying
  * upfront that the origin "isn't GitHub or GitLab".
@@ -650,8 +753,9 @@ export function repoIssueUrlBase(target) {
 /**
  * Composed `resolveAppWorkTracker` + `resolveRepoForgeTarget` for callers that
  * hold the managed-app record (not just a bare `repoPath`): resolve the app's
- * work tracker, then resolve its forge target with that tracker supplied as the
- * `preferredForge` pin.
+ * work tracker, then resolve its forge target with that concrete tracker supplied
+ * as the `preferredForge`. The tracker may come from a hostname match or from
+ * an existing CLI config entry for a custom host.
  *
  * This composition exists so a feature can't accidentally drop the pin. Threading
  * it by hand is what left the issue-reconcile scan blind to a self-hosted forge
