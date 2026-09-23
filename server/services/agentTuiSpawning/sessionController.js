@@ -57,6 +57,7 @@ import {
   createStallNudgeGate,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
+  STALL_NUDGE_MAX_TOTAL,
   createMcpBootTracker,
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
@@ -1602,12 +1603,13 @@ export function createTuiSessionController({
       // this is the only moment the answer is acted on.
       if (sentinelPresent()) return;
       if (stalled === 'exhausted') {
-        // Every nudge was ignored, so the session is wedged below its composer
-        // rather than merely stopped. There is no ceiling left to reap it, so say
+        // Every nudge in the streak was ignored (wedged below its composer), or the
+        // run spent its lifetime budget answering nudges without ever finishing
+        // (a model looping on "continue"). Either way more nudges won't help. There is no ceiling left to reap it, so say
         // so loudly and badge the card — an agent nobody can see is stuck is the
         // condition this gate exists to end, and only a human can end this one.
-        appendLine(`🛑 Session still idle after ${STALL_NUDGE_MAX_ATTEMPTS} nudges — it is not responding; open the Shell tab to take it over`);
-        emitLog('warn', `🛑 TUI agent ${agentId} is wedged — ${STALL_NUDGE_MAX_ATTEMPTS} stall nudges went unanswered`, { agentId });
+        appendLine(`🛑 Session still idle after ${stallNudgeGate.nudgesSent} nudges — it is not finishing; open the Shell tab to take it over`);
+        emitLog('warn', `🛑 TUI agent ${agentId} is wedged — still idle after ${stallNudgeGate.nudgesSent} stall nudges`, { agentId });
         persistence.updateAgent(agentId, { metadata: { phase: 'stalled' } }).catch((err) =>
           emitLog('error', `TUI agent ${agentId} stalled-phase update failed: ${err?.message || err}`, { agentId }));
         // Re-arm the onData handler's one-shot "phase: working" write, so a
@@ -1617,7 +1619,7 @@ export function createTuiSessionController({
         return;
       }
       if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'stalled-session nudge' })) {
-        appendLine(`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${stalled}/${STALL_NUDGE_MAX_ATTEMPTS})`);
+        appendLine(`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${stalled}/${STALL_NUDGE_MAX_ATTEMPTS}, ${stallNudgeGate.nudgesSent}/${STALL_NUDGE_MAX_TOTAL} this run)`);
       }
     }, PROVIDER_SIGNAL_POLL_MS);
 

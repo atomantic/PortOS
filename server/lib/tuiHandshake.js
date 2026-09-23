@@ -1569,6 +1569,13 @@ export const STALL_NUDGE_RECOVERY_MS = 30000;
 // three of them is wedged below the composer (a dead child, a TUI that stopped
 // reading its PTY), and pasting into it forever only fills raw.txt.
 export const STALL_NUDGE_MAX_ATTEMPTS = 3;
+// Lifetime ceiling across every streak of one session. The recovery reset above
+// trusts "it printed for 30s" as proof the nudge worked, but a model that has
+// lost the thread answers every nudge with a paragraph ("the story is finished")
+// and then stops again — each reply clears the streak, so the per-streak budget
+// never runs out and the run loops for hours on a local GPU. A run that has
+// needed this many nudges is not going to finish on the next one.
+export const STALL_NUDGE_MAX_TOTAL = 6;
 // What gets pasted. It leads with the literal word a human used, for the literal
 // reason it worked — the TUI still holds the whole conversation and the model
 // only needs a turn — and then closes the two doors that produce this state in
@@ -1591,20 +1598,26 @@ export const STALL_NUDGE_TEXT = 'continue — this session went quiet with its t
  *     it, and the sibling gates all announce their verdict.
  *   - 0 — nothing to do
  *
+ * Recovery refills the per-streak budget but never the lifetime one
+ * (`maxTotal`), so a session that answers every nudge and then stops again is
+ * still reported as wedged instead of being nudged forever.
+ *
  * The post-nudge wait is measured from the NUDGE, not from output, and that is
  * the load-bearing detail: a session wedged below its composer never echoes the
  * paste, so a purely output-based gate would re-fire on the very next poll tick
  * and paste continuously until the budget ran out seconds later.
  *
- * @param {{ idleMs?: number, recoveryMs?: number, maxAttempts?: number }} [options]
- * @returns {{ takeNudge: (nowMs: number, lastOutputAtMs: number) => number|'exhausted' }}
+ * @param {{ idleMs?: number, recoveryMs?: number, maxAttempts?: number, maxTotal?: number }} [options]
+ * @returns {{ takeNudge: (nowMs: number, lastOutputAtMs: number) => number|'exhausted', readonly nudgesSent: number }}
  */
 export function createStallNudgeGate({
   idleMs = STALL_NUDGE_IDLE_MS,
   recoveryMs = STALL_NUDGE_RECOVERY_MS,
   maxAttempts = STALL_NUDGE_MAX_ATTEMPTS,
+  maxTotal = STALL_NUDGE_MAX_TOTAL,
 } = {}) {
   let attempts = 0;
+  let total = 0;
   let nudgedAt = null;
   let reportedExhausted = false;
   return {
@@ -1619,14 +1632,16 @@ export function createStallNudgeGate({
       }
       if (nowMs - lastOutputAtMs < idleMs) return 0;
       if (nudgedAt !== null && nowMs - nudgedAt < idleMs) return 0;
-      if (attempts >= maxAttempts) {
+      if (attempts >= maxAttempts || total >= maxTotal) {
         if (reportedExhausted) return 0;
         reportedExhausted = true;
         return 'exhausted';
       }
       attempts += 1;
+      total += 1;
       nudgedAt = nowMs;
       return attempts;
     },
+    get nudgesSent() { return total; },
   };
 }

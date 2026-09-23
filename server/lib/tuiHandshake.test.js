@@ -15,6 +15,7 @@ import {
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
   createStallNudgeGate,
+  STALL_NUDGE_MAX_TOTAL,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_RECOVERY_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
@@ -2096,6 +2097,24 @@ describe('createStallNudgeGate', () => {
     // stall hours later is a fresh one, with the whole budget available again.
     const revivedAt = now + STALL_NUDGE_RECOVERY_MS + 1;
     expect(gate.takeNudge(revivedAt + STALL_NUDGE_IDLE_MS, revivedAt)).toBe(1);
+  });
+
+  it('stops nudging a session that answers every nudge and then stalls again', () => {
+    // A local model that has lost the thread replies to each nudge with a
+    // paragraph and goes quiet again. Every reply clears the streak, so only the
+    // lifetime ceiling ends the loop instead of nudging it for hours.
+    const gate = createStallNudgeGate();
+    let lastOutputAt = 0;
+    let now = STALL_NUDGE_IDLE_MS;
+    for (let i = 1; i <= STALL_NUDGE_MAX_TOTAL; i += 1) {
+      expect(gate.takeNudge(now, lastOutputAt)).toBe(1);
+      lastOutputAt = now + STALL_NUDGE_RECOVERY_MS + 1;
+      now = lastOutputAt + STALL_NUDGE_IDLE_MS;
+    }
+    expect(gate.nudgesSent).toBe(STALL_NUDGE_MAX_TOTAL);
+    expect(gate.takeNudge(now, lastOutputAt)).toBe('exhausted');
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS, lastOutputAt)).toBe(0);
+    expect(gate.nudgesSent).toBe(STALL_NUDGE_MAX_TOTAL);
   });
 });
 
