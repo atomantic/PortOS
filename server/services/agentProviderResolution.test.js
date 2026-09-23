@@ -73,10 +73,10 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.modelSelection.tier).toBe('medium');
   });
 
-  it('flags a learning-suggested model that differs from the provider default and warns loudly (#8148)', async () => {
+  it('flags a learning-tier override that differs from the provider default and warns loudly (#8148)', async () => {
     const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-sonnet-5'] };
     getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-sonnet-5', tier: 'medium', reason: 'learning-suggested', learningReason: '80% success on medium' });
+    selectModelForTask.mockResolvedValue({ model: 'claude-sonnet-5', tier: 'medium', reason: 'learning-suggested', isLearningTierOverride: true, learningReason: '80% success on medium' });
 
     const r = await resolveAgentProviderAndModel(TASK);
     expect(r.ok).toBe(true);
@@ -89,10 +89,24 @@ describe('resolveAgentProviderAndModel', () => {
     }));
   });
 
-  it('does not flag a learning suggestion that already matches the provider default', async () => {
+  it('does not flag a learning-tier override that already matches the provider default', async () => {
     const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5'] };
     getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-opus-5-5', tier: 'default', reason: 'learning-suggested' });
+    selectModelForTask.mockResolvedValue({ model: 'claude-opus-5-5', tier: 'default', reason: 'learning-suggested', isLearningTierOverride: true });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
+    expect(emitLog).toHaveBeenCalledWith('info', expect.any(String), expect.not.objectContaining({ downgradedFromDefault: true }));
+  });
+
+  it('never flags a differing model unless the selection itself marked it a learning-tier override', async () => {
+    // A model differing from the default for a reason OTHER than the learning
+    // system (e.g. a heuristic "complex-task" heavy-tier pick, or a provider
+    // swap) must never be mislabeled as a silent downgrade — this pins that
+    // the resolver trusts `isLearningTierOverride`, not just "model !== default".
+    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-heavy-5'] };
+    getActiveProvider.mockResolvedValue(provider);
+    selectModelForTask.mockResolvedValue({ model: 'claude-heavy-5', tier: 'heavy', reason: 'complex-task' });
 
     const r = await resolveAgentProviderAndModel(TASK);
     expect(r.modelSelection.downgradedFromDefault).toBeUndefined();

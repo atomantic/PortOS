@@ -207,6 +207,11 @@ export async function selectModelForTask(task, provider, agent = {}) {
         model: suggestedModel,
         tier: suggested,
         reason: 'learning-suggested',
+        // Stated here, at the moment this module substitutes a tier the task
+        // never asked for, rather than left for a downstream caller to infer
+        // by matching this `reason` string — a fragile proxy a future third
+        // learning-tier reason could silently bypass (#8148).
+        isLearningTierOverride: true,
         learningReason,
         avoidedTiers: avoidTiers.length > 0 ? avoidTiers : undefined
       };
@@ -224,6 +229,7 @@ export async function selectModelForTask(task, provider, agent = {}) {
             model: tierToModel[tier],
             tier,
             reason: 'learning-avoid-bad-tier',
+            isLearningTierOverride: true,
             learningReason,
             avoidedTiers: avoidTiers
           };

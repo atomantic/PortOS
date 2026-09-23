@@ -75,6 +75,18 @@ const PROVIDER_BADGE_CLASSES = {
   auth: 'bg-rose-500/15 text-rose-400',
 };
 
+function buildTierBadge(metadata) {
+  const downgraded = metadata.modelDowngradedFromDefault;
+  return {
+    key: downgraded ? 'tierDowngraded' : 'tier',
+    label: downgraded ? 'Tier (downgraded)' : 'Tier',
+    value: metadata.modelTier,
+    title: downgraded
+      ? `Ran on "${metadata.model}" — the learning system substituted this for the configured default "${metadata.modelConfiguredDefault}" (${metadata.modelReason})`
+      : metadata.modelReason ? `Model selection: ${metadata.modelReason}` : `Model tier ${metadata.modelTier}`,
+  };
+}
+
 function buildProviderConfigBadges(metadata = {}) {
   const providerId = metadata.providerId || null;
   const providerType = metadata.providerType || null;
@@ -139,14 +151,7 @@ function buildProviderConfigBadges(metadata = {}) {
       value: dispatch,
       title: `${dispatch}-owned child process`,
     },
-    metadata.modelTier && {
-      key: metadata.modelDowngradedFromDefault ? 'tierDowngraded' : 'tier',
-      label: metadata.modelDowngradedFromDefault ? 'Tier (downgraded)' : 'Tier',
-      value: metadata.modelTier,
-      title: metadata.modelDowngradedFromDefault
-        ? `Ran on "${metadata.model}" — the learning system substituted this for the configured default "${metadata.modelConfiguredDefault}" (${metadata.modelReason})`
-        : metadata.modelReason ? `Model selection: ${metadata.modelReason}` : `Model tier ${metadata.modelTier}`,
-    },
+    metadata.modelTier && buildTierBadge(metadata),
     metadata.leanMode && {
       key: 'prompt',
       label: 'Prompt',
