@@ -101,3 +101,13 @@ it('never substitutes a token rate for missing task cost and lets users exclude 
   expect(screen.queryByTestId('scatter-example:gpt-6-luna')).toBeNull();
   expect(screen.getByTestId('scatter-example:claude-opus-5-5')).toBeTruthy();
 });
+
+it('defaults fit visible to active and toggles back to full axes', async () => {
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  const fitBtn = screen.getByRole('button', { name: 'Reset axes' });
+  expect(fitBtn).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(fitBtn);
+  expect(screen.getByRole('button', { name: 'Fit visible' })).toHaveAttribute('aria-pressed', 'false');
+});
+

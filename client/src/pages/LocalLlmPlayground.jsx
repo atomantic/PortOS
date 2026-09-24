@@ -533,7 +533,7 @@ export default function LocalLlmPlayground() {
       {/* This page keeps its own `/local-llm/playground` path (it predates the
           Models section and lives in ⌘K history), so without the section's tab
           bar arriving here would strand the user outside it. */}
-      <ModelsTabsHeader activeTab="playground" desktop={false} />
+      <ModelsTabsHeader activeTab="playground" />
 
       <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4 space-y-4">
         <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
