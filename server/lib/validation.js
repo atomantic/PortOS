@@ -334,13 +334,14 @@ export const appSchema = z.object({
 // in this file.
 // Reference-repo entry. Each app can list upstream repos it watches for
 // clean-room reimplementation; the `reference-watch` scheduled task fetches
-// each one, finds commits since `lastReviewedSha`, and appends slug-tagged
-// `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
-// `plan-task` to pick up. `notes` is the free-text "what we use from this
-// repo" field — fed into the review prompt so the agent knows which features
-// in our app are load-bearing for the watch. `repoUrl` is either a clonable
-// URL (https://github.com/owner/repo or scp-style user@host:owner/repo.git)
-// or a local filesystem path; the service detects remote URLs by matching
+// each one, finds commits since `lastReviewedSha`, and files proposals in the
+// app's configured tracker (PLAN.md checklist IDs or forge issue numbers) for
+// `/claim` / `plan-task` / `claim-issue*` to pick up. `notes` is the free-text
+// "what we use from this repo" field, fed into the review prompt so the agent
+// knows which features in our app are load-bearing for the watch. `repoUrl` is
+// either a clonable URL (https://github.com/owner/repo or scp-style
+// user@host:owner/repo.git) or a local filesystem path; the service detects
+// remote URLs by matching
 // `scheme://` or scp-style `user@host:path` (see isLocalPath in
 // services/referenceRepos.js) and treats anything else as a local path.
 // The persisted record's server-owned fields (id, status, lastError,

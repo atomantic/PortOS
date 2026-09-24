@@ -204,8 +204,12 @@ describe('scheduled ux prompt assembly (#3273)', () => {
     const task = await generateUx(app);
     expect(task).not.toBeNull();
     expect(task.description).not.toContain('{trackerInstructions}');
-    // ux wording, not reference-watch's.
-    expect(task.description).toContain('[ux-…]');
+    // The old UX marker is compatibility-only; new forge titles use the shared
+    // human-readable issue-ID contract.
+    expect(task.description).toContain('legacy marker only');
+    expect(task.description).toContain('short, human-readable title');
+    expect(task.description).not.toContain('[<slug>]');
+    expect(task.description).not.toContain('--search');
     expect(task.description).toContain('gh label create ux');
     expect(task.description).not.toContain('ref-watch');
     // Ordering guard: {trackerInstructions} expands BEFORE {appName}/{repoPath}.
@@ -262,8 +266,12 @@ describe('scheduled plan-feature prompt assembly', () => {
     const task = await generatePlanFeature(app);
     expect(task).not.toBeNull();
     expect(task.description).not.toContain('{trackerInstructions}');
-    // plan-feature wording, not reference-watch's.
-    expect(task.description).toContain('[plan-feature-…]');
+    // The old plan-feature marker is compatibility-only; new forge titles use
+    // the shared human-readable issue-ID contract.
+    expect(task.description).toContain('legacy marker only');
+    expect(task.description).toContain('short, human-readable title');
+    expect(task.description).not.toContain('[<slug>]');
+    expect(task.description).not.toContain('--search');
     expect(task.description).toContain('gh label create plan-feature');
     expect(task.description).not.toContain('ref-watch');
     // Ordering guard: {trackerInstructions} expands BEFORE {appName}/{repoPath}.
@@ -309,7 +317,7 @@ describe('audit fileIssues toggle', () => {
     expect(task.metadata.useWorktree).toBe(false);
     expect(task.metadata.openPR).toBe(false);
     expect(task.description).toContain('Mode: file issues, change nothing');
-    expect(task.description).toContain('[security-…]');
+    expect(task.description).toContain('ID beginning with `security-`');
     expect(task.description).not.toContain('{modeInstructions}');
     expect(task.description).not.toContain('{trackerInstructions}');
   });
@@ -321,7 +329,7 @@ describe('audit fileIssues toggle', () => {
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
     expect(task.description).toContain('Mode: implement the highest-value fix');
-    expect(task.description).not.toContain('[security-…]');
+    expect(task.description).not.toContain('ID beginning with `security-`');
   });
 
   it('forces module-hygiene remediation into a worktree after an unsafe toggle transition', async () => {

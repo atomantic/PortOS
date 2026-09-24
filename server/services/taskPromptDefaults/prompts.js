@@ -787,8 +787,9 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
 1. **Inventory existing findings so you don't duplicate.** Follow the
    "Inventory" step under "Where to record findings" above for this app's
-   tracker. Every prior UX finding carries a \`[ux-…]\` slug — collect the
-   existing slugs and skip any screen/problem pair already filed.
+   tracker. De-duplicate by the route/screen and problem described in existing
+   items; the tracker block defines their IDs. Older forge issues may have a
+   legacy title tag, but new issue titles do not need one.
 
 2. **Discover the running app's UI URL** the same way the \`ui-bugs\` and
    \`mobile-responsive\` audits do — from the app's own config/README/dev-server
@@ -832,10 +833,9 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 5. **File ONE item per finding** using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
 
-   - **A slug-tagged title.** Lowercase kebab-case starting with \`ux-\`,
-     naming the screen and the problem (e.g.
-     \`ux-settings-save-below-fold-on-mobile\`); ≤80 chars total; unique against
-     every existing \`[ux-…]\` slug (re-check before each record).
+   - **A short, human-readable title** naming the screen and the problem. Do
+     not invent an issue ID or add a slug/category/severity tag to a forge
+     title; follow the selected tracker's ID convention from its instructions.
    - **The screen/route** you audited and which checklist item (1–8) it failed.
    - **What the user is trying to do** on that screen.
    - **Why the current design impedes it** — 1–2 sentences, concrete and
@@ -859,8 +859,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    tracker items or in a change.
 
 7. Your final assistant message must be a 2–3 sentence summary of: how many
-   routes you audited, how many findings you filed (and their slugs), and which
-   checklist items came up most often.`,
+   routes you audited, how many findings you filed (and their issue numbers or
+   tracker IDs), and which checklist items came up most often.`,
 
   'data-safety': `[Improvement: {appName}] Data and upgrade-safety audit
 
@@ -1683,8 +1683,9 @@ Repository: {repoPath}
    present, that section is a current snapshot collected immediately before
    dispatch, so do NOT list it again. Follow the "Inventory" step under "Where
    to record the plan" for any corresponding section that is absent, says it
-   could not be collected, or when you need a full issue body. Collect every
-   existing \`[plan-feature-…]\` slug, then skim
+   could not be collected, or when you need a full issue body. De-duplicate
+   against existing items by the feature need and approach; the tracker block
+   defines how to identify and record each item. Then skim
    the last 50 \`git log\` entries plus recent \`.changelog/\` files: an idea
    that is already an open tracker item, in an open PR, or recently shipped work
    is NOT a candidate.
@@ -1739,10 +1740,9 @@ Repository: {repoPath}
 4. **Write the decision-complete plan.** Every design choice is DECIDED, not
    raised as a question — make the call and state it. The filed item must carry:
 
-   - **A slug-tagged title.** Lowercase kebab-case starting with
-     \`plan-feature-\`, naming the feature (e.g.
-     \`plan-feature-export-universe-to-markdown\`); ≤80 chars total; unique
-     against every existing \`[plan-feature-…]\` slug (re-check before recording).
+   - **A short, human-readable title** naming the feature. Do not invent an
+     issue ID or add a slug/category/severity tag to a forge title; follow the
+     selected tracker's ID convention from its instructions.
    - **Motivation** — which documented requirement, success criterion, goal, or
      evidenced user need this serves, 1–2 sentences.
    - **Approach** — the design you have decided on: the behavior to build, the
@@ -1768,7 +1768,7 @@ Repository: {repoPath}
    No source edits, no branches, no PRs.
 
 8. Your final assistant message must be a 2–3 sentence summary of: the feature
-   you planned, where you filed it (item slug / issue number), and the one
+   you planned, where you filed it (issue number/key or tracker ID), and the one
    design call you made that a reviewer is most likely to question.`,
 
   'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
@@ -3491,9 +3491,12 @@ Repository: {repoPath}
 ## What to do
 
 1. **Inventory existing proposals so you don't duplicate.** Follow the
-   "Inventory" step under "Where to record proposals" above for this app's
-   tracker. Every prior reference-watch proposal carries a \`[ref-watch-…]\`
-   slug — collect the existing slugs and skip any commit already proposed.
+   "Inventory" step under "Where to record proposals" above; it defines this
+   tracker's IDs and duplicate matching. For reference-specific duplicates,
+   compare the upstream repository and commit SHA(s) in prior titles/bodies and
+   skip any commit already proposed. Older forge issues may have a bracketed
+   legacy title tag; new issue titles do not need one. PLAN.md keeps the
+   checklist IDs defined by the tracker instructions.
 
 2. For each reference above, for every commit in the "Commits to review"
    list, read its diff via \`git -C <source clone path> show <sha>\` (the
@@ -3548,21 +3551,14 @@ Repository: {repoPath}
    proposal in the task tracker** using the "Record" mechanics under "Where
    to record proposals" above. Each proposal must carry:
 
-   - **A slug-tagged title.** Lowercase kebab-case starting with
-     \`ref-watch-\` so the user can grep them in bulk; include a short
-     reference of the upstream repo so multiple watched refs don't collide
-     (e.g. \`ref-watch-phosphene-lazy-eval-env-bootstrap\`); ≤80 chars total;
-     unique against every existing \`[ref-watch-…]\` slug (re-check before
-     each record).
-   - **A short title sentence.**
-   - **Provenance:** From \`reference-watch\` review of <ref name>
-     (commit(s) \`<sha>\` [+ \`<sha>\` …], <today's date>).
-   - **1–2 sentences** on what bug/capability the commit addresses and why it
-     matters for {appName} tied to our notes.
-   - **A \`Fix:\` line** naming the specific files + functions in {appName}
-     to change (e.g. \`server/services/foo.js#buildArgs()\`) — describe the
-     BEHAVIOR to add, not upstream's exact code (clean-room reimplementation).
-   - **Estimated scope:** small / medium / large.
+   - **A short, human-readable title.** Do not invent an issue ID or add a
+     slug/category/severity tag to a forge title. The issue number or key is its
+     ID; use the existing bracketed checklist-ID format only when the selected
+     tracker is PLAN.md.
+   - The selected tracker's **Record** requirements above, including
+     provenance, rationale, the clean-room behavior to implement in {appName},
+     files/functions, and estimated scope. Describe the behavior, never copy
+     upstream code verbatim.
 
    For **Maybe — needs human call** items (real value but unclear fit, or
    gated on a decision/precondition), record the same proposal but end the

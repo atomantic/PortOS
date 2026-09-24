@@ -20,9 +20,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // review submission, rebase/CI policy enforcement, and merging are hooks.
   'issue-watcher',
   // Watches `referenceRepos` configured on the app — fetches each upstream
-  // repo, finds commits since lastReviewedSha, and appends slug-tagged
-  // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
-  // `plan-task` to pick up. No source-code edits, no separate review file.
+  // repo, finds commits since lastReviewedSha, and files proposals in the
+  // app's configured tracker (PLAN.md checklist IDs or forge issue numbers)
+  // for `/claim` / `plan-task` / `claim-issue*` to pick up. No source-code
+  // edits, no separate review file.
   'reference-watch',
   // Walks the running app UI with a UX reviewer's eye (Playwright MCP) against a
   // named checklist — buried primary actions, dead-end empty/error states,
@@ -59,10 +60,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // and the `copy` metric label; narrower than the `ux` audit, which walks the
   // running UI. File-issues.
   'copy',
-  // The six lanes below complete the scheduled counterparts of the slashdo
-  // `do:better` audit lenses (DO_BETTER_LENS_COVERAGE in lib/auditCatalog.js),
-  // so every category of app quality can be scheduled on its own cadence
-  // instead of fanning eight sub-agents out of one command run.
+  // The six PortOS-owned specialist missions below map onto current slashdo
+  // `do:better` scopes through DO_BETTER_SCOPE_COVERAGE in lib/auditCatalog.js.
+  // They can be scheduled independently while shared runtime contracts own
+  // audit orchestration and tracker filing.
   // Measured branching per function — ranks the hottest high-complexity
   // functions by churn and reduces them with a named transformation. The
   // structural cousin of `module-hygiene` (which owns responsibility and

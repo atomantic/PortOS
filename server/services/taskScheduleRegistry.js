@@ -311,15 +311,13 @@ export const DEFAULT_TASK_INTERVALS = {
   // do-replan audits PLAN.md after open PRs and stale branches have been cleaned up,
   // so the plan reflects what actually merged.
   'do-replan':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, runAfter: ['pr-reviewer', 'branch-reconcile'], taskMetadata: { useWorktree: true, openPR: true } },
-  // Writable — the v2 reference-watch prompt (PROMPT_VERSIONS['reference-watch'] = 2)
-  // instructs the agent to APPEND slug-tagged `[ref-watch-…]` checklist items to
-  // PLAN.md and commit them. `readOnly: true` would inject the "do not modify or
-  // commit files" guard into the system prompt and the agent would refuse to write
-  // the PLAN entries — defeating the whole flow. Worktree off because the task body
-  // itself reads from data/cos/reference-repos (managed clones the user can't
-  // accidentally clobber) and the PLAN.md write is small enough that the in-place
-  // commit on the source repo is simpler than a worktree round-trip. Mirrors the
-  // on-commit trigger path in referenceRepos.js#triggerReferenceAnalysis.
+  // Writable — the v4 reference-watch prompt records proposals through the
+  // resolved tracker instructions: PLAN.md commits checklist items, while forge
+  // trackers create issues. `readOnly: true` would inject the "do not modify or
+  // commit files" guard and prevent both paths. Worktree off because the task
+  // reads managed clones under data/cos/reference-repos and its PLAN.md write is
+  // small enough to commit in place. Mirrors the on-commit trigger path in
+  // referenceRepos.js#triggerReferenceAnalysis.
   // `readOnly` is coupled to PROMPT_VERSIONS['reference-watch'] — see
   // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
   // re-auditing this default (a guard test in taskSchedule.test.js enforces it).

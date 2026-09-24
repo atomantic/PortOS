@@ -382,18 +382,13 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'copy finding(s)',
     }),
   },
-  // The six types below give every `do:better` audit lens a scheduled
-  // counterpart (DO_BETTER_LENS_COVERAGE, at the bottom of this file). They
-  // are refactor- or defect-hunting lanes carved out of the broader
-  // code-quality / module-hygiene / test-coverage bodies so each can be
-  // scheduled, pinned to a provider, and toggled between filing and fixing on
-  // its own. Each still files under an existing category (`code-quality`,
-  // `bug`, `tests`, `dependencies`) and ALSO under the metric slug
-  // (`cognitive-load`, `structural-drift`, `runtime-safety`, …) so the
-  // backlog can be filtered by lens without parsing titles. The refactor
-  // lanes require a managed worktree in do-work mode: a mechanical
-  // restructuring of a hot function or a dependency swap is exactly the edit
-  // that must never land in the user's live checkout.
+  // These six PortOS-owned focused missions map onto the current generic
+  // `/do:better` scopes through DO_BETTER_SCOPE_COVERAGE below. Their
+  // scheduleable mission bodies add narrow checks; they do not copy slashdo's
+  // audit orchestration or tracker-filing procedure. Each keeps its existing
+  // category label and an additional metric label where needed. Refactor lanes
+  // require a managed worktree in do-work mode so edits never land in a live
+  // checkout.
   'better-complexity': {
     quotaBurnId: null,
     label: 'Cyclomatic complexity',
@@ -651,25 +646,18 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
 }
 
 /**
- * Which scheduled audit types cover each `do:better` audit lens
- * (lib/slashdo/lib/better-audit.md, the `For \`<lens>\`:` list). The slashdo
- * command fans the same lenses out to sub-agents in one run; PortOS exposes
- * each as its own schedulable, provider-pinnable task so a managed app can run
- * every category of self-improvement on its own cadence. Keys are the lens
- * slugs slashdo uses; values are the AUDIT_DEFINITIONS types that own that
- * lens's findings, in no significant order — the relation is many-to-many both
- * ways (`security` answers three lenses; `bugs-perf` has four owners), which
- * is why this is a lens-keyed map rather than a field on each definition. A
- * per-definition field could not answer the question the map exists for: did
- * upstream add a lens that NOTHING here owns?
+ * Scheduled audit types mapped onto the scope table in slashdo's
+ * `lib/better-audit.md`. The exported `DO_BETTER_LENS_COVERAGE` name remains
+ * as a compatibility alias for callers that used the old per-lens roster;
+ * the source of truth is now slashdo's generic scope table. Values are
+ * AUDIT_DEFINITIONS types that cover a scope; the relation is many-to-many.
  *
- * It drives schedule discovery labels, never dispatch or execution ordering.
- * auditCatalog.test.js checks it two ways: every
- * listed type is a real audit type, and (when the submodule is checked out)
- * every lens slashdo declares has an entry here, so a lens added upstream
- * cannot silently go unschedulable.
+ * This map drives schedule discovery labels, never dispatch or execution
+ * ordering. The test parses the bundled table and checks both directions, so
+ * adding a slashdo scope without a scheduled owner or leaving stale scope
+ * labels fails at the source boundary.
  */
-export const DO_BETTER_LENS_COVERAGE = Object.freeze({
+export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   security: ['security'],
   'code-quality': ['code-quality', 'observability'],
   dry: ['simplify'],
@@ -683,15 +671,18 @@ export const DO_BETTER_LENS_COVERAGE = Object.freeze({
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
 });
 
+/** @deprecated Use DO_BETTER_SCOPE_COVERAGE; kept for API compatibility. */
+export const DO_BETTER_LENS_COVERAGE = DO_BETTER_SCOPE_COVERAGE;
+
 /** Display metadata is derived, so upgrades never rewrite durable task IDs. */
 export function getAuditScheduleMetadata(taskType) {
   const canonicalType = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(canonicalType)) return { displayName: taskType, defaultLabels: [] };
-  const lenses = Object.entries(DO_BETTER_LENS_COVERAGE)
-    .filter(([, types]) => types.includes(canonicalType)).map(([lens]) => lens);
+  const scopes = Object.entries(DO_BETTER_SCOPE_COVERAGE)
+    .filter(([, types]) => types.includes(canonicalType)).map(([scope]) => scope);
   return {
     displayName: canonicalType.startsWith('better-') ? canonicalType : `better-${canonicalType}`,
-    defaultLabels: ['codebase-improvement', 'slashdo', ...lenses],
+    defaultLabels: ['codebase-improvement', 'slashdo', ...scopes],
   };
 }
 
