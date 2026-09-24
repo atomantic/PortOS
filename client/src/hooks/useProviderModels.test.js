@@ -57,6 +57,25 @@ describe('useProviderModels — Antigravity base models', () => {
     expect(result.current.selectedModel).toBe('');
   });
 
+  // A picker with no Auto option (the Quality runner) opens on the configured
+  // default instead of whichever provider the registry happens to list first.
+  it('opens a required picker on the configured default provider and its default model', async () => {
+    const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', enabled: true, defaultModel: 'example-model', models: ['example-model'] };
+    api.getProviders.mockResolvedValue({ activeProvider: 'claude-code-tui', providers: [CODEX, CLAUDE_TUI] });
+    const { result } = renderHook(() => useProviderModels({ preselectDefaults: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.selectedProviderId).toBe('claude-code-tui');
+    expect(result.current.selectedModel).toBe('example-model');
+  });
+
+  it('falls back to a TUI provider, not list order, when a required picker filters out the default', async () => {
+    const TUI = { id: 'example-tui', type: 'tui', enabled: true, defaultModel: 'm', models: ['m'] };
+    api.getProviders.mockResolvedValue({ activeProvider: 'example-api', providers: [CODEX, TUI] });
+    const { result } = renderHook(() => useProviderModels({ preselectDefaults: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.selectedProviderId).toBe('example-tui');
+  });
+
   it('does not substitute another provider when the active default is filtered out', async () => {
     api.getProviders.mockResolvedValue({ activeProvider: 'missing', providers: [CODEX] });
     const { result } = renderHook(() => useProviderModels({ allowDefault: true, preselectDefaults: true }));

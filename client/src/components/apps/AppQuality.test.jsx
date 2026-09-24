@@ -15,7 +15,7 @@ import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
 
 it('shows zero as a real score up front and keeps the scoring explanation in a tooltip', async () => {
-  const app = { id: 'portos-default', quality: { score: 0, ratedCategories: 1, totalCategories: 25, categories: [
+  const app = { id: 'portos-default', quality: { score: 0, ratedCategories: 1, totalCategories: 25, applicableCategories: 18, categories: [
     { id: 'security', label: 'Security', score: 0, coverage: 'broad', confidence: 'high', summary: 'Critical failure', scannedFiles: 5, totalFiles: 5, worstSeverity: 10 },
     { id: 'ux', label: 'UX', score: 80, coverage: 'partial', stale: true, summary: 'Only one journey inspected' },
   ] } };
@@ -23,7 +23,7 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   await screen.findByText(/No scored assessments/);
   expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
   expect(screen.getAllByText('Stale · partial')).not.toHaveLength(0);
-  expect(screen.getByText(/1\/25 categories contribute/)).toBeInTheDocument();
+  expect(screen.getByText(/1\/18 applicable categories contribute/)).toBeInTheDocument();
   expect(screen.queryByText(/Equal-weight mean/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
   expect(screen.getByRole('tooltip')).toHaveTextContent(/Equal-weight mean/);

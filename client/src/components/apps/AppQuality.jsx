@@ -53,6 +53,9 @@ export default function AppQuality({ app, detail = false }) {
   const score = quality?.score;
   const sortedCategories = quality?.categories
     ? [...quality.categories].sort((a, b) => {
+      // Categories that cannot apply to this repository sink below every
+      // category that can, whichever sort is active.
+      if ((a.applicable === false) !== (b.applicable === false)) return a.applicable === false ? 1 : -1;
       if (categorySort === 'oldest-run') {
         const aRun = Date.parse(a.assessedAt);
         const bRun = Date.parse(b.assessedAt);
@@ -68,13 +71,15 @@ export default function AppQuality({ app, detail = false }) {
       return a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
     })
     : [];
+  // Pre-applicability servers send no `applicableCategories`; fall back to the catalog size.
+  const categoryCount = quality?.applicableCategories ?? quality?.totalCategories ?? 0;
   const hasAssessments = quality?.categories?.some(category => category.assessedAt);
   const unscoredLabel = hasAssessments ? 'Quality: no qualifying score' : 'Quality: not assessed';
   const label = quality?.unavailable ? 'Quality unavailable'
     : score == null ? unscoredLabel : `Quality: ${score}/100`;
   if (!detail) return (
     <Link to={`/apps/${app.id}/quality`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
-      {label}{score != null && ` · ${quality.ratedCategories}/${quality.totalCategories} categories`}
+      {label}{score != null && ` · ${quality.ratedCategories}/${categoryCount} categories`}
     </Link>
   );
   const panelLink = (name, categoryId) => {
@@ -111,7 +116,7 @@ export default function AppQuality({ app, detail = false }) {
               </InfoTooltip>
             </h3>
             <p className="text-xs text-gray-400">
-              {quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute
+              {quality?.ratedCategories ?? 0}/{categoryCount} applicable categories contribute
               {federation && ` · ${federation.available ?? 0} sync peers`}
             </p>
           </div>
@@ -185,13 +190,14 @@ function CategoryRow({ category, below, runLink }) {
     ...(!category.sourcePeerId && category.agentId ? [{ id: 'run', label: 'View audit run', to: `/cos/agents/${category.agentId}` }] : []),
     ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: '/instances' }] : []),
   ];
-  const evidence = <>
+  const inapplicable = category.applicable === false;
+  const evidence = inapplicable ? <>Not applicable · {category.inapplicableReason}</> : <>
     {category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence}`}
     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}
     {category.sourcePeerId || category.sourcePeerName ? ` · ${category.sourcePeerName || 'federated peer'}` : ''}
   </>;
   return (
-    <tr className={`border-t border-port-border align-middle${below ? ' bg-port-warning/10' : ''}`}>
+    <tr className={`border-t border-port-border align-middle${below ? ' bg-port-warning/10' : ''}${inapplicable ? ' text-gray-500' : ''}`}>
       <th scope="row" className="py-1.5 px-2 font-medium">
         <span className="inline-flex items-center gap-1.5">
           {category.label}

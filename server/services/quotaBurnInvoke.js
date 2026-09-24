@@ -450,6 +450,13 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   const queued = await queuedOnDemandReason(resolved.catalog?.queued, resolved.ref.taskType, resolved.ref.appId);
   if (queued) return declined(queued);
 
+  // An audit that cannot apply to the target repository is declined HERE, so
+  // the burn moves on to work that can spend the window. The generator would
+  // refuse it too, but only after the request consumed the step's turn.
+  const { inapplicableAuditReason } = await import('./appQualitySchedule.js');
+  const inapplicable = await inapplicableAuditReason(resolved.ref.appId, resolved.ref.taskType);
+  if (inapplicable) return declined(`"${resolved.ref.taskType}" does not apply to this app: ${inapplicable}`);
+
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return declined(picked.error);
 

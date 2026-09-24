@@ -31,6 +31,12 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
   return true;
 }
 
+/**
+ * @param {object[]} apps - Managed app records
+ * @param {object} [deps] - Injectable seams. `resolveApplicability(app)` →
+ *   `{ [category]: reason }` adds repository-scan applicability; only the
+ *   single-app detail read passes it, so a list read never walks N checkouts.
+ */
 export async function enrichAppsWithQuality(apps, deps = {}) {
   if (!apps.length) return apps;
   // One app-scoped query per list, not one per tile or transcript scan.
@@ -47,13 +53,15 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
   // records, never the whole list — same posture as the peer collect below.
   const releases = await Promise.all(apps.map(app => readReleaseQuality(deps, app).catch(() => [])));
   return Promise.all(apps.map(async (app, index) => {
-    const shared = await collectAppQuality(app, 30, deps)
-      .catch(() => ({ records: [], federation: { failed: true } }));
+    const [shared, inapplicable] = await Promise.all([
+      collectAppQuality(app, 30, deps).catch(() => ({ records: [], federation: { failed: true } })),
+      deps.resolveApplicability ? deps.resolveApplicability(app).catch(() => ({})) : {},
+    ]);
     return { ...app,
       quality: result ? { ...summarizeAppQuality(latestQualityRecords([
         ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
         ...shared.records, ...releases[index],
-      ]), deps.now ?? Date.now()), federation: shared.federation }
+      ]), deps.now ?? Date.now(), { inapplicable }), federation: shared.federation }
         : { ...summarizeAppQuality(), unavailable: true },
     };
   }));

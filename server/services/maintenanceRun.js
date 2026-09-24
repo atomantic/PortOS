@@ -318,10 +318,22 @@ async function evaluate(id, { ignoreTaskId }) {
 
   const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
+  const skippedSteps = {};
   for (const step of run.steps) {
     if (completed[step.id]) continue;
     const shape = sequenceStepShapeReason(step);
     if (shape) return hold(shape);
+    // An audit this repository cannot have findings for is COMPLETED as
+    // skipped, not dispatched: the generator would refuse it anyway, and a
+    // refused request would leave the step pending — re-dispatched on every
+    // evaluation. Checked here so the run moves straight to the next step.
+    const inapplicable = step.drain ? null : await (await import('./appQualitySchedule.js')).inapplicableAuditReason(run.appId, step.taskRef?.taskType);
+    if (inapplicable) {
+      completed[step.id] = new Date().toISOString();
+      skippedSteps[step.id] = inapplicable;
+      console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — not applicable: ${inapplicable}`);
+      continue;
+    }
     if (step.drain) {
       const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
       if (probe.drained) {
@@ -331,10 +343,11 @@ async function evaluate(id, { ignoreTaskId }) {
       if (!probe.job) return hold(probe.reason);
     }
     const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
-    if (!result.dispatched) return hold(result.reason, { completed });
+    if (!result.dispatched) return hold(result.reason, { completed, ...skippedPatch(run, skippedSteps) });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {
       completed,
+      ...skippedPatch(run, skippedSteps),
       steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
       reason: null,
       active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
@@ -343,12 +356,17 @@ async function evaluate(id, { ignoreTaskId }) {
     return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
   }
   await patchRun(id, {
-    completed, active: null, reason: 'maintenance sequence complete',
+    completed, ...skippedPatch(run, skippedSteps), active: null, reason: 'maintenance sequence complete',
     status: MAINTENANCE_RUN_STATUS.COMPLETED, finishedAt: new Date().toISOString(),
   });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
   return { dispatched: false, completed: true, reason: 'maintenance sequence complete' };
 }
+
+/** Merge newly skipped steps into the run's `skipped` map (step id → reason), or add nothing. */
+const skippedPatch = (run, skippedSteps) => (Object.keys(skippedSteps).length
+  ? { skipped: { ...(run.skipped || {}), ...skippedSteps } }
+  : {});
 
 /**
  * Continuation. An audit step is done when its agent SUCCEEDS; a failed agent

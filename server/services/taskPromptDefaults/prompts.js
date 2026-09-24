@@ -134,6 +134,16 @@ an explicitly closed concern is worse than a window spent idle.
   intended root, including through symlinks and encoded separators.
 - **Missing authorization** — an endpoint or action that checks who you are but
   not whether you may do this, or checks neither.
+- **Broken resource or tenant isolation** — where the application serves more
+  than one principal, a query, object-store key, or cache entry not scoped to
+  the caller's owner or tenant, so one caller can read or change another's data
+  by guessing or iterating an id.
+- **Server-side request forgery** — a URL, host, or webhook target supplied by a
+  caller that the server fetches, letting it reach internal services, cloud
+  metadata endpoints, or local files.
+- **Unsafe deserialization and parsing** — untrusted bytes handed to a
+  deserializer, template engine, archive extractor, or XML parser that can
+  execute code, write outside its target, or exhaust memory.
 - **Unvalidated trust boundaries that are actually crossed** — data arriving
   from another machine, a third-party API, or a model response, used without
   validation where a malformed or hostile value would do damage.
@@ -306,13 +316,36 @@ scale the code actually sees. Say which one you have.
 - **Cache misuse** — a cache that never invalidates, one that never hits because
   its key varies, or an unbounded one that is really a leak.
 
+## Required service and data-path coverage
+
+For services, APIs, workers, and data pipelines, inspect the heaviest request
+and job paths as well as any UI:
+
+- **Query plans** — read the plan (EXPLAIN or the engine's equivalent) for the
+  most frequent and the most expensive queries rather than inferring index use
+  from the schema; watch for sequential scans, sorts spilling to disk, and plans
+  that change with data volume.
+- **Buffering instead of streaming** — a whole file, object, result set, or
+  response body loaded into memory when it could be streamed or paged.
+- **Batch shape** — bulk operations done one row or one request at a time, or
+  batches so large they time out or hold locks for seconds.
+- **Connection and concurrency limits** — pools sized below the concurrency the
+  service accepts, work serialized behind one connection, or unbounded parallel
+  fan-out that saturates a downstream.
+- **Data layout for analytical reads** — reads that cannot prune partitions or
+  push predicates down, many small files, row-oriented formats scanned for a
+  few columns.
+- **Serialization and startup cost** — repeated encode/decode of the same
+  payload, and cold-start work on a serverless or per-request path.
+
 ## Required UI load and idle-network coverage
 
 For apps with a UI, inspect the shared shell and at least one high-volume
 collection route, plus a sibling tab that does not use that collection. Trace
 initial reads, mounted hidden panels, polling timers, websocket invalidations,
-and reconnect recovery. Include Brain inbox/memory, CoS history, and media
-history when those surfaces exist; follow the app's collection-loading standard.
+and reconnect recovery. Include the app's largest growing collections (inboxes,
+histories, media libraries, logs) when they exist; follow the app's
+collection-loading standard.
 
 When browser tooling is available, capture a cold route load, navigation to the
 sibling tab, and at least 60 seconds of idle network activity. Report request
@@ -331,6 +364,9 @@ evidence is unavailable, explicitly mark UI load/idle transfer UNVERIFIED and
 file a deduplicated coverage-gap issue with the missing check and next step.
 Never copy live personal records, hostnames, tokens, or raw private HAR bodies
 into reports; report redacted endpoint patterns and aggregate measurements.
+
+Money and metered-quota spend belong to the cost-efficiency work; stay on
+latency, throughput, and resource use.
 
 ## Do not trade correctness or clarity for a gain you cannot measure
 
@@ -864,8 +900,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
   'data-safety': `[Improvement: {appName}] Data and upgrade-safety audit
 
-Audit {appName} for changes that could corrupt, lose, or strand user data
-across upgrades and machines.
+Audit {appName} for changes and operations that could corrupt, lose, or strand
+data across upgrades, deployments, environments, and machines.
 
 Repository: {repoPath}
 
@@ -889,9 +925,23 @@ Hunt specifically for:
   field it never read.
 - **Read-modify-write races between two paths** that mutate the same record or
   file and can drop one another's changes.
+- **Backups that would not restore** — a backup that omits a store the
+  application needs, has never been restored by any script or test, or restores
+  into a shape the current code rejects.
+- **Bulk and backfill operations without a safety net** — a mass update, delete,
+  reprocessing, or backfill job with no dry run, no bounded scope, no batching,
+  and no way to resume or undo when it stops halfway.
+- **Retention and lifecycle rules that reach live data** — an expiry,
+  compaction, or cleanup rule whose predicate or path can match data that is
+  still in use.
+- **Long-lived data formats** — datasets, archives, or exported files written in
+  a shape the next version cannot read, with no version marker or reader for
+  the old shape.
 
-State the upgrade scenario explicitly for each finding: which install, holding
-what, upgrading to what, and what breaks. Cross-version and cross-install
+State the scenario explicitly for each finding: which install, environment, or
+dataset, holding what, upgrading or running what, and what breaks. Runtime data
+correctness (duplicates under retry, partial writes, lost updates) belongs to
+the data-integrity work. Cross-version and cross-install
 compatibility code is NOT dead code — read the project's rules on migrations
 and version gates before proposing any such removal.`,
 
@@ -1039,32 +1089,49 @@ coverage.`,
 
   'api-contract': `[Improvement: {appName}] API and route-contract audit
 
-Audit {appName}'s API endpoints and route handlers for contract drift,
-validation gaps, and error traps.
+Audit {appName}'s API surface — HTTP routes, RPC services, GraphQL resolvers,
+event and message contracts, and any published SDK or client — for contract
+drift, validation gaps, and error traps.
 
 Repository: {repoPath}
 
 {modeInstructions}
 
-Trace client callers through to server routes and schemas, hunting for:
+Identify the framework and the project's own conventions (validation library,
+error envelope, async wrapper, versioning scheme) before judging anything. Trace
+callers — in-repo clients, SDKs, consumers of a published spec — through to the
+handlers and schemas, hunting for:
 
-- **Unvalidated inputs** — endpoints reading \`req.body\`/\`query\`/\`params\`
-  directly with no validation schema, letting malformed types into domain logic.
-- **Client/server drift** — a client service sending a field no route reads, a
-  route requiring one the caller omits, or a caller awaiting a key the response
+- **Unvalidated inputs** — handlers reading the request body, query, params, or
+  message payload directly with no schema, letting malformed types into domain
+  logic.
+- **Caller/handler drift** — a caller sending a field no handler reads, a
+  handler requiring one the caller omits, or a caller reading a key the response
   never carries.
-- **Status and envelope errors** — a 200 carrying \`{ error }\`, a raw 500 for
-  bad client input, or a bare string where the app's \`{ error: message }\`
-  envelope is expected.
-- **Async traps** — a route handler not wrapped in \`asyncHandler\`, where a
-  rejected promise hangs the request socket instead of reaching the error
-  middleware.
-- **Loose schemas** — unbounded strings (no \`.max()\`), arbitrary keys (no
-  \`.strict()\`), or an enum accepting values downstream code cannot handle.
-- **Method mismatch** — a mutation behind \`GET\`, or a non-idempotent \`PUT\`.
+- **Spec drift** — an OpenAPI, protobuf, GraphQL, or event schema that no longer
+  matches the implementation, so generated clients and documentation are wrong.
+- **Breaking changes to a published contract** — a renamed, removed, or retyped
+  field, a changed default, or a reused protobuf field number on an API other
+  systems consume, with no new version or deprecation path.
+- **Status and envelope errors** — success statuses carrying errors, a server
+  error for bad client input, or responses that break the project's own error
+  envelope, so callers cannot tell retryable failures from permanent ones.
+- **Async traps** — a handler whose rejected promise or thrown error bypasses
+  the framework's error path (for example an Express handler missing the
+  project's async wrapper), hanging the request instead of failing it.
+- **Unsafe mutation semantics** — a mutation behind a safe method, a
+  non-idempotent PUT or DELETE, or a create endpoint clients will retry with no
+  idempotency key, producing duplicates on a timeout.
+- **Unbounded or unstable collections** — list endpoints with no limit, no
+  maximum page size, or offset pagination over data that changes underneath the
+  caller.
+- **Long work on a synchronous request** — an endpoint that does minutes of work
+  inline where the contract should accept the job and report status.
+- **Loose schemas** — unbounded strings, arbitrary extra keys, or an enum
+  accepting values downstream code cannot handle.
 
-For each finding, name the caller AND the route with \`file.js:LINE\`, the shape
-that gets through, and the concrete failure it produces.`,
+For each finding, name the caller AND the handler with \`file:LINE\`, the shape
+that gets through, and the concrete failure it produces for a consumer.`,
 
   'ui-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
 
@@ -1126,10 +1193,23 @@ Hunt specifically for:
 - **Uninstrumented workflows** — a multi-step background pipeline or agent
   transition with no progress logging, so a stuck job looks identical to a slow
   one.
+- **Lost correlation** — a request, job, or message id that is not carried
+  across a service, queue, or thread boundary, so one failure's log lines cannot
+  be joined together.
+- **Nothing to alert on** — a critical path (request latency and error rate,
+  queue depth or consumer lag, job success and duration, data freshness) with no
+  metric or countable signal, so a degradation is only discovered by a user.
+- **Health signals that do not reflect health** — a status or health endpoint
+  that reports OK while a dependency the service needs is down, or that never
+  reports degraded states.
+- **No trail for consequential actions** — destructive, administrative, or
+  permission-changing operations with no record of who did what and when,
+  where the domain needs one.
 
-For each finding, name the catch block or uninstrumented step and state the
-operational blind spot it creates: what breaks, and how long before anyone
-notices.`,
+Match the project's scale: a single-process tool needs good logs and a truthful
+status view, not a tracing stack. For each finding, name the catch block,
+uninstrumented step, or missing signal and state the operational blind spot it
+creates: what breaks, and how long before anyone notices.`,
 
   'copy': `[Improvement: {appName}] Copy and text-clarity audit
 
@@ -1572,6 +1652,284 @@ practical public boundary instead of deleting it.
 
 Cite the test file and case name with \`file:LINE\`, the source it claims to
 cover, and the probe result.`,
+
+  'infrastructure': `[Improvement: {appName}] Infrastructure and deployment audit
+
+Audit how {appName} is built, packaged, deployed, and run, as described by the
+configuration in its repository.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Inventory the infrastructure-as-code, container, orchestration, platform, process
+manager, and CI/CD files first. Judge each against the environment it actually
+targets — a local development compose file is not a production manifest, and
+the project's documented deployment model decides which exposure is intended.
+
+## Hunt for
+
+- **Exposure beyond intent** — a storage bucket, database, admin port, or
+  service reachable from a wider network than the design calls for: public ACLs,
+  \`0.0.0.0/0\` ingress, a load balancer in front of an internal endpoint, a
+  debug port published by a container.
+- **Over-broad identity** — a role, service account, token, or CI permission
+  granted wildcard actions or resources, or more than the workload uses; a
+  long-lived static credential where the platform offers a short-lived one.
+- **Secrets in configuration** — a credential committed in a manifest, a
+  variables file, a CI file, or a baked-in image layer; a secret passed where it
+  lands in logs or process listings.
+- **Irreproducible builds and deploys** — an unpinned base image (\`latest\`), an
+  unpinned CI action or provider plugin, a build step that fetches whatever is
+  newest, a deploy that depends on state only one machine has.
+- **Missing runtime guardrails** — no resource requests/limits, no health or
+  readiness probe where the orchestrator uses one, a container running as root
+  with a writable root filesystem it does not need, no restart policy for a
+  long-running service.
+- **Unsafe state and data configuration** — IaC state with no locking or no
+  encryption, a storage resource with no encryption at rest, no versioning or
+  deletion protection on data that cannot be regenerated, no backup policy.
+- **CI/CD supply-chain and injection risk** — untrusted pull-request content
+  reaching a privileged workflow context, script injection through
+  interpolated event fields, artifacts published without provenance.
+- **Environment drift** — two environments (or a manifest and the code that
+  reads it) that disagree about a port, a variable, or a resource, so the first
+  deploy to the other one fails.
+
+## Not yours
+
+Application-code vulnerabilities belong to the security work; package version
+bumps to dependency updates; per-call timeouts and retries to the failure-path
+work; process shutdown and health-endpoint behavior inside the code to the
+reliability work. Name the overlap if it is the cause, then leave it to its owner.
+
+## The bar
+
+Every finding names the file and line, the environment it affects, and the
+concrete consequence: who can reach what, what a leaked credential grants, or
+which deploy breaks. Redact before you publish — describe a secret's location
+and shape, never its value, and never paste account ids, hostnames, or addresses.`,
+
+  'data-integrity': `[Improvement: {appName}] Data integrity and pipeline audit
+
+Audit whether the data {appName} ingests, transforms, stores, and serves stays
+correct — no duplicates, no silent loss, no quietly wrong results — under the
+retries, redeliveries, crashes, and concurrency it will actually see.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Inventory every write path first: request handlers that persist, ingestion and
+import entry points, queue and stream consumers, batch, backfill, and
+compaction jobs, and the formats data is stored in. Then trace what happens
+when each one runs twice, stops halfway, or runs concurrently with itself.
+
+## Hunt for
+
+- **Non-idempotent writes under retry or redelivery** — a consumer on an
+  at-least-once queue, a retried request, or a re-run job that inserts again
+  instead of upserting by a natural or idempotency key, producing duplicates.
+- **Partial writes visible to readers** — a multi-object or multi-table write
+  with no transaction, commit protocol, manifest, or atomic rename, so a crash
+  or a concurrent reader sees half a batch as if it were whole.
+- **Lost updates** — read-modify-write on shared records with no transaction,
+  row version, conditional write, or serialization, where two writers race.
+- **Validation missing at the boundary** — records accepted from an upstream
+  source with no schema check, so one malformed batch poisons everything
+  downstream of it.
+- **Schema evolution that breaks old data** — a stored format (table, column
+  family, Parquet/Avro/JSON document, event payload) changed in a way readers
+  of already-written data cannot handle: a renamed or retyped field, a new
+  required field with no default, a partition layout change with no rewrite.
+- **Semantic corruption** — time zones and naive timestamps mixed, floating
+  point for money, NULL collapsed into empty or zero, truncation or precision
+  loss on conversion, a join or aggregation that double-counts.
+- **Unstable pagination and incremental reads** — offset pagination over data
+  that changes underneath it, a high-water mark that skips late or equal
+  timestamps, a sync cursor that loses records written during a read.
+- **Deletion and retention that miss or overreach** — a retention job whose
+  range or predicate can match live data, or a delete that leaves derived
+  copies (indexes, caches, aggregates, replicas) inconsistent with the source.
+- **Missing integrity checks on transfer** — a copy, upload, or replication with
+  no checksum or row-count reconciliation, so truncation goes unnoticed.
+
+## Not yours
+
+Stored-format changes that need an upgrade migration, destructive defaults,
+and backup/restore belong to the data-safety work; personal-data retention
+obligations to the privacy work; call-level retries to the failure-path work.
+
+## The bar
+
+State the scenario for every finding: which write path, which failure or
+interleaving (a retry, a crash between steps, two concurrent writers, a late
+record), and exactly what the stored data looks like afterward. Cite
+\`file:LINE\` for the write and for the caller that can trigger the scenario.`,
+
+  'reliability': `[Improvement: {appName}] Reliability and operability audit
+
+Audit how {appName} behaves as a running service: when it starts, when it is
+stopped or restarted, when load exceeds capacity, when it runs as more than one
+instance, and when a deploy puts old and new versions side by side.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Inventory the process entry points, signal handling, health endpoints, queues
+and worker pools, scheduled and background jobs, and the deployment shape the
+repository describes (single process, replicas, serverless, a process manager).
+Judge against that shape — a single-user tool on one machine does not need
+leader election, and the project's documented deployment model is binding.
+
+## Hunt for
+
+- **Work dropped on shutdown** — no SIGTERM handling, or a handler that exits
+  without draining in-flight requests, finishing or checkpointing jobs, and
+  flushing buffered writes, so every deploy or restart loses work.
+- **Health checks that lie or amplify** — a readiness check that reports ready
+  before dependencies are usable, or a liveness check that fails when a
+  dependency is down, so the orchestrator restart-loops a healthy process.
+- **Unbounded intake** — an in-memory queue, buffer, fan-out, or worker pool
+  with no bound or backpressure, so a burst turns into memory exhaustion instead
+  of rejected or delayed work.
+- **Jobs that run twice or never resume** — a scheduled job with no lock or
+  lease when more than one instance can run it, or a long job with no
+  checkpoint, so a crash restarts it from zero or leaves it half-done.
+- **Startup fragility** — a process that crashes permanently when a dependency
+  is briefly unavailable at boot instead of retrying, or that starts with
+  invalid configuration and fails on the first request instead of at startup.
+- **Mixed-version hazards** — a message, job payload, cache entry, or stored
+  record whose shape changed such that the old and new versions running during a
+  rolling deploy (or a rollback) misread each other.
+- **Single points of failure the design did not choose** — process-local state
+  (sessions, locks, rate counters, caches treated as truth) in a service that
+  is deployed or scaled as multiple instances.
+- **Self-inflicted overload** — synchronized timers or cron jobs that all fire
+  at once, a thundering herd after a restart, a cache stampede on expiry.
+
+## Not yours
+
+Per-call timeouts, retry ceilings, and degraded-dependency fallbacks belong to
+the failure-path work; latent code defects (missing awaits, leaks) to the
+runtime-safety work; health-probe and resource-limit configuration in
+manifests to the infrastructure work; missing metrics to the observability work.
+
+## The bar
+
+Every finding names the event (a deploy, a crash, a burst, a second instance),
+the code path with \`file:LINE\`, and what is lost, duplicated, or unavailable
+as a result. A resilience pattern the design does not need is not a finding.`,
+
+  'privacy': `[Improvement: {appName}] Privacy and data-governance audit
+
+Audit how {appName} handles personal and sensitive data: where it goes, who and
+what can see it, how long it stays, and whether it can be removed.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+**Read the project's documented data model and sharing rules first and treat
+them as binding.** A flow the project deliberately supports — syncing a user's
+own data to machines they control, say — is not a finding because the data is
+personal. The question is whether data reaches a place, audience, or lifetime
+the design did not choose.
+
+Inventory the personal and sensitive fields first (identity, contact, location,
+health, financial, credentials, free-text a user wrote about themselves or
+others), then trace each to every sink.
+
+## Hunt for
+
+- **Exposure in operational output** — personal data or secrets in log lines,
+  error messages, crash reports, analytics events, URLs and query strings,
+  cache keys, or file names, where far more people and systems can read them.
+- **Over-sharing to third parties** — full records sent to an external API,
+  model provider, telemetry service, or webhook when the task needed a field or
+  a summary; no minimization or redaction before an outbound call.
+- **API over-exposure** — responses that return fields the caller has no use
+  for or no right to see, because a whole record is serialized instead of a
+  projection.
+- **Retention without an end** — personal data kept indefinitely with no
+  retention rule, or temporary copies (exports, uploads, scratch files, debug
+  dumps) that are never cleaned up.
+- **Erasure that does not reach every copy** — a delete that removes the
+  primary record but leaves derived datasets, search indexes, caches, backups
+  the design says are prunable, or replicas holding it.
+- **Real data in the wrong place** — production or personal records copied into
+  test fixtures, seed files, documentation examples, or lower environments.
+- **Unprotected sensitive stores** — sensitive data at rest with no encryption
+  where the platform expects it, or access to it with no audit trail when the
+  domain requires one.
+
+## Not yours
+
+Authentication, authorization, and injection belong to the security work; data
+correctness to the data-integrity work; storage encryption flags in
+infrastructure manifests to the infrastructure work. Name the overlap if it is
+the cause.
+
+## The bar
+
+For each finding, name the field or data class, the source, the sink with
+\`file:LINE\`, and the audience or lifetime it should not have. Never paste a
+real personal value into a finding — describe the field, not its contents.`,
+
+  'cost-efficiency': `[Improvement: {appName}] Cost and resource-efficiency audit
+
+Find where {appName} spends money or metered quota it does not need to: paid
+API and model calls, cloud storage, query, compute, and egress.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+Inventory the metered dependencies first — paid third-party APIs, AI model
+providers, cloud object storage, warehouse or lake query engines, serverless
+or managed compute, message services, and cross-region or internet egress —
+then every call site, schedule, and retry path that reaches them.
+
+## Estimate, never guess
+
+A cost finding needs a rough quantity: how often the path runs, the unit cost
+or what the bill scales with (calls, bytes scanned, bytes stored, GB-hours), and
+how that grows with usage. State the estimate and its assumptions. "This could
+be expensive" is not a finding.
+
+## Hunt for
+
+- **Paid calls repeated for the same answer** — a model or API call with no
+  cache for identical inputs, a call re-made on every render, poll, or retry
+  when the result could be reused.
+- **Paid work nobody asked for** — calls on startup, background pre-generation,
+  or batch fills the user did not trigger; honor the project's documented rules
+  about when provider calls are allowed.
+- **Retries that multiply spend** — retry loops around paid calls with no
+  ceiling, or retries of errors that can never succeed.
+- **Unbounded scans of metered stores** — listing an entire bucket, a query
+  without a partition or date filter, \`SELECT *\` against a columnar store, a
+  full-table scan where an index or predicate pushdown was available.
+- **Storage that only grows** — no lifecycle rule moving cold data to a cheaper
+  tier or expiring it, unbounded log or artifact retention, many small files
+  where the engine charges or slows per file.
+- **Over-provisioning** — always-on resources sized for peak, idle capacity
+  that could scale to zero, a larger instance or model tier than the workload
+  uses (a cheaper model would do the job).
+- **Avoidable egress** — data moved across regions or out of the provider on a
+  hot path when it could be processed in place.
+
+## Not yours
+
+Latency and throughput belong to the performance work, even when a fix also
+saves money; resource limits in manifests belong to the infrastructure work.
+
+## The bar
+
+For each finding give \`file:LINE\`, the cost driver, the estimate with its
+assumptions, the proposed change, and the expected saving. Reject changes that
+save pennies at the cost of correctness or clarity.`,
 
   'feature-ideas': `[Improvement: {appName}] Implement Next Planned Feature
 
