@@ -32,6 +32,7 @@ export { default as useGallerySidecars } from './useGallerySidecars.js';
 export { default as useGalleryPreviewResolver } from './useGalleryPreviewResolver.js';
 export { default as useImageVariants } from './useImageVariants.js';
 export { default as useNoteSave } from './useNoteSave.js';
+export { default as useVaultNote } from './useVaultNote.js';
 export { default as useHoverTooltip } from './useHoverTooltip.js';
 export { default as useHydratedPreviewRoute } from './useHydratedPreviewRoute.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';

@@ -5,30 +5,27 @@ import {
   FolderOpen,
   Search,
   Plus,
-  Trash2,
-  Save,
   ChevronRight,
   ChevronDown,
   ArrowLeft,
   Tag,
   Link2,
   RefreshCw,
-  Edit3,
-  X,
   FileText,
+  X,
   Settings
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
-import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
-import { timeAgo, formatBytes, formatCount } from '../../../utils/formatters';
+import { formatCount } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import useUrlParams from '../../../hooks/useUrlParams';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
-import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
+import NoteDetailPane from '../../notes/NoteDetailPane.jsx';
+import useVaultNote from '../../../hooks/useVaultNote.js';
 
 function UnavailableState({ title, message, onRetry }) {
   return (
@@ -74,12 +71,20 @@ export default function NotesTab() {
   const [scanError, setScanError] = useState(false);
 
   // Note viewer/editor state
-  const [selectedNote, setSelectedNote] = useState(null);
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
-  const [loadingNote, setLoadingNote] = useState(false);
-  const [noteError, setNoteError] = useState(false);
-  const [noteRetry, setNoteRetry] = useState(0);
+  const {
+    note: selectedNote, setNote: setSelectedNote, loading: loadingNote,
+    error: noteError, retry: retryNote, clear: clearNote, sequenceRef: selectSeqRef,
+  } = useVaultNote(selectedVaultId, selectedNotePath, {
+    onReset: () => {
+      setNoteContent('');
+      setEditing(false);
+      dismissForce();
+      cancelDelete();
+    },
+    onLoad: note => setNoteContent(note.content),
+  });
 
   // Search state
   const [searchInput, setSearchInput] = useState(searchQuery);
@@ -109,24 +114,17 @@ export default function NotesTab() {
   });
 
   const searchRef = useRef(null);
-  const editorRef = useRef(null);
 
   // Invalidate work at the interaction boundary, including A → B → A switches.
   const vaultScopeRef = useRef(0);
   const scopedVaultRef = useRef(selectedVaultId);
-  const selectSeqRef = useRef(0);
   const scanSeqRef = useRef(0);
   const searchSeqRef = useRef(0);
   const mountedRef = useRef(false);
   const isCurrentScope = scope => mountedRef.current && vaultScopeRef.current === scope;
 
   const clearSelection = () => {
-    selectSeqRef.current += 1;
-    setSelectedNote(null);
-    setNoteContent('');
-    setEditing(false);
-    setLoadingNote(false);
-    setNoteError(false);
+    clearNote();
     dismissForce();
     cancelDelete();
   };
@@ -256,34 +254,6 @@ export default function NotesTab() {
     if (isCurrentScope(scope) && data?.tags) setTags(data.tags);
   };
 
-  const loadNote = async () => {
-    if (!selectedVaultId || !selectedNotePath) return;
-    const scope = vaultScopeRef.current;
-    const sequence = ++selectSeqRef.current;
-    setSelectedNote(null);
-    setNoteContent('');
-    setEditing(false);
-    setNoteError(false);
-    setLoadingNote(true);
-    dismissForce();
-    cancelDelete();
-    const data = await api.getNote(selectedVaultId, selectedNotePath, { silent: true }).catch(() => null);
-    if (!isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
-    if (data) {
-      setSelectedNote(data);
-      setNoteContent(data.content);
-    } else setNoteError(true);
-    setLoadingNote(false);
-  };
-
-  useEffect(() => {
-    if (!selectedVaultId || !selectedNotePath) {
-      clearSelection();
-      return;
-    }
-    loadNote();
-  }, [selectedVaultId, selectedNotePath, noteRetry]);
-
   const loadSearch = useCallback(async (query = searchQuery) => {
     if (!query.trim() || !selectedVaultId) return;
     const scope = vaultScopeRef.current;
@@ -329,7 +299,7 @@ export default function NotesTab() {
 
   const handleSelectNote = (notePath) => {
     clearSelection();
-    setNoteRetry(value => value + 1);
+    retryNote();
     updateParams({ note: notePath });
   };
 
@@ -682,195 +652,33 @@ export default function NotesTab() {
       {/* Right panel: note viewer/editor — hidden on mobile until a note is
           opened so the list owns the small-screen viewport; always shown on md+. */}
       <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNotePath || loadingNote || noteError ? 'flex' : 'hidden md:flex'}`}>
-        {loadingNote ? (
-          <div className="flex items-center justify-center h-full">
-            <BrailleSpinner text="Loading" />
-          </div>
-        ) : noteError ? (
-          <div className="flex flex-col items-center justify-center gap-3 h-full p-4">
-            <button
-              type="button"
-              onClick={closeNote}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-port-accent hover:text-white"
-            >
-              <ArrowLeft size={16} aria-hidden="true" /> Back to notes
-            </button>
-            <UnavailableState
-              title="Note is unavailable"
-              message="This note could not be read, so its contents were not replaced with an empty view."
-              onRetry={() => setNoteRetry(value => value + 1)}
-            />
-          </div>
-        ) : selectedNote ? (
-          <>
-            {/* Note header */}
-            <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
-              <button
-                onClick={closeNote}
-                aria-label="Back"
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-white font-medium truncate">{selectedNote.name}</h2>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  {selectedNote.folder && (
-                    <span className="flex items-center gap-1">
-                      <FolderOpen size={10} />
-                      {selectedNote.folder}
-                    </span>
-                  )}
-                  <span>Modified {timeAgo(selectedNote.modifiedAt)}</span>
-                  <span>{formatBytes(selectedNote.size)}</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                {editing ? (
-                  <>
-                    <button
-                      onClick={() => handleSaveNote()}
-                      disabled={saving}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
-                    >
-                      <Save size={14} />
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
-                    <button
-                      onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
-                      aria-label="Close editor"
-                      className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
-                    >
-                      <X size={16} />
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => setEditing(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-card text-gray-300 text-sm hover:text-white hover:bg-port-border"
-                  >
-                    <Edit3 size={14} />
-                    Edit
-                  </button>
-                )}
-                <button
-                  onClick={() => requestDelete(selectedNote.path)}
-                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
-                  title="Delete note" aria-label="Delete note"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-
-            {/* Delete confirmation */}
-            {isConfirmingDelete(selectedNote.path) && (
-              <InlineConfirmRow
-                variant="separator"
-                question="Delete this note permanently?"
-                onConfirm={() => handleDeleteNote(selectedNote.path)}
-                onCancel={cancelDelete}
-              />
-            )}
-
-            {/* Editor-only: outside edit mode there is no buffer the user meant to
-                write, and a stray "Save anyway" click would still issue the risky
-                forced write. */}
-            <ForceSaveNoteRow
-              offered={editing && forceOffered}
-              onConfirm={() => handleSaveNote({ force: true })}
-              onCancel={dismissForce}
-            />
-
-            {/* Note content */}
-            <div className="flex-1 min-h-0 overflow-auto flex">
-              {/* Main content area */}
-              <div className="flex-1 min-w-0">
-                {editing ? (
-                  <textarea
-                    aria-label="Note content"
-                    ref={editorRef}
-                    value={noteContent}
-                    onChange={e => setNoteContent(e.target.value)}
-                    className="w-full h-full p-4 bg-port-bg text-gray-200 font-mono text-sm resize-none focus:outline-none"
-                    spellCheck={false}
-                    onKeyDown={e => {
-                      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-                        e.preventDefault();
-                        handleSaveNote();
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="p-4">
-                    <MarkdownPreview content={selectedNote.body || selectedNote.content} onLinkClick={handleSelectNote} />
-                  </div>
-                )}
-              </div>
-
-              {!editing && (
-                <div className="w-56 border-l border-port-border p-3 space-y-4 shrink-0 overflow-auto hidden lg:block">
-                  {selectedNote.frontmatter && Object.keys(selectedNote.frontmatter).length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1">Properties</h4>
-                      <div className="space-y-1">
-                        {Object.entries(selectedNote.frontmatter).map(([key, val]) => (
-                          <div key={key} className="text-xs">
-                            <span className="text-gray-500">{key}:</span>{' '}
-                            <span className="text-gray-300">
-                              {Array.isArray(val) ? val.join(', ') : String(val)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedNote.tags?.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1">Tags</h4>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedNote.tags.map(tag => (
-                          <span key={tag} className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent">
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <LinkSection
-                    icon={<Link2 size={10} />}
-                    label="Links"
-                    items={selectedNote.wikilinks}
-                    getKey={link => link}
-                    getLabel={link => link}
-                    onClickItem={link => {
-                      const match = notes.find(n => n.name.toLowerCase() === link.toLowerCase());
-                      if (match) handleSelectNote(match.path);
-                      else toast.warn(`Note "${link}" not found in vault`);
-                    }}
-                  />
-
-                  <LinkSection
-                    icon={<ArrowLeft size={10} />}
-                    label="Backlinks"
-                    items={selectedNote.backlinks}
-                    getKey={bl => bl.path}
-                    getLabel={bl => bl.name}
-                    onClickItem={bl => handleSelectNote(bl.path)}
-                  />
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500">
-            <BookOpen size={48} className="mb-3 opacity-30" />
-            <p className="text-sm">Select a note to view</p>
-            <p className="text-xs mt-1">or press + to create a new one</p>
-          </div>
-        )}
+        <NoteDetailPane
+          selectedNote={selectedNote} loading={loadingNote} error={noteError}
+          onRetry={retryNote} onBack={closeNote} backLabel="Back to notes"
+          headerBackLabel="Back"
+          editing={editing} onSetEditing={setEditing} noteContent={noteContent}
+          onSetContent={setNoteContent} saving={saving} onSave={handleSaveNote}
+          confirmingDelete={selectedNote ? isConfirmingDelete(selectedNote.path) : false}
+          onRequestDelete={requestDelete} onDelete={handleDeleteNote}
+          onCancelDelete={cancelDelete} forceOffered={forceOffered}
+          dismissForce={dismissForce}
+          renderPreview={content => <MarkdownPreview content={content} onLinkClick={handleSelectNote} />}
+          renderLinks={note => (
+            <>
+              <LinkSection icon={<Link2 size={10} />} label="Links" items={note.wikilinks}
+                getKey={link => link} getLabel={link => link}
+                onClickItem={link => {
+                  const match = notes.find(n => n.name.toLowerCase() === link.toLowerCase());
+                  if (match) handleSelectNote(match.path);
+                  else toast.warn(`Note "${link}" not found in vault`);
+                }} />
+              <LinkSection icon={<ArrowLeft size={10} />} label="Backlinks" items={note.backlinks}
+                getKey={bl => bl.path} getLabel={bl => bl.name}
+                onClickItem={bl => handleSelectNote(bl.path)} />
+            </>
+          )}
+          emptyHint="or press + to create a new one"
+        />
       </div>
     </div>
   );
