@@ -116,8 +116,7 @@ describe('IssuesTab', () => {
     expect(linkButton).toHaveAttribute('href', 'https://github.com/acme/widget/issues/42');
     expect(linkButton).toHaveAttribute('target', '_blank');
     expect(linkButton).toHaveAttribute('rel', 'noreferrer');
-    expect(linkButton.className).toContain('min-h-[44px]');
-    expect(linkButton.className).toContain('min-w-[44px]');
+    expect(linkButton.className).toContain('pointer-coarse:min-h-9');
     expect(linkButton).toHaveTextContent('GitHub');
   });
 

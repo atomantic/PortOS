@@ -44,6 +44,10 @@ function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
 const RUN_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
+// Compact, content-width row buttons (right-aligned, wrap on narrow rows); touch
+// devices get a taller 36px target instead of full-width 44px slabs.
+const ISSUE_ACTION_BUTTON = 'px-2.5 py-1 min-h-7 pointer-coarse:min-h-9 rounded-md text-xs';
+
 const RUN_STATUS_LABEL = {
   queued: 'Queued — view',
   active: 'Active — view',
@@ -812,7 +816,7 @@ export default function IssuesTab({ appId, appName }) {
             const isOpen = expanded.has(issue.number);
             return (
               <div key={issue.number} className={`${issueRowTint(issue)} @container`}>
-                <div className="flex flex-col @min-[64rem]:flex-row @min-[64rem]:items-start gap-3 p-3">
+                <div className="flex flex-col @min-[40rem]:flex-row @min-[40rem]:items-start gap-2 @min-[40rem]:gap-3 p-3">
                   <button
                     onClick={() => toggleExpanded(issue.number)}
                     aria-expanded={isOpen}
@@ -860,7 +864,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 w-full @min-[64rem]:flex @min-[64rem]:flex-wrap @min-[64rem]:items-center @min-[64rem]:w-auto @min-[64rem]:min-w-0 @min-[64rem]:self-start">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0 @min-[40rem]:max-w-[45%]">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];
@@ -875,7 +879,7 @@ export default function IssuesTab({ appId, appName }) {
                             key={action}
                             to="/cos/agents"
                             aria-label={`${spec.label} #${issue.number}: ${RUN_STATUS_LABEL[state] || 'Queued — view'}`}
-                            className="min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto min-w-0 px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center justify-center @min-[64rem]:justify-start gap-1.5 transition-colors"
+                            className={`${ISSUE_ACTION_BUTTON} bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border flex items-center gap-1.5 whitespace-nowrap transition-colors`}
                           >
                             <Icon size={14} /> {spec.label} · {RUN_STATUS_LABEL[state] || 'Queued — view'}
                           </Link>
@@ -889,7 +893,7 @@ export default function IssuesTab({ appId, appName }) {
                           disabled={action === 'claim' && invalidReviewOverride}
                           title={spec.title(issue.number, appName)}
                           icon={Icon}
-                          className={`min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto @min-[64rem]:min-w-[7.5rem] px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
+                          className={`${ISSUE_ACTION_BUTTON} ${spec.tone} border border-port-border`}
                         >
                           {spec.label}
                         </RunActionButton>
@@ -903,7 +907,7 @@ export default function IssuesTab({ appId, appName }) {
                           label: `#${issue.number} ${issue.title || ''}`.trim()
                         }}
                         buttonText="Thread"
-                        className="min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto justify-center px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                        className={`${ISSUE_ACTION_BUTTON} bg-port-bg text-gray-300 hover:text-white border border-port-border flex items-center gap-1.5 transition-colors`}
                       />
                     )}
                     {issue.url && (
@@ -920,7 +924,7 @@ export default function IssuesTab({ appId, appName }) {
                             window.open(issue.url, '_blank', 'noreferrer');
                           }
                         }}
-                        className="min-h-[44px] min-w-[44px] @min-[64rem]:min-h-0 @min-[64rem]:min-w-0 w-full @min-[64rem]:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors"
+                        className={`${ISSUE_ACTION_BUTTON} inline-flex items-center gap-1.5 border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 transition-colors`}
                       >
                         <ExternalLink size={14} />
                         <span>{forgeLabel}</span>
