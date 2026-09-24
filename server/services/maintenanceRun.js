@@ -355,12 +355,19 @@ async function evaluate(id, { ignoreTaskId }) {
     console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
     return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
   }
+  // Name the skips in the reason the run view shows: a run whose only selected
+  // check did not apply would otherwise finish as a bare "complete" with no
+  // explanation of why nothing ran.
+  const skippedCount = Object.keys({ ...(run.skipped || {}), ...skippedSteps }).length;
+  const reason = skippedCount
+    ? `maintenance sequence complete — skipped ${skippedCount} ${skippedCount === 1 ? 'check that does' : 'checks that do'} not apply to this repository`
+    : 'maintenance sequence complete';
   await patchRun(id, {
-    completed, ...skippedPatch(run, skippedSteps), active: null, reason: 'maintenance sequence complete',
+    completed, ...skippedPatch(run, skippedSteps), active: null, reason,
     status: MAINTENANCE_RUN_STATUS.COMPLETED, finishedAt: new Date().toISOString(),
   });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
-  return { dispatched: false, completed: true, reason: 'maintenance sequence complete' };
+  return { dispatched: false, completed: true, reason };
 }
 
 /** Merge newly skipped steps into the run's `skipped` map (step id → reason), or add nothing. */
