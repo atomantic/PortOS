@@ -164,11 +164,12 @@ describe('CoS config lives in its own file', () => {
   });
 
   // The shipped default is the ONLY thing stopping a never-configured install
-  // from auto-starting CoS (server/services/cos.js reads `alwaysOn || autoStart`
-  // at boot) and with it every work-generation flag that defaults on. That used
-  // to be enforced by a data.reference/cos/config.json seed, which was deleted
-  // in #6182's repair (migration 340) — so nothing but this literal enforces
-  // AGENTS.md's "No cold-bootstrap LLM calls" for a fresh install now.
+  // from auto-starting CoS (server/services/cos.js reads
+  // `alwaysOn || autoStart || state.running` at boot — and a fresh install's
+  // state.running is false) and with it every work-generation flag that defaults
+  // on. That used to be enforced by a data.reference/cos/config.json seed, which
+  // was deleted in #6182's repair (migration 340) — so nothing but this literal
+  // enforces AGENTS.md's "No cold-bootstrap LLM calls" for a fresh install now.
   it('defaults alwaysOn off so a fresh install never auto-starts CoS', async () => {
     const { DEFAULT_CONFIG } = await freshModule();
     expect(DEFAULT_CONFIG.alwaysOn).toBe(false);
