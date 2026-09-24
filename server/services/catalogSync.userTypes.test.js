@@ -129,6 +129,19 @@ describe('applyRemoteChanges — catalogTypes LWW merge', () => {
     expect(getActiveCatalogType('faction')?.label).toBe('Reborn');
   });
 
+  it.each([PORTOS_SCHEMA_VERSIONS.catalog - 1, PORTOS_SCHEMA_VERSIONS.catalog + 1, undefined])(
+    'accepts user-type tombstones without a deleted boolean at version %s', async (catalog) => {
+      store = { catalogUserTypes: [{ id: 'faction', label: 'Faction', primaryContentKey: 'x', fields: [], updatedAt: '2026-01-01' }] };
+      const stats = await applyRemoteChanges({
+        portosMeta: { schemaVersions: { catalog } },
+        catalogTypes: [{ id: 'faction', updatedAt: '2026-01-01', deletedAt: '2026-02-01' }],
+      });
+      expect(stats.catalogTypes.applied).toBe(1);
+      expect(store.catalogUserTypes[0].deletedAt).toBe('2026-02-01');
+      expect(getActiveCatalogType('faction')).toBeUndefined();
+    },
+  );
+
   it('rejects with 412 when the sender is ahead on the catalog schema', async () => {
     await expect(applyRemoteChanges({
       portosMeta: { schemaVersions: { catalog: PORTOS_SCHEMA_VERSIONS.catalog + 1 } },

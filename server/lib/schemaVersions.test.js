@@ -44,8 +44,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
   });
 
-  it('version-gates catalog media generation provenance', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(9);
+  it('version-gates catalog object attachments and media generation provenance', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(10);
   });
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {

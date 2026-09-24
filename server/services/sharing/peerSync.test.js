@@ -3714,6 +3714,24 @@ describe('peerSync', () => {
       expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
     });
 
+    it.each([PORTOS_SCHEMA_VERSIONS.catalog - 1, undefined])(
+      'rejects catalog version %s before merging the owning universe or its bundle', async (catalog) => {
+        vi.mocked(getBackendName).mockReturnValue('postgres');
+        vi.mocked(mergeUniversesFromSync).mockClear();
+        const schemaVersions = { ...PORTOS_SCHEMA_VERSIONS, catalog };
+        await expect(applyIncomingPush({
+          kind: 'universe', record: liveUniverse, assetManifest: [], sourceInstanceId: 'peer-a',
+          catalogBundle: { ingredients: [{ id: 'example-object', type: 'object', payload: { name: 'Edited on peer' } }] },
+          portosMeta: { schemaVersions },
+        })).rejects.toMatchObject({
+          code: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
+          details: { ahead: [], behind: [{ category: 'catalog', senderV: catalog ?? 0, receiverV: PORTOS_SCHEMA_VERSIONS.catalog }] },
+        });
+        expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+        expect(applyCatalogRemoteChanges).not.toHaveBeenCalled();
+      },
+    );
+
     // #3926: the gate used to key on `ingredients` alone, so any bundle whose
     // live rows sat in another block (`refs` today; `relations`/`tags`/`media`/
     // `catalogTypes` from catalog v4–v8) slipped past it and got applied on a
@@ -3758,7 +3776,7 @@ describe('peerSync', () => {
       expect(applyCatalogRemoteChanges).toHaveBeenCalledTimes(1);
     });
 
-    it('receiver does NOT gate a tombstone-only bundle from a schema-ahead sender', async () => {
+    it.each([PORTOS_SCHEMA_VERSIONS.catalog + 1, PORTOS_SCHEMA_VERSIONS.catalog - 1, undefined])('receiver does NOT gate a tombstone-only bundle at catalog version %s', async (catalog) => {
       // Tombstone rows are id+deleted+deletedAt+updatedAt at every catalog
       // version, so they stay exempt — otherwise federated catalog deletes
       // would stall the moment one peer upgrades ahead.
@@ -3772,7 +3790,7 @@ describe('peerSync', () => {
           relations: [{ id: 'cat-rel-1', deleted: true, deletedAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-01T00:00:00Z' }],
         },
         sourceInstanceId: 'peer-a',
-        portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, catalog: PORTOS_SCHEMA_VERSIONS.catalog + 1 }, portosVersion: '99.0.0' },
+        portosMeta: { schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, catalog }, portosVersion: '99.0.0' },
       });
       expect(applyCatalogRemoteChanges).toHaveBeenCalledTimes(1);
     });
