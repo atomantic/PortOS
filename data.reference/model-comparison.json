@@ -2,260 +2,1124 @@
   "schemaVersion": 1,
   "observations": [
     {
-      "id": "zen-free-2026-09-big-pickle",
-      "provider": "OpenCode Zen",
-      "model": "big-pickle",
+      "id": "lcb-generation-2023-05-08--2025-04-07-claude-3-haiku-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-3-haiku",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 22.5,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Big Pickle. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Claude-3-Haiku); serving style Claude3. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-deepseek-v4-flash-free",
-      "provider": "OpenCode Zen",
-      "model": "deepseek-v4-flash-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-claude-3.5-sonnet-20241022-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-3.5-sonnet-20241022",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 48.7,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "DeepSeek V4 Flash Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Claude-3.5-Sonnet-20241022); serving style Claude3. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-muse-spark-1.3-contributor-free",
-      "provider": "OpenCode Zen",
-      "model": "muse-spark-1.3-contributor-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-claude-opus-4-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-opus-4",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Thinking",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (2,110 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 66.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 2110 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Muse Spark 1.3 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Claude-Opus-4 (Thinking)); serving style Claude3Thinking. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-muse-spark-1.2-contributor-free",
-      "provider": "OpenCode Zen",
-      "model": "muse-spark-1.2-contributor-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-claude-sonnet-4-unspecified",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-4",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Thinking",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (2,110 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 64,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 2110 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Muse Spark 1.2 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Claude-Sonnet-4 (Thinking)); serving style Claude3Thinking. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-mimo-v2.5-free",
-      "provider": "OpenCode Zen",
-      "model": "mimo-v2.5-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-deepseek-r1-0528-unspecified",
+      "provider": "DeepSeek",
+      "model": "deepseek-r1-0528",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 84.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "MiMo V2.5 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (DeepSeek-R1-0528); serving style DeepSeekR1. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-ling-3.0-flash-fin-free",
-      "provider": "OpenCode Zen",
-      "model": "ling-3.0-flash-fin-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-deepseek-v3-unspecified",
+      "provider": "DeepSeek",
+      "model": "deepseek-v3",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 49.6,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Ling 3.0 Flash Fin Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (DeepSeek-V3); serving style DeepSeekAPI. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-nemotron-3-ultra-free",
-      "provider": "OpenCode Zen",
-      "model": "nemotron-3-ultra-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-opencodereasoning-nemotron-1.1-32b-unspecified",
+      "provider": "NVIDIA",
+      "model": "opencodereasoning-nemotron-1.1-32b",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 78.5,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Nemotron 3 Ultra Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "NVIDIA model (https://huggingface.co/nvidia/OpenCodeReasoning-Nemotron-1.1-32B); LiveCodeBench lists DeepSeekR1 as the serving style. Costs, throughput and quota are not published by the benchmark source."
     },
     {
-      "id": "zen-free-2026-09-nemotron-3.5-lightning-free",
-      "provider": "OpenCode Zen",
-      "model": "nemotron-3.5-lightning-free",
+      "id": "lcb-generation-2023-05-08--2025-04-07-openreasoning-nemotron-32b-unspecified",
+      "provider": "NVIDIA",
+      "model": "openreasoning-nemotron-32b",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 81,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "NVIDIA model (https://huggingface.co/nvidia/OpenReasoning-Nemotron-32B); LiveCodeBench lists DeepSeekR1 as the serving style. Costs, throughput and quota are not published by the benchmark source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gemini-2.5-flash-04.17-unspecified",
+      "provider": "Google",
+      "model": "gemini-2.5-flash-04-17",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 75.1,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 0.3,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard input price."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 2.5,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard output price."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Nemotron 3.5 Lightning Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Gemini-2.5-Flash-04-17); serving style GeminiThinking. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gemini-2.5-flash-05.20-unspecified",
+      "provider": "Google",
+      "model": "gemini-2.5-flash-05-20",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 76.2,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.3,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 2.5,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (Gemini-2.5-Flash-05-20); serving style GeminiThinking. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gemini-2.5-pro-05.06-unspecified",
+      "provider": "Google",
+      "model": "gemini-2.5-pro-05-06",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 82.7,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.25,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (Gemini-2.5-Pro-05-06); serving style GeminiThinking. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gemini-2.5-pro-06.05-unspecified",
+      "provider": "Google",
+      "model": "gemini-2.5-pro-06-05",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 84.3,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.25,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://ai.google.dev/gemini-api/docs/pricing",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published Gemini API standard-tier family rate for prompts up to 200,000 tokens, in USD per 1 million input or output tokens, checked 2026-09-23. Applied as a family-level reference to this dated leaderboard snapshot; not a historical price, measured task cost, or subscription usage. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (Gemini-2.5-Pro-06-05); serving style GeminiThinking. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-exaone-4.0-32b-unspecified",
+      "provider": "LG AI",
+      "model": "exaone-4.0-32b",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 80.9,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (EXAONE-4.0-32B); serving style EXAONE. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gpt-4-turbo-2024-04.09-unspecified",
+      "provider": "OpenAI",
+      "model": "gpt-4-turbo-2024-04-09",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 37.3,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (GPT-4-Turbo-2024-04-09); serving style OpenAIChat. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gpt-4o-2024-08.06-unspecified",
+      "provider": "OpenAI",
+      "model": "gpt-4o-2024-08-06",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 38.3,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2.5,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-4o",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-4o",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (GPT-4O-2024-08-06); serving style OpenAIChat. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-gpt-4o-mini-2024-07.18-unspecified",
+      "provider": "OpenAI",
+      "model": "gpt-4o-mini-2024-07-18",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 35.5,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.15,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.6,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-4o-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (GPT-4O-mini-2024-07-18); serving style OpenAIChat. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o3-high",
+      "provider": "OpenAI",
+      "model": "o3",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 84.7,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O3 (High)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o3-mini-2025-01.31-high",
+      "provider": "OpenAI",
+      "model": "o3-mini-2025-01-31",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 77.7,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O3-Mini-2025-01-31 (High)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o3-mini-2025-01.31-low",
+      "provider": "OpenAI",
+      "model": "o3-mini-2025-01-31",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 70.6,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O3-Mini-2025-01-31 (Low)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o3-mini-2025-01.31-unspecified",
+      "provider": "OpenAI",
+      "model": "o3-mini-2025-01-31",
+      "effort": "unspecified",
+      "configuration": "Med",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 75.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o3-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O3-Mini-2025-01-31 (Med)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o4-mini-high",
+      "provider": "OpenAI",
+      "model": "o4-mini",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 87.3,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O4-Mini (High)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o4-mini-low",
+      "provider": "OpenAI",
+      "model": "o4-mini",
+      "effort": "low",
+      "configuration": "Low",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 77.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O4-Mini (Low)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-o4-mini-medium",
+      "provider": "OpenAI",
+      "model": "o4-mini",
+      "effort": "medium",
+      "configuration": "Medium",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 84.5,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard input price."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/o4-mini",
+          "retrievedAt": "2026-09-24T06:54:29Z",
+          "methodology": "Published standard API text-token rate in USD per 1 million input or output tokens, checked 2026-09-23. This is API reference pricing, not measured benchmark-task cost, subscription usage, or a guarantee that a historical snapshot remains accessible. Metric: standard output price."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (O4-Mini (Medium)); serving style OpenAIReason. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-qwen3-235b-a22b-unspecified",
+      "provider": "Qwen",
+      "model": "qwen3-235b-a22b",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 80.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (Qwen3-235B-A22B); serving style CodeQwenInstruct. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-xbai-o4-medium-unspecified",
+      "provider": "Unknown",
+      "model": "xbai-o4-medium",
+      "effort": "unspecified",
+      "configuration": "Full generation split, all difficulties",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 80.1,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (XBai-o4-medium); serving style XBai. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "lcb-generation-2023-05-08--2025-04-07-grok-3-mini-high",
+      "provider": "xAI",
+      "model": "grok-3-mini",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 78.1,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Sourced from LiveCodeBench (Grok-3-Mini (High)); serving style Grok. Costs, throughput and quota are not published by this source."
+    },
+    {
+      "id": "xai-grok-4.7-pricing-2026-09-21-standard",
+      "provider": "xAI",
+      "model": "grok-4.7",
+      "effort": "unspecified",
+      "configuration": "xAI API grok-4.7; input context at most 200,000 tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-21)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cached input is $0.50/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+    },
+    {
+      "id": "xai-grok-4.7-pricing-2026-09-21-long-context",
+      "provider": "xAI",
+      "model": "grok-4.7",
+      "effort": "unspecified",
+      "configuration": "xAI API grok-4.7; input context above 200,000 tokens, up to 500,000",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-21)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "outputPerMillion": {
+        "value": 12,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cached input is $1.00/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+    },
+    {
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-fast-mode",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) fast mode, speed=\"fast\", research preview; global inference_geo",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "Anthropic official pricing page, \"Fast mode pricing\" table; USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "Anthropic official pricing page, \"Fast mode pricing\" table; USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Pricing only, and a distinct billing configuration from the standard $4/$20 rates carried by the v4.3.2 observation. Fast mode is Claude API first-party only (not AWS/Bedrock/Vertex), applies across the full context window, and is unavailable with the Batch API. Artificial Analysis publishes no separate fast-mode evaluation, so no quality, throughput or latency is claimed here."
+    },
+    {
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-standard",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) standard global endpoint; base input / output tokens, inference_geo=global",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published list price for Claude Opus 5.5 ($4/MTok base input, $20/MTok output). Cache writes ($5/MTok 5m, $8/MTok 1h) and cache reads ($0.20/MTok, 0.05x base) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. inference_geo=\"us\" carries a documented 1.1x multiplier and is a different configuration. No quality, latency, throughput or benchmark task cost is published on this page."
+    },
+    {
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-batch",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API Batch API (asynchronous, 50% discount); base input / output tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published Batch API price for Claude Opus 5.5 ($2/MTok input, $10/MTok output). Batch is a distinct billing configuration from the standard endpoint and is not interchangeable with it (asynchronous, no fast mode). Unknown fields stay null."
+    },
+    {
+      "id": "openai-gpt-5.5-pro-pricing-2026-09-23-standard",
+      "provider": "OpenAI",
+      "model": "gpt-5.5-pro",
+      "effort": "unspecified",
+      "configuration": "OpenAI API, standard tier, request under 272K context",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 30,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "OpenAI official API pricing page; USD per million uncached input tokens, standard tier, <272K context."
+        }
+      },
+      "outputPerMillion": {
+        "value": 180,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "OpenAI official API pricing page; USD per million output tokens, standard tier, <272K context."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Pricing only. Reachable on this install through the opencode-zen provider. The pricing page lists no cached-input rate for this model. Reasoning tokens are not separately priced by the source, so reasoningPerMillion stays null rather than assumed equal to output. No Artificial Analysis page for this variant was retrieved this run."
+    },
+    {
+      "id": "openai-gpt-6-luna-pricing-2026-09-23-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenAI published standard-tier list price for gpt-6-luna ($0.10/M uncached input, $0.50/M output; cached input $0.01/M is a separate class). Long-context requests bill at 2x; Batch/Flex ($0.05/$0.25) and Fast ($0.20/$1.00) are separate tiers not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. Cross-checked against the OpenRouter public model list for the same model, which publishes the same $0.10/$0.50 rates."
+    },
+    {
+      "id": "openai-gpt-6-sol-pricing-2026-09-23-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6-sol",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenAI published standard-tier list price for gpt-6-sol ($2.00/M uncached input, $10.00/M output; cached input $0.20/M is a separate class). The page documents long-context requests at 2x the standard rates and separate Batch/Flex ($1/$5) and Fast ($4/$20) tiers — each a different configuration, not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. No quality, throughput or latency on this source."
+    },
+    {
+      "id": "xai-grok-build-0.1-pricing-2026-09-23-standard",
+      "provider": "xAI",
+      "model": "grok-build-0.1",
+      "effort": "unspecified",
+      "configuration": "xAI API, standard tier, request at most 200,000 input tokens (256k context window)",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://docs.x.ai/developers/models",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "xAI official model documentation pricing table; USD per million uncached input tokens at the <200k input tier."
+        }
+      },
+      "outputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://docs.x.ai/developers/models",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "xAI official model documentation pricing table; USD per million output tokens at the <200k input tier."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Pricing only. Reachable on this install through the opencode-zen provider. xAI documents a separate above-200k tier at $2.00/$4.00 per million and a $0.20 cached-input rate; the catalog schema has no cached-input field, so only the uncached rate is recorded. No published quality, throughput, latency or benchmark task cost was found for this model."
     },
     {
       "id": "nim-free-2026-09-google-gemma-4-31b-it",
@@ -322,68 +1186,772 @@
       "notes": "Laguna XS 2.1. Free NVIDIA NIM endpoint listed on 2026-09-15. Pricing is temporary; usage limits, trial credits, and NVIDIA data-use terms apply (https://build.nvidia.com/poolside/laguna-xs-2.1). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named OpenRouter or local serving's scores."
     },
     {
-      "id": "xai-grok-4.7-pricing-2026-09-21-standard",
-      "provider": "xAI",
-      "model": "grok-4.7",
+      "id": "zen-free-2026-09-big-pickle",
+      "provider": "OpenCode Zen",
+      "model": "big-pickle",
       "effort": "unspecified",
-      "configuration": "xAI API grok-4.7; input context at most 200,000 tokens",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
       "billing": "api",
-      "benchmark": "Official API pricing (2026-09-21)",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Big Pickle. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-deepseek-v4-flash-free",
+      "provider": "OpenCode Zen",
+      "model": "deepseek-v4-flash-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "DeepSeek V4 Flash Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-ling-3.0-flash-fin-free",
+      "provider": "OpenCode Zen",
+      "model": "ling-3.0-flash-fin-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Ling 3.0 Flash Fin Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-mimo-v2.5-free",
+      "provider": "OpenCode Zen",
+      "model": "mimo-v2.5-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "MiMo V2.5 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-muse-spark-1.2-contributor-free",
+      "provider": "OpenCode Zen",
+      "model": "muse-spark-1.2-contributor-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Muse Spark 1.2 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-muse-spark-1.3-contributor-free",
+      "provider": "OpenCode Zen",
+      "model": "muse-spark-1.3-contributor-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Muse Spark 1.3 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-nemotron-3-ultra-free",
+      "provider": "OpenCode Zen",
+      "model": "nemotron-3-ultra-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Nemotron 3 Ultra Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-nemotron-3.5-lightning-free",
+      "provider": "OpenCode Zen",
+      "model": "nemotron-3.5-lightning-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Nemotron 3.5 Lightning Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-deepseek-deepseek-v4-flash-vision-exp",
+      "provider": "OpenRouter",
+      "model": "deepseek-v4-flash-vision-exp",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint deepseek/deepseek-v4-flash-vision-exp; standard tier, uncached input / output tokens; context window 1048576 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.22,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.66,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `deepseek/deepseek-v4-flash-vision-exp` (DeepSeek: DeepSeek V4 Flash Vision Exp) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-sakana-fugu-ultra-v2",
+      "provider": "OpenRouter",
+      "model": "fugu-ultra-v2",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint sakana/fugu-ultra-v2; standard tier, uncached input / output tokens; context window 1000000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 30,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `sakana/fugu-ultra-v2` (Sakana: Fugu Ultra v2) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. The endpoint publishes a long-context price override above a token threshold; only the standard tier is recorded here. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-openai-gpt-6-astra-pro",
+      "provider": "OpenRouter",
+      "model": "gpt-6-astra-pro",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint openai/gpt-6-astra-pro; standard tier, uncached input / output tokens; context window 1050000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `openai/gpt-6-astra-pro` (OpenAI: GPT-6 Astra Pro) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. The endpoint publishes a long-context price override above a token threshold; only the standard tier is recorded here. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-tencent-hy-mt2-30b-a3b",
+      "provider": "OpenRouter",
+      "model": "hy-mt2-30b-a3b",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint tencent/hy-mt2-30b-a3b; standard tier, uncached input / output tokens; context window 8192 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.074,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.295,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `tencent/hy-mt2-30b-a3b` (Tencent: Hy-MT2-30B-A3B) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-tencent-hy4-preview",
+      "provider": "OpenRouter",
+      "model": "hy4-preview",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint tencent/hy4-preview; standard tier, uncached input / output tokens; context window 1048576 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.834,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 2.501,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `tencent/hy4-preview` (Tencent: Hy4 preview) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-thinkingmachines-inkling-small-free",
+      "provider": "OpenRouter",
+      "model": "inkling-small:free",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint thinkingmachines/inkling-small:free; standard tier, uncached input / output tokens; context window 1048576 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `thinkingmachines/inkling-small:free` (Thinking Machines: Inkling Small (free)) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. A `:free` variant carries a zero published rate and is a temporary promotional endpoint subject to OpenRouter and upstream rate limits and data-use terms; the zero is a published price, not a measurement of cost to serve. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-poolside-laguna-s-2.1",
+      "provider": "OpenRouter",
+      "model": "laguna-s-2.1",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint poolside/laguna-s-2.1; standard tier, uncached input / output tokens; context window 1048576 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.09,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.18,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `poolside/laguna-s-2.1` (Poolside: Laguna S 2.1) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-inception-mercury-2.5",
+      "provider": "OpenRouter",
+      "model": "mercury-2.5",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint inception/mercury-2.5; standard tier, uncached input / output tokens; context window 260000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.04,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.15,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `inception/mercury-2.5` (Inception: Mercury 2.5) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-meta-muse-glimmer-30b",
+      "provider": "OpenRouter",
+      "model": "muse-glimmer-30b",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint meta/muse-glimmer-30b; standard tier, uncached input / output tokens; context window 131072 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.3,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 1.2,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `meta/muse-glimmer-30b` (Meta: Muse Glimmer 30B) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-nex-agi-nex-n2.5-pro-free",
+      "provider": "OpenRouter",
+      "model": "nex-n2.5-pro:free",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint nex-agi/nex-n2.5-pro:free; standard tier, uncached input / output tokens; context window 262144 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `nex-agi/nex-n2.5-pro:free` (Nex AGI: Nex-N2.5-Pro (free)) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. A `:free` variant carries a zero published rate and is a temporary promotional endpoint subject to OpenRouter and upstream rate limits and data-use terms; the zero is a published price, not a measurement of cost to serve. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-qwen-qwen3.8-flash",
+      "provider": "OpenRouter",
+      "model": "qwen3.8-flash",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint qwen/qwen3.8-flash; standard tier, uncached input / output tokens; context window 1000000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.15,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.47,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `qwen/qwen3.8-flash` (Qwen: Qwen3.8 Flash) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-qwen-qwen3.8-max-0902",
+      "provider": "OpenRouter",
+      "model": "qwen3.8-max-0902",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint qwen/qwen3.8-max-0902; standard tier, uncached input / output tokens; context window 1000000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
         "value": 2,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
         }
       },
       "outputPerMillion": {
         "value": 6,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Cached input is $0.50/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+      "notes": "OpenRouter published per-token price for the routed endpoint `qwen/qwen3.8-max-0902` (Qwen: Qwen3.8 Max (0902)) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
     },
     {
-      "id": "xai-grok-4.7-pricing-2026-09-21-long-context",
-      "provider": "xAI",
-      "model": "grok-4.7",
+      "id": "openrouter-pricing-2026-09-23-sakana-sakana-namazu",
+      "provider": "OpenRouter",
+      "model": "sakana-namazu",
       "effort": "unspecified",
-      "configuration": "xAI API grok-4.7; input context above 200,000 tokens, up to 500,000",
+      "configuration": "OpenRouter routed endpoint sakana/sakana-namazu; standard tier, uncached input / output tokens; context window 262144 tokens",
       "billing": "api",
-      "benchmark": "Official API pricing (2026-09-21)",
+      "benchmark": "Unbenchmarked (pricing only)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 4,
+        "value": 0.95,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
         }
       },
       "outputPerMillion": {
-        "value": 12,
+        "value": 4,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Cached input is $1.00/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+      "notes": "OpenRouter published per-token price for the routed endpoint `sakana/sakana-namazu` (Sakana: Sakana Namazu) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-inference-net-schematron-v2-turbo",
+      "provider": "OpenRouter",
+      "model": "schematron-v2-turbo",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint inference-net/schematron-v2-turbo; standard tier, uncached input / output tokens; context window 128000 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.03,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.15,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `inference-net/schematron-v2-turbo` (Inference.net: Schematron V2 Turbo) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-bytedance-seed-seed-2.0-code",
+      "provider": "OpenRouter",
+      "model": "seed-2.0-code",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint bytedance-seed/seed-2.0-code; standard tier, uncached input / output tokens; context window 262144 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `bytedance-seed/seed-2.0-code` (ByteDance Seed: Seed-2.0-Code) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. The endpoint publishes a long-context price override above a token threshold; only the standard tier is recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
+    },
+    {
+      "id": "openrouter-pricing-2026-09-23-upstage-solar-pro4",
+      "provider": "OpenRouter",
+      "model": "solar-pro4",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed endpoint upstage/solar-pro4; standard tier, uncached input / output tokens; context window 524288 tokens",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0.09,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.prompt (USD per uncached input token) converted to USD per million tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.36,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-23T00:31:00Z",
+          "methodology": "OpenRouter public model list: pricing.completion (USD per output token) converted to USD per million tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter published per-token price for the routed endpoint `upstage/solar-pro4` (Upstage: Solar Pro 4) read from the public model list API. This is OpenRouter's charge for its own routing of this model, not the model creator's first-party API price; the two can differ and are separate configurations. Cached-input reads are priced separately and are a different token class from the uncached input recorded here. No separate reasoning-token price is published for this endpoint, so reasoningPerMillion is null rather than assumed to equal the output rate. OpenRouter may route a request across several underlying serving providers, so throughput and latency are not attributable to a single endpoint from this source and stay null. No quality score or benchmark task cost is published here."
     }
   ]
 }

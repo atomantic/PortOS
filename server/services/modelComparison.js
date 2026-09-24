@@ -1,4 +1,4 @@
-/** Machine-local reference prices and PortOS-run benchmark observations. */
+/** Shipped public reference data and machine-local PortOS benchmark observations. */
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { readFile } from 'fs/promises';
@@ -29,6 +29,26 @@ export async function getModelComparison() {
   // replaced with an empty store by the next import.
   const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
   return { ...catalog, observations: catalog.observations.filter(row => !retiredExternalBenchmark(row)) };
+}
+
+/** Public comparison data always comes from the shipped catalog, never local files. */
+export async function getShippedModelComparison() {
+  const raw = await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8');
+  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  return {
+    ...catalog,
+    observations: catalog.observations.filter(row =>
+      !retiredExternalBenchmark(row) && !isPortosBenchmarkObservation(row) && !hasPortosRunSource(row)),
+  };
+}
+
+/** Local task-benchmark history is exposed only to Models → Performance. */
+export async function getPortosModelBenchmarkObservations() {
+  const catalog = await getModelComparison();
+  return {
+    schemaVersion: catalog.schemaVersion,
+    observations: catalog.observations.filter(isPortosBenchmarkObservation),
+  };
 }
 
 async function mergeModelComparison(incoming) {

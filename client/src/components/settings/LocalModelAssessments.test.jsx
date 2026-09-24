@@ -31,12 +31,22 @@ vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
 
+vi.mock('../../services/apiModelPerformance', () => ({
+  getModelPerformanceBenchmarks: vi.fn(),
+  discoverModelPerformanceModels: vi.fn(),
+  runModelPerformanceBenchmark: vi.fn(),
+}));
+
 import {
   getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
   getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
+import {
+  getModelPerformanceBenchmarks,
+  runModelPerformanceBenchmark,
+} from '../../services/apiModelPerformance';
 import { localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import LocalModelAssessments from './LocalModelAssessments.jsx';
 
@@ -137,6 +147,7 @@ describe('LocalModelAssessments', () => {
     vi.clearAllMocks();
     idleSweep();
     getLocalLlmAssessments.mockResolvedValue(report());
+    getModelPerformanceBenchmarks.mockResolvedValue({ schemaVersion: 1, observations: [], inventory: [] });
   });
 
   it('loads persisted results on mount without triggering any model run', async () => {
@@ -145,6 +156,16 @@ describe('LocalModelAssessments', () => {
     // The AI Provider Usage Policy boundary: mounting the panel must never
     // reach a provider.
     expect(runLocalLlmAssessment).not.toHaveBeenCalled();
+  });
+
+  it('loads PortOS benchmark inventory only when its Performance tab is opened', async () => {
+    const user = userEvent.setup();
+    await renderPanel();
+    expect(getModelPerformanceBenchmarks).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'PortOS bench' }));
+    await waitFor(() => expect(getModelPerformanceBenchmarks).toHaveBeenCalledTimes(1));
+    expect(runModelPerformanceBenchmark).not.toHaveBeenCalled();
   });
 
   it('runs an explicit local TUI task check and ranks by completion time', async () => {
