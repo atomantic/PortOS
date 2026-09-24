@@ -56,6 +56,7 @@ import {
   enabledAppIdsByTaskType,
   resolveQuotaBurnStepAvailability,
 } from '../lib/quotaBurnTaskRef.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { isProgrammaticScheduledTaskType } from '../lib/taskTargetScope.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -207,6 +208,12 @@ export async function resolveQuotaBurnStep(step, catalog = null) {
   if (!interval) {
     return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.UNKNOWN_TASK, reason: `scheduled task "${ref.taskType}" could not be read` } };
   }
+  const effective = effectiveSettings(step, interval);
+  // Here rather than at invoke, so the status page's probe and the runner agree
+  // that an audit which cannot apply to its app is not ready work, and so a
+  // maintenance run can complete it as skipped from the same verdict.
+  const notApplicable = await notApplicableReason(ref, effective.params);
+  if (notApplicable) return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE, reason: notApplicable } };
   return {
     kind: isProgrammaticScheduledTaskType(ref.taskType) ? 'programmatic' : 'builtin',
     // Handed back so a caller that resolved through a catalog keeps reading that
@@ -214,8 +221,16 @@ export async function resolveQuotaBurnStep(step, catalog = null) {
     catalog: resolvedCatalog,
     ref,
     interval,
-    effective: effectiveSettings(step, interval),
+    effective,
   };
+}
+
+/** Why an audit step cannot apply to its app, or null — honoring the user's explicit override. */
+async function notApplicableReason(ref, params) {
+  if (!ref.appId || params?.runInapplicableAudit === true || !isAuditTaskType(ref.taskType)) return null;
+  const { inapplicableAuditReason } = await import('./appQualitySchedule.js');
+  const reason = await inapplicableAuditReason(ref.appId, ref.taskType);
+  return reason ? `"${ref.taskType}" does not apply to this app: ${reason}` : null;
 }
 
 /**
@@ -404,7 +419,9 @@ async function queuedOnDemandReason(queued, taskType, appId) {
  */
 export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null, maintenanceRunId = null } = {}) {
   const resolved = await resolveQuotaBurnStep(step, catalog);
-  if (resolved.unavailable) return declined(resolved.unavailable.reason);
+  // The code rides along so a caller can tell "does not apply" (a maintenance
+  // run completes that step as skipped) from a refusal it must hold on.
+  if (resolved.unavailable) return { ...declined(resolved.unavailable.reason), code: resolved.unavailable.code };
 
   if (resolved.kind === 'programmatic') return runProgrammaticStep({ resolved, family, context, force });
   if (resolved.kind === 'custom') return runCustomJobStep({ resolved, step, family, candidate, maintenanceRunId });
@@ -450,14 +467,6 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   const queued = await queuedOnDemandReason(resolved.catalog?.queued, resolved.ref.taskType, resolved.ref.appId);
   if (queued) return declined(queued);
 
-  // An audit that cannot apply to the target repository is declined HERE, so
-  // the burn moves on to work that can spend the window. The generator would
-  // refuse it too, but only after the request consumed the step's turn.
-  // A maintenance run's single explicit check carries the user's override.
-  const { inapplicableAuditReason } = await import('./appQualitySchedule.js');
-  const inapplicable = step.overrides?.params?.runInapplicableAudit ? null
-    : await inapplicableAuditReason(resolved.ref.appId, resolved.ref.taskType);
-  if (inapplicable) return declined(`"${resolved.ref.taskType}" does not apply to this app: ${inapplicable}`);
 
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return declined(picked.error);

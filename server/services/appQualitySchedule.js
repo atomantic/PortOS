@@ -36,7 +36,7 @@ import {
   resolveQualityScheduleOptions,
 } from '../lib/qualitySchedulePlan.js';
 import { cronWeekdayHours } from '../lib/cronFields.js';
-import { AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
+import { isFreshAssessment } from '../lib/auditQuality.js';
 import { getAppById, getAppTaskTypeOverrides, updateAppTaskTypeOverrides } from './apps.js';
 import { loadSchedule } from './taskScheduleStore.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression } from './taskScheduleConstants.js';
@@ -73,6 +73,10 @@ const CAPABILITY_PATTERNS = {
  */
 const CAPABILITY_TTL_MS = 60 * 1000;
 const capabilityCache = new Map();
+// The not-applicable rulings, on the same TTL: every automated dispatch lane and
+// the burn status page ask per step, and the answer changes only when an audit
+// of this app completes.
+const notApplicableCache = new Map();
 
 const missingPatterns = AUDIT_REPO_CAPABILITIES.filter(capability => !CAPABILITY_PATTERNS[capability]);
 if (missingPatterns.length) {
@@ -139,10 +143,15 @@ async function scanRepoCapabilities(repoPath) {
   const capabilities = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
   const { files, complete } = await listRepoFiles(repoPath);
   const scanned = files.filter(path => !VENDOR_SEGMENTS.test(path));
+  const pending = Object.entries(CAPABILITY_PATTERNS);
   for (const path of scanned) {
-    for (const [capability, patterns] of Object.entries(CAPABILITY_PATTERNS)) {
-      if (!capabilities[capability] && patterns.some(pattern => pattern.test(path))) capabilities[capability] = true;
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const [capability, patterns] = pending[index];
+      if (!patterns.some(pattern => pattern.test(path))) continue;
+      capabilities[capability] = true;
+      pending.splice(index, 1);
     }
+    if (!pending.length) break;
   }
   return { capabilities, scanned: scanned.length, complete: complete && scanned.length > 0 };
 }
@@ -158,15 +167,20 @@ async function scanRepoCapabilities(repoPath) {
  * not evidence about this one.
  */
 async function loadNotApplicableCategories(appId, now = Date.now()) {
+  const cached = notApplicableCache.get(appId);
+  if (cached && now - cached.at < CAPABILITY_TTL_MS) return cached.value;
   const result = await query(
     `SELECT DISTINCT ON (category) category, assessed_at, report FROM app_quality_measurements
      WHERE app_id = $1 ORDER BY category, assessed_at DESC, agent_id DESC`,
     [appId]
   ).catch(() => null);
+  // A failed read is "no rulings known", and is not cached — the next ask retries.
   if (!result) return new Set();
-  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable'
-    && now - Date.parse(row.assessed_at) <= AUDIT_FRESHNESS_MS)
+  const value = new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable'
+    && isFreshAssessment(row.assessed_at, now))
     .map(row => normalizeAuditTaskType(row.category)));
+  notApplicableCache.set(appId, { at: now, value });
+  return value;
 }
 
 /**
@@ -189,17 +203,10 @@ export async function resolveQualityChecks(app) {
   // deselect most of the catalog over a repository nobody actually looked at.
 
   const checks = AUDIT_TASK_TYPE_LIST.map(taskType => {
-    const requirement = auditCapabilityRequirement(taskType);
-    let applicable = true;
-    let reason = null;
-    if (notApplicable.has(taskType)) {
-      applicable = false;
-      reason = 'a previous audit reported this category as not applicable here';
-    } else if (requirement && complete && !capabilities[requirement]) {
-      applicable = false;
-      reason = AUDIT_CAPABILITY_MISSING_REASON[requirement];
-    }
-    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable, reason };
+    const reason = notApplicable.has(taskType)
+      ? 'a previous audit reported this category as not applicable here'
+      : missingCapabilityReason(taskType, capabilities, complete);
+    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable: !reason, reason };
   });
   return { checks, capabilities, scanned, complete };
 }
@@ -227,16 +234,30 @@ export async function resolveAuditApplicability(app, taskType) {
 }
 
 /**
- * Every category this app's repository cannot have findings for, as
- * `{ [category]: reason }` — the shape `summarizeAppQuality` takes, so the
- * Quality tab's denominator and runner agree with the dispatch gate.
+ * The repository-shape half of the verdict: why `taskType` cannot apply to a
+ * checkout with these capabilities, or null. Only a COMPLETE inventory licenses
+ * a negative (see `resolveQualityChecks`).
+ */
+function missingCapabilityReason(taskType, capabilities, complete) {
+  const requirement = auditCapabilityRequirement(taskType);
+  return requirement && complete && !capabilities[requirement] ? AUDIT_CAPABILITY_MISSING_REASON[requirement] : null;
+}
+
+/**
+ * Every category this app's repository shape rules out, as
+ * `{ [category]: reason }` — the shape `summarizeAppQuality` takes. Reads the
+ * cached file scan only: the summary already sees each category's own
+ * `not-applicable` report, so re-reading the measurements here would repeat
+ * the query the caller just made.
  *
  * @param {object} app - The managed app record
  * @returns {Promise<Record<string, string>>}
  */
 export async function inapplicableAuditReasons(app) {
-  const { checks } = await resolveQualityChecks(app);
-  return Object.fromEntries(checks.filter(check => !check.applicable).map(check => [check.taskType, check.reason]));
+  const { capabilities, complete } = await detectRepoCapabilities(app);
+  return Object.fromEntries(AUDIT_TASK_TYPE_LIST
+    .map(taskType => [taskType, missingCapabilityReason(taskType, capabilities, complete)])
+    .filter(([, reason]) => reason));
 }
 
 /**
@@ -251,9 +272,7 @@ export async function inapplicableAuditReasons(app) {
  */
 export async function inapplicableAuditReason(appId, taskType) {
   if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, normalizeAuditTaskType(taskType))) return null;
-  // `.then` rather than a direct call, so even a synchronous throw from the
-  // app lookup lands in the fail-open catch instead of the caller's lane.
-  const verdict = await Promise.resolve(appId).then(id => getAppById(id))
+  const verdict = await getAppById(appId)
     .then(app => (app ? resolveAuditApplicability(app, taskType) : null))
     .catch(() => null);
   return verdict && !verdict.applicable ? verdict.reason || 'not applicable to this repository' : null;

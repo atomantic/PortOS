@@ -90,6 +90,12 @@ export function parseAuditQualityReport(summary, category) {
 
 export const AUDIT_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Whether an assessment taken at `assessedAt` still counts at `now` (not future-dated, not older than the window). */
+export function isFreshAssessment(assessedAt, now = Date.now()) {
+  const age = now - Date.parse(assessedAt);
+  return Number.isFinite(age) && age >= 0 && age <= AUDIT_FRESHNESS_MS;
+}
+
 /**
  * Roll the newest measurement per category into the app's quality summary.
  *
@@ -112,8 +118,7 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const report = auditQualityReportSchema.safeParse(record?.report);
     const valid = report.success && report.data.category === id;
     const assessedAt = record?.assessedAt;
-    const age = now - Date.parse(assessedAt);
-    const stale = valid && (!Number.isFinite(age) || age < 0 || age > AUDIT_FRESHNESS_MS);
+    const stale = valid && !isFreshAssessment(assessedAt, now);
     const contributes = valid && !stale && report.data.coverage === 'broad' && report.data.confidence !== 'low' && report.data.score !== null;
     const reportedNotApplicable = valid && !stale && report.data.coverage === 'not-applicable';
     const detectedReason = Object.hasOwn(inapplicable, id) ? inapplicable[id] : null;

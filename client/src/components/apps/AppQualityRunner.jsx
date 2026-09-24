@@ -34,7 +34,7 @@ export default function AppQualityRunner({ app, children }) {
   const [runs, setRuns] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const revision = useRef(0);
-  const picker = useProviderModels({ filter: enabledProcessProviderFilter, withEffort: true, preselectDefaults: true });
+  const picker = useProviderModels({ filter: enabledProcessProviderFilter, withEffort: true });
   const taskTypes = categories.filter(category => (selection === 'all' && isApplicable(category)) || (selection === 'missing' ? needsCheck(category) : category.id === selection)).map(category => category.id);
   const loadRuns = useCallback(async () => {
     const requestedRevision = revision.current;
@@ -49,7 +49,10 @@ export default function AppQualityRunner({ app, children }) {
     setBusy(true);
     setError('');
     const response = await startMaintenanceRun({ appId: app.id, providerId: picker.selectedProviderId, model: picker.selectedModel,
-      effort: effort || null, mode, claimBetweenAudits: false, taskTypes }, { silent: true }).catch(err => { setError(err.message); return null; });
+      effort: effort || null, mode, claimBetweenAudits: false, taskTypes,
+      // A category picked by name is the user's explicit choice and runs even if
+      // the repository scan says it cannot apply; batch selections stay gated.
+      ...(selection !== 'missing' && selection !== 'all' ? { explicitCheck: true } : {}) }, { silent: true }).catch(err => { setError(err.message); return null; });
     if (response) setRuns(previous => [response.run, ...previous.filter(entry => entry.id !== response.run.id)]);
     setBusy(false);
   };

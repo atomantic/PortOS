@@ -173,16 +173,12 @@ export function serializeQualitySnapshot(repository, records) {
  */
 const MAX_CATEGORY_NAMES = 256;
 const CATEGORY_NAME = /^[a-z][a-z0-9-]{0,63}$/;
-function parseCategoryDictionary(values) {
-  if (!Array.isArray(values) || values.length > MAX_CATEGORY_NAMES) return null;
-  if (values.some(value => typeof value !== 'string' || !CATEGORY_NAME.test(value))) return null;
-  if (new Set(values).size !== values.length) return null;
-  return values;
-}
+const parseCategoryDictionary = values => parseDictionary(values, { max: MAX_CATEGORY_NAMES, accepts: value => CATEGORY_NAME.test(value) });
 
-function parseDictionary(values, allowed) {
-  if (!Array.isArray(values) || values.length > allowed.size) return null;
-  if (values.some(value => typeof value !== 'string' || !allowed.has(value))) return null;
+/** A dictionary of unique strings, each passing `accepts`, at most `max` long — or null. */
+function parseDictionary(values, { max, accepts }) {
+  if (!Array.isArray(values) || values.length > max) return null;
+  if (values.some(value => typeof value !== 'string' || !accepts(value))) return null;
   if (new Set(values).size !== values.length) return null;
   return values;
 }
@@ -245,8 +241,8 @@ function parseV2(value) {
   }
   if (typeof value.repository !== 'string' || !REPOSITORY.test(value.repository)) return { status: 'malformed' };
   const categories = parseCategoryDictionary(value.categories);
-  const coverage = parseDictionary(value.coverage, COVERAGE);
-  const confidence = parseDictionary(value.confidence, CONFIDENCE);
+  const coverage = parseDictionary(value.coverage, { max: COVERAGE.size, accepts: v => COVERAGE.has(v) });
+  const confidence = parseDictionary(value.confidence, { max: CONFIDENCE.size, accepts: v => CONFIDENCE.has(v) });
   if (!categories || !coverage || !confidence) return { status: 'malformed' };
   if (!Array.isArray(value.measurements) || value.measurements.length > MAX_QUALITY_SNAPSHOT_ROWS) return { status: 'malformed' };
   if (value.measurements.length > 0 && (categories.length === 0 || coverage.length === 0 || confidence.length === 0)) {

@@ -165,6 +165,18 @@ export const createPrReviewerDefaultStages = () => ([
 // win when a schedule is loaded. A `feature` association is the exception: it
 // is code-owned and makes the task invisible and non-runnable while that
 // install-wide feature is disabled.
+/**
+ * The shared shape of an on-demand audit that files issues by default, with open
+ * issues + PRs preloaded so it dedups against in-flight work without spending its
+ * own forge calls. A factory, not a shared object: each type gets its own
+ * `taskMetadata`, so a write to one row can never leak into another.
+ */
+const fileIssuesAuditInterval = () => ({
+  type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null,
+  dataInputs: ['open-issues', 'open-pull-requests'],
+  taskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
+});
+
 export const DEFAULT_TASK_INTERVALS = {
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
@@ -343,20 +355,20 @@ export const DEFAULT_TASK_INTERVALS = {
   // must not land a refactor) and on-demand until the user picks a cadence.
   // Open issues + PRs are preloaded so the agent dedups against in-flight
   // work without spending its own forge calls, the way module-hygiene does.
-  'better-complexity':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-cognitive-load':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-structural-drift':    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-runtime-safety':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-dependency-freedom':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-test-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-complexity':          fileIssuesAuditInterval(),
+  'better-cognitive-load':      fileIssuesAuditInterval(),
+  'better-structural-drift':    fileIssuesAuditInterval(),
+  'better-runtime-safety':      fileIssuesAuditInterval(),
+  'better-dependency-freedom':  fileIssuesAuditInterval(),
+  'better-test-quality':        fileIssuesAuditInterval(),
   // Service and data-platform lenses (see AUDIT_DEFINITIONS). File-issues by
   // default — their findings usually touch production configuration — with
   // open issues + PRs preloaded for dedup like the do:better lanes above.
-  'infrastructure':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'data-integrity':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'reliability':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'privacy':                    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'cost-efficiency':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'infrastructure':             fileIssuesAuditInterval(),
+  'data-integrity':             fileIssuesAuditInterval(),
+  'reliability':                fileIssuesAuditInterval(),
+  'privacy':                    fileIssuesAuditInterval(),
+  'cost-efficiency':            fileIssuesAuditInterval(),
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },

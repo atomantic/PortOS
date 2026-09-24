@@ -55,6 +55,8 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
+import { pluralize } from '../lib/textUtils.js';
 import { isQueuedContinuation } from '../lib/agentOutcome.js';
 import { cosEvents } from './cosEvents.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
@@ -176,7 +178,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -202,7 +204,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
     id, appId, familyId, claimFamilyId, ...pins,
     taskTypes,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck }),
     completed: {},
     active: null,
     reason: null,
@@ -318,37 +320,36 @@ async function evaluate(id, { ignoreTaskId }) {
 
   const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
-  const skippedSteps = {};
+  // Step id → why it did not apply. Persisted with every hold, not only on
+  // dispatch, so a later hold does not throw away skips this pass decided.
+  const skipped = { ...run.skipped };
   for (const step of run.steps) {
     if (completed[step.id]) continue;
     const shape = sequenceStepShapeReason(step);
-    if (shape) return hold(shape);
-    // An audit this repository cannot have findings for is COMPLETED as
-    // skipped, not dispatched: the generator would refuse it anyway, and a
-    // refused request would leave the step pending — re-dispatched on every
-    // evaluation. Checked here so the run moves straight to the next step.
-    const inapplicable = step.drain || step.overrides?.params?.runInapplicableAudit ? null
-      : await (await import('./appQualitySchedule.js')).inapplicableAuditReason(run.appId, step.taskRef?.taskType);
-    if (inapplicable) {
-      completed[step.id] = new Date().toISOString();
-      skippedSteps[step.id] = inapplicable;
-      console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — not applicable: ${inapplicable}`);
-      continue;
-    }
+    if (shape) return hold(shape, { completed, skipped });
     if (step.drain) {
       const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
       if (probe.drained) {
         completed[step.id] = new Date().toISOString();
         continue;
       }
-      if (!probe.job) return hold(probe.reason);
+      if (!probe.job) return hold(probe.reason, { completed, skipped });
     }
     const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
-    if (!result.dispatched) return hold(result.reason, { completed, ...skippedPatch(run, skippedSteps) });
+    // An audit this repository cannot have findings for is COMPLETED as
+    // skipped: holding on it would leave the step pending forever, since the
+    // verdict will not change on the next evaluation.
+    if (result.code === QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE) {
+      completed[step.id] = new Date().toISOString();
+      skipped[step.id] = result.reason;
+      console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — ${result.reason}`);
+      continue;
+    }
+    if (!result.dispatched) return hold(result.reason, { completed, skipped });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {
       completed,
-      ...skippedPatch(run, skippedSteps),
+      skipped,
       steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
       reason: null,
       active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
@@ -359,22 +360,17 @@ async function evaluate(id, { ignoreTaskId }) {
   // Name the skips in the reason the run view shows: a run whose only selected
   // check did not apply would otherwise finish as a bare "complete" with no
   // explanation of why nothing ran.
-  const skippedCount = Object.keys({ ...(run.skipped || {}), ...skippedSteps }).length;
+  const skippedCount = Object.keys(skipped).length;
   const reason = skippedCount
-    ? `maintenance sequence complete — skipped ${skippedCount} ${skippedCount === 1 ? 'check that does' : 'checks that do'} not apply to this repository`
+    ? `maintenance sequence complete — skipped ${pluralize(skippedCount, 'check that does', 'checks that do')} not apply to this repository`
     : 'maintenance sequence complete';
   await patchRun(id, {
-    completed, ...skippedPatch(run, skippedSteps), active: null, reason,
+    completed, skipped, active: null, reason,
     status: MAINTENANCE_RUN_STATUS.COMPLETED, finishedAt: new Date().toISOString(),
   });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
   return { dispatched: false, completed: true, reason };
 }
-
-/** Merge newly skipped steps into the run's `skipped` map (step id → reason), or add nothing. */
-const skippedPatch = (run, skippedSteps) => (Object.keys(skippedSteps).length
-  ? { skipped: { ...(run.skipped || {}), ...skippedSteps } }
-  : {});
 
 /**
  * Continuation. An audit step is done when its agent SUCCEEDS; a failed agent

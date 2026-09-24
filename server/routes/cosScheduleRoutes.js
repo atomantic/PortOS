@@ -40,6 +40,9 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
   taskTypes: z.array(z.enum(Object.keys(AUDIT_DEFINITIONS))).min(1).max(Object.keys(AUDIT_DEFINITIONS).length).optional(),
+  // The user named these checks one by one (the Quality tab's per-category Run),
+  // so each runs even where the repository scan says it cannot apply.
+  explicitCheck: z.boolean().optional(),
   mode: z.enum(['file-issues', 'fix']).optional(),
   claimBetweenAudits: z.boolean().optional(),
   claimHandler: z.object({

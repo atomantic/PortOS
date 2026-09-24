@@ -8,9 +8,9 @@ const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-mai
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 
 const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} }));
-// Applicability is decided by the repository scan (covered in
-// appQualitySchedule.test.js); here only the run's reaction to a verdict matters.
-vi.mock('./appQualitySchedule.js', () => ({ inapplicableAuditReason: vi.fn(async (_appId, taskType) => state.inapplicable[taskType] || null) }));
+// Applicability is decided by the quota-burn resolver (covered in
+// quotaBurnInvoke.test.js); the invoke double below returns its not-applicable
+// verdict so these cases pin only the run's reaction to it.
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
@@ -35,6 +35,8 @@ vi.mock('./scheduledHandlers/providerPick.js', async (importActual) => await imp
 vi.mock('./quotaBurnInvoke.js', () => ({
   getQuotaBurnTaskCatalog: vi.fn(async () => ({ builtin: {}, custom: {} })),
   invokeQuotaBurnStep: vi.fn(async (call) => {
+    const reason = state.inapplicable[call.step.taskRef.taskType];
+    if (reason && !call.step.overrides?.params?.runInapplicableAudit) return { dispatched: false, reason, code: 'not-applicable' };
     state.invoked.push(call);
     return state.dispatch || { dispatched: true, summary: `ran ${call.step.taskRef.taskType}`, awaiting: { requestId: `demand-${state.invoked.length}` } };
   }),
@@ -70,9 +72,9 @@ beforeEach(async () => {
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
-  it('runs a single explicitly chosen check even where it does not apply', async () => {
+  it('runs a check the user chose by name even where it does not apply', async () => {
     state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
-    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive'] });
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive'], explicitCheck: true });
     expect(run.steps[0].overrides.params).toMatchObject({ runInapplicableAudit: true });
     expect(dispatchedTypes()).toEqual(['mobile-responsive']);
   });

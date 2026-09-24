@@ -38,7 +38,7 @@ vi.mock('./taskScheduleStore.js', () => ({
 }));
 
 // Applicability comes from the repository scan (appQualitySchedule.test.js);
-// these cases only pin how a burn step reacts to the verdict.
+// these cases only pin how the resolver reports it to the probe and the invoke.
 const inapplicable = vi.hoisted(() => ({ byType: {} }));
 vi.mock('./appQualitySchedule.js', () => ({
   inapplicableAuditReason: vi.fn(async (_appId, taskType) => inapplicable.byType[taskType] || null),
@@ -222,7 +222,7 @@ describe('refusal paths', () => {
   it('refuses a disabled task type', async () => {
     state.schedule.ux.enabled = false;
     const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } });
-    expect(result).toEqual({ dispatched: false, reason: expect.stringContaining('is disabled') });
+    expect(result).toEqual({ dispatched: false, reason: expect.stringContaining('is disabled'), code: 'disabled' });
     dispatchedNothing();
   });
 
@@ -410,11 +410,13 @@ describe('refusal paths', () => {
 });
 
 describe('built-in agent task invocation', () => {
-  it('declines an audit that cannot apply to its app, unless the step carries the user override', async () => {
+  it('reports an audit that cannot apply as no work and declines it, unless the step carries the user override', async () => {
     inapplicable.byType = { ux: 'no user interface found in this repository' };
     const auditStep = (params) => step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, overrides: { params } });
+    // The status page's probe and the runner agree it is not ready work.
+    expect(await countQuotaBurnStepPending({ step: auditStep({ fileIssues: true }), family: grok })).toMatchObject({ count: 0, detail: expect.stringMatching(/does not apply/) });
     const refused = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true }), family: grok, candidate });
-    expect(refused).toEqual({ dispatched: false, reason: expect.stringMatching(/does not apply to this app: no user interface/) });
+    expect(refused).toEqual({ dispatched: false, reason: expect.stringMatching(/does not apply to this app: no user interface/), code: 'not-applicable' });
     expect(state.triggered).toHaveLength(0);
     const forced = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true, runInapplicableAudit: true }), family: grok, candidate });
     expect(forced.dispatched).toBe(true);
