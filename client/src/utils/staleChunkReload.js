@@ -13,7 +13,10 @@ const STALE_CHUNK_PATTERNS = [
   'failed to fetch dynamically imported module',
   'error loading dynamically imported module',
   'importing a module script failed',
-  'mime type'
+  'mime type',
+  // A mixed old/new chunk graph can resolve the module request but provide a
+  // stale superclass export, which fails while evaluating the imported module.
+  'superclass is not a constructor'
 ];
 
 const RELOAD_FLAG = 'portos.staleChunkReloadAttempted';

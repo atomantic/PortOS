@@ -59,6 +59,7 @@ describe('isStaleChunkError', () => {
     'Failed to fetch dynamically imported module',
     'error loading dynamically imported module',
     'Expected a JavaScript module but got MIME type text/html',
+    'The superclass is not a constructor.',
   ])('matches %s', (msg) => {
     expect(isStaleChunkError(new Error(msg))).toBe(true);
   });
