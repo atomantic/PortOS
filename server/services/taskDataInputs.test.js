@@ -68,6 +68,44 @@ describe('taskDataInputs', () => {
     expect(empty[0].content).toContain('No open issues match');
   });
 
+  it('names the gh login remedy when the forge host has no gh credential', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const exec = vi.fn().mockResolvedValue({
+      code: -1, stdout: '',
+      stderr: 'none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`',
+    });
+    const [section] = await resolveTaskDataInputs(['open-issues'], {
+      app: APP,
+      dependencies: {
+        resolveTracker: vi.fn().mockResolvedValue({ forge: 'gh', host: 'ghes.example.com' }),
+        listIssues: (options) => listForgeOpenIssues({ ...options, exec }),
+      },
+    });
+    expect(section.content).toContain('gh auth login --hostname ghes.example.com');
+    expect(section.content).toContain('Do not interpret this as an empty source');
+    expect(section.content).not.toContain('source read failed');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('adds no forge sections and makes no forge calls when none are selected', async () => {
+    const resolveTracker = vi.fn();
+    const listIssues = vi.fn();
+    const listPullRequests = vi.fn();
+    const sections = await resolveTaskDataInputs([], {
+      app: APP, dependencies: { resolveTracker, listIssues, listPullRequests },
+    });
+    expect(sections).toEqual([]);
+    expect(appendTaskDataInputs('Do the task.', sections)).toBe('Do the task.');
+    await resolveTaskDataInputs(['project-goals'], {
+      app: APP,
+      dependencies: { resolveTracker, listIssues, listPullRequests, findFiles: vi.fn().mockResolvedValue([]) },
+    });
+    expect(resolveTracker).not.toHaveBeenCalled();
+    expect(listIssues).not.toHaveBeenCalled();
+    expect(listPullRequests).not.toHaveBeenCalled();
+  });
+
   it('uses task policy for issue context and fails closed when policy resolution fails', async () => {
     const listConfiguredIssues = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 7, title: 'Eligible' }] });
     const listIssues = vi.fn();
@@ -266,8 +304,8 @@ describe('taskDataInputs', () => {
   it('does not treat blank forge output as a legitimately empty list', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '   ', stderr: '' });
     await expect(listForgeOpenIssues({ cli: 'gh', cwd: '/repo', exec }))
-      .resolves.toEqual({ ok: false, issues: [] });
+      .resolves.toMatchObject({ ok: false, issues: [] });
     await expect(listForgePullRequests({ cli: 'gh', cwd: '/repo', exec }))
-      .resolves.toEqual({ ok: false, items: [] });
+      .resolves.toMatchObject({ ok: false, items: [] });
   });
 });

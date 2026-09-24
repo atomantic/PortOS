@@ -9,11 +9,13 @@
 import { readdir } from 'fs/promises';
 import { join, relative } from 'path';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
 import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
 import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
-import { execGh } from './github.js';
+import { classifyGhProbe, execGh, ghRemedy } from './github.js';
 import { execGlabJson } from './gitlab.js';
 
 const MAX_DOCUMENT_FILES = 3;
@@ -126,14 +128,39 @@ export function renderForgeItems(items, { emptyMessage }) {
 
 async function runForgeCli(cli, args, { cwd, env } = {}) {
   if (cli === 'gh') {
-    const stdout = await execGh(args, FORGE_TIMEOUT_MS, { cwd, env }).catch(() => null);
-    return stdout === null ? { code: -1, stdout: '' } : { code: 0, stdout };
+    let stderr = '';
+    const stdout = await execGh(args, FORGE_TIMEOUT_MS, { cwd, env }).catch((err) => {
+      stderr = err?.ghStderr || err?.message || '';
+      return null;
+    });
+    return stdout === null ? { code: -1, stdout: '', stderr } : { code: 0, stdout };
   }
   if (cli === 'glab') {
-    const { rows } = await execGlabJson(args, cwd, FORGE_TIMEOUT_MS);
-    return rows === null ? { code: -1, stdout: '' } : { code: 0, stdout: JSON.stringify(rows) };
+    const { rows, reason } = await execGlabJson(args, cwd, FORGE_TIMEOUT_MS);
+    return rows === null ? { code: -1, stdout: '', stderr: `glab ${reason}` } : { code: 0, stdout: JSON.stringify(rows) };
   }
   return { code: -1, stdout: '' };
+}
+
+/**
+ * Name WHY a forge read failed so the agent (and the operator reading its
+ * prompt) sees the remedy instead of a generic "source read failed" — most
+ * often a GitHub Enterprise host missing from `gh auth status`.
+ */
+export function describeForgeReadFailure({ cli, stderr = '', host = null } = {}) {
+  const text = String(stderr || '').trim();
+  if (cli === 'gh') {
+    const { status } = classifyGhProbe({ code: 1, stderr: text });
+    if (status === 'not-authenticated' || status === 'unreachable') {
+      return ghRemedy(status, { hostname: host || 'github.com' });
+    }
+  }
+  const firstLine = text.split('\n').find((line) => line.trim())?.trim();
+  return firstLine ? `${cli} failed: ${redactPii(scrubSecretTokens(firstLine)).slice(0, 200)}` : 'source read failed';
+}
+
+function failedRead(cli, result) {
+  return result.code !== 0 ? (result.stderr || '') : `${cli} returned no parseable list`;
 }
 
 export async function listForgeOpenIssues({ cli, cwd, env, exec = runForgeCli } = {}) {
@@ -142,9 +169,9 @@ export async function listForgeOpenIssues({ cli, cwd, env, exec = runForgeCli } 
     ? ['issue', 'list', '-P', '100']
     : ['issue', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,state,url,labels'];
   const result = await exec(cli, args, { cwd, env });
-  if (result.code !== 0 || !result.stdout.trim()) return { ok: false, issues: [] };
+  if (result.code !== 0 || !result.stdout.trim()) return { ok: false, issues: [], error: failedRead(cli, result) };
   const parsed = safeJSONParse(result.stdout, null, { logError: false });
-  if (!Array.isArray(parsed)) return { ok: false, issues: [] };
+  if (!Array.isArray(parsed)) return { ok: false, issues: [], error: failedRead(cli, result) };
   return {
     ok: true,
     issues: parsed
@@ -171,9 +198,9 @@ export async function listForgePullRequests({ cli, cwd, env, state = 'open', exe
         '--json', 'number,title,author,url,isDraft,headRefName,baseRefName,labels,closedAt'
       ];
   const result = await exec(cli, args, { cwd, env });
-  if (result.code !== 0 || !result.stdout.trim()) return { ok: false, items: [] };
+  if (result.code !== 0 || !result.stdout.trim()) return { ok: false, items: [], error: failedRead(cli, result) };
   const parsed = safeJSONParse(result.stdout, null, { logError: false });
-  if (!Array.isArray(parsed)) return { ok: false, items: [] };
+  if (!Array.isArray(parsed)) return { ok: false, items: [], error: failedRead(cli, result) };
   // GitLab's --closed excludes merged MRs on current glab versions. Keep the
   // explicit filter as a compatibility guard if a version returns both.
   const items = closed
@@ -184,6 +211,14 @@ export async function listForgePullRequests({ cli, cwd, env, state = 'open', exe
 
 function unavailableMessage(label, reason = 'source read failed') {
   return `${label} could not be preloaded (${reason}). Do not interpret this as an empty source.`;
+}
+
+function forgeUnavailable(label, forge, result) {
+  const reason = result?.error != null
+    ? describeForgeReadFailure({ cli: forge.cli, stderr: result.error, host: forge.host })
+    : undefined;
+  if (reason) console.warn(`⚠️ Task data input "${label}" not preloaded: ${reason}`);
+  return unavailableMessage(label, reason);
 }
 
 async function resolveForgeContext(app, deps) {
@@ -238,21 +273,21 @@ const INPUT_LOADERS = {
           { emptyMessage: 'No open issues match this task’s configured filters (help wanted is excluded).' }
         )
         + (result.truncated ? TRUNCATION_NOTICE : '')
-      : unavailableMessage('Open issues');
+      : forgeUnavailable('Open issues', forge, result);
   },
   'open-pull-requests': async ({ app, deps, forge }) => {
     if (!forge) return unavailableMessage('Open pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'open' });
     return result.ok
       ? renderForgeItems(result.items, { emptyMessage: 'No open pull requests.' })
-      : unavailableMessage('Open pull requests');
+      : forgeUnavailable('Open pull requests', forge, result);
   },
   'closed-unmerged-pull-requests': async ({ app, deps, forge }) => {
     if (!forge) return unavailableMessage('Closed unmerged pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'closed-unmerged' });
     return result.ok
       ? renderForgeItems(result.items, { emptyMessage: 'No recently closed unmerged pull requests.' })
-      : unavailableMessage('Closed unmerged pull requests');
+      : forgeUnavailable('Closed unmerged pull requests', forge, result);
   },
 };
 

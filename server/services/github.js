@@ -644,12 +644,16 @@ export function classifyGhProbe({ code = null, stderr = '', spawnError = null } 
  * Human-readable remedy for a given probe status. Kept beside the classifier so
  * the message and the state it describes cannot drift apart.
  */
-export function ghRemedy(status) {
+export function ghRemedy(status, { hostname = null } = {}) {
   switch (status) {
     case 'not-installed':
       return 'Install the GitHub CLI (brew install gh) to let PortOS read pull requests and issues.';
     case 'not-authenticated':
-      return 'Run `gh auth login` — PortOS can reach GitHub but has no usable credential.';
+      // gh keeps one credential per host, and SSH access to a repo's git remote
+      // grants no API access — so an enterprise host needs its own login.
+      return hostname
+        ? `Run \`gh auth login --hostname ${hostname}\` — gh has no usable credential for ${hostname} (SSH git access does not grant API access).`
+        : 'Run `gh auth login` — PortOS can reach GitHub but has no usable credential.';
     case 'unreachable':
       return 'gh cannot open an outbound connection. If an outbound firewall (e.g. Little Snitch) is installed, allow the gh binary to reach api.github.com — a denied connect surfaces as "bad file descriptor".';
     case 'error':
