@@ -175,6 +175,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(gitlab).toContain('Never force-delete with `-D`');
   });
 
+  it('every claim flow publishes a review-blocked PR instead of stranding the branch (#8201)', () => {
+    for (const key of ['plan-task-claim', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira']) {
+      const body = DEFAULT_TASK_PROMPTS[key];
+      expect(body, key).toContain('**Required-review publication rule:**');
+      expect(body, key).toContain('REVIEW_STATUS=review-blocked');
+      expect(body, key).not.toContain('never open the PR on the strength of it');
+    }
+  });
+
   it('plan-task v18 scheduled default omits review while plan-task-claim preserves it', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-task'];
     const claimFlow = DEFAULT_TASK_PROMPTS['plan-task-claim'];
