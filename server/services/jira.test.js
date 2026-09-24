@@ -18,14 +18,31 @@ const {
   createTicket,
   deleteInstance,
   fetchMyCurrentSprintTickets,
+  getInstances,
   getEpicChildren,
   getIssue,
   isCloudInstance,
   jiraAuthHeader,
   resolveCustomFieldIds,
+  saveInstances,
   updateTicket,
   upsertInstance
 } = await import('./jira.js');
+
+describe('upsertInstance token preservation', () => {
+  it('preserves the token and token age when editing metadata without a new token', async () => {
+    const tokenUpdatedAt = '2026-01-01T00:00:00.000Z';
+    await saveInstances({ instances: { example: {
+      id: 'example', name: 'Original', baseUrl: 'https://jira.example.com',
+      email: 'user@example.com', apiToken: 'stored-secret', tokenUpdatedAt
+    } } });
+    const updated = await upsertInstance('example', {
+      name: 'Renamed', baseUrl: 'https://jira.example.com', email: 'user@example.com'
+    });
+    expect(updated).toMatchObject({ name: 'Renamed', apiToken: 'stored-secret', tokenUpdatedAt });
+    expect((await getInstances()).instances.example).toMatchObject({ apiToken: 'stored-secret', tokenUpdatedAt });
+  });
+});
 
 describe('isCloudInstance', () => {
   it('treats *.atlassian.net hosts as Cloud', () => {

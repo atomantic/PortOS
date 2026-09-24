@@ -4,88 +4,13 @@ import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
-import { buildSubcalendarColorMap, eventChipStyle, getEventDayMinutes } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
+import { HOURS, PX_PER_HOUR, PX_PER_15MIN, START_HOUR, eventKey, getEventPosition, layoutEvents } from './calendarTimeGrid';
 import { formatDateFull, formatHourOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import useUrlParams from '../../hooks/useUrlParams';
-
-const START_HOUR = 0;
-const END_HOUR = 24;
-const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_HOUR);
-const PX_PER_HOUR = 80;
-const PX_PER_15MIN = PX_PER_HOUR / 4; // 20px per 15-min block
-const START_MINUTES = START_HOUR * 60;
-
-function getEventPosition(event, day) {
-  const { startMin, endMin } = getEventDayMinutes(event, day);
-  const top = ((startMin - START_MINUTES) / 60) * PX_PER_HOUR;
-  const height = Math.min(
-    Math.max(((endMin - startMin) / 60) * PX_PER_HOUR, PX_PER_15MIN),
-    HOURS.length * PX_PER_HOUR - top,
-  );
-  return { top, height };
-}
-
-/**
- * Assign columns to overlapping events so they render side-by-side.
- * Returns a Map of eventKey -> { column, totalColumns }
- */
-function layoutEvents(events, day) {
-  const items = events.map(e => {
-    const { startMin, endMin } = getEventDayMinutes(e, day);
-    return { event: e, startMin, endMin: Math.max(endMin, startMin + 15) };
-  }).sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
-
-  const groups = []; // groups of overlapping events
-  let currentGroup = [];
-  let groupEnd = -1;
-
-  for (const item of items) {
-    if (currentGroup.length === 0 || item.startMin < groupEnd) {
-      currentGroup.push(item);
-      groupEnd = Math.max(groupEnd, item.endMin);
-    } else {
-      groups.push(currentGroup);
-      currentGroup = [item];
-      groupEnd = item.endMin;
-    }
-  }
-  if (currentGroup.length > 0) groups.push(currentGroup);
-
-  const layout = new Map();
-  for (const group of groups) {
-    // Assign columns greedily
-    const columns = [];
-    for (const item of group) {
-      let placed = false;
-      for (let col = 0; col < columns.length; col++) {
-        if (columns[col] <= item.startMin) {
-          columns[col] = item.endMin;
-          layout.set(eventKey(item.event), { column: col, totalColumns: 0 });
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        layout.set(eventKey(item.event), { column: columns.length, totalColumns: 0 });
-        columns.push(item.endMin);
-      }
-    }
-    // Set totalColumns for all events in this group
-    const total = columns.length;
-    for (const item of group) {
-      const l = layout.get(eventKey(item.event));
-      if (l) l.totalColumns = total;
-    }
-  }
-  return layout;
-}
-
-function eventKey(e) {
-  return `${e.accountId}-${e.id}`;
-}
 
 export default function DayView({ accounts }) {
   const [date, setDate] = useState(() => {
@@ -130,8 +55,8 @@ export default function DayView({ accounts }) {
     setLoading(true);
   };
 
-  const allDayEvents = useMemo(() => events.filter(e => e.isAllDay), [events]);
-  const timedEvents = useMemo(() => events.filter(e => !e.isAllDay && getEventDayMinutes(e, date)), [events, date]);
+  const allDayEvents = useMemo(() => events.filter(e => e.isAllDay && eventOccursOnDay(e, date)), [events, date]);
+  const timedEvents = useMemo(() => events.filter(e => !e.isAllDay && eventOccursOnDay(e, date)), [events, date]);
   const layout = useMemo(() => layoutEvents(timedEvents, date), [timedEvents, date]);
   const colorMap = useMemo(() => buildSubcalendarColorMap(accounts), [accounts]);
   const selectedEventKey = searchParams.get('event');
@@ -145,7 +70,7 @@ export default function DayView({ accounts }) {
   }, []);
   const isToday = date.toDateString() === now.toDateString();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const nowTop = ((nowMinutes - START_MINUTES) / 60) * PX_PER_HOUR;
+  const nowTop = (nowMinutes / 60) * PX_PER_HOUR;
 
   return (
     <div className="space-y-4">

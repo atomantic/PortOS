@@ -62,7 +62,7 @@ describe('BrowseTab responsive list/detail', () => {
   it('selecting a note loads it and exposes a mobile back control that clears selection', async () => {
     renderTab();
     fireEvent.click(screen.getByText('Example Source'));
-    await waitFor(() => expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/sources/example.md'));
+    await waitFor(() => expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/sources/example.md', { silent: true }));
 
     const back = await screen.findByLabelText('Back to list');
     // Back control is mobile-only (hidden from md+).
@@ -76,11 +76,25 @@ describe('BrowseTab responsive list/detail', () => {
   it('opens a note from the URL and removes the note param when closed', async () => {
     renderTab(['/wiki/browse?vault=v1&note=wiki%2Fsources%2Fexample.md']);
 
-    await waitFor(() => expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/sources/example.md'));
+    await waitFor(() => expect(api.getNote).toHaveBeenCalledWith('v1', 'wiki/sources/example.md', { silent: true }));
     expect(await screen.findByRole('heading', { name: 'Example Source' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/wiki/browse?vault=v1'));
+  });
+
+  it('keeps a failed read selected and retries it without calling the page missing', async () => {
+    api.getNote.mockRejectedValueOnce(new Error('temporary vault failure'));
+    renderTab(['/wiki/browse?vault=v1&note=wiki%2Fsources%2Fexample.md']);
+
+    expect(await screen.findByText('Note is unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Page unavailable in this vault')).toBeNull();
+    expect(screen.getByTestId('location')).toHaveTextContent('note=wiki%2Fsources%2Fexample.md');
+
+    api.getNote.mockResolvedValueOnce(sampleNote);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: 'Example Source' })).toBeInTheDocument();
+    expect(api.getNote).toHaveBeenCalledTimes(2);
   });
 });
 

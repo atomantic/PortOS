@@ -47,6 +47,27 @@ function makeApp() {
   return app;
 }
 
+describe('POST /instances token updates', () => {
+  const details = { id: 'example', name: 'Example Jira', baseUrl: 'https://jira.example.com', email: 'user@example.com' };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('requires a token when creating an instance', async () => {
+    jiraService.getInstances.mockResolvedValue({ instances: {} });
+    const response = await request(makeApp()).post('/api/jira/instances').send(details);
+    expect(response.status).toBe(400);
+    expect(jiraService.upsertInstance).not.toHaveBeenCalled();
+  });
+
+  it('keeps the saved token when updating other fields', async () => {
+    jiraService.getInstances.mockResolvedValue({ instances: { example: { apiToken: 'stored-secret' } } });
+    jiraService.upsertInstance.mockResolvedValue({ ...details, hasApiToken: true, tokenUpdatedAt: '2026-01-01T00:00:00.000Z' });
+    const response = await request(makeApp()).post('/api/jira/instances').send(details);
+    expect(response.status).toBe(200);
+    expect(jiraService.upsertInstance).toHaveBeenCalledWith('example', expect.objectContaining({ apiToken: undefined }));
+  });
+});
+
 describe('GET /reports/:appId/:date', () => {
   it('rejects unsafe path parameters before reading a report', async () => {
     const response = await request(makeApp()).get('/api/jira/reports/bad@app/2026-01-01');

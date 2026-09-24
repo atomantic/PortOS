@@ -90,8 +90,10 @@ export async function upsertInstance(instanceId, instanceData) {
     name: instanceData.name,
     baseUrl: instanceData.baseUrl,
     email: instanceData.email,
-    apiToken: instanceData.apiToken, // Server/DC PAT (sent as Bearer) or Cloud API token (sent as Basic email:token)
-    tokenUpdatedAt: (instanceData.apiToken !== existing?.apiToken) ? new Date().toISOString() : (existing?.tokenUpdatedAt || new Date().toISOString()),
+    apiToken: instanceData.apiToken || existing?.apiToken, // Server/DC PAT (sent as Bearer) or Cloud API token (sent as Basic email:token)
+    tokenUpdatedAt: instanceData.apiToken && instanceData.apiToken !== existing?.apiToken
+      ? new Date().toISOString()
+      : (existing?.tokenUpdatedAt || new Date().toISOString()),
     createdAt: existing?.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

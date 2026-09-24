@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { act, render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
@@ -82,5 +82,36 @@ describe('Jira page — token age display', () => {
 
     expect(await screen.findByText(/Token saved 400 days ago/)).toBeInTheDocument();
     expect(screen.queryByText(/expired/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Jira instance management', () => {
+  it('shows a test result only on the tested instance', async () => {
+    api.get.mockResolvedValue({ instances: {
+      ...instance().instances,
+      'inst-2': { id: 'inst-2', name: 'Example JIRA', baseUrl: 'https://jira.example.com', email: 'other@example.com', hasApiToken: true }
+    } });
+    api.post.mockResolvedValue({ success: true, user: 'Example User', email: 'me@example.com' });
+    await renderPage();
+    const firstCard = screen.getByText('Acme JIRA').closest('.bg-gray-800');
+    const secondCard = screen.getByText('Example JIRA').closest('.bg-gray-800');
+
+    await act(async () => fireEvent.click(within(firstCard).getByRole('button', { name: 'Test' })));
+
+    expect(within(firstCard).getByText(/Authenticated as: Example User/)).toBeInTheDocument();
+    expect(within(secondCard).queryByText(/Authenticated as:/)).not.toBeInTheDocument();
+  });
+
+  it('saves a name edit without re-entering the existing token', async () => {
+    api.get.mockResolvedValue(instance());
+    api.post.mockResolvedValue({ id: 'inst-1', name: 'Renamed JIRA', hasApiToken: true });
+    await renderPage();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Edit' })));
+    expect(screen.getByPlaceholderText('Leave blank to keep existing key')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Display Name'), { target: { value: 'Renamed JIRA' } });
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+    await act(async () => fireEvent.click(save));
+    expect(api.post).toHaveBeenCalledWith('/jira/instances', expect.objectContaining({ id: 'inst-1', name: 'Renamed JIRA', apiToken: undefined }), { silent: true });
   });
 });

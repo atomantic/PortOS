@@ -94,7 +94,7 @@ describe('Wiki vault editor isolation', () => {
     await screen.findByText(noteB.content);
     expect(screen.queryByRole('textbox', { name: 'Note content' })).not.toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/wiki/browse?vault=vault-b&note=wiki%2Findex.md');
-    expect(getNote).toHaveBeenCalledWith('vault-b', noteB.path);
+    expect(getNote).toHaveBeenCalledWith('vault-b', noteB.path, { silent: true });
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue(noteB.content);
@@ -115,7 +115,7 @@ describe('Wiki vault editor isolation', () => {
     scanNotesVault.mockImplementation(id => id === 'vault-a' ? scanA.promise : Promise.resolve({ notes: [noteB] }));
     getNote.mockImplementation(id => id === 'vault-a' ? readA.promise : Promise.resolve(noteB));
     openA();
-    await waitFor(() => expect(getNote).toHaveBeenCalledWith('vault-a', noteA.path));
+    await waitFor(() => expect(getNote).toHaveBeenCalledWith('vault-a', noteA.path, { silent: true }));
 
     switchToB();
     await screen.findByText(noteB.content);
@@ -169,7 +169,7 @@ describe('Wiki vault editor isolation', () => {
     openA();
     await screen.findByText(noteA.content);
     switchToB();
-    await screen.findByText('Page unavailable in this vault');
+    await screen.findByText('Note is unavailable');
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete note' })).not.toBeInTheDocument();
     await act(async () => {});

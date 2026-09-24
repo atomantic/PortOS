@@ -1,448 +1,50 @@
-import { useState, useEffect } from 'react';
 import { Link } from 'react-router';
-import toast from '../components/ui/Toast';
-import PageSkeleton from '../components/ui/PageSkeleton';
-import { FormField } from '../components/ui/FormField';
-import Modal from '../components/ui/Modal';
-import api from '../services/api';
-import { invalidateInstanceFeatures } from '../hooks/useInstanceFeatures.js';
+import IntegrationInstancesPage from '../components/integrations/IntegrationInstancesPage';
 
-// PAT lifetimes aren't a fixed platform constant — Cloud API tokens typically don't
-// expire on a schedule at all, and Server/DC PAT expiration is chosen per-token by
-// whoever generated it. So there's no age threshold that reliably means "expired"
-// (a real instance was still authenticating fine 35+ days after its last save).
-// This is a soft, non-committal nudge — the Test button is the only real signal.
+// PAT lifetimes vary by Jira edition and token settings. Test is the reliable signal.
 const TOKEN_STALE_WARN_DAYS = 60;
+const getTokenAgeDays = tokenUpdatedAt => tokenUpdatedAt
+  ? Math.floor((Date.now() - new Date(tokenUpdatedAt).getTime()) / 86400000)
+  : null;
 
-function getTokenAgeDays(tokenUpdatedAt) {
-  if (!tokenUpdatedAt) return null;
-  const updated = new Date(tokenUpdatedAt);
-  return Math.floor((Date.now() - updated.getTime()) / 86400000);
-}
+const fields = [
+  { name: 'baseUrl', label: 'Base URL', type: 'url', placeholder: 'https://jira.example.com' },
+  { name: 'email', label: 'Email', type: 'email', placeholder: 'your.email@example.com' },
+  { name: 'apiToken', label: 'API Token (Personal Access Token)', type: 'password', secret: true, placeholder: 'Enter your JIRA Personal Access Token', help: 'Generate this from your JIRA profile → Personal Access Tokens' }
+];
+const initialForm = { id: '', name: '', baseUrl: '', email: '', apiToken: '' };
 
 export default function Jira() {
-  const [instances, setInstances] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [editingInstance, setEditingInstance] = useState(null);
-  const [testingInstance, setTestingInstance] = useState(null);
-  const [testResult, setTestResult] = useState(null);
-  const [saveError, setSaveError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
-
-  // Form state
-  const [formData, setFormData] = useState({
-    id: '',
-    name: '',
-    baseUrl: '',
-    email: '',
-    apiToken: ''
-  });
-
-  useEffect(() => {
-    loadInstances();
-  }, []);
-
-  const loadInstances = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/jira/instances', { silent: true });
-      setInstances(response.instances || {});
-    } catch (error) {
-      console.error(`❌ Failed to load JIRA instances: ${error.message}`);
-      toast.error(`Failed to load JIRA instances: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleEdit = (instance) => {
-    setEditingInstance(instance.id);
-    setFormData({
-      id: instance.id,
-      name: instance.name,
-      baseUrl: instance.baseUrl,
-      email: instance.email,
-      apiToken: '' // Don't pre-fill token for security
-    });
-    setTestResult(null);
-    setSaveError(null);
-  };
-
-  const handleCreate = () => {
-    setEditingInstance('new');
-    setFormData({
-      id: '',
-      name: '',
-      baseUrl: '',
-      email: '',
-      apiToken: ''
-    });
-    setTestResult(null);
-    setSaveError(null);
-  };
-
-  const handleCancel = () => {
-    setEditingInstance(null);
-    setFormData({
-      id: '',
-      name: '',
-      baseUrl: '',
-      email: '',
-      apiToken: ''
-    });
-    setTestResult(null);
-    setSaveError(null);
-  };
-
-  const handleSave = async () => {
-    try {
-      setSaving(true);
-      setSaveError(null);
-
-      const payload = {
-        id: formData.id || formData.name.toLowerCase().replace(/\s+/g, '-'),
-        name: formData.name,
-        baseUrl: formData.baseUrl,
-        email: formData.email,
-        apiToken: formData.apiToken
-      };
-
-      const saved = await api.post('/jira/instances', payload, { silent: true });
-
-      // The JIRA nav entries are auto-gated on whether any instance is
-      // configured, so saving the FIRST one is what reveals them — without this
-      // they stay hidden until a full reload.
-      invalidateInstanceFeatures('jira');
-      toast.success(`JIRA instance "${payload.name}" saved successfully`);
-      setInstances(prev => ({ ...prev, [saved.id]: saved }));
-      handleCancel();
-    } catch (error) {
-      console.error(`❌ Failed to save JIRA instance: ${error.message}`);
-      setSaveError(error.message);
-      toast.error(`Failed to save: ${error.message}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDeleteClick = (instanceId) => {
-    setDeleteConfirm(instanceId);
-  };
-
-  const handleDeleteConfirm = async () => {
-    const instanceId = deleteConfirm;
-    setDeleteConfirm(null);
-
-    try {
-      await api.delete(`/jira/instances/${instanceId}`, { silent: true });
-      // Removing the LAST instance re-hides the nav entries (see the save path).
-      invalidateInstanceFeatures('jira');
-      toast.success(`JIRA instance "${instanceId}" deleted`);
-      setInstances(prev => {
-        const next = { ...prev };
-        delete next[instanceId];
-        return next;
-      });
-    } catch (error) {
-      console.error(`❌ Failed to delete JIRA instance: ${error.message}`);
-      toast.error(`Failed to delete: ${error.message}`);
-    }
-  };
-
-  const handleDeleteCancel = () => {
-    setDeleteConfirm(null);
-  };
-
-  const handleTest = async (instanceId) => {
-    try {
-      setTestingInstance(instanceId);
-      setTestResult(null);
-
-      const response = await api.post(`/jira/instances/${instanceId}/test`, undefined, { silent: true });
-      setTestResult(response);
-
-      if (response.success) {
-        toast.success('Connection successful!');
-      }
-    } catch (error) {
-      setTestResult({
-        success: false,
-        error: error.message
-      });
-      toast.error(`Connection failed: ${error.message}`);
-    } finally {
-      setTestingInstance(null);
-    }
-  };
-
-  const handleInputChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
-    // Clear error when user starts typing
-    if (saveError) {
-      setSaveError(null);
-    }
-  };
-
-  if (loading) {
-    return <PageSkeleton label="Loading Jira" padded titleWidthClass="w-52" cards={2} />;
-  }
-
-  return (
-    <div className="@container/page min-w-0 p-4 sm:p-6">
-      <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
-        <h1 className="text-xl sm:text-2xl font-bold text-white">JIRA Integration</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            to="/devtools/jira/reports"
-            className="px-4 py-2 border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded text-sm"
-          >
-            Status Reports
-          </Link>
-          {!editingInstance && (
-            <button
-              onClick={handleCreate}
-              className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded"
-            >
-              + Add JIRA Instance
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        open={!!deleteConfirm}
-        onClose={handleDeleteCancel}
-        size="sm"
-        backdropClassName="bg-black/50"
-        ariaLabelledBy="jira-delete-title"
-      >
-        <div className="bg-gray-800 rounded-lg p-4 sm:p-6">
-          <h3 id="jira-delete-title" className="text-lg sm:text-xl font-bold text-white mb-4">Delete JIRA Instance?</h3>
-          <p className="text-gray-300 mb-6 text-sm sm:text-base break-words">
-            Are you sure you want to delete "{deleteConfirm}"? This will not affect existing tickets.
-          </p>
-          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-            <button
-              onClick={handleDeleteCancel}
-              className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleDeleteConfirm}
-              className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
-        {editingInstance ? (
-          <div className="bg-gray-800 rounded-lg p-4 sm:p-6 min-w-0">
-            <h2 className="text-lg sm:text-xl font-bold text-white mb-4">
-              {editingInstance === 'new' ? 'Add' : 'Edit'} JIRA Instance
-            </h2>
-
-            {saveError && (
-              <div role="alert" className="mb-4 p-3 bg-port-error/20 border border-port-error/40 rounded">
-                <p className="text-port-error font-medium">Error saving JIRA instance</p>
-                <p className="text-port-error/80 text-sm mt-1">{saveError}</p>
-              </div>
-            )}
-
-            <div className="space-y-4">
-              <FormField label="Instance ID" labelClassName="block text-sm font-medium text-gray-300 mb-1">
-                <input
-                  type="text"
-                  name="id"
-                  value={formData.id}
-                  onChange={handleInputChange}
-                  disabled={editingInstance !== 'new'}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white disabled:opacity-50"
-                  placeholder="e.g., company-jira"
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Unique identifier (cannot be changed after creation)
-                </p>
-              </FormField>
-
-              <FormField label="Display Name" labelClassName="block text-sm font-medium text-gray-300 mb-1">
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                  placeholder="e.g., Company JIRA"
-                />
-              </FormField>
-
-              <FormField label="Base URL" labelClassName="block text-sm font-medium text-gray-300 mb-1">
-                <input
-                  type="url"
-                  name="baseUrl"
-                  value={formData.baseUrl}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                  placeholder="https://jira.example.com"
-                />
-              </FormField>
-
-              <FormField label="Email" labelClassName="block text-sm font-medium text-gray-300 mb-1">
-                <input
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                  placeholder="your.email@example.com"
-                />
-              </FormField>
-
-              <FormField label="API Token (Personal Access Token)" labelClassName="block text-sm font-medium text-gray-300 mb-1">
-                <input
-                  type="password"
-                  name="apiToken"
-                  value={formData.apiToken}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
-                  placeholder="Enter your JIRA Personal Access Token"
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  Generate this from your JIRA profile → Personal Access Tokens
-                </p>
-              </FormField>
-
-              <div className="flex flex-col sm:flex-row gap-2">
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !formData.name || !formData.baseUrl || !formData.email || !formData.apiToken}
-                  className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
-                <button
-                  onClick={handleCancel}
-                  disabled={saving}
-                  className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="space-y-4 @5xl/page:col-start-2 @5xl/page:row-start-1">
-          {Object.values(instances).length === 0 ? (
-            <div className="bg-gray-800 rounded-lg p-8 text-center">
-              <p className="text-gray-400">No JIRA instances configured.</p>
-              <p className="text-gray-500 text-sm mt-2">
-                Add a JIRA instance to enable ticket creation for your apps.
-              </p>
-            </div>
-          ) : (
-            Object.values(instances).map((instance) => (
-              <div key={instance.id} className="bg-gray-800 rounded-lg p-4 sm:p-6">
-                <div className="flex flex-col gap-4">
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-lg font-bold text-white truncate">{instance.name}</h3>
-                    <p className="text-gray-400 text-sm mt-1 break-all">{instance.baseUrl}</p>
-                    <p className="text-gray-500 text-sm truncate">Email: {instance.email}</p>
-                    <p className="text-gray-500 text-sm">
-                      API Token: {instance.hasApiToken ? '✓ Configured' : '✗ Not set'}
-                    </p>
-                    {instance.hasApiToken && (() => {
-                      const ageDays = getTokenAgeDays(instance.tokenUpdatedAt);
-                      if (ageDays === null) return (
-                        <p className="text-port-warning text-sm mt-1">
-                          Token age unknown — re-save to start tracking age
-                        </p>
-                      );
-                      if (ageDays >= TOKEN_STALE_WARN_DAYS) return (
-                        <p className="text-port-warning text-sm mt-1">
-                          Token saved {ageDays} days ago — click Test to confirm it&apos;s still valid
-                        </p>
-                      );
-                      return null;
-                    })()}
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => handleTest(instance.id)}
-                      disabled={testingInstance === instance.id}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded disabled:opacity-50"
-                    >
-                      {testingInstance === instance.id ? 'Testing...' : 'Test'}
-                    </button>
-                    <button
-                      onClick={() => handleEdit(instance)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-warning hover:bg-port-warning/80 text-white text-sm rounded"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDeleteClick(instance.id)}
-                      className="flex-1 sm:flex-none px-3 py-2 sm:py-1 bg-port-error hover:bg-port-error/80 text-white text-sm rounded"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                {testResult && testResult.success !== undefined && (
-                  <div
-                    className={`mt-4 p-3 rounded ${
-                      testResult.success
-                        ? 'bg-port-success/20 border border-port-success/40'
-                        : 'bg-port-error/20 border border-port-error/40'
-                    }`}
-                  >
-                    {testResult.success ? (
-                      <div>
-                        <p className="text-port-success font-medium">✓ Connection successful</p>
-                        <p className="text-port-success/80 text-sm mt-1">
-                          Authenticated as: {testResult.user} ({testResult.email})
-                        </p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-port-error font-medium">✗ Connection failed</p>
-                        <p className="text-port-error/80 text-sm mt-1">{testResult.error}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        <div className="bg-gray-800 rounded-lg p-4 sm:p-6 min-w-0">
-          <h2 className="text-base sm:text-lg font-bold text-white mb-3 sm:mb-4">Usage</h2>
-          <div className="space-y-2 text-xs sm:text-sm text-gray-300">
-            <p>1. Add one or more JIRA instances above</p>
-            <p>2. Go to Apps and configure JIRA settings for each app</p>
-            <p>
-              3. When the Chief of Staff works on an app with JIRA enabled, it will:
-            </p>
-            <ul className="list-disc list-inside ml-2 sm:ml-4 space-y-1 text-gray-400">
-              <li>Create a JIRA ticket for the work</li>
-              <li>Create a feature branch (e.g., feature/PROJ-1234)</li>
-              <li>Make commits to that branch</li>
-              <li>Create a pull request with ticket link</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  return <IntegrationInstancesPage
+    title="JIRA" apiBase="/jira" feature="jira" fields={fields} initialForm={initialForm}
+    heading={<h1 className="text-xl sm:text-2xl font-bold text-white">JIRA Integration</h1>}
+    skeletonWidth="w-52" emptyDescription="Add a JIRA instance to enable ticket creation for your apps."
+    deleteDescription="This will not affect existing tickets."
+    headerActions={<Link to="/devtools/jira/reports" className="px-4 py-2 border border-port-border hover:border-port-accent text-gray-300 hover:text-white rounded text-sm">Status Reports</Link>}
+    summarize={instance => {
+      const ageDays = instance.hasApiToken ? getTokenAgeDays(instance.tokenUpdatedAt) : null;
+      return <>
+        <p className="text-gray-400 text-sm mt-1 break-all">{instance.baseUrl}</p>
+        <p className="text-gray-500 text-sm truncate">Email: {instance.email}</p>
+        <p className="text-gray-500 text-sm">API Token: {instance.hasApiToken ? '✓ Configured' : '✗ Not set'}</p>
+        {instance.hasApiToken && ageDays === null && <p className="text-port-warning text-sm mt-1">Token age unknown — re-save to start tracking age</p>}
+        {instance.hasApiToken && ageDays >= TOKEN_STALE_WARN_DAYS && <p className="text-port-warning text-sm mt-1">Token saved {ageDays} days ago — click Test to confirm it&apos;s still valid</p>}
+      </>;
+    }}
+    testSuccessDetail={result => <div>
+      <p className="text-port-success font-medium">✓ Connection successful</p>
+      <p className="text-port-success/80 text-sm mt-1">Authenticated as: {result.user} ({result.email})</p>
+    </div>}
+    helpSteps={<>
+      <p>1. Add one or more JIRA instances above</p>
+      <p>2. Go to Apps and configure JIRA settings for each app</p>
+      <p>3. When the Chief of Staff works on an app with JIRA enabled, it will:</p>
+      <ul className="list-disc list-inside ml-2 sm:ml-4 space-y-1 text-gray-400">
+        <li>Create a JIRA ticket for the work</li>
+        <li>Create a feature branch (e.g., feature/PROJ-1234)</li>
+        <li>Make commits to that branch</li>
+        <li>Create a pull request with ticket link</li>
+      </ul>
+    </>}
+  />;
 }
