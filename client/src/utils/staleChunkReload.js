@@ -16,7 +16,14 @@ const STALE_CHUNK_PATTERNS = [
   'mime type'
 ];
 
+// These can mean an old/new module graph supplied incompatible runtime exports,
+// but the same messages can come from real application bugs. Match them only
+// at import/render boundaries; recovery still requires a confirmed newer build.
+const MODULE_EVALUATION_PATTERNS = ['superclass is not a constructor'];
+const SAFARI_RUNTIME_EXPORTS = ['useState', 'jsx'];
+
 const RELOAD_FLAG = 'portos.staleChunkReloadAttempted';
+const reloadAttempts = new Map();
 
 // The service worker names every cache it owns with this prefix
 // (`portos-shell-v1`, `portos-assets-v1`, …). Mirrored from public/sw.js so the
@@ -24,14 +31,18 @@ const RELOAD_FLAG = 'portos.staleChunkReloadAttempted';
 // between the page and its controlling worker on the same origin.
 const CACHE_PREFIX = 'portos-';
 
-// Upper bound on how long we wait for the cache purge before reloading anyway.
-// A hung or absent Cache Storage (private mode, storage disabled/partitioned)
-// must never leave the user stuck on the error screen — reload regardless.
+// Bound both the live-build probe and a confirmed-new-build cache purge.
 const PURGE_TIMEOUT_MS = 1500;
 
-export const isStaleChunkError = (err) => {
+export const isStaleChunkError = (err, { duringImport = false, duringRender = false } = {}) => {
   const msg = (err?.message || String(err || '')).toLowerCase();
-  return STALE_CHUNK_PATTERNS.some(p => msg.includes(p));
+  if (STALE_CHUNK_PATTERNS.some(p => msg.includes(p))) return true;
+  if (!duringImport && !duringRender) return false;
+
+  return MODULE_EVALUATION_PATTERNS.some((p) => msg.includes(p))
+    || (msg.includes('undefined is not an object')
+      && msg.includes('evaluating')
+      && SAFARI_RUNTIME_EXPORTS.some((name) => msg.includes(`.${name.toLowerCase()}`)));
 };
 
 // Anti-loop guard: stash the build id we already attempted a reload for. A
@@ -98,34 +109,37 @@ export const fetchServerBuildId = async () => {
 
 export const reloadOnceForStaleChunk = () => {
   const buildId = getCurrentBuildId();
-  const flag = buildId ? `${buildId}` : '1';
-  // The stored flag IS the anti-loop guard, so it gets the sentinel treatment
-  // (root AGENTS.md): a storage that cannot persist must not read back as
-  // `no reload attempted yet`, which would reload on every stale-chunk error
-  // forever. Write, then read back — a mismatch means storage is unavailable
-  // (Safari private mode, blocked storage, disabled cookies) and the page stays
-  // put. The guarded helpers also keep the throw itself from taking out the very
-  // recovery path a stale bundle needs (#5689).
-  if (safeReadSession(RELOAD_FLAG) === flag) return false;
-  safeWriteSession(RELOAD_FLAG, flag);
-  if (safeReadSession(RELOAD_FLAG) !== flag) {
-    console.warn('🔄 Stale chunk detected but sessionStorage is unavailable — skipping reload to avoid a reload loop');
-    return false;
-  }
-  console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — reloading to pick up new bundle`);
-  // Purge the offline caches BEFORE reloading so the reload can't be handed the
-  // stale shell/chunks back — but only when the server confirms a different
-  // build exists (see fetchServerBuildId); a transient network failure must
-  // not cost the user their valid offline shell. Bounded by PURGE_TIMEOUT_MS
-  // so a hung probe or Cache Storage still reloads. `reload()` fires exactly
-  // once — `Promise.race` settles once.
-  withTimeout(
-    fetchServerBuildId().then((serverBuildId) =>
-      serverBuildId && serverBuildId !== buildId ? purgeOfflineCaches() : undefined
-    ),
-    PURGE_TIMEOUT_MS
-  ).finally(() => {
+  if (!buildId) return Promise.resolve(false);
+  if (safeReadSession(RELOAD_FLAG) === buildId) return Promise.resolve(false);
+  if (reloadAttempts.has(buildId)) return reloadAttempts.get(buildId);
+
+  const attempt = (async () => {
+    // A rejected preload can be a transient network error, and a runtime export
+    // error can be an application bug. Reload only when the live shell proves
+    // this tab is running a different build; an offline/unknown/same-build
+    // result leaves the current page and its unsaved state intact.
+    const serverBuildId = await withTimeout(fetchServerBuildId(), PURGE_TIMEOUT_MS);
+    if (!serverBuildId || serverBuildId === buildId) return false;
+
+    // Persist the anti-loop guard only after confirming a newer build. A
+    // same-build or offline probe must remain eligible for a later deployment.
+    safeWriteSession(RELOAD_FLAG, buildId);
+    if (safeReadSession(RELOAD_FLAG) !== buildId) {
+      console.warn('🔄 A newer build is available but sessionStorage is unavailable — skipping reload to avoid a reload loop');
+      return false;
+    }
+
+    console.warn(`🔄 Stale chunk detected (page build ${buildId}, server build ${serverBuildId}) — reloading`);
+    // Purge the offline caches before reloading so the new server shell cannot
+    // be replaced by stale cached assets. The server build mismatch is already
+    // confirmed, so a hung cache purge gets the bounded timeout and reloads.
+    await withTimeout(purgeOfflineCaches(), PURGE_TIMEOUT_MS);
     window.location.reload();
+    return true;
+  })().catch(() => false).finally(() => {
+    reloadAttempts.delete(buildId);
   });
-  return true;
+
+  reloadAttempts.set(buildId, attempt);
+  return attempt;
 };

@@ -49,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   document.head.innerHTML = '';
 });
@@ -61,6 +62,23 @@ describe('isStaleChunkError', () => {
     'Expected a JavaScript module but got MIME type text/html',
   ])('matches %s', (msg) => {
     expect(isStaleChunkError(new Error(msg))).toBe(true);
+  });
+
+  it.each([
+    'The superclass is not a constructor.',
+    "undefined is not an object (evaluating 'A.useState')",
+    "undefined is not an object (evaluating '$.jsx')",
+  ])('treats %s as stale only in module-load or render recovery', (msg) => {
+    const error = new Error(msg);
+    expect(isStaleChunkError(error)).toBe(false);
+    expect(isStaleChunkError(error, { duringImport: true })).toBe(true);
+    expect(isStaleChunkError(error, { duringRender: true })).toBe(true);
+  });
+
+  it('does not treat unrelated Safari undefined-object errors as stale module errors', () => {
+    const error = new Error("undefined is not an object (evaluating 'A.someValue')");
+    expect(isStaleChunkError(error, { duringImport: true })).toBe(false);
+    expect(isStaleChunkError(error, { duringRender: true })).toBe(false);
   });
 
   it('is case-insensitive and accepts non-Error values', () => {
@@ -144,7 +162,7 @@ describe('fetchServerBuildId', () => {
 });
 
 describe('reloadOnceForStaleChunk', () => {
-  it('purges caches then reloads once for a given build', async () => {
+  it('purges caches and reloads only after confirming a newer server build', async () => {
     stubSessionStorage();
     stubFetch();
     const reload = stubReload();
@@ -157,13 +175,12 @@ describe('reloadOnceForStaleChunk', () => {
       }),
     });
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    // Reload is deferred until the purge settles.
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
     expect(deleted).toEqual(['portos-shell-v1']);
   });
 
-  it('skips the purge but still reloads when the server is unreachable', async () => {
+  it('keeps the current page when the server build cannot be checked', async () => {
     stubSessionStorage();
     stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
     const reload = stubReload();
@@ -173,18 +190,17 @@ describe('reloadOnceForStaleChunk', () => {
       delete: cacheDelete,
     });
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    // Offline: the (possibly current-build) offline shell must survive so the
-    // reload can boot it — purging would strand the user on a network error page.
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    // An offline or unverified probe is not evidence that a reload can recover.
     expect(cacheDelete).not.toHaveBeenCalled();
   });
 
-  it('skips the purge when the server still serves the SAME build (transient failure)', async () => {
+  it('does not reload on the same build, and remains eligible when a newer build appears', async () => {
     stubSessionStorage();
-    // Server reachable, but serving the build the page already runs — the
-    // import error was a network blip, not a stale deployment.
-    stubFetch(() =>
+    // A same-build response means this may be a transient failure or a real
+    // application bug; keep the page in place and leave the guard unset.
+    const fetch = stubFetch(() =>
       Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-abc')) })
     );
     const reload = stubReload();
@@ -194,9 +210,16 @@ describe('reloadOnceForStaleChunk', () => {
       delete: cacheDelete,
     });
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
     expect(cacheDelete).not.toHaveBeenCalled();
+
+    fetch.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-new')) })
+    );
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(cacheDelete).toHaveBeenCalledWith('portos-shell-v1');
   });
 
   it('does not reload twice for the same build id', async () => {
@@ -205,10 +228,10 @@ describe('reloadOnceForStaleChunk', () => {
     const reload = stubReload();
     vi.stubGlobal('caches', undefined);
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
     // Second stale error in the SAME build → guard blocks it.
-    expect(reloadOnceForStaleChunk()).toBe(false);
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
@@ -223,9 +246,8 @@ describe('reloadOnceForStaleChunk', () => {
     const reload = stubReload();
     vi.stubGlobal('caches', undefined);
 
-    expect(reloadOnceForStaleChunk()).toBe(false);
-    expect(reloadOnceForStaleChunk()).toBe(false);
-    await Promise.resolve();
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 
@@ -235,18 +257,18 @@ describe('reloadOnceForStaleChunk', () => {
     const reload = stubReload();
     vi.stubGlobal('caches', undefined);
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(1);
 
     setBuildId('build-def');
-    expect(reloadOnceForStaleChunk()).toBe(true);
-    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 
-  it('still reloads when the reachability probe hangs (timeout backstop)', async () => {
+  it('does not reload when the build probe times out', async () => {
     vi.useFakeTimers();
     stubSessionStorage();
-    // Probe never resolves → the whole purge chain would hang without the timeout.
+    // A timed out probe cannot confirm that reloading will recover.
     stubFetch(() => new Promise(() => {}));
     const reload = stubReload();
     vi.stubGlobal('caches', {
@@ -254,11 +276,11 @@ describe('reloadOnceForStaleChunk', () => {
       delete: vi.fn(),
     });
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
+    const attempt = reloadOnceForStaleChunk();
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1500);
-    expect(reload).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+    await expect(attempt).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('still reloads when the cache purge hangs (timeout backstop)', async () => {
@@ -272,10 +294,22 @@ describe('reloadOnceForStaleChunk', () => {
       delete: vi.fn(),
     });
 
-    expect(reloadOnceForStaleChunk()).toBe(true);
+    const attempt = reloadOnceForStaleChunk();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1500);
+    await expect(attempt).resolves.toBe(true);
     expect(reload).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
+  });
+
+  it('does not probe or reload without the current page build id', async () => {
+    stubSessionStorage();
+    const fetch = stubFetch();
+    const reload = stubReload();
+    setBuildId(null);
+
+    await expect(reloadOnceForStaleChunk()).resolves.toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
   });
 });

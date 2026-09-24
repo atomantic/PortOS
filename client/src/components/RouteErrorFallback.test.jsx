@@ -48,7 +48,7 @@ describe('RouteErrorFallback', () => {
 
     await renderRouteError(error);
 
-    expect(isStaleChunkError).toHaveBeenCalledWith(error);
+    expect(isStaleChunkError).toHaveBeenCalledWith(error, { duringRender: true });
     expect(reloadOnceForStaleChunk).toHaveBeenCalledOnce();
   });
 

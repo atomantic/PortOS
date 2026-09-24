@@ -14,14 +14,26 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    if (isStaleChunkError(error) && reloadOnceForStaleChunk()) return;
-    console.error(`💥 React Error: ${error.message}`, errorInfo);
-    // `onError` lets a caller that owns chrome AROUND the failed subtree react
-    // to the failure — an r3f `<Canvas>` can only degrade to `fallback={null}`
-    // inside the scene, so the DOM-side message has to be rendered by the
-    // parent from its own state (ThreejsModelPreview's spec-render panel).
-    // Not called on the stale-chunk path above: that reloads the page.
-    this.props.onError?.(error);
+    const report = () => {
+      console.error(`💥 React Error: ${error.message}`, errorInfo);
+      // `onError` lets a caller that owns chrome AROUND the failed subtree
+      // react to the failure — an r3f `<Canvas>` can only degrade to
+      // `fallback={null}` inside the scene, so the DOM-side message has to be
+      // rendered by the parent from its own state.
+      this.props.onError?.(error);
+    };
+
+    if (isStaleChunkError(error, { duringRender: true })) {
+      // React may catch missing runtime exports after import() already resolved.
+      // Recover only when the live shell confirms this page is stale; otherwise
+      // report the real render error to the owning boundary.
+      void reloadOnceForStaleChunk().then((reloaded) => {
+        if (!reloaded) report();
+      });
+      return;
+    }
+
+    report();
   }
 
   render() {
