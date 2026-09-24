@@ -34,6 +34,7 @@ export const PRICING_AS_OF = '2026-09-01';
 // Newer model launch rates are tracked separately so the baseline date above
 // does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
+  'claude-opus-5-5': '2026-09-23',
   'gpt-6-sol': '2026-09-22',
   'gpt-6-luna': '2026-09-22',
   'gpt-5.6-sol': '2026-09-22',
@@ -74,6 +75,9 @@ const FABLE_MODEL_IDS = ['claude-fable-5-1', 'claude-fable-5'];
 const EXACT_RATES = {
   // Anthropic
   'claude-fable-5-1': [10.0, 50.0],
+  // Opus 5.5 launched below the $5/$25 Opus tier rate, so it is its own row
+  // rather than a member of OPUS_MODEL_IDS.
+  'claude-opus-5-5': [4.0, 20.0],
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
   // Cloned per row so each key owns its pair exactly as the hand-written rows
@@ -215,6 +219,8 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok/, read: 0.15, write: 1.25 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
+  // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
+  { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
 ];
 
 const cacheMultipliers = (rateModel) => {
