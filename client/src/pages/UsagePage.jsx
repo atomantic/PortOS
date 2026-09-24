@@ -900,7 +900,7 @@ function InternalUsageMetrics() {
 export function UsagePage() {
   return (
     <ModelsSectionLayout activeTab="usage">
-      <ModelsTabsHeader activeTab="usage" desktop={false} />
+      <ModelsTabsHeader activeTab="usage" />
       <div className="min-h-0 min-w-0 flex-1 space-y-6 overflow-auto">
         <ProviderQuotaSection />
         <InternalUsageMetrics />
