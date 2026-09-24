@@ -1,7 +1,50 @@
 import { describe, it, expect } from 'vitest';
 
-import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
 import { chipColors, parseColor, contrastRatio, chipBackdrop } from '../../lib/chipContrast';
+
+describe('eventOccursOnDay', () => {
+  const day = (date) => new Date(2026, 8, date);
+  const event = (start, end, isAllDay = true) => ({
+    startTime: day(start).toISOString(), endTime: day(end).toISOString(), isAllDay,
+  });
+
+  it('treats the end midnight as exclusive for one-day and three-day all-day events', () => {
+    const oneDay = event(23, 24);
+    expect([22, 23, 24].map(date => eventOccursOnDay(oneDay, day(date))))
+      .toEqual([false, true, false]);
+
+    const threeDays = event(21, 24);
+    expect([20, 21, 22, 23, 24].map(date => eventOccursOnDay(threeDays, day(date))))
+      .toEqual([false, true, true, true, false]);
+  });
+
+  it('includes an all-day event that began before the visible range', () => {
+    expect(eventOccursOnDay(event(19, 22), day(21))).toBe(true);
+  });
+
+  it('handles a timed event crossing midnight and rejects an end at midnight', () => {
+    const overnight = {
+      startTime: new Date(2026, 8, 23, 23).toISOString(),
+      endTime: new Date(2026, 8, 24, 1).toISOString(),
+      isAllDay: false,
+    };
+    expect(eventOccursOnDay(overnight, day(23))).toBe(true);
+    expect(eventOccursOnDay(overnight, day(24))).toBe(true);
+    expect(eventOccursOnDay(overnight, day(25))).toBe(false);
+    expect(eventOccursOnDay({ ...overnight, endTime: day(24).toISOString() }, day(24))).toBe(false);
+  });
+
+  it('uses local midnight across daylight-saving transitions', () => {
+    const spring = {
+      startTime: new Date(2026, 2, 7).toISOString(),
+      endTime: new Date(2026, 2, 9).toISOString(),
+      isAllDay: true,
+    };
+    expect(eventOccursOnDay(spring, new Date(2026, 2, 8))).toBe(true);
+    expect(eventOccursOnDay(spring, new Date(2026, 2, 9))).toBe(false);
+  });
+});
 
 describe('buildSubcalendarColorMap', () => {
   it('flattens every account\'s colored subcalendars into one id → color map', () => {
