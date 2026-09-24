@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath } from '../lib/apiAccessPolicy.js';
@@ -123,14 +123,23 @@ export const authGate = async (req, res, next) => {
   }));
 };
 
+const isLoopbackAddress = (value) => {
+  if (typeof value !== 'string') return false;
+  const address = value.replace(/^::ffff:/i, '');
+  return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
+};
+
 // Host execution needs operator authority, not merely a peer's Basic credential.
 // Mount after authGate: missing context fails closed. Password-free installs
-// permit only the actual loopback socket peer, never req.ip/forwarded headers or
-// the machine-local warning acknowledgement.
+// require loopback socket peers, including the dev proxy caller. Neither req.ip
+// nor the machine-local warning acknowledgement can grant authority.
 export const requireHostControl = (req, res, next) => {
   const auth = req.portosAuthContext;
-  const address = req.socket?.remoteAddress?.replace(/^::ffff:/i, '');
-  const loopback = address === '::1' || (isIP(address ?? '') === 4 && address.startsWith('127.'));
+  const proxyClient = req.headers[DEV_PROXY_CLIENT_ADDRESS_HEADER];
+  // Only restrict an actual loopback connection with the dev proxy's marker.
+  // A direct remote caller cannot gain authority by forging a loopback header.
+  const loopback = isLoopbackAddress(req.socket?.remoteAddress)
+    && (proxyClient === undefined || isLoopbackAddress(proxyClient));
   if ((auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
     || (auth?.enabled === false && loopback)) return next();
   sendErrorResponse(res, new ServerError('Host commands require an operator session, or a local connection when no password is set.', {

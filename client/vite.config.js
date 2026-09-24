@@ -7,6 +7,7 @@ import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../lib/portosAuthCore.js';
 import {
   EIDOVERSE_HOST_PATH_PREFIX,
   EIDOVERSE_ROOT_EXACT_PATHS,
@@ -187,7 +188,15 @@ export default defineConfig(({ command, mode }) => {
         '^/api(?:/|$)': {
           target: API_TARGET,
           changeOrigin: true,
-          secure: false
+          secure: false,
+          configure(proxy) {
+            proxy.on('proxyReq', (proxyReq, req) => {
+              // The API sees Vite's loopback connection, not the browser's.
+              // Replace caller-supplied provenance, including duplicate headers;
+              // unknown socket peers must never become an implicit local caller.
+              proxyReq.setHeader(DEV_PROXY_CLIENT_ADDRESS_HEADER, req.socket?.remoteAddress || 'unknown');
+            });
+          }
         },
         // Every `/data/**` asset mount at once, instead of a hand-maintained
         // list that silently fell behind the server's (see docs/PORTS.md:

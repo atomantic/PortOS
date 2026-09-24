@@ -4,6 +4,7 @@ import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { request } from '../lib/testHelper.js';
 import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { ALLOWED_COMMANDS } from '../lib/commandSecurity.js';
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -117,7 +118,7 @@ describe('commands routes', () => {
 
     it.each([
       ['password-free remote peer', false, {}],
-      ['spoofed forwarding headers', false, { 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '::1' }],
+      ['spoofed forwarding headers', false, { 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '::1', [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
       ['authenticated Basic peer', true, { Authorization: basic }],
       ['unauthenticated password-protected peer', true, {}],
       ['invalid operator session', true, { Authorization: 'Bearer invalid-session' }],
@@ -144,6 +145,41 @@ describe('commands routes', () => {
       child.emit('close', 0);
     });
 
+    it.each(['192.0.2.10', 'unknown', '127.0.0.1, 192.0.2.10'])(
+      'rejects a dev-proxied nonlocal or ambiguous caller %s', async proxyClient => {
+        const child = createChildProcess();
+        spawnMock.mockReturnValue(child);
+        const { app } = createApp();
+        const started = await request(app).post('/api/commands/execute').send({ command: 'pwd' });
+        expect(started.status).toBe(202);
+        spawnMock.mockClear();
+        for (const path of ['/api/commands/execute', `/api/commands/${started.body.commandId}/stop`]) {
+          const response = await request(app).post(path)
+            .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient)
+            .set('X-Forwarded-For', '127.0.0.1')
+            .send({ command: 'npx --yes example-package' });
+          expect(response.status).toBe(403);
+          expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+        }
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(child.kill).not.toHaveBeenCalled();
+        child.emit('close', 0);
+      },
+    );
+
+    it('keeps local UI command control through the dev proxy', async () => {
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp();
+      const started = await request(app).post('/api/commands/execute')
+        .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::ffff:127.0.0.1').send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      const stopped = await request(app).post(`/api/commands/${started.body.commandId}/stop`)
+        .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1');
+      expect(stopped.status).toBe(200);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
     it.each(['127.0.0.1', '127.0.0.2', '::1', '::ffff:127.0.0.1'])(
       'keeps password-free local command control on %s', async remoteAddress => {
         const child = createChildProcess();
@@ -165,7 +201,7 @@ describe('commands routes', () => {
       const child = createChildProcess();
       spawnMock.mockReturnValue(child);
       const { app } = createApp(undefined, { remoteAddress: '192.0.2.10' });
-      const started = await request(app).post('/api/commands/execute').set(header, value).send({ command: 'pwd' });
+      const started = await request(app).post('/api/commands/execute').set(header, value).set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '192.0.2.10').send({ command: 'pwd' });
       expect(started.status).toBe(202);
       const stopped = await request(app).post(`/api/commands/${started.body.commandId}/stop`).set(header, value);
       expect(stopped.status).toBe(200);
