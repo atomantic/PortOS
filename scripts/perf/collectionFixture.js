@@ -4,12 +4,14 @@
  */
 import { execFile, fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { access, cp, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+
+import { isDirectlyInvoked } from '../lib/directInvocation.js';
 
 const codeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -65,6 +67,7 @@ export async function startCollectionFixture({
     if (cleanupError) throw cleanupError;
   })();
   const onSignal = () => { stopped = true; close().catch(() => { process.exitCode = 1; }); };
+  db.on('error', onSignal);
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   try {
@@ -74,6 +77,7 @@ export async function startCollectionFixture({
     const { stdout } = await promisify(execFile)('git', ['ls-files', '-z', '--', 'server', 'lib'], { cwd: codeRoot });
     for (const file of stdout.split('\0').filter(Boolean)) {
       if (file === 'lib/slashdo' || file.endsWith('.test.js') || file.endsWith('.test.jsx')) continue;
+      if (!(await lstat(join(codeRoot, file))).isFile()) throw new Error('Fixture source must contain regular files');
       await mkdir(dirname(join(root, file)), { recursive: true });
       await cp(join(codeRoot, file), join(root, file), { dereference: false });
     }
@@ -135,7 +139,7 @@ export async function startCollectionFixture({
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   startCollectionFixture().then(fixture => {
     console.log(JSON.stringify({ ready: true, url: fixture.url, cardinalities: fixture.cardinalities }));
   }).catch(error => {
