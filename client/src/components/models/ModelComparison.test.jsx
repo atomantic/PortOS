@@ -54,3 +54,19 @@ it('surfaces load failure and successfully reloads without losing the page contr
   await screen.findByTestId('scatter-example:gpt-6-luna');
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('filters loaded chart evidence by provider and restores all providers without fetching or choosing an execution model', async () => {
+  api.getModelComparison.mockResolvedValue({ composite: { rows: [
+    rows[0], { ...rows[3], providerId: 'peer', provider: 'Peer', modelKey: 'peer:claude-opus-5-5' },
+  ] } });
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  const filter = screen.getByLabelText('Provider filter');
+  fireEvent.change(filter, { target: { value: 'peer' } });
+  expect(screen.queryByTestId('scatter-example:gpt-6-luna')).toBeNull();
+  expect(screen.getByTestId('scatter-peer:claude-opus-5-5')).toBeTruthy();
+  fireEvent.change(filter, { target: { value: '' } });
+  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toBeTruthy();
+  expect(screen.getByTestId('scatter-peer:claude-opus-5-5')).toBeTruthy();
+  expect(api.getModelComparison).toHaveBeenCalledTimes(1);
+});
