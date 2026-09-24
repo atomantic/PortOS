@@ -9,8 +9,6 @@
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { getMemorySection } from './memoryRetriever.js';
-import { getDigitalTwinForPrompt } from './digital-twin.js';
-import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
@@ -18,11 +16,11 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliRe
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
-import { TASK_CONTEXT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
+import { getDigitalTwinForPrompt } from './digital-twin.js';
+import { taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
 import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
-import { PORTOS_APP_ID } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSections/constants.js';
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
@@ -89,8 +87,6 @@ const AGENTS_DIR = PATHS.cosAgents;
 // These scheduled audits inspect a running web UI. Keep their runtime contract
 // in the builder rather than only in the default prompt bodies so customized
 // prompts and tasks queued before a prompt revision get the same guidance.
-// The configurable briefing template the full (`api`) path renders.
-const BRIEFING_STAGE_KEY = 'cos-agent-briefing';
 
 export const UI_AUDIT_TASK_TYPES = Object.freeze([
   'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux'
@@ -621,27 +617,10 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     skipDevContext,
   });
 
-  // Try to use the prompt template system. Skip the template path for
-  // review-loop follow-up agents because the user-side template usually
-  // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
-  // fallback is the source of truth for that section, and silently dropping
-  // it would leave the agent with no instructions and the loop would not run.
-  // Precomputed display label for the stock "Target Application" heading in the
-  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
-  // the redundant heading for the PortOS default app (empty string → the
-  // template section is falsy and renders nothing), surface the app id for
-  // managed apps. `task.metadata.app` stays in the context for any custom
-  // template references — only the stock heading gates on this.
-  const briefingApp = task.metadata?.app;
-  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
-  // The task's prompt payload + human note as ONE string (#4153). Templates —
-  // the shipped `cos-agent-briefing.md` AND every copy an install has since
-  // customized — reference `{{task.metadata.context}}`, so the split is folded
-  // back into that key for rendering instead of being pushed out to every
-  // template on every install. `metadata.prompt` still travels untouched for a
-  // custom template that wants to address it directly.
-  const briefingSourceTask = taskVisibleToPipelineReviewer(task);
-  const contextBlock = taskContextBlock(briefingSourceTask);
+  // The task's prompt payload + human note as ONE block (#4153), taken from the
+  // reviewer-visible projection so a Security Scan report meant for the human
+  // never reaches a pipeline reviewer's prompt.
+  const contextBlock = taskContextBlock(taskVisibleToPipelineReviewer(task));
   // Issue filing and planner attribution. Skipped for Creative Director runs
   // alongside the rest of the dev context — a scene evaluation files no issue.
   // The forge is left at the default here rather than probed: this path is
@@ -651,38 +630,9 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     ? ''
     : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
-  const briefingTask = contextBlock === (briefingSourceTask.metadata?.[TASK_CONTEXT_KEY] ?? null)
-    ? briefingSourceTask
-    : { ...briefingSourceTask, metadata: { ...briefingSourceTask.metadata, [TASK_CONTEXT_KEY]: contextBlock } };
-  const promptData = isReviewLoopFollowUp ? null : await buildPrompt(BRIEFING_STAGE_KEY, {
-    task: briefingTask,
-    targetAppLabel,
-    config,
-    memorySection,
-    agentInstructionsSection,
-    digitalTwinSection,
-    worktreeSection,
-    pipelineSection,
-    jiraSection,
-    simplifySection,
-    tuiCompletionSection,
-    reviewLoopSection,
-    reviewLoopFollowUpSection,
-    compactionSection,
-    skillSection,
-    planningContextSection,
-    toolsSection,
-    claudeMdSection: agentInstructionsSection, // Backwards compatibility for prompt templates (pre-#4852 name)
-    soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
-    timestamp: new Date().toISOString()
-  }).catch(() => null);
 
-  if (promptData?.prompt) {
-    return `${promptData.prompt}${orchestrationSection ? `\n\n${orchestrationSection}` : ''}${issueFilingSection ? `\n\n${issueFilingSection}` : ''}\n\n${UNATTENDED_RUN_RULE}${uiAuditRuntimeSection ? `\n\n${uiAuditRuntimeSection}` : ''}\n\n${PM2_SAFETY_RULE}`;
-  }
-
-  return buildFallbackAgentPrompt({
-    task, workspaceDir, agentInstructionsSection, memorySection, contextBlock,
+  return buildFullAgentPrompt({
+    task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
     reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
@@ -701,8 +651,9 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
     getAgentInstructionsContext(workspaceDir)
       .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
+    // Empty when the Digital Twin 'auto-inject into CoS' setting is off.
     getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
-      .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; })
+      .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; }),
   ]);
   return { memorySection, agentInstructionsSection, digitalTwinSection };
 }
@@ -839,17 +790,16 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
 }
 
 /**
- * The built-in fallback prompt for the full (`api`) path — rendered when the
- * configurable `cos-agent-briefing` template is unavailable or a review-loop
- * follow-up bypasses it.
+ * The prompt for the full (`api`) path. It is the only briefing an API-provider
+ * agent receives; there is no user-editable template for it (#8200).
  *
  * Pure string assembly, deliberately separate from `buildAgentPrompt`: every
  * optional section it interpolates is decided by the caller, so the
  * orchestrator reads as "resolve the sections, then render" instead of
  * carrying each section's presence ternary in its own body.
  */
-function buildFallbackAgentPrompt({
-  task, workspaceDir, agentInstructionsSection, memorySection, contextBlock,
+function buildFullAgentPrompt({
+  task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
   worktreeSection, pipelineSection, jiraSection, orchestrationSection,
   issueFilingSection, simplifySection, tuiCompletionSection,
   reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
@@ -858,10 +808,11 @@ function buildFallbackAgentPrompt({
 }) {
 const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
 
-// Fallback to built-in template
+// The full-path briefing
 return `${agentInstructionsSection || ''}
 
 ${memorySection || ''}
+${digitalTwinSection ? `\n${digitalTwinSection}\n` : ''}
 
 ${taskBlock.description}
 ${contextBlock ? (contextBlock.includes('\n') ? `\n### Task Context\n\n${contextBlock.trimEnd()}\n` : `\n### Task Context\n\n${contextBlock}\n`) : ''}

@@ -126,7 +126,7 @@
     },
     "cos-agent-briefing": {
       "name": "CoS Agent Briefing",
-      "description": "Brief a sub-agent on their assigned task",
+      "description": "Unused — CoS agents are briefed by a built-in prompt; editing this template has no effect (#8200)",
       "model": "heavy",
       "returnsJson": false,
       "variables": []
