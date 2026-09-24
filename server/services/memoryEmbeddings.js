@@ -165,13 +165,6 @@ function getConfig() {
 }
 
 /**
- * Set embedding configuration (called by CoS service on startup)
- */
-export function setEmbeddingConfig(config) {
-  embeddingConfig = { ...DEFAULT_MEMORY_CONFIG, ...config };
-}
-
-/**
  * Check if the embedding backend is reachable and an embedding model is usable.
  * Works for any OpenAI-compatible backend (LM Studio, Ollama, …) — all serve
  * `GET /v1/models`.

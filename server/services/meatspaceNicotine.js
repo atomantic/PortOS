@@ -333,14 +333,3 @@ export async function removeCustomProduct(index) {
   console.log(`🗑️ Removed custom nicotine product: ${removed.name}`);
   return removed;
 }
-
-export async function reorderCustomProducts(fromIndex, toIndex) {
-  if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return null;
-  const data = await loadCustomProducts();
-  if (fromIndex < 0 || fromIndex >= data.products.length) return null;
-  if (toIndex < 0 || toIndex >= data.products.length) return null;
-  const [moved] = data.products.splice(fromIndex, 1);
-  data.products.splice(toIndex, 0, moved);
-  await saveCustomProducts(data);
-  return data.products;
-}

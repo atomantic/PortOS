@@ -1301,7 +1301,6 @@ export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
 export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
 export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
-export const isCfgDisabled = (model) => model?.cfgDisabled === true;
 export const isEditOnly = (model) => model?.editOnly === true;
 
 // Append models that are genuinely new in this release (not in

@@ -107,28 +107,6 @@ export async function logActivity(activity) {
 }
 
 /**
- * Update activity status (e.g., from 'started' to 'completed')
- */
-export async function updateActivityStatus(agentId, activityId, status, result = null, error = null) {
-  const date = new Date();
-  const dateStr = getDateString(date);
-  const data = await loadActivity(agentId, date);
-
-  const activity = data.activities.find(a => a.id === activityId);
-  if (activity) {
-    activity.status = status;
-    if (result) activity.result = result;
-    if (error) activity.error = error;
-    activity.completedAt = new Date().toISOString();
-
-    await saveActivity(agentId, dateStr, data);
-    activityEvents.emit('activity:updated', { agentId, activityId, status });
-  }
-
-  return activity;
-}
-
-/**
  * Get activities for an agent
  */
 export async function getActivities(agentId, options = {}) {

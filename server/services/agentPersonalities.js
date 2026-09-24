@@ -140,14 +140,3 @@ export async function deleteAgent(id) {
 export async function toggleAgent(id, enabled) {
   return updateAgent(id, { enabled });
 }
-
-/**
- * Get agent count by user
- */
-export async function getAgentCount(userId = null) {
-  const agents = await getAllAgents();
-  if (userId) {
-    return agents.filter(a => a.userId === userId).length;
-  }
-  return agents.length;
-}

@@ -61,10 +61,6 @@ export async function addBloodTest(test) {
   return test;
 }
 
-export async function saveBloodTests(data) {
-  await writeLocal(BLOOD_TESTS_FILE, data);
-}
-
 // === Body Composition ===
 
 /**

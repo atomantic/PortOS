@@ -941,12 +941,6 @@ export async function getMastery(id) {
   return item.mastery;
 }
 
-export async function getTrainingLog(memoryItemId, limit = 50) {
-  let entries = await listStoredTrainingEntries();
-  if (memoryItemId) entries = entries.filter(e => e.memoryItemId === memoryItemId);
-  return entries.slice(-limit);
-}
-
 // =============================================================================
 // DRILL GENERATION (for POST sessions)
 // =============================================================================

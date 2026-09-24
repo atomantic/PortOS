@@ -8,9 +8,6 @@ import {
   getAwaitingApprovalTasks,
   updateTaskStatus,
   addTask,
-  removeTask,
-  getNextTask,
-  validateTask,
   TASK_STATUS_VALUES,
   TASK_PRIORITY_VALUES,
   UNKNOWN_STATUS_BLOCKED_CATEGORY
@@ -607,177 +604,6 @@ describe('Task Parser', () => {
     });
   });
 
-  describe('removeTask', () => {
-    it('should remove task by ID', () => {
-      const tasks = [
-        { id: 'task-001' },
-        { id: 'task-002' },
-        { id: 'task-003' }
-      ];
-
-      const remaining = removeTask(tasks, 'task-002');
-
-      expect(remaining).toHaveLength(2);
-      expect(remaining.find(t => t.id === 'task-002')).toBeUndefined();
-    });
-
-    it('should return same array if task not found', () => {
-      const tasks = [{ id: 'task-001' }];
-      const remaining = removeTask(tasks, 'task-999');
-
-      expect(remaining).toHaveLength(1);
-    });
-  });
-
-  describe('getNextTask', () => {
-    it('should return first pending task in queue order', () => {
-      const tasks = [
-        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
-        { id: 'task-002', status: 'pending', priority: 'HIGH', priorityValue: 4 },
-        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
-      ];
-
-      const next = getNextTask(tasks);
-
-      // Should return first in queue, not highest priority
-      expect(next.id).toBe('task-001');
-    });
-
-    it('should prioritize critical auto-fix tasks over queue order', () => {
-      const tasks = [
-        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
-        { id: 'sys-002', status: 'pending', priority: 'HIGH', priorityValue: 3, description: 'Fix critical error: something broke' },
-        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
-      ];
-
-      const next = getNextTask(tasks);
-
-      // Should return the critical auto-fix task even though it's not first
-      expect(next.id).toBe('sys-002');
-    });
-
-    it('should prioritize CRITICAL priority system tasks', () => {
-      const tasks = [
-        { id: 'task-001', status: 'pending', priority: 'HIGH', priorityValue: 3 },
-        { id: 'sys-002', status: 'pending', priority: 'CRITICAL', priorityValue: 4, description: 'System issue' },
-        { id: 'task-003', status: 'pending', priority: 'MEDIUM', priorityValue: 2 }
-      ];
-
-      const next = getNextTask(tasks);
-
-      expect(next.id).toBe('sys-002');
-    });
-
-    it('should not prioritize regular system tasks without critical indicators', () => {
-      const tasks = [
-        { id: 'task-001', status: 'pending', priority: 'LOW', priorityValue: 1 },
-        { id: 'sys-002', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Regular system task' },
-        { id: 'task-003', status: 'pending', priority: 'HIGH', priorityValue: 3 }
-      ];
-
-      const next = getNextTask(tasks);
-
-      // Should return first in queue since sys-002 is not a critical auto-fix
-      expect(next.id).toBe('task-001');
-    });
-
-    it('should return null if no pending tasks', () => {
-      const tasks = [
-        { id: 'task-001', status: 'completed', priorityValue: 4 }
-      ];
-
-      const next = getNextTask(tasks);
-
-      expect(next).toBeNull();
-    });
-
-    it('should return null for empty array', () => {
-      const next = getNextTask([]);
-      expect(next).toBeNull();
-    });
-  });
-
-  describe('validateTask', () => {
-    it('should validate a correct task', () => {
-      const task = {
-        id: 'task-001',
-        description: 'Test task',
-        status: 'pending',
-        priority: 'HIGH'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(true);
-      expect(result.errors).toHaveLength(0);
-    });
-
-    it('should reject task without id', () => {
-      const task = {
-        description: 'Test',
-        status: 'pending',
-        priority: 'HIGH'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Task must have a valid id');
-    });
-
-    it('should reject task without description', () => {
-      const task = {
-        id: 'task-001',
-        status: 'pending',
-        priority: 'HIGH'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Task must have a description');
-    });
-
-    it('should reject task with invalid status', () => {
-      const task = {
-        id: 'task-001',
-        description: 'Test',
-        status: 'invalid',
-        priority: 'HIGH'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Invalid task status');
-    });
-
-    it('should reject task with invalid priority', () => {
-      const task = {
-        id: 'task-001',
-        description: 'Test',
-        status: 'pending',
-        priority: 'INVALID'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors).toContain('Invalid priority (must be CRITICAL, HIGH, MEDIUM, or LOW)');
-    });
-
-    it('should collect multiple errors', () => {
-      const task = {
-        status: 'invalid',
-        priority: 'INVALID'
-      };
-
-      const result = validateTask(task);
-
-      expect(result.valid).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(2);
-    });
-  });
 });
 
 describe('Task Parser — challenged status (#2441)', () => {
@@ -821,10 +647,6 @@ describe('Task Parser — challenged status (#2441)', () => {
     expect(grouped.challenged.map((t) => t.id)).toEqual(['a']);
   });
 
-  it('validates challenged as a legal status', () => {
-    const result = validateTask({ id: 'task-902', description: 'x', status: 'challenged', priority: 'HIGH' });
-    expect(result.valid).toBe(true);
-  });
 });
 
 describe('unrepresentable status/priority never drops a task (#7239)', () => {

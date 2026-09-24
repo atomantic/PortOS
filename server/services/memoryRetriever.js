@@ -229,28 +229,3 @@ export async function getMemorySection(task, options = {}) {
 
   return formatForPrompt(memories);
 }
-
-/**
- * Get memory stats for a task (useful for debugging)
- */
-export async function getRetrievalStats(task) {
-  const memories = await getRelevantMemories(task, { maxTokens: 10000 });
-
-  return {
-    total: memories.length,
-    byType: memories.reduce((acc, m) => {
-      acc[m.type] = (acc[m.type] || 0) + 1;
-      return acc;
-    }, {}),
-    bySource: memories.reduce((acc, m) => {
-      acc[m.source] = (acc[m.source] || 0) + 1;
-      return acc;
-    }, {}),
-    totalTokens: memories.reduce((acc, m) => acc + estimateTokens(m.content), 0),
-    topMemories: memories.slice(0, 5).map(m => ({
-      type: m.type,
-      summary: m.summary,
-      relevance: m.relevance.toFixed(2)
-    }))
-  };
-}

@@ -55,19 +55,6 @@ export async function recordCorrection({ from, subject, triaged, corrected }) {
 }
 
 /**
- * Build a prompt section describing user triage preferences.
- */
-export async function buildRulesPromptSection() {
-  const rules = await getTriageRules();
-  if (!rules.length) return '';
-
-  const lines = rules.map(r =>
-    `- Emails from "${r.senderPattern}" should be "${r.correctedAction}" (not "${r.originalAction}"). Example subject: "${r.exampleSubject}"`
-  );
-  return `\n\nUser triage preferences (ALWAYS follow these rules — they override your default judgment):\n${lines.join('\n')}\n`;
-}
-
-/**
  * Delete a specific rule by index.
  */
 export async function deleteRule(index) {

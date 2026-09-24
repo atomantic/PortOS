@@ -730,7 +730,7 @@ export async function terminateAgent(agentId) {
   // terminateAgent stays result-shaped (not a throw): its route path is
   // fire-and-forget (cosAgentLifecycle emits `agent:terminate` and returns
   // `{ success: true }` before termination runs), and its other callers are
-  // internal orchestration (the event handler, killAllAgents' bulk sweep) that
+  // internal orchestration (including the event handler) that
   // inspect the result rather than a thrown ServerError. Only pauseAgent and
   // killAgent — whose routes surface an HTTP status — throw (issue #2534).
   if (!agent) {
@@ -965,17 +965,6 @@ export async function getAgentProcessStats(agentId) {
   }
 
   return null;
-}
-
-/**
- * Kill all active agents.
- */
-export async function killAllAgents() {
-  const directIds = Array.from(activeAgents.keys());
-  const runnerIds = Array.from(runnerAgents.keys());
-
-  await Promise.all([...directIds, ...runnerIds].map(agentId => terminateAgent(agentId)));
-  return { killed: directIds.length + runnerIds.length };
 }
 
 /**

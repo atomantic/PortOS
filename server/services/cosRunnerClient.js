@@ -515,28 +515,3 @@ export async function getAgentStatsFromRunner(agentId) {
   }
   return readRunnerJson(response);
 }
-
-/**
- * Terminate all agents via the runner
- */
-export async function terminateAllAgentsViaRunner() {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/terminate-all`, {
-    method: 'POST'
-  }, 30000);
-  if (!response.ok) {
-    throw new Error('Failed to terminate agents');
-  }
-  return readRunnerJson(response);
-}
-
-/**
- * Get agent output from runner
- */
-export async function getAgentOutputFromRunner(agentId) {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents/${agentId}/output`, {}, 10000);
-  if (!response.ok) {
-    const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to get agent output');
-  }
-  return readRunnerJson(response);
-}

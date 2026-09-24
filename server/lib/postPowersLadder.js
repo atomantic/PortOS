@@ -102,7 +102,3 @@ export function resolvePowersLevel(levelStats = {}, opts = {}, floorLevel = 0) {
     levels: result.levels.map(({ descriptor, ...rung }) => ({ ...rung, technique: descriptor })),
   };
 }
-
-export function powersLevelMastered(stat, level, opts = POWERS_MASTERY_DEFAULTS) {
-  return progression.isLevelMastered(stat, level, opts);
-}
