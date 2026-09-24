@@ -10,10 +10,10 @@ const STORAGE = 'portos-composite-comparison-v1';
 const COLORS = ['#2563eb', '#f97316', '#16a34a', '#9333ea', '#0891b2', '#db2777', '#ca8a04', '#dc2626'];
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unspecified', 'reasoning'];
 const PRICES = [
+  ['costPerTask', 'Cost per benchmark task (recommended)', 'USD / Intelligence Index task'],
   ['blendedPerMillion', 'Blended token price (3:1 input/output)', 'USD / 1M total tokens'],
   ['inputPerMillion', 'Input token price', 'USD / 1M input tokens'],
   ['outputPerMillion', 'Output token price', 'USD / 1M output tokens'],
-  ['costPerTask', 'Sourced benchmark task cost', 'USD / Intelligence Index task'],
 ];
 const buttonClass = 'rounded-lg border border-port-border px-3 py-2 text-xs disabled:opacity-50';
 const valueText = (metric, money = false) => metric ? `${metric.estimated ? '≈ ' : ''}${money ? formatUsd(metric.value, { maximumFractionDigits: 4 }) : formatCount(metric.value, { maximumFractionDigits: 1 })}` : 'Needs research';
@@ -68,7 +68,11 @@ export default function ModelComparison() {
       models: Array.isArray(saved?.models) ? saved.models : null,
       efforts: Array.isArray(saved?.efforts) ? saved.efforts : null,
       provider: typeof saved?.provider === 'string' ? saved.provider : '',
-      priceId: PRICES.some(([id]) => id === saved?.priceId) ? saved.priceId : 'blendedPerMillion',
+      // Upgrade the old token-rate default once, retaining model/effort filters.
+      axisVersion: 2,
+      priceId: saved?.axisVersion !== 2 && saved?.priceId === 'blendedPerMillion'
+        ? 'costPerTask'
+        : PRICES.some(([id]) => id === saved?.priceId) ? saved.priceId : 'costPerTask',
       height: [420, 600, 720].includes(saved?.height) ? saved.height : 600,
       log: saved?.log === true,
     };
@@ -106,7 +110,7 @@ export default function ModelComparison() {
   const selected = scoped.filter(row => (settings.models === null || settings.models.includes(row.model)) && (settings.efforts === null || settings.efforts.includes(row.effort)));
   const price = PRICES.find(([id]) => id === settings.priceId) || PRICES[0];
   const plotCandidates = selected.filter(row => row.quality && row[price[0]] && (showEstimates || (!row.quality.estimated && !row[price[0]].estimated)) && (!settings.log || row[price[0]].value > 0))
-    .map(row => ({ ...row, x: row[price[0]].value, y: row.quality.value, label: `${row.model} (${row.effort})${row.quality.estimated ? ' ≈' : ''}` }));
+    .map(row => ({ ...row, x: row[price[0]].value, y: row.quality.value, label: `${row.model} (${row.effort})${row.quality.estimated || row[price[0]].estimated ? ' ≈' : ''}` }));
   const plotted = [...plotCandidates.reduce((unique, row) => {
     const key = `${row.model}:${row.effort}:${row.x}:${row.y}:${row.quality.estimated}:${row[price[0]].estimated}`;
     const prior = unique.get(key);
@@ -159,7 +163,9 @@ export default function ModelComparison() {
         </ScatterChart></ResponsiveContainer>
       </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : 'No points match these choices. Select models and efforts, change the cost axis, or research missing evidence.'}</p>}
       <div className="flex flex-wrap gap-3 text-xs" aria-label="Chart legend">{[...new Set(plotted.map(row => row.model))].map(model => <span key={model} className="break-all" style={{ color: COLORS[models.indexOf(model) % COLORS.length] }}>● {model}</span>)}</div>
-      <p className="mt-3 text-xs text-port-text-muted">Token prices are API references, not subscription charges or local operating costs. Effort usually changes token usage, not the per-token rate. Use sourced task cost to compare reasoning expense where published.</p>
+      <p className="mt-3 text-xs text-port-text-muted">{price[0] === 'costPerTask'
+        ? 'Task cost includes the token usage of each model and effort on the same benchmark. It is an API reference cost, not a quote for your workload or subscription. Missing task costs stay unplotted until researched; token rates are never substituted.'
+        : 'Token price is the rate per token, not cost per task. Higher effort can use more reasoning tokens at the same rate, so vertical effort curves do not mean equal task cost. Choose Cost per benchmark task to compare reasoning expense.'}</p>
     </section>
     <ComparisonValueGuide rows={selected} />
     <GenerationDelta rows={selected} priceId={price[0]} />

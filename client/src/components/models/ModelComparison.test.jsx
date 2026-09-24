@@ -11,7 +11,7 @@ vi.mock('recharts', () => ({
   XAxis: ({ label }) => <div data-testid="xaxis" data-label={label?.value} />, YAxis: () => null,
 }));
 const metric = (value, estimated = false) => ({ value, estimated, method: 'Example source', sources: [{ url: 'https://example.com', retrievedAt: '2026-09-01T00:00:00Z', methodology: 'Published' }] });
-const row = (model, effort, quality, price, estimated = false) => ({ id: `${model}:${effort}`, providerId: 'example', provider: 'Example', model, modelKey: `example:${model}`, effort, quality: quality === null ? null : metric(quality, estimated), blendedPerMillion: metric(price), inputPerMillion: metric(price / 2), outputPerMillion: metric(price * 2), costPerTask: null, needsResearch: quality === null || estimated });
+const row = (model, effort, quality, price, estimated = false) => ({ id: `${model}:${effort}`, providerId: 'example', provider: 'Example', model, modelKey: `example:${model}`, effort, quality: quality === null ? null : metric(quality, estimated), blendedPerMillion: metric(price), inputPerMillion: metric(price / 2), outputPerMillion: metric(price * 2), costPerTask: metric(price * (effort === 'high' ? 3 : 1)), needsResearch: quality === null || estimated });
 const rows = [row('gpt-6-luna', 'low', 21, 0.2), row('gpt-6-luna', 'high', 32, 0.2), row('gpt-5.6-luna', 'low', 20, 0.45), row('claude-opus-5-5', 'high', 56, 8), row('unknown-model', 'high', null, 0)];
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows } }); });
 
@@ -21,7 +21,7 @@ it('compares generations and vendors together with quick model and effort toggle
   expect(screen.queryByLabelText('Benchmark')).toBeNull();
   fireEvent.change(screen.getByLabelText('Filter models'), { target: { value: 'gpt-6-luna,opus' } });
   fireEvent.click(screen.getByRole('button', { name: 'Compare matching' }));
-  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.2,32]]');
+  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.6000000000000001,32]]');
   expect(screen.getByTestId('scatter-example:claude-opus-5-5')).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Pair comparison' })).toHaveTextContent('-24 points');
   expect(screen.queryByTestId('scatter-example:gpt-5.6-luna')).toBeNull();
@@ -69,4 +69,35 @@ it('filters loaded chart evidence by provider and restores all providers without
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toBeTruthy();
   expect(screen.getByTestId('scatter-peer:claude-opus-5-5')).toBeTruthy();
   expect(api.getModelComparison).toHaveBeenCalledTimes(1);
+});
+
+it('upgrades the legacy token-rate default without losing filters and remembers an explicit token-rate choice', async () => {
+  localStorage.setItem('portos-composite-comparison-v1', JSON.stringify({ priceId: 'blendedPerMillion', models: ['gpt-6-luna'], efforts: ['low', 'high'] }));
+  const { unmount } = render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  expect(screen.getByLabelText('Cost axis')).toHaveValue('costPerTask');
+  expect(screen.queryByTestId('scatter-example:claude-opus-5-5')).toBeNull();
+  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.6000000000000001,32]]');
+  fireEvent.change(screen.getByLabelText('Cost axis'), { target: { value: 'blendedPerMillion' } });
+  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.2,32]]');
+  expect(screen.getByText(/vertical effort curves do not mean equal task cost/)).toBeTruthy();
+  unmount();
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  expect(screen.getByLabelText('Cost axis')).toHaveValue('blendedPerMillion');
+});
+
+it('never substitutes a token rate for missing task cost and lets users exclude estimated task costs', async () => {
+  api.getModelComparison.mockResolvedValue({ composite: { rows: [
+    { ...rows[0], costPerTask: null },
+    { ...rows[1], costPerTask: metric(0.6, true) },
+    { ...rows[3], costPerTask: metric(0) },
+  ] } });
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.6,32]]');
+  expect(screen.getByTestId('scatter-example:claude-opus-5-5')).toHaveAttribute('data-values', '[[0,56]]');
+  fireEvent.click(screen.getByLabelText('Include estimates'));
+  expect(screen.queryByTestId('scatter-example:gpt-6-luna')).toBeNull();
+  expect(screen.getByTestId('scatter-example:claude-opus-5-5')).toBeTruthy();
 });
