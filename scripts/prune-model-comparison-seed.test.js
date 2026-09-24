@@ -19,16 +19,26 @@ describe('model comparison seed scope', () => {
     }
   });
 
-  it('ships price references without third-party model-performance scores', async () => {
+  it('ships public benchmark and price observations without PortOS run data', async () => {
     const { observations } = await readSeed();
     expect(observations.length).toBeGreaterThan(0);
+    const scored = observations.filter(row => row.quality);
+    const priced = observations.filter(row => row.inputPerMillion || row.outputPerMillion || row.reasoningPerMillion);
+    expect(scored.length).toBeGreaterThan(0);
+    expect(priced.length).toBeGreaterThan(0);
+    expect(observations.some(row => row.quality && (row.inputPerMillion || row.outputPerMillion))).toBe(true);
+
+    const metricFields = [
+      'quality', 'costPerTask', 'apiEquivalentCost', 'inputPerMillion', 'outputPerMillion',
+      'reasoningPerMillion', 'responseSeconds', 'tokensPerSecond', 'tokensPerRun',
+      'inputTokens', 'outputTokens', 'quota',
+    ];
     for (const row of observations) {
-      expect(row.quality).toBeNull();
-      expect(row.costPerTask).toBeNull();
-      expect(row.responseSeconds).toBeNull();
-      expect(row.tokensPerSecond).toBeNull();
       expect(row.benchmark).not.toMatch(/^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i);
       expect(row.id).not.toMatch(/^(?:aa-v\d|swebench-)/i);
+      for (const field of metricFields) {
+        if (row[field]) expect(row[field].source.url).toMatch(/^https:\/\//);
+      }
     }
   });
 
@@ -55,7 +65,7 @@ describe('model comparison seed scope', () => {
     }
   });
 
-  it('carries no retired model generations in the price reference seed', async () => {
+  it('carries no retired model generations in the comparison catalog', async () => {
     const models = new Set((await readSeed()).observations.map(row => row.model));
     for (const retired of ['claude-2.0', 'gpt-4', 'palm-2', 'llama-2-chat-70b']) expect(models.has(retired)).toBe(false);
   });

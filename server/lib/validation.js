@@ -2290,7 +2290,6 @@ export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().
 export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
 export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
 
-export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();
 export const modelComparisonBenchmarkRunSchema = z.object({
   providerId: z.string().min(1).max(200),
   model: z.string().min(1).max(200),

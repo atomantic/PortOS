@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { BarChart3, Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal, FlaskConical } from 'lucide-react';
+import { Activity, BarChart3, Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal, FlaskConical } from 'lucide-react';
 import socket from '../../services/socket';
 import Drawer from '../Drawer';
 import BrailleSpinner from '../BrailleSpinner';
@@ -37,6 +37,7 @@ import AssessmentSweepPanel from './AssessmentSweepPanel';
 import ModelCapabilityTests, { TestCell } from './ModelCapabilityTests.jsx';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import ModelThroughputReport from './ModelThroughputReport';
+import PortosModelBenchmarkPanel from './PortosModelBenchmarkPanel';
 import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
@@ -54,6 +55,7 @@ const INTENTS = [
 
 export const PERFORMANCE_VIEWS = [
   { id: 'results', label: 'Results', icon: BarChart3 },
+  { id: 'portos-benchmark', label: 'PortOS bench', icon: Activity },
   { id: 'capabilities', label: 'Capabilities', icon: FlaskConical },
   { id: 'agent-checks', label: 'Agent checks', icon: Terminal },
   { id: 'tuning', label: 'Tuning', icon: SlidersHorizontal },
@@ -786,6 +788,11 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   const selectedKey = assessmentKey || pathnameAssessmentKey;
   const validView = PERFORMANCE_VIEWS.some((item) => item.id === requestedView);
   const activeView = validView ? requestedView : 'results';
+  const [portosBenchmarkVisited, setPortosBenchmarkVisited] = useState(() => activeView === 'portos-benchmark');
+
+  useEffect(() => {
+    if (activeView === 'portos-benchmark') setPortosBenchmarkVisited(true);
+  }, [activeView]);
 
   useEffect(() => {
     if (!validView) navigate({ pathname: `${PERFORMANCE_PATH}/results`, search: location.search }, { replace: true });
@@ -1129,6 +1136,15 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
 
       <div hidden={activeView !== 'results'}>
         <RuntimeRoster runtimes={report?.runtimes} />
+      </div>
+
+      <div
+        hidden={activeView !== 'portos-benchmark'}
+        role="tabpanel"
+        id="performance-task-portos-benchmark"
+        aria-labelledby="tab-portos-benchmark"
+      >
+        {portosBenchmarkVisited && <PortosModelBenchmarkPanel />}
       </div>
 
       <div

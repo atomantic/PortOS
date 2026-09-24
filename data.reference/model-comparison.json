@@ -2,260 +2,292 @@
   "schemaVersion": 1,
   "observations": [
     {
-      "id": "zen-free-2026-09-big-pickle",
-      "provider": "OpenCode Zen",
-      "model": "big-pickle",
+      "id": "lcb-generation-2023-05-08--2025-04-07-qwen3-235b-a22b-unspecified",
+      "provider": "Qwen",
+      "model": "qwen3-235b-a22b",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Full generation split, all difficulties",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 80.4,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 0.455,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://openrouter.ai/qwen/qwen3-235b-a22b-04-28/pricing",
+          "retrievedAt": "2026-09-24T07:42:35Z",
+          "methodology": "OpenRouter's published standard routed price for qwen/qwen3-235b-a22b-04-28: USD per 1 million input tokens."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 1.82,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://openrouter.ai/qwen/qwen3-235b-a22b-04-28/pricing",
+          "retrievedAt": "2026-09-24T07:42:35Z",
+          "methodology": "OpenRouter's published standard routed price for qwen/qwen3-235b-a22b-04-28: USD per 1 million output tokens."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Big Pickle. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Qwen3-235B-A22B); serving style CodeQwenInstruct. Input/output prices are OpenRouter's standard USD rates for its qwen/qwen3-235b-a22b-04-28 route, not Alibaba Cloud's first-party API prices. Benchmark-task cost and quota are not published."
     },
     {
-      "id": "zen-free-2026-09-deepseek-v4-flash-free",
-      "provider": "OpenCode Zen",
-      "model": "deepseek-v4-flash-free",
-      "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "id": "lcb-generation-2023-05-08--2025-04-07-grok-3-mini-high",
+      "provider": "xAI",
+      "model": "grok-3-mini",
+      "effort": "high",
+      "configuration": "High",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
-      "quality": null,
+      "benchmark": "LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)",
+      "quality": {
+        "value": 78.1,
+        "source": {
+          "url": "https://livecodebench.github.io/leaderboard.html",
+          "retrievedAt": "2026-09-23T04:48:48.912Z",
+          "methodology": "LiveCodeBench generation split, pass@1 mean over 1055 problems, full window 2023-05-08 to 2025-04-07."
+        }
+      },
       "costPerTask": null,
-      "inputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
-      "outputPerMillion": {
-        "value": 0,
-        "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
-        }
-      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "DeepSeek V4 Flash Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Sourced from LiveCodeBench (Grok-3-Mini (High)); serving style Grok. Costs, throughput and quota are not published by this source."
     },
     {
-      "id": "zen-free-2026-09-muse-spark-1.3-contributor-free",
-      "provider": "OpenCode Zen",
-      "model": "muse-spark-1.3-contributor-free",
+      "id": "xai-grok-4.7-pricing-2026-09-21-standard",
+      "provider": "xAI",
+      "model": "grok-4.7",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "xAI API grok-4.7; input context at most 200,000 tokens",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-21)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 2,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 6,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Muse Spark 1.3 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Cached input is $0.50/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
     },
     {
-      "id": "zen-free-2026-09-muse-spark-1.2-contributor-free",
-      "provider": "OpenCode Zen",
-      "model": "muse-spark-1.2-contributor-free",
+      "id": "xai-grok-4.7-pricing-2026-09-21-long-context",
+      "provider": "xAI",
+      "model": "grok-4.7",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "xAI API grok-4.7; input context above 200,000 tokens, up to 500,000",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-21)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 4,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 12,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Muse Spark 1.2 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Cached input is $1.00/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
     },
     {
-      "id": "zen-free-2026-09-mimo-v2.5-free",
-      "provider": "OpenCode Zen",
-      "model": "mimo-v2.5-free",
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-fast-mode",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Claude API (first-party) fast mode, speed=\"fast\", research preview; global inference_geo",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-23)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 8,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "Anthropic official pricing page, \"Fast mode pricing\" table; USD per million uncached input tokens."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 40,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:34:54.874Z",
+          "methodology": "Anthropic official pricing page, \"Fast mode pricing\" table; USD per million output tokens."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "MiMo V2.5 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Pricing only, and a distinct billing configuration from the standard $4/$20 rates carried by the v4.3.2 observation. Fast mode is Claude API first-party only (not AWS/Bedrock/Vertex), applies across the full context window, and is unavailable with the Batch API. Artificial Analysis publishes no separate fast-mode evaluation, so no quality, throughput or latency is claimed here."
     },
     {
-      "id": "zen-free-2026-09-ling-3.0-flash-fin-free",
-      "provider": "OpenCode Zen",
-      "model": "ling-3.0-flash-fin-free",
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-standard",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Claude API (first-party) standard global endpoint; base input / output tokens, inference_geo=global",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-23)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 4,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 20,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Ling 3.0 Flash Fin Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Anthropic published list price for Claude Opus 5.5 ($4/MTok base input, $20/MTok output). Cache writes ($5/MTok 5m, $8/MTok 1h) and cache reads ($0.20/MTok, 0.05x base) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. inference_geo=\"us\" carries a documented 1.1x multiplier and is a different configuration. No quality, latency, throughput or benchmark task cost is published on this page."
     },
     {
-      "id": "zen-free-2026-09-nemotron-3-ultra-free",
-      "provider": "OpenCode Zen",
-      "model": "nemotron-3-ultra-free",
+      "id": "anthropic-claude-opus-5.5-pricing-2026-09-23-batch",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "Claude API Batch API (asynchronous, 50% discount); base input / output tokens",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-23)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 2,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 10,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-23T00:33:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Nemotron 3 Ultra Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "Anthropic published Batch API price for Claude Opus 5.5 ($2/MTok input, $10/MTok output). Batch is a distinct billing configuration from the standard endpoint and is not interchangeable with it (asynchronous, no fast mode). Unknown fields stay null."
     },
     {
-      "id": "zen-free-2026-09-nemotron-3.5-lightning-free",
-      "provider": "OpenCode Zen",
-      "model": "nemotron-3.5-lightning-free",
+      "id": "openai-gpt-6-luna-pricing-2026-09-23-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
       "effort": "unspecified",
-      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
       "billing": "api",
-      "benchmark": "Unbenchmarked (pricing only)",
+      "benchmark": "Official API pricing (2026-09-23)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 0,
+        "value": 0.1,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
         }
       },
       "outputPerMillion": {
-        "value": 0,
+        "value": 0.5,
         "source": {
-          "url": "https://models.dev/api.json",
-          "retrievedAt": "2026-09-06T00:00:00Z",
-          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Nemotron 3.5 Lightning Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+      "notes": "OpenAI published standard-tier list price for gpt-6-luna ($0.10/M uncached input, $0.50/M output; cached input $0.01/M is a separate class). Long-context requests bill at 2x; Batch/Flex ($0.05/$0.25) and Fast ($0.20/$1.00) are separate tiers not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. Cross-checked against the OpenRouter public model list for the same model, which publishes the same $0.10/$0.50 rates."
+    },
+    {
+      "id": "openai-gpt-6-sol-pricing-2026-09-23-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6-sol",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-23)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/pricing",
+          "retrievedAt": "2026-09-23T00:34:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenAI published standard-tier list price for gpt-6-sol ($2.00/M uncached input, $10.00/M output; cached input $0.20/M is a separate class). The page documents long-context requests at 2x the standard rates and separate Batch/Flex ($1/$5) and Fast ($4/$20) tiers — each a different configuration, not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. No quality, throughput or latency on this source."
     },
     {
       "id": "nim-free-2026-09-google-gemma-4-31b-it",
@@ -322,68 +354,260 @@
       "notes": "Laguna XS 2.1. Free NVIDIA NIM endpoint listed on 2026-09-15. Pricing is temporary; usage limits, trial credits, and NVIDIA data-use terms apply (https://build.nvidia.com/poolside/laguna-xs-2.1). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named OpenRouter or local serving's scores."
     },
     {
-      "id": "xai-grok-4.7-pricing-2026-09-21-standard",
-      "provider": "xAI",
-      "model": "grok-4.7",
+      "id": "zen-free-2026-09-big-pickle",
+      "provider": "OpenCode Zen",
+      "model": "big-pickle",
       "effort": "unspecified",
-      "configuration": "xAI API grok-4.7; input context at most 200,000 tokens",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
       "billing": "api",
-      "benchmark": "Official API pricing (2026-09-21)",
+      "benchmark": "Unbenchmarked (pricing only)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 2,
+        "value": 0,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
         }
       },
       "outputPerMillion": {
-        "value": 6,
+        "value": 0,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry big-pickle: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Cached input is $0.50/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+      "notes": "Big Pickle. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
     },
     {
-      "id": "xai-grok-4.7-pricing-2026-09-21-long-context",
-      "provider": "xAI",
-      "model": "grok-4.7",
+      "id": "zen-free-2026-09-deepseek-v4-flash-free",
+      "provider": "OpenCode Zen",
+      "model": "deepseek-v4-flash-free",
       "effort": "unspecified",
-      "configuration": "xAI API grok-4.7; input context above 200,000 tokens, up to 500,000",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
       "billing": "api",
-      "benchmark": "Official API pricing (2026-09-21)",
+      "benchmark": "Unbenchmarked (pricing only)",
       "quality": null,
       "costPerTask": null,
       "inputPerMillion": {
-        "value": 4,
+        "value": 0,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
         }
       },
       "outputPerMillion": {
-        "value": 12,
+        "value": 0,
         "source": {
-          "url": "https://docs.x.ai/developers/models/grok-4.7",
-          "retrievedAt": "2026-09-21T00:00:00Z",
-          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry deepseek-v4-flash-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
         }
       },
       "reasoningPerMillion": null,
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "Cached input is $1.00/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+      "notes": "DeepSeek V4 Flash Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-ling-3.0-flash-fin-free",
+      "provider": "OpenCode Zen",
+      "model": "ling-3.0-flash-fin-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry ling-3.0-flash-fin-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Ling 3.0 Flash Fin Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-mimo-v2.5-free",
+      "provider": "OpenCode Zen",
+      "model": "mimo-v2.5-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry mimo-v2.5-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "MiMo V2.5 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-muse-spark-1.2-contributor-free",
+      "provider": "OpenCode Zen",
+      "model": "muse-spark-1.2-contributor-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.2-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Muse Spark 1.2 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-muse-spark-1.3-contributor-free",
+      "provider": "OpenCode Zen",
+      "model": "muse-spark-1.3-contributor-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry muse-spark-1.3-contributor-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Muse Spark 1.3 Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-nemotron-3-ultra-free",
+      "provider": "OpenCode Zen",
+      "model": "nemotron-3-ultra-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3-ultra-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Nemotron 3 Ultra Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
+    },
+    {
+      "id": "zen-free-2026-09-nemotron-3.5-lightning-free",
+      "provider": "OpenCode Zen",
+      "model": "nemotron-3.5-lightning-free",
+      "effort": "unspecified",
+      "configuration": "OpenCode Zen free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://models.dev/api.json",
+          "retrievedAt": "2026-09-06T00:00:00Z",
+          "methodology": "OpenCode provider catalog entry nemotron-3.5-lightning-free: published USD per million input/output tokens. Availability cross-checked at https://opencode.ai/zen/v1/models. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Nemotron 3.5 Lightning Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
     }
   ]
 }

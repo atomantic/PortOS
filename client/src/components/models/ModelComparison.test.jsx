@@ -1,15 +1,9 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import ModelComparison from './ModelComparison';
 import * as api from '../../services/apiModelComparison';
-import toast from '../ui/Toast';
 
-vi.mock('../../services/apiModelComparison', () => ({
-  getModelComparison: vi.fn(),
-  discoverComparisonModels: vi.fn(),
-  runPortosModelBenchmark: vi.fn(),
-}));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), warning: vi.fn() } }));
+vi.mock('../../services/apiModelComparison', () => ({ getModelComparison: vi.fn() }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ children }) => <div>{children}</div>,
@@ -20,78 +14,63 @@ vi.mock('recharts', () => ({
   YAxis: ({ label }) => <div data-testid="yaxis" data-label={label?.value} />,
 }));
 
-const runSource = {
-  url: 'portos://model-comparison/00000000-0000-4000-8000-000000000001',
-  retrievedAt: '2026-09-23T00:00:00.000Z',
-  methodology: 'PortOS Task Bench v1',
-};
-const metric = value => ({ value, source: runSource });
-const observation = ({ id, provider, model, score, tokens, cost = null, billing = 'subscription', tokenBasis = 'measured' }) => ({
+const source = (url, methodology = 'Published source') => ({
+  url,
+  retrievedAt: '2026-09-24T06:00:00Z',
+  methodology,
+});
+const metric = (value, url, methodology) => ({ value, source: source(url, methodology) });
+const row = ({ id, provider, model, benchmark, quality, input = null, output = null }) => ({
   id,
   provider,
   model,
   effort: 'high',
-  configuration: 'PortOS Task Bench v1; temperature=0',
-  billing,
-  benchmark: 'PortOS Task Bench v1 (deterministic)',
-  quality: metric(score),
+  configuration: 'Public source result',
+  billing: 'api',
+  benchmark,
+  quality: quality === null ? null : metric(quality, 'https://livecodebench.github.io/leaderboard.html'),
   costPerTask: null,
-  inputPerMillion: null,
-  outputPerMillion: null,
+  inputPerMillion: input === null ? null : metric(input, 'https://developers.openai.com/api/docs/models/o4-mini'),
+  outputPerMillion: output === null ? null : metric(output, 'https://developers.openai.com/api/docs/models/o4-mini'),
   reasoningPerMillion: null,
-  responseSeconds: metric(4),
-  tokensPerSecond: metric(tokens / 4),
-  tokensPerRun: metric(tokens),
-  inputTokens: metric(tokens - 20),
-  outputTokens: metric(20),
-  apiEquivalentCost: cost === null ? null : metric(cost),
-  tokenBasis,
-  completedTasks: 5,
-  totalTasks: 5,
+  responseSeconds: null,
+  tokensPerSecond: null,
   quota: null,
-  notes: 'No prompt or model response is stored.',
+  notes: '',
 });
-const codexRun = observation({ id: 'portos:codex-run', provider: 'Codex', model: 'gpt-6-luna', score: 80, tokens: 120, cost: 0.0002 });
-const localRun = observation({ id: 'portos:local-run', provider: 'Ollama', model: 'qwen3.6:35b', score: 60, tokens: 150, billing: 'local', tokenBasis: 'estimated' });
-const inventory = [
-  { id: 'codex', name: 'Codex', billing: 'subscription', canBenchmark: true, canDiscover: false, models: [{ model: 'gpt-6-luna', efforts: ['low', 'high'] }] },
-  { id: 'ollama', name: 'Ollama', billing: 'local', canBenchmark: true, canDiscover: true, models: [{ model: 'qwen3.6:35b', efforts: [] }] },
+
+const benchmark = 'LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)';
+const observations = [
+  row({ id: 'o4-mini-high', provider: 'OpenAI', model: 'o4-mini', benchmark, quality: 87.3, input: 1.1, output: 4.4 }),
+  row({ id: 'qwen3-score', provider: 'Qwen', model: 'qwen3-235b-a22b', benchmark, quality: 80.4 }),
+  row({ id: 'free-endpoint', provider: 'OpenCode Zen', model: 'example-free-model', benchmark: 'Unbenchmarked (pricing only)', quality: null, input: 0, output: 0 }),
 ];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [codexRun, localRun], inventory });
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations });
 });
 
-it('runs the explicitly selected provider, model and effort, then displays the saved result', async () => {
-  api.runPortosModelBenchmark.mockResolvedValue({ observation: codexRun, complete: true });
+it('plots only shipped benchmark data with a matching published token price', async () => {
   render(<ModelComparison />);
 
-  await screen.findByTestId('xaxis');
-  await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue('gpt-6-luna'));
-  await waitFor(() => expect(screen.getByLabelText('Reasoning effort')).toBeEnabled());
-  fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Run five tasks' }));
-
-  await waitFor(() => expect(api.runPortosModelBenchmark).toHaveBeenCalledWith(
-    { providerId: 'codex', model: 'gpt-6-luna', effort: 'high' },
-    expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }),
-  ));
-  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Benchmark saved: 80% correct'));
-  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[120,80]]');
+  expect(await screen.findByTestId('scatter-OpenAI')).toHaveAttribute('data-values', '[[4.4,87.3]]');
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-label', 'Published output price (USD per 1M tokens)');
+  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-label', 'Benchmark score (%)');
+  expect(screen.getByText('qwen3-235b-a22b')).toBeTruthy();
+  expect(screen.getByText('example-free-model')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /run five tasks/i })).toBeNull();
+  expect(screen.queryByRole('button', { name: /discover models/i })).toBeNull();
+  expect(api.getModelComparison).toHaveBeenCalledTimes(1);
 });
 
-it('compares all runs by tokens and limits the cost view to models with known API rates', async () => {
+it('switches between input and output prices without comparing benchmark families', async () => {
   render(<ModelComparison />);
 
-  await screen.findByTestId('scatter-Ollama');
-  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[120,80]]');
-  expect(screen.getByTestId('scatter-Ollama')).toHaveAttribute('data-values', '[[150,60]]');
+  await screen.findByTestId('scatter-OpenAI');
+  fireEvent.change(screen.getByLabelText('Token price'), { target: { value: 'inputPerMillion' } });
 
-  fireEvent.click(screen.getByRole('button', { name: 'API equivalent' }));
-  await screen.findByTestId('scatter-Codex');
-  expect(screen.queryByTestId('scatter-Ollama')).toBeNull();
-  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[0.2,80]]');
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-label', 'Estimated API equivalent per 1,000 runs');
-  expect(screen.getByText('~$0.20')).toBeTruthy();
+  expect(screen.getByTestId('scatter-OpenAI')).toHaveAttribute('data-values', '[[1.1,87.3]]');
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-label', 'Published input price (USD per 1M tokens)');
+  expect(screen.getByLabelText('Benchmark')).toHaveValue(benchmark);
 });
