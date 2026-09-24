@@ -73,6 +73,7 @@ vi.mock('../hooks/useLocalModels', () => ({
 }));
 vi.mock('../components/models/ModelsTabsHeader', () => ({
   default: ({ activeTab }) => <div data-testid="models-tabs-header" data-active-tab={activeTab} />,
+  ModelsSectionLayout: ({ children }) => <>{children}</>,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
   // `params` becomes the setup request's query string, so the test can assert

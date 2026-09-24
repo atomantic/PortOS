@@ -15,7 +15,7 @@ import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
-import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
@@ -761,13 +761,13 @@ export default function AIProviders() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-full">
+      <ModelsSectionLayout activeTab="providers">
         <PageHeader icon={Bot} title="AI Providers" />
-        <ModelsTabsHeader activeTab="providers" />
-        <div className="flex-1 overflow-auto p-4">
+        <ModelsTabsHeader activeTab="providers" desktop={false} />
+        <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4">
           <PageSkeleton header="none" label="Loading providers" layout="grid" cards={4} />
         </div>
-      </div>
+      </ModelsSectionLayout>
     );
   }
 
@@ -820,15 +820,15 @@ export default function AIProviders() {
   ) : null;
 
   return (
-    <div className="flex flex-col h-full">
+    <ModelsSectionLayout activeTab="providers">
       <PageHeader icon={Bot} title="AI Providers" actions={headerActions} />
 
-      <ModelsTabsHeader activeTab="providers" />
+      <ModelsTabsHeader activeTab="providers" desktop={false} />
       <div className="px-4 pt-3">
         <ProviderPageTabs activeTab={activeTab} />
       </div>
 
-      <div className={`flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
+      <div className={`min-h-0 min-w-0 flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
       {activeTab === 'harnesses' && (
         <ProviderHarnessesTab
           selectedHarnessId={harnessId || null}
@@ -1301,6 +1301,6 @@ export default function AIProviders() {
           ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
           : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
       />
-    </div>
+    </ModelsSectionLayout>
   );
 }
