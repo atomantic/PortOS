@@ -9,6 +9,7 @@
  * (gallery, loras, models, delete) target the local module directly.
  */
 
+import { createImageGalleryHandlers } from './imageGalleryRead.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -795,49 +796,11 @@ router.get('/loras', asyncHandler(async (_req, res) => {
   res.json(await local.listLoraFilenames());
 }));
 
-const galleryQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(60),
-  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
-  q: z.string().max(500).default(''),
-  hidden: z.enum(['true', 'false']).optional().transform(v => v === undefined ? undefined : v === 'true'),
-  starred: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
-  summary: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
-  filename: z.string().min(1).max(255).optional(),
-  kind: z.enum(['image', 'video', 'all']).default('image'),
-  media: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
-  collectionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional(),
-  universeId: z.string().min(1).max(255).optional(),
-  entryCategory: z.string().min(1).max(255).optional(),
-  entryKind: z.string().min(1).max(255).optional(),
-});
-
-router.get('/gallery/collections', asyncHandler(async (_req, res) => {
-  const { listGalleryCollectionSummaries } = await import('../services/mediaAssetIndex/gallery.js');
-  res.json(await listGalleryCollectionSummaries(local.listGallery));
-}));
-
-router.get('/gallery/facets', asyncHandler(async (_req, res) => {
-  const { listGalleryFacets } = await import('../services/mediaAssetIndex/gallery.js');
-  res.json(await listGalleryFacets(local.listGallery));
-}));
-
-// Reference hydration is bounded independently of browsing; callers send only
-// filenames actually attached to their universe, project or export.
-router.post('/gallery/lookup', asyncHandler(async (req, res) => {
-  const { filenames } = validateRequest(z.object({ filenames: z.array(z.string().min(1).max(255)).max(200) }), req.body);
-  const { listGalleryPage } = await import('../services/mediaAssetIndex/gallery.js');
-  res.json((await listGalleryPage({ limit: 200, mediaKeys: filenames.map(f => `image:${f}`) }, local.listGallery)).items);
-}));
-
-router.get('/gallery', asyncHandler(async (req, res) => {
-  // No paging keys preserves the full legacy array for callers not migrated yet.
-  // New callers use ?limit=5 (recent strip) or ?limit=60&offset=0&q=...
-  const paginated = Object.keys(galleryQuerySchema.shape).some(key => req.query[key] !== undefined);
-  if (!paginated) return res.json(await local.listGallery());
-  const options = validateRequest(galleryQuerySchema, req.query);
-  const { listGalleryPage } = await import('../services/mediaAssetIndex/gallery.js');
-  res.json(await listGalleryPage(options, local.listGallery));
-}));
+const galleryReads = createImageGalleryHandlers(local.listGallery);
+router.get('/gallery/collections', galleryReads.collections);
+router.get('/gallery/facets', galleryReads.facets);
+router.post('/gallery/lookup', galleryReads.lookup);
+router.get('/gallery', galleryReads.list);
 
 // SSE progress stream. Local renders run via the mediaJobQueue and emit
 // `queued` → `started` → `progress` → `complete` events; the queue owns the
