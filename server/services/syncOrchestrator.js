@@ -15,7 +15,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -102,18 +102,21 @@ async function withCursors(fn) {
 // it outright (#5663). `peerFetch` also carries the peer HTTPS agent, so a
 // self-signed tailnet peer no longer fails TLS validation on these pulls.
 //
-// The timeout bounds the peerFetch call and nothing after it, so the JSON
-// decode of an already-received body can't be aborted — the same shape
-// `fetchWithTimeout` had here. (Over HTTPS the budget does still cover the
-// download itself, because the insecure-agent shim buffers the whole body
-// before it resolves; that is a property of that transport, not of this call.)
-// Contract is unchanged: null on transport failure, non-2xx, or bad JSON.
+// Headers retain their 15s budget. HTTP body reads get a separate 60s idle
+// deadline so large, progressing downloads may finish; HTTPS is already
+// buffered within the request budget. Body stalls must reach the cycle's
+// failure path instead of becoming a successful no-op.
+function handlePeerBodyError(error) {
+  if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
+  return null;
+}
+
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
   const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
     .catch(() => null);
   if (!res?.ok) return null;
-  return res.json().catch(() => null);
+  return readPeerBody(res, 'json').catch(handlePeerBodyError);
 }
 
 /**
@@ -132,18 +135,17 @@ async function syncImageFromPeer(peer, avatarPath) {
   if (exists) return;
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  // Same `peerFetch` hop and the same timeout scope as fetchPeer. Non-critical
-  // either way: a failure just retries next cycle.
+  // Use the same request and body-idle budgets as JSON snapshots.
   const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
     .catch(() => null);
   if (!res?.ok) return;
-  await res.arrayBuffer()
+  await readPeerBody(res, 'arrayBuffer')
     .then(async (bytes) => {
       await ensureDir(PATHS.images);
       await writeFileGuarded(localPath, Buffer.from(bytes));
       console.log(`🔄 Synced avatar image: ${filename}`);
     })
-    .catch(() => {});
+    .catch(handlePeerBodyError);
 }
 
 // --- Status ---
