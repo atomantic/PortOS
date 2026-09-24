@@ -12,8 +12,7 @@ Created specialized prompt templates per task category with routing, examples, a
 **Implementation:**
 - Added shipped `data.reference/prompts/skills/` templates: `bug-fix.md`, `feature.md`, `security-audit.md`, `refactor.md`, `documentation.md`, `mobile-responsive.md`, and `threejs-visual.md`
 - Added primary lifecycle routing plus an optional bounded domain guide in `agentPromptBuilder.js`; a Three.js, React Three Fiber, or WebGL scene task receives the visual guide after its lifecycle guidance, so a security task retains its security checklist
-- Updated `buildAgentPrompt()` to inject matched templates into both the Mustache template system and the fallback template
-- Updated `cos-agent-briefing.md` with `{{#skillSection}}` conditional block
+- `buildAgentPrompt()` injects matched templates into the API-path briefing
 - Templates only load when matched to avoid token inflation; generic WebGL mentions do not trigger the scene guide
 
 ## P2: Agent Context Compaction

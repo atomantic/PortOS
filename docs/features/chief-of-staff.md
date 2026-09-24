@@ -146,7 +146,6 @@ Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
 
 | Template | Purpose |
 |----------|---------|
-| cos-agent-briefing | Brief sub-agent on task |
 | cos-evaluate | Evaluate tasks and decide actions |
 | cos-report-summary | Generate daily summary |
 | cos-self-improvement | Analyze and suggest improvements |

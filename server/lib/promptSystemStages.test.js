@@ -112,8 +112,8 @@ describe('shipped stage catalog parity', () => {
 describe('derived call-site protection', () => {
   const REFERENCED_NOT_CURATED = 'pipeline-series-concept-judge';
 
-  it('keeps the curated badge set to the ten hand-picked stages', () => {
-    expect(SYSTEM_STAGE_KEYS).toHaveLength(10);
+  it('keeps the curated badge set to the nine hand-picked stages', () => {
+    expect(SYSTEM_STAGE_KEYS).toHaveLength(9);
     expect(isSystemStage(REFERENCED_NOT_CURATED)).toBe(false);
     expect(systemStageUsedBy(REFERENCED_NOT_CURATED)).toEqual([]);
   });
