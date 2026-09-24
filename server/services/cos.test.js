@@ -2525,6 +2525,21 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
   });
 });
 
+describe('CoS startup — resume persisted running + mind recovery', () => {
+  // After a portos-server restart the in-memory daemon flag is false, but
+  // state.running may still be true on disk. initializePersistentMindSupervisor
+  // (orphan activeTurn recovery + watchdog) only runs inside start(), so boot
+  // must re-enter start() when the previous process left running=true — not
+  // only when alwaysOn/autoStart is set.
+  it('auto-starts on boot when state.running was persisted true', () => {
+    const initStart = COS_SRC.indexOf('export async function init(');
+    expect(initStart).toBeGreaterThan(-1);
+    const initFn = extractFnBody(COS_SRC, initStart);
+    expect(initFn).toMatch(/state\.config\.alwaysOn\s*\|\|\s*state\.config\.autoStart\s*\|\|\s*state\.running/);
+    expect(initFn).toMatch(/await start\(\)/);
+  });
+});
+
 describe('CoS startup — single-flight recovery', () => {
   it('shares the full boot promise across concurrent start callers', () => {
     expect(COS_SRC).toMatch(/let daemonStartPromise = null/);

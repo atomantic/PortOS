@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { randomBytes } from 'crypto';
+import { stat } from 'fs/promises';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import {
   COOKIE_NAME,
@@ -69,6 +70,9 @@ const sessions = new Map();
 // burst of concurrent verifySession calls after a restart can't observe an
 // empty Map while the first call is still reading auth-sessions.json.
 let loadPromise = null;
+// mtime of auth-sessions.json at last read/write — used to pick up tokens
+// minted out-of-process (see mergeSessionsFromDisk).
+let sessionsFileMtimeMs = 0;
 
 const now = () => Date.now();
 
@@ -92,6 +96,11 @@ const readSessions = async () => {
     const id = typeof entry.id === 'string' ? entry.id : randomBytes(SESSION_ID_BYTES).toString('hex');
     sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt, label, id });
   }
+  try {
+    sessionsFileMtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+  } catch {
+    // leave prior stamp; miss path will retry
+  }
 };
 
 const writeSessions = async () => {
@@ -100,6 +109,11 @@ const writeSessions = async () => {
     tokens.push({ tokenHash, expiresAt, label, id });
   }
   await atomicWrite(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
+  try {
+    sessionsFileMtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+  } catch {
+    // next miss will refresh
+  }
 };
 
 const ensureLoaded = async () => {
@@ -109,6 +123,24 @@ const ensureLoaded = async () => {
     });
   }
   return loadPromise;
+};
+
+// Out-of-process callers (box keepalive, a shell one-liner) mint sessions by
+// importing this module against the same auth-sessions.json the running server
+// owns. The server's Map is loaded once at first verify, so a token written
+// after that load is invisible until restart — which made keepalive's
+// POST /api/cos/start keep answering AUTH_REQUIRED after the instance password
+// was enabled. On a miss, merge any newer disk records into the live Map;
+// never drop in-memory entries a racing disk write might have omitted.
+const mergeSessionsFromDisk = async () => {
+  let mtimeMs = 0;
+  try {
+    mtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+  } catch {
+    return;
+  }
+  if (mtimeMs <= sessionsFileMtimeMs) return;
+  await readSessions();
 };
 
 const readAuthConfig = async () => {
@@ -289,7 +321,11 @@ export const verifySession = async (token) => {
   if (typeof token !== 'string' || token.length === 0) return false;
   await ensureLoaded();
   const key = hashToken(token);
-  const entry = sessions.get(key);
+  let entry = sessions.get(key);
+  if (!entry) {
+    await mergeSessionsFromDisk();
+    entry = sessions.get(key);
+  }
   if (!entry) return false;
   if (entry.expiresAt <= now()) {
     sessions.delete(key);
