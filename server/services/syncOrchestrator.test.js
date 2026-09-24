@@ -639,7 +639,7 @@ describe('syncOrchestrator', () => {
       expect(updatePeer).toHaveBeenCalledWith('local-peer-row', { schemaGaps: null });
     });
 
-    it('records a schema gap and stops draining when the sender is ahead on catalog', async () => {
+    it.each(['ahead', 'behind'])('records a %s catalog gap without advancing cursors, then retries', async (direction) => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -651,7 +651,8 @@ describe('syncOrchestrator', () => {
       });
       const mismatch = new Error('catalog ahead');
       mismatch.code = 'CATALOG_SCHEMA_VERSION_AHEAD';
-      mismatch.diff = { ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }], behind: [] };
+      const gap = { category: 'catalog', senderV: direction === 'ahead' ? 99 : 0, receiverV: 10 };
+      mismatch.diff = { ahead: [], behind: [], [direction]: [gap] };
       applyCatalogChanges.mockRejectedValueOnce(mismatch);
 
       const { updatePeer } = await import('./instances.js');
@@ -662,17 +663,26 @@ describe('syncOrchestrator', () => {
       // Only one apply attempt — we stop draining on the block (no hasMore loop).
       expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
       expect(result.catalog.blockedBySchema).toBeTruthy();
+      expect(result.catalog.catalogSeqs.ingredients).toBeUndefined();
       // Gap persisted on the local peer row under schemaGaps.catalog.
       expect(updatePeer).toHaveBeenCalledWith(
         'local-peer-row',
         expect.objectContaining({
           schemaGaps: expect.objectContaining({
             catalog: expect.objectContaining({
-              ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }],
+              [direction]: [gap],
             }),
           }),
         }),
       );
+      // The next cycle retries the same rows after peers upgrade.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+        ingredients: [{ id: 'x' }], maxSequences: { ingredients: '5' }, hasMore: false,
+      }) });
+      applyCatalogChanges.mockResolvedValueOnce({ ingredients: { inserted: 1 } });
+      const retry = await syncWithPeer(catalogPeer);
+      expect(mockFetch.mock.calls.at(-1)[0]).toContain('since[ingredients]=0');
+      expect(retry.catalog.catalogSeqs.ingredients).toBe('5');
     });
   });
 

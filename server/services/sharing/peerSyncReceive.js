@@ -15,6 +15,7 @@ import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
   compareSchemaVersions,
+  catalogEnvelopeHasLiveRows,
   scopeVersionDiff,
   formatVersionGap,
   getPortosVersion,
@@ -66,36 +67,18 @@ async function applyCatalogBundle(catalogBundle, portosMeta) {
 }
 
 /**
- * True when a catalog bundle carries at least one LIVE (non-tombstone) row in
- * any of its blocks. Every block of the catalog sync envelope is an array of
- * rows (`ingredients`, `refs`, `relations`, `tags`, `media`, `catalogTypes`,
- * …), so we scan array-valued keys generically instead of enumerating them —
- * a block added by a catalog schema version NEWER than this receiver still
- * counts, which is exactly the case the version gate exists to catch. A row
- * that isn't a plain object counts as live (conservative: gate rather than
- * wave through something we can't classify).
- */
-function catalogBundleHasLiveRow(catalogBundle) {
-  return Object.values(catalogBundle).some(
-    (block) => Array.isArray(block) && block.some((row) => row?.deleted !== true),
-  );
-}
-
-/**
  * SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer storage
- * layout can't corrupt local state. Legacy senders without `portosMeta` pass
- * through (comparator treats absent as zero/no-contract; their record went
- * through the same v0 → vN sanitizer chain we already run). When the sender
+ * layout can't corrupt local state. Outside catalog, legacy senders without
+ * `portosMeta` pass through (absent versions compare as zero, and their records
+ * use the existing sanitizer backfill chain). When the sender
  * is AHEAD on any category, throws a structured error the route layer maps
  * to HTTP 409 + body so the sender can persist the gap on the subscription
  * and surface it in the UI. Returns `{ senderSchemaVersions }` on success —
  * the caller threads it into every merge call.
  *
- * We do NOT reject on "sender behind" here — the sanitizer's existing
- * backfill chain handles older inputs in-place. A future forward-only
- * contract (e.g. a required field that the sanitizer can't synthesize) can
- * opt into a behind-gate; the comparator already surfaces both directions
- * for that purpose.
+ * Live catalog rows also reject sender-behind (including absent versions):
+ * their whole-row LWW payload can erase fields an older sanitizer dropped.
+ * Other categories retain their existing sanitizer backfill behavior.
  *
  * Extracted out of `applyIncomingPush`'s own body (#6843) — a self-contained
  * validate-or-throw step with one clear output, and one of the two chunks
@@ -153,7 +136,7 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
   // name by definition. Tombstone-only bundles (every row deleted) are
   // id+deleted+deletedAt+updatedAt — safe at every version, so they needn't
   // gate (same reasoning as the tombstone-record exemption above).
-  if (record.deleted !== true && isPlainObject(catalogBundle) && catalogBundleHasLiveRow(catalogBundle)) {
+  if (record.deleted !== true && isPlainObject(catalogBundle) && catalogEnvelopeHasLiveRows(catalogBundle)) {
     for (const c of (RECORD_KIND_SCHEMA_CATEGORIES['cat-ingredient'] || ['catalog'])) relevantCategories.add(c);
   }
   // A bundled linked track (#1858) ships a live, full-shape `track` record. Gate
@@ -167,7 +150,8 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
   }
   const fullDiff = compareSchemaVersions(senderSchemaVersions, PORTOS_SCHEMA_VERSIONS);
   const versionDiff = scopeVersionDiff(fullDiff, [...relevantCategories]);
-  if (versionDiff.ahead.length > 0) {
+  const catalogBehind = versionDiff.behind.some((gap) => gap.category === 'catalog');
+  if (versionDiff.ahead.length > 0 || catalogBehind) {
     console.warn(
       `⚠️ peerSync: rejecting push from ${sourceInstanceId} — ${formatVersionGap(versionDiff)} (sender PortOS ${senderPortosVersion || 'unknown'})`,
     );
@@ -177,7 +161,7 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
     // back to its own version, which is misleading.
     const receiverPortosVersion = await getPortosVersion().catch(() => null);
     throw makeErr(
-      `sender's schema is ahead — receiver cannot apply (${formatVersionGap(versionDiff)})`,
+      `sender's schema is ${versionDiff.ahead.length ? 'ahead' : 'behind'} — receiver cannot apply (${formatVersionGap(versionDiff)})`,
       ERR_SCHEMA_VERSION_AHEAD,
       {
         ahead: versionDiff.ahead,

@@ -22,8 +22,8 @@
  * receivers compare incoming vs local and reject ahead-mismatches (sender too
  * new) or behind-mismatches (sender too old to satisfy a forward-only field).
  *
- * Absent categories default to 0 — the comparator treats 0 as "no check"
- * so historical / un-versioned data categories pass through unchanged.
+ * Absent categories default to 0. Receivers choose which mismatch directions
+ * to reject; live catalog rows require equality even for unversioned peers.
  * Future PRs that introduce a layout change for `series`, `issues`, etc.
  * add an entry here.
  */
@@ -54,15 +54,6 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // attachments-unaware `sanitizeObject` can't silently strip the field and
   // LWW the loss back onto the newer peer.
   //
-  // NOTE — `catalog` is intentionally NOT bumped for this field (matches the
-  // #1287 relationshipLinks precedent). A bible object promoted to the catalog
-  // carries `attachments` in `catalog_ingredients.payload`; an older peer's
-  // `updateIngredient` → `sanitizeObject` would drop it on a local edit and a
-  // catalog sync back could clobber the newer copy. We accept that graceful
-  // degradation rather than gate `catalog` — bumping it would pause ALL catalog
-  // sync with version-mismatched peers for one additive field, the heavier
-  // tradeoff this project has chosen against for additive bible fields. The
-  // `universes` gate above already protects the canonical (embedded) copy.
   // v8 adds shared styleReferences[]. Older peers must not sanitize the field
   // away and LWW-sync that loss back to a newer install.
   // v9 = `moodBoardId` added (#4188) — the universe's linked mood board. The
@@ -312,10 +303,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // payload that would silently miss tombstones.
   //
   // Per-category gate so a new peer can sync its catalog independently of
-  // whether other categories are version-locked. Older peers are
-  // sender-behind on `catalog` (not ahead), so the receiver still accepts
-  // their pushes; newer peers pushing to older receivers are sender-ahead
-  // and get 409. `cat-ingredient` and `cat-scrap` record kinds map back
+  // whether other categories are version-locked. Since v10, live catalog
+  // rows require an exact version match; tombstones stay version-independent.
+  // `cat-ingredient` and `cat-scrap` record kinds map back
   // here via RECORD_KIND_SCHEMA_CATEGORIES.
   //
   // NOT bumped for the per-record `payload.schemaVersion` stamp added by
@@ -378,7 +368,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and related fields). The metadata field is additive and optional on the
   // wire; a v9 sender must not push it to a ≤v8 receiver that would silently
   // drop it. A v9 receiver still accepts ≤v8 media rows without metadata.
-  catalog: 9,
+  // v10 = protect structured object `payload.attachments[]` from older
+  // sanitizers. Live catalog transfers now require equal versions in BOTH
+  // directions, including legacy senders with no version. Whole-row LWW from
+  // an older peer can erase fields after an unrelated edit. Tombstone-only
+  // transfers remain version-independent; no local storage migration is needed.
+  catalog: 10,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -937,10 +932,9 @@ export async function buildPortosMeta(overrides = {}) {
  *
  *   compatible — `true` only when neither list has entries.
  *
- * Absent or zero entries on either side are treated as "no contract" — the
- * comparator skips them. So legacy peers that don't send `portosMeta` at
- * all simply pass through (treat their schemaVersions as `{}` → no
- * `ahead` entries → compatible).
+ * Absent or invalid entries are compared as zero. A legacy sender without
+ * `portosMeta` is behind every versioned receiver category; callers decide
+ * whether those behind gaps block the transfer.
  */
 export function compareSchemaVersions(senderVersions = {}, receiverVersions = PORTOS_SCHEMA_VERSIONS) {
   const sender = senderVersions && typeof senderVersions === 'object' ? senderVersions : {};
@@ -963,6 +957,16 @@ export function compareSchemaVersions(senderVersions = {}, receiverVersions = PO
     else behind.push({ category: cat, senderV, receiverV });
   }
   return { ahead, behind, compatible: ahead.length === 0 && behind.length === 0 };
+}
+
+/** Catalog row blocks share `deleted`, except user types use `deletedAt`.
+ * Unknown blocks and malformed rows conservatively count as live so a future
+ * payload cannot bypass the version gate. Envelope metadata is not a row block.
+ */
+export function catalogEnvelopeHasLiveRows(envelope) {
+  return Object.entries(envelope).some(([kind, block]) => Array.isArray(block) && block.some(
+    (row) => kind === 'catalogTypes' ? !row?.deletedAt : row?.deleted !== true,
+  ));
 }
 
 /**

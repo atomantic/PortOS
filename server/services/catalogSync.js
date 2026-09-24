@@ -46,7 +46,7 @@ import {
   upsertMediaFromPeer,
   normalizeTags,
 } from './catalogDB.js';
-import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { compareSchemaVersions, scopeVersionDiff, formatVersionGap, catalogEnvelopeHasLiveRows, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
 import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice, writeUserTypes } from './catalogUserTypes/store.js';
@@ -131,8 +131,9 @@ export async function getChangesSince(since = '0', limit = 100) {
 
 export class CatalogSyncVersionMismatchError extends Error {
   constructor(diff) {
-    super(`catalog sync rejected: sender ahead on ${diff.ahead.map((g) => `${g.category} (v${g.senderV} vs v${g.receiverV})`).join(', ')}`);
+    super(`catalog sync rejected: ${formatVersionGap(diff)}`);
     this.name = 'CatalogSyncVersionMismatchError';
+    // Keep the established wire code so existing callers recognize the gap.
     this.code = 'CATALOG_SCHEMA_VERSION_AHEAD';
     this.status = 412;
     this.diff = diff;
@@ -140,14 +141,13 @@ export class CatalogSyncVersionMismatchError extends Error {
 }
 
 export async function applyRemoteChanges(envelope = {}) {
-  // Schema-version gate: a peer running a newer `catalog` schema would push
-  // forward-shaped data this install can't safely interpret. Match the
-  // memorySync pattern — reject ahead-mismatches with a 412.
+  // Whole-row LWW from an older sanitizer can erase new payload fields. Live
+  // catalog rows require equal versions; tombstones and empty pages are safe
+  // at any version. Scan all row blocks, including future envelope kinds.
   const senderVersions = envelope?.portosMeta?.schemaVersions || {};
-  const diff = compareSchemaVersions(senderVersions, PORTOS_SCHEMA_VERSIONS);
-  const aheadOnCatalog = diff.ahead.filter((g) => g.category === 'catalog');
-  if (aheadOnCatalog.length > 0) {
-    throw new CatalogSyncVersionMismatchError({ ahead: aheadOnCatalog, behind: [] });
+  const diff = scopeVersionDiff(compareSchemaVersions(senderVersions, PORTOS_SCHEMA_VERSIONS), ['catalog']);
+  if (catalogEnvelopeHasLiveRows(envelope) && !diff.compatible) {
+    throw new CatalogSyncVersionMismatchError(diff);
   }
 
   const stats = {

@@ -321,7 +321,7 @@ function catalogSinceQuery(catalogSeqs) {
  * — but the catalog is a multi-table relational store, so the cursor is the
  * per-kind `maxSequences` object the peer returns, not a single scalar.
  *
- * A schema-version-ahead peer (newer `catalog` schema) makes applyRemoteChanges
+ * A schema-version-mismatched peer (older or newer `catalog` schema) makes applyRemoteChanges
  * throw CatalogSyncVersionMismatchError; we record the gap on the peer record
  * (same surfacing as the snapshot categories) and stop draining so we don't
  * loop on a payload we can't safely apply.
@@ -369,7 +369,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
     firstFetch = false;
 
     // Forward the sender's portosMeta so applyRemoteChanges runs the schema
-    // gate BEFORE merging — a sender ahead on `catalog` throws and we persist
+    // gate BEFORE merging — a sender mismatched on `catalog` throws and we persist
     // the gap rather than corrupting local state.
     let stats;
     try {
@@ -378,8 +378,9 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
       if (err?.code === 'CATALOG_SCHEMA_VERSION_AHEAD') {
         blockedBySchema = err.diff;
         const ahead = Array.isArray(err.diff?.ahead) ? err.diff.ahead : [];
+        const behind = Array.isArray(err.diff?.behind) ? err.diff.behind : [];
         await recordPeerSchemaGap(peerId, 'catalog', {
-          ahead, behind: [], senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
+          ahead, behind, senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
         }).catch((e) => logFailureWithStack('⚠️ syncOrchestrator: persist catalog schema gap failed', e));
         break;
       }
