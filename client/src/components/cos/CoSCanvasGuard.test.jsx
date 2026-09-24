@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const webgl = vi.hoisted(() => ({ available: true }));
 vi.mock('../../lib/webglSupport', () => ({ isWebGLAvailable: () => webgl.available }));
 
+const recovery = vi.hoisted(() => ({ attempt: vi.fn() }));
+vi.mock('../../utils/staleChunkReload', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, reloadOnceForStaleChunk: recovery.attempt };
+});
+
 import CoSCanvasGuard from './CoSCanvasGuard';
 
 const Boom = ({ error }) => { throw error; };
@@ -15,6 +21,7 @@ describe('CoSCanvasGuard', () => {
   let logged;
   beforeEach(() => {
     webgl.available = true;
+    recovery.attempt.mockReset().mockResolvedValue(false);
     logged = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
   afterEach(() => {
@@ -67,6 +74,31 @@ describe('CoSCanvasGuard', () => {
   it('falls back to the raw message for an unrecognized failure', () => {
     render(<CoSCanvasGuard><Boom error={new Error('something went sideways')} /></CoSCanvasGuard>);
     expect(screen.getByText('something went sideways')).toBeInTheDocument();
+  });
+
+  it('checks for a newer build when an avatar render hits a missing runtime export', async () => {
+    render(
+      <CoSCanvasGuard>
+        <Boom error={new Error("undefined is not an object (evaluating 'rv.jsx')")} />
+      </CoSCanvasGuard>,
+    );
+
+    await vi.waitFor(() => expect(recovery.attempt).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(screen.getByTestId('cos-avatar-asset-error')).toBeInTheDocument());
+    expect(screen.getByText(/undefined is not an object/i)).toBeInTheDocument();
+  });
+
+  it('leaves avatar error reporting to recovery when a newer build is confirmed', async () => {
+    recovery.attempt.mockResolvedValue(true);
+    render(
+      <CoSCanvasGuard>
+        <Boom error={new Error("undefined is not an object (evaluating 'rv.jsx')")} />
+      </CoSCanvasGuard>,
+    );
+
+    await vi.waitFor(() => expect(recovery.attempt).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId('cos-avatar-asset-error')).not.toBeInTheDocument();
+    expect(logged).not.toHaveBeenCalledWith(expect.stringContaining('💥 React Error'), expect.anything());
   });
 
   // Without the resetKey the panel sticks forever: once it is up the boundary

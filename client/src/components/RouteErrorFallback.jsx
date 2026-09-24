@@ -17,7 +17,9 @@ export default function RouteErrorFallback() {
   const message = getErrorMessage(error);
 
   useEffect(() => {
-    if (isStaleChunkError(error)) reloadOnceForStaleChunk();
+    if (isStaleChunkError(error, { duringRender: true })) {
+      void reloadOnceForStaleChunk();
+    }
   }, [error]);
 
   return (

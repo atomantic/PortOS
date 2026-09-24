@@ -71,8 +71,8 @@ is where each shared table is re-exported from its `server/lib` leaf.
 
 | Module | Purpose |
 |---|---|
-| `lazyWithReload` | `React.lazy` wrapper that auto-reloads once on a stale-chunk import error (post-deploy hash mismatch). |
-| `staleChunkReload` | Detects stale dynamic-import chunk errors (`isStaleChunkError`) and triggers a one-time reload guard; `purgeOfflineCaches()` drops the service-worker caches so the recovery reload boots the fresh bundle. |
+| `lazyWithReload` | `React.lazy` wrapper that retries transient import failures and reloads only when a failed chunk belongs to an older build. |
+| `staleChunkReload` | Detects stale import/runtime-export errors at import and render boundaries, confirms the served build changed before reloading, and purges service-worker caches for that recovery. |
 
 ## File handling
 
