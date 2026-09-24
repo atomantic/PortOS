@@ -293,13 +293,14 @@ const fixtureOwnerFor = (path) => FIXTURE_OWNERS.find(({ re }) => re.test(path))
 // The bundled slashdo submodule (see AGENTS.md "Slashdo Commands") ships no
 // source into the tree the planner scans — `git diff` reports only the gitlink
 // pointer at this path, never the files inside it — so it can't be detected the
-// way an ordinary source change is. The two contract suites below exercise the
+// way an ordinary source change is. The contract suites below exercise the
 // real bundled renderer and only mean anything with the submodule checked out,
 // so CI initializes it (see ci.yml) exactly when one of them is set to run.
 export const SLASHDO_GITLINK_PATH = 'lib/slashdo';
 export const SLASHDO_CONTRACT_TEST_FILES = [
   'server/lib/slashdoLoader.test.js',
   'server/lib/slashdoInvocation.test.js',
+  'server/lib/auditCatalog.test.js',
 ];
 const SLASHDO_CONTRACT_SOURCE_FILES = [
   'server/lib/slashdoLoader.js',

@@ -1823,7 +1823,8 @@ describe('taskSchedule', () => {
       const app = { repoPath: '/tmp/example-repo', workTracker: 'github' }
       const block = await resolveTrackerFilingBlock(app, 'plan-feature')
       expect(block.workTracker).toBe('github')
-      expect(block.trackerInstructions).toContain('[plan-feature-…]')
+      expect(block.trackerInstructions).toContain('The issue number is its ID')
+      expect(block.trackerInstructions).not.toContain('ID beginning with `plan-feature-`')
     })
 
     it('ships a prompt that plans without implementing', async () => {

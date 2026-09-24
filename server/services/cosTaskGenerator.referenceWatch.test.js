@@ -317,7 +317,7 @@ describe('audit fileIssues toggle', () => {
     expect(task.metadata.useWorktree).toBe(false);
     expect(task.metadata.openPR).toBe(false);
     expect(task.description).toContain('Mode: file issues, change nothing');
-    expect(task.description).toContain('[security-…]');
+    expect(task.description).toContain('ID beginning with `security-`');
     expect(task.description).not.toContain('{modeInstructions}');
     expect(task.description).not.toContain('{trackerInstructions}');
   });
@@ -329,7 +329,7 @@ describe('audit fileIssues toggle', () => {
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
     expect(task.description).toContain('Mode: implement the highest-value fix');
-    expect(task.description).not.toContain('[security-…]');
+    expect(task.description).not.toContain('ID beginning with `security-`');
   });
 
   it('forces module-hygiene remediation into a worktree after an unsafe toggle transition', async () => {
