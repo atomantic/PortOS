@@ -185,6 +185,16 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(await generate('reliability')).not.toBeNull();
   });
 
+  it('runs an inapplicable audit the user explicitly chose: an override or a manual Run', async () => {
+    applicability.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    // The on-demand lane (a manual Run) is an explicit choice and is not gated.
+    expect(await generate('mobile-responsive', { skipPreconditions: true })).not.toBeNull();
+    // The schedule form's recorded override lets the scheduled lane run it too.
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { runInapplicableAudit: true } });
+    expect(await generate('mobile-responsive')).not.toBeNull();
+  });
+
   it.each(AUDIT_TYPES)('%s — file-issues mode renders no commit/push/PR/auto-merge directive', async (taskType) => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });

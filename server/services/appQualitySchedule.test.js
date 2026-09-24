@@ -230,6 +230,18 @@ describe('buildQualitySchedulePlan', () => {
 });
 
 describe('applyQualitySchedulePlan', () => {
+  // Without the recorded override the scheduled lane's applicability gate would
+  // skip, every week, a check the user deliberately selected.
+  it('records an override on a check selected although it does not apply, and clears it once it does', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({ security: { enabled: true, taskMetadata: { runInapplicableAudit: true, reviewer: 'codex' } } });
+    await applyQualitySchedulePlan(appWith(NODE_SERVICE), { taskTypes: ['accessibility', 'security'], claimBetween: false });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    expect(patches.accessibility.taskMetadata).toMatchObject({ runInapplicableAudit: true });
+    expect(patches.security.taskMetadata).not.toHaveProperty('runInapplicableAudit');
+    // Unrelated stored settings survive the merge.
+    expect(patches.security.taskMetadata).toMatchObject({ reviewer: 'codex' });
+  });
+
   it('retires a claim drain an earlier plan planted when the drain is switched off', async () => {
     getAppTaskTypeOverrides.mockResolvedValue({ 'claim-work': { enabled: true, interval: '0 6,14 * * *' } });
     const app = appWith(NODE_SERVICE);
@@ -276,7 +288,7 @@ describe('applyQualitySchedulePlan', () => {
   });
 
   it('writes each audit\u2019s catalog delivery default when the form states no preference', async () => {
-    const app = appWith(NODE_SERVICE);
+    const app = appWith([...NODE_SERVICE, 'client/App.jsx']);
     await applyQualitySchedulePlan(app, { taskTypes: ['security', 'ux'] });
     const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
     // security ships defaultFileIssues:false, ux ships true — a form-wide

@@ -2274,8 +2274,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     const app = await getAppById(appId).catch(() => null);
     reason = app?.layeredIntelligence?.lastRunReason || null;
   }
-  if (outcome === 'idle' && (request.taskType === 'pr-reviewer' || isAuditTaskType(request.taskType))) {
-    reason = takePerpetualTransient(request.taskType, appId)?.reason ?? null;
+  if (outcome === 'idle' && request.taskType === 'pr-reviewer') {
+    reason = takePerpetualTransient('pr-reviewer', appId)?.reason ?? null;
   }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
@@ -2400,8 +2400,7 @@ function buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, app
 /**
  * The dispatch-side half of audit applicability (see `resolveAuditApplicability`).
  * A detection failure never blocks work — the gate only removes what it has
- * evidence against. The verdict is parked as a transient so a manual Run's
- * "produced nothing" notice can say WHY (`emitOnDemandEmpty`).
+ * evidence against.
  *
  * @returns {Promise<boolean>} true when the dispatch must be skipped
  */
@@ -2413,7 +2412,6 @@ async function skipInapplicableAudit(app, taskType, taskSchedule) {
   });
   if (verdict.applicable) return false;
   emitLog('info', `⏭️ Skipping ${taskType} for ${app.name}: not applicable — ${verdict.reason}`, { appId: app.id, analysisType: taskType });
-  recordPerpetualTransient(taskType, app.id, { reason: `Not applicable to this repository: ${verdict.reason}` });
   await taskSchedule.recordExecution(taskType, app.id);
   return true;
 }
@@ -2749,14 +2747,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Also protect requests queued before the target-scope gate was installed.
   if (requiresInstallWideTarget(taskType)) return null;
 
-  // Audit applicability bail-out — before metadata, preflights, or a spawn slot.
-  // A quality audit this repository cannot have findings for (a mobile audit of
-  // a pure API, an infrastructure audit of a repo with no deployment config) is
-  // skipped with a logged reason instead of paying a provider call to be told
-  // "not applicable". Covers every lane that reaches this generator: the clock,
-  // a manual Run, a maintenance run, and a quota-burn step. Execution is
-  // recorded so the cadence advances rather than retrying every tick.
-  if (isAuditTaskType(taskType) && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end
@@ -2800,6 +2790,18 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // pass, so an invocation can carry nothing a stored override could not.
   const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
   if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
+
+  // Audit applicability bail-out — before preflights or a spawn slot. On the
+  // SCHEDULED lane, a quality audit this repository cannot have findings for (a
+  // mobile audit of a pure API, an infrastructure audit of a repo with no
+  // deployment config) is skipped with a logged reason instead of paying a
+  // provider call to be told "not applicable"; execution is recorded so the
+  // cadence advances. The on-demand lane (`skipPreconditions`) is not gated
+  // here: a manual Run is an explicit choice, and the two automated on-demand
+  // callers — maintenance runs and quota-burn steps — gate before they queue.
+  // `runInapplicableAudit` is the user's recorded override from the schedule form.
+  if (!skipPreconditions && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
+    && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);

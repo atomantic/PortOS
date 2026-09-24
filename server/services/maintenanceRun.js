@@ -327,7 +327,8 @@ async function evaluate(id, { ignoreTaskId }) {
     // skipped, not dispatched: the generator would refuse it anyway, and a
     // refused request would leave the step pending — re-dispatched on every
     // evaluation. Checked here so the run moves straight to the next step.
-    const inapplicable = step.drain ? null : await (await import('./appQualitySchedule.js')).inapplicableAuditReason(run.appId, step.taskRef?.taskType);
+    const inapplicable = step.drain || step.overrides?.params?.runInapplicableAudit ? null
+      : await (await import('./appQualitySchedule.js')).inapplicableAuditReason(run.appId, step.taskRef?.taskType);
     if (inapplicable) {
       completed[step.id] = new Date().toISOString();
       skippedSteps[step.id] = inapplicable;

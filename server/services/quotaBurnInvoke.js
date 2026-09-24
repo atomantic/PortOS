@@ -453,8 +453,10 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   // An audit that cannot apply to the target repository is declined HERE, so
   // the burn moves on to work that can spend the window. The generator would
   // refuse it too, but only after the request consumed the step's turn.
+  // A maintenance run's single explicit check carries the user's override.
   const { inapplicableAuditReason } = await import('./appQualitySchedule.js');
-  const inapplicable = await inapplicableAuditReason(resolved.ref.appId, resolved.ref.taskType);
+  const inapplicable = step.overrides?.params?.runInapplicableAudit ? null
+    : await inapplicableAuditReason(resolved.ref.appId, resolved.ref.taskType);
   if (inapplicable) return declined(`"${resolved.ref.taskType}" does not apply to this app: ${inapplicable}`);
 
   const picked = await resolveStepProvider(resolved.effective, family);

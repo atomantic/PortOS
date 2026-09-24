@@ -179,3 +179,16 @@ describe('AppQuality snapshot publishing', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 });
+
+it('lists categories that cannot apply last, with their reason instead of evidence', async () => {
+  const app = { id: 'example', quality: { score: 70, ratedCategories: 1, totalCategories: 3, applicableCategories: 2, categories: [
+    { id: 'accessibility', label: 'Accessibility', score: null, coverage: 'unavailable', applicable: false, inapplicableReason: 'no user interface found in this repository' },
+    { id: 'security', label: 'Security', score: 70, coverage: 'broad', confidence: 'high', applicable: true },
+    { id: 'privacy', label: 'Privacy', score: null, coverage: 'unavailable', applicable: true },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  const table = await screen.findByRole('table');
+  const rows = within(table).getAllByRole('row').slice(1).map(row => within(row).getByRole('rowheader').textContent);
+  expect(rows).toEqual(['Security', 'Privacy', 'Accessibility']);
+  expect(within(table).getAllByText(/Not applicable · no user interface found in this repository/)).not.toHaveLength(0);
+});
