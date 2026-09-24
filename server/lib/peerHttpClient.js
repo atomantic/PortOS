@@ -82,6 +82,52 @@ export async function peerFetch(url, options = {}, peer = null) {
   return url.startsWith('https://') ? httpsFetch(url, finalOptions) : fetch(url, finalOptions);
 }
 
+export const PEER_BODY_IDLE_TIMEOUT = 'PEER_BODY_IDLE_TIMEOUT';
+
+/**
+ * Consume a peer response with a deadline between received body chunks. Native
+ * fetch resolves at headers; HTTPS already buffers under the caller's request
+ * timeout, so its response methods keep their existing behavior.
+ */
+export async function readPeerBody(response, method, { idleTimeoutMs = 60000 } = {}) {
+  if (!response.body) return response[method]();
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let timer;
+  let rejectIdle;
+  const idle = new Promise((_, reject) => { rejectIdle = reject; });
+  const resetIdle = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => rejectIdle(Object.assign(
+      new Error('Peer response body stalled'), { code: PEER_BODY_IDLE_TIMEOUT }
+    )), idleTimeoutMs);
+  };
+  resetIdle();
+  try {
+    await Promise.race([
+      (async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value.byteLength) {
+            chunks.push(value);
+            resetIdle();
+          }
+        }
+      })(),
+      idle,
+    ]);
+    return new Response(Buffer.concat(chunks))[method]();
+  } finally {
+    clearTimeout(timer);
+    // Cancel a stalled native fetch to release its socket; do not let transport
+    // cleanup hold the sync lock after the deadline has already fired.
+    reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 function normalizeHeaders(headers) {
   if (!headers) return {};
   if (typeof headers[Symbol.iterator] === 'function') return Object.fromEntries(new Headers(headers));
