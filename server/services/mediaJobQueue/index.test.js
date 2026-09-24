@@ -391,6 +391,40 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.listJobs({ status: 'running' })).toHaveLength(1);
   });
 
+  it('limits a 500-row terminal archive while preserving live FIFO and filtered recents', async () => {
+    const now = Date.now();
+    const archived = Array.from({ length: 500 }, (_, i) => ({
+      id: `archived-${i}`,
+      kind: i % 2 ? 'video' : 'image',
+      owner: i % 4 ? 'other' : 'example',
+      status: i % 5 === 0 ? 'completed' : i % 3 === 0 ? 'canceled' : 'failed',
+      queuedAt: new Date(now - 600_000).toISOString(),
+      completedAt: new Date(now - i * 1000).toISOString(),
+      params: {},
+    }));
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: archived }));
+    await mediaJobQueue.initMediaJobQueue();
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    const first = mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
+    const second = mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
+    await flush();
+
+    const all = mediaJobQueue.listQueueJobs();
+    expect(all.slice(0, 2).map((j) => j.id)).toEqual([first.jobId, second.jobId]);
+    expect(all).toHaveLength(12);
+    expect(all.slice(2).map((j) => j.id)).toEqual(
+      archived.filter((j) => j.status !== 'completed').slice(0, 10).map((j) => j.id),
+    );
+    expect(mediaJobQueue.listJobs()).toHaveLength(502);
+
+    const scoped = mediaJobQueue.listQueueJobs({ kind: 'video', owner: 'example', limit: 3 });
+    expect(scoped.slice(0, 2).map((j) => j.id)).toEqual([first.jobId, second.jobId]);
+    expect(scoped.slice(2).map((j) => j.id)).toEqual(
+      archived.filter((j) => j.kind === 'video' && j.owner === 'example' && j.status !== 'completed')
+        .slice(0, 3).map((j) => j.id),
+    );
+  });
+
   it('cancelQueuedJobs cancels every queued job, leaves running ones alone', async () => {
     // Block the worker so subsequent enqueues stay queued.
     let resolveBlocker;

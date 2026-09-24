@@ -403,6 +403,30 @@ export function listJobs({ status, kind, owner } = {}) {
   });
 }
 
+// The render queue displays every live job and only a short recent failure
+// reel. Select that reel before sanitization; the archive can hold 500 rows.
+export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
+  const matches = (job) => (!kind || job.kind === kind) && (!owner || job.owner === owner);
+  const live = [
+    ...(running ? [running] : []),
+    ...cloudRunning,
+    ...remoteRunning,
+    ...queue,
+  ].filter(matches);
+  const recent = [];
+  const finishedAt = (job) => new Date(job.completedAt || job.startedAt || job.queuedAt || 0).getTime();
+  for (const job of archive) {
+    if (!matches(job) || (job.status !== 'failed' && job.status !== 'canceled')) continue;
+    const time = finishedAt(job);
+    let index = 0;
+    while (index < recent.length && !(time > recent[index].time)) index += 1;
+    if (index >= limit) continue;
+    recent.splice(index, 0, { job, time });
+    if (recent.length > limit) recent.pop();
+  }
+  return [...live, ...recent.map(({ job }) => job)];
+}
+
 // Serialize persist() calls through a single chain. atomicWrite rename can
 // finish out-of-order under concurrent calls, so a slow "start" persist
 // landing after a fast "done" persist would regress the on-disk snapshot

@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -129,6 +129,17 @@ router.get('/', asyncHandler(async (req, res) => {
     return tb - ta;
   });
   res.json([...live, ...terminal].map(sanitizeJob));
+}));
+
+const queueQuerySchema = z.object({
+  kind: z.enum(JOB_KINDS).optional(),
+  owner: z.string().max(256).optional(),
+  limit: z.coerce.number().int().min(0).max(100).optional(),
+});
+
+router.get('/queue', asyncHandler(async (req, res) => {
+  const filters = validateRequest(queueQuerySchema, req.query);
+  res.json(listQueueJobs(filters).map(sanitizeJob));
 }));
 
 router.post('/refine-prompt', asyncHandler(async (req, res) => {
