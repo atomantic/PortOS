@@ -8,7 +8,7 @@ The chart compares one selected public benchmark at a time against a published i
 
 Published per-token rates are API references. They are not a benchmark's measured token usage, task cost, subscription charge, subscription allowance use, or free-provider quota. Family-level rates are marked as estimates for dated model snapshots. Missing score or price data stays blank. A zero-priced endpoint is not a promise of unlimited access.
 
-The initial shipped snapshot uses the downloaded online catalog as its starting point: 26 LiveCodeBench generation/pass@1 observations and 35 pricing-only observations. The LiveCodeBench rows are divided by their published sample count (24 rows over 1,055 problems and two reasoning rows over 2,110 problems). Thirteen score rows have a separately sourced API rate. There are also public pricing references for additional models and free endpoints with no matched benchmark score. The catalog contains no PortOS-run observations, Artificial Analysis Intelligence Index scores, or SWE-bench scores.
+The initial shipped snapshot uses the downloaded online catalog as its starting point, then keeps models available through shipped providers, declared local-model equivalences, and a small set of current frontier anchors. It contains 19 observations across 16 models: two LiveCodeBench generation/pass@1 scores over 1,055 problems and 17 pricing-only references. The Qwen3-235B-A22B score also carries OpenRouter's separately sourced route price; the Grok 3 Mini score has no matched price and remains unplotted. The catalog contains no PortOS-run observations, Artificial Analysis Intelligence Index scores, or SWE-bench scores.
 
 ## Updating the shipped catalog
 

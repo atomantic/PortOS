@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 /**
  * Keep `data.reference/model-comparison.json` scoped to dispatched models and
- * reference prices, without publishing third-party model-quality scores.
- *
- * The seed is a small set of price references for models exposed by shipped
- * providers, not an industry score index. Performance comes from explicit
- * PortOS benchmark runs stored only on the install that ran them.
+ * publicly sourced benchmark and token-price observations. PortOS task
+ * benchmark runs remain machine-local under Models → Performance.
  *
  * Scope is derived from `data.reference/providers.json` rather than a hand-kept
  * list, so adding a model to a shipped provider and re-running this script is
