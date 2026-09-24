@@ -87,4 +87,21 @@ describe('RouteErrorFallback', () => {
     expect(reload).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });
+
+  it('requests a cached-asset purge when retrying a stale runtime error', async () => {
+    const error = new Error('The superclass is not a constructor.');
+    isStaleChunkError.mockReturnValue(true);
+    reloadOnceForStaleChunk.mockResolvedValue(false);
+    const reload = vi.fn();
+    vi.stubGlobal('location', { reload });
+    const user = userEvent.setup();
+    await renderRouteError(error);
+
+    reloadOnceForStaleChunk.mockResolvedValue(true);
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(reloadOnceForStaleChunk).toHaveBeenLastCalledWith({ forceCachePurge: true });
+    expect(reload).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });

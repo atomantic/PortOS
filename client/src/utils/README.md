@@ -71,8 +71,8 @@ is where each shared table is re-exported from its `server/lib` leaf.
 
 | Module | Purpose |
 |---|---|
-| `lazyWithReload` | `React.lazy` wrapper that retries transient import failures and reloads only when a failed chunk belongs to an older build. |
-| `staleChunkReload` | Detects stale import/runtime-export errors at import and render boundaries, confirms the served build changed before reloading, and purges service-worker caches for that recovery. |
+| `lazyWithReload` | `React.lazy` wrapper that retries transient import failures and reloads only when a failed chunk belongs to an older build; the route error screen can explicitly purge PortOS asset caches before retrying a runtime import failure. |
+| `staleChunkReload` | Detects stale import/runtime-export errors at import and render boundaries, confirms a newer served build before automatic reload, and purges PortOS caches for that recovery; an explicit route-error retry can also purge them when the live shell is reachable. |
 
 ## File handling
 
