@@ -222,6 +222,47 @@ describe('reloadOnceForStaleChunk', () => {
     expect(cacheDelete).toHaveBeenCalledWith('portos-shell-v1');
   });
 
+  it('clears cached assets on an explicit retry when the server is reachable on the same build', async () => {
+    stubSessionStorage();
+    stubFetch(() =>
+      Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-abc')) })
+    );
+    const reload = stubReload();
+    const deleted = [];
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['portos-shell-v1', 'other-app-cache']),
+      delete: vi.fn((name) => {
+        deleted.push(name);
+        return Promise.resolve(true);
+      }),
+    });
+
+    await expect(reloadOnceForStaleChunk({ forceCachePurge: true })).resolves.toBe(true);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(deleted).toEqual(['portos-shell-v1']);
+    // The explicit retry is still one-shot for this page build.
+    await expect(reloadOnceForStaleChunk({ forceCachePurge: true })).resolves.toBe(false);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('does not clear cached assets on an explicit retry when the browser is offline', async () => {
+    stubSessionStorage();
+    stubFetch(() =>
+      Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-abc')) })
+    );
+    vi.stubGlobal('navigator', { onLine: false });
+    const reload = stubReload();
+    const cacheDelete = vi.fn();
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['portos-shell-v1']),
+      delete: cacheDelete,
+    });
+
+    await expect(reloadOnceForStaleChunk({ forceCachePurge: true })).resolves.toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+    expect(cacheDelete).not.toHaveBeenCalled();
+  });
+
   it('does not reload twice for the same build id', async () => {
     stubSessionStorage();
     stubFetch();

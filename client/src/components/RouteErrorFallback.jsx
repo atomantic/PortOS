@@ -16,6 +16,14 @@ export default function RouteErrorFallback() {
   const navigate = useNavigate();
   const message = getErrorMessage(error);
 
+  const retry = async () => {
+    if (isStaleChunkError(error, { duringRender: true })) {
+      const reloaded = await reloadOnceForStaleChunk({ forceCachePurge: true });
+      if (reloaded) return;
+    }
+    window.location.reload();
+  };
+
   useEffect(() => {
     if (isStaleChunkError(error, { duringRender: true })) {
       void reloadOnceForStaleChunk();
@@ -38,7 +46,7 @@ export default function RouteErrorFallback() {
         <div className="flex flex-col sm:flex-row gap-2">
           <button
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={retry}
             className="flex-1 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-port-on-accent rounded-lg transition-colors"
           >
             Try again

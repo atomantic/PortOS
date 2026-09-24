@@ -107,32 +107,52 @@ export const fetchServerBuildId = async () => {
   return (el && el.getAttribute('content')) || null;
 };
 
-export const reloadOnceForStaleChunk = () => {
+export const reloadOnceForStaleChunk = ({ forceCachePurge = false } = {}) => {
   const buildId = getCurrentBuildId();
   if (!buildId) return Promise.resolve(false);
   if (safeReadSession(RELOAD_FLAG) === buildId) return Promise.resolve(false);
-  if (reloadAttempts.has(buildId)) return reloadAttempts.get(buildId);
+  if (reloadAttempts.has(buildId)) {
+    const inFlight = reloadAttempts.get(buildId);
+    if (!forceCachePurge) return inFlight;
+    // The route fallback can be retried while its automatic, conservative
+    // check is still probing. If that check finds the same build, continue the
+    // user's explicit retry with a cache purge instead of falling back to a
+    // plain reload.
+    return inFlight.then((reloaded) => (
+      reloaded ? true : reloadOnceForStaleChunk({ forceCachePurge: true })
+    ));
+  }
 
   const attempt = (async () => {
     // A rejected preload can be a transient network error, and a runtime export
     // error can be an application bug. Reload only when the live shell proves
     // this tab is running a different build; an offline/unknown/same-build
-    // result leaves the current page and its unsaved state intact.
+    // result leaves the current page and its unsaved state intact unless the
+    // user explicitly requested a fresh-asset retry.
     const serverBuildId = await withTimeout(fetchServerBuildId(), PURGE_TIMEOUT_MS);
-    if (!serverBuildId || serverBuildId === buildId) return false;
+    if (!serverBuildId) return false;
+    const newerBuildAvailable = serverBuildId !== buildId;
+    const explicitRetryCanRecover = forceCachePurge
+      && !newerBuildAvailable
+      && !(typeof navigator !== 'undefined' && navigator.onLine === false);
+    if (!newerBuildAvailable && !explicitRetryCanRecover) return false;
 
-    // Persist the anti-loop guard only after confirming a newer build. A
-    // same-build or offline probe must remain eligible for a later deployment.
+    // Persist the anti-loop guard after confirming either a newer build or an
+    // explicit, online retry. An automatic same-build or offline probe remains
+    // eligible for a later deployment.
     safeWriteSession(RELOAD_FLAG, buildId);
     if (safeReadSession(RELOAD_FLAG) !== buildId) {
-      console.warn('🔄 A newer build is available but sessionStorage is unavailable — skipping reload to avoid a reload loop');
+      console.warn('🔄 A stale chunk was detected but sessionStorage is unavailable — skipping reload to avoid a reload loop');
       return false;
     }
 
-    console.warn(`🔄 Stale chunk detected (page build ${buildId}, server build ${serverBuildId}) — reloading`);
-    // Purge the offline caches before reloading so the new server shell cannot
-    // be replaced by stale cached assets. The server build mismatch is already
-    // confirmed, so a hung cache purge gets the bounded timeout and reloads.
+    console.warn(newerBuildAvailable
+      ? `🔄 Stale chunk detected (page build ${buildId}, server build ${serverBuildId}) — reloading`
+      : `🔄 Clearing cached PortOS assets after explicit retry (build ${buildId}) — reloading`);
+    // Purge the offline caches before reloading so a stale shell or asset does
+    // not get served again. The normal automatic path gets here only after a
+    // build mismatch; the explicit retry gets here only after the live shell
+    // responds and the browser is not known to be offline.
     await withTimeout(purgeOfflineCaches(), PURGE_TIMEOUT_MS);
     window.location.reload();
     return true;
