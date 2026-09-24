@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useSocket } from './useSocket';
 import { useThemeContext } from '../components/ThemeContext';
-import { createShellTerminal, readTerminalTheme } from '../components/shell/createShellTerminal';
+import {
+  createShellTerminal,
+  readTerminalTheme,
+  TERMINAL_SCROLLBACK_LINES,
+} from '../components/shell/createShellTerminal';
 
 export const ITERM_SHELL_PATH = '/shell/iterm';
 
@@ -53,7 +57,10 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
   // Terminal lifetime = component lifetime.
   useEffect(() => {
     if (!enabled || !terminalRef.current || termRef.current) return undefined;
-    termRef.current = createShellTerminal(terminalRef.current, { scrollback: 0, cursorBlink: false });
+    termRef.current = createShellTerminal(terminalRef.current, {
+      scrollback: TERMINAL_SCROLLBACK_LINES,
+      cursorBlink: false,
+    });
     return () => {
       termRef.current?.dispose();
       termRef.current = null;
@@ -116,8 +123,20 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       sizeTo(cols, rows);
       if (bufferedOutput) term.write(bufferedOutput);
     };
-    const handleOutput = ({ id, data }) => {
-      if (id === attachedIdRef.current && !pendingRef.current.target) termRef.current?.write(data);
+    const handleOutput = ({ id, data, reset = false, scrollbackRows = 0 }) => {
+      if (id !== attachedIdRef.current || pendingRef.current.target) return;
+      const term = termRef.current;
+      if (!term) return;
+      if (reset) {
+        term.reset();
+        term.write(data);
+        return;
+      }
+      const rows = Number.isInteger(scrollbackRows) ? Math.max(0, scrollbackRows) : 0;
+      const advance = rows > 0 && term.rows > 0
+        ? `\x1b[${term.rows};1H${'\n'.repeat(Math.min(rows, term.rows))}`
+        : '';
+      term.write(`${advance}${data}`);
     };
     const handleExit = ({ id }) => {
       if (id !== attachedIdRef.current) return;

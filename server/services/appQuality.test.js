@@ -73,9 +73,28 @@ describe('scheduled audit measurement workflow', () => {
       ['performance', 100, 'broad', 'low', now],
     ].map(([category, score, coverage, confidence, date]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(date).toISOString() }));
     const quality = summarizeAppQuality(records, now);
-    expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: 25 });
+    expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: Object.keys(AUDIT_DEFINITIONS).length });
     expect(quality.categories.find(c => c.id === 'ux')).toMatchObject({ score: 100, stale: true });
     expect(summarizeAppQuality().score).toBeNull();
+  });
+
+  // The regression: a backend API was reported as "2 of 30 categories" because
+  // seven UI audits it cannot have findings for sat in the denominator.
+  it('drops categories that cannot apply from the denominator, unless rated evidence says they do', () => {
+    const now = Date.now();
+    const records = [
+      ['code-quality', 80, 'broad', 'high'],
+      ['typing', null, 'not-applicable', 'low'],
+      ['mobile-responsive', 60, 'broad', 'high'],
+    ].map(([category, score, coverage, confidence]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(now).toISOString() }));
+    const quality = summarizeAppQuality(records, now, { inapplicable: { accessibility: 'no user interface found', 'mobile-responsive': 'no user interface found' } });
+    const byId = Object.fromEntries(quality.categories.map(c => [c.id, c]));
+    expect(byId.accessibility).toMatchObject({ applicable: false, inapplicableReason: 'no user interface found' });
+    expect(byId.typing).toMatchObject({ applicable: false, inapplicableReason: expect.stringMatching(/not applicable/) });
+    // Detected as UI-less, but a fresh broad assessment exists: it counts.
+    expect(byId['mobile-responsive']).toMatchObject({ applicable: true, inapplicableReason: null });
+    expect(quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length - 2);
+    expect(quality.score).toBe(70);
   });
 
   it('surfaces previously stored lifecycle scores under the renamed category', () => {
@@ -97,6 +116,32 @@ describe('scheduled audit measurement workflow', () => {
     const [app] = await enrichAppsWithQuality([{ id: 'app' }], { query: vi.fn().mockRejectedValue(new Error('offline')) });
     expect(app.quality).toMatchObject({ unavailable: true, score: null });
     log.mockRestore();
+  });
+
+  // The dispatch gate reads only this install's rulings; a peer's describes a
+  // different checkout, so the Quality tab must not hide the category on it.
+  it('does not let a peer\'s not-applicable ruling mark a category inapplicable here', () => {
+    const now = Date.now();
+    const peerRow = { category: 'ux', sourcePeerId: 'peer-a', sourcePeerName: 'Peer A', assessedAt: new Date(now).toISOString(),
+      report: report({ category: 'ux', score: null, coverage: 'not-applicable', confidence: 'low' }) };
+    const localRow = { ...peerRow, sourcePeerId: undefined, sourcePeerName: undefined };
+    expect(summarizeAppQuality([peerRow], now).categories.find(c => c.id === 'ux').applicable).toBe(true);
+    expect(summarizeAppQuality([localRow], now).categories.find(c => c.id === 'ux').applicable).toBe(false);
+  });
+
+  // The detail read feeds the repository scan into the summary; a failing scan
+  // must cost only the applicability, never the whole quality read.
+  it('folds the repository-scan verdicts into the summary, and ignores a scan that fails', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const [scanned] = await enrichAppsWithQuality([{ id: 'app' }], {
+      query, resolveApplicability: async () => ({ accessibility: 'no user interface found' }),
+    });
+    expect(scanned.quality.categories.find(c => c.id === 'accessibility')).toMatchObject({ applicable: false, inapplicableReason: 'no user interface found' });
+    expect(scanned.quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length - 1);
+    const [failed] = await enrichAppsWithQuality([{ id: 'app' }], {
+      query, resolveApplicability: async () => { throw new Error('git unavailable'); },
+    });
+    expect(failed.quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length);
   });
 });
 

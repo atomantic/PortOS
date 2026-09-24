@@ -36,7 +36,8 @@ import {
   resolveQualityScheduleOptions,
 } from '../lib/qualitySchedulePlan.js';
 import { cronWeekdayHours } from '../lib/cronFields.js';
-import { getAppTaskTypeOverrides, updateAppTaskTypeOverrides } from './apps.js';
+import { isFreshAssessment } from '../lib/auditQuality.js';
+import { getAppById, getAppTaskTypeOverrides, updateAppTaskTypeOverrides } from './apps.js';
 import { loadSchedule } from './taskScheduleStore.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression } from './taskScheduleConstants.js';
 import { INSTALL_WIDE_TASK_TYPES } from '../lib/taskTargetScope.js';
@@ -53,6 +54,15 @@ const CAPABILITY_PATTERNS = {
   tests: [/\.(test|spec)\.[cm]?[jt]sx?$/i, /(^|\/)tests?\//i, /(^|\/)__tests__\//i, /(^|\/)test_[^/]+\.py$/i, /[^/]+_test\.(py|go|rb)$/i, /Tests\.swift$/i],
   dependencies: [/(^|\/)package\.json$/i, /(^|\/)requirements[^/]*\.txt$/i, /(^|\/)pyproject\.toml$/i, /(^|\/)Cargo\.toml$/i, /(^|\/)go\.mod$/i, /(^|\/)Gemfile$/i, /(^|\/)composer\.json$/i, /(^|\/)Package\.swift$/i, /(^|\/)pubspec\.yaml$/i],
   api: [/(^|\/)(routes?|api|controllers|handlers|endpoints)\//i, /\.proto$/i, /(^|\/)openapi[^/]*\.(ya?ml|json)$/i, /(^|\/)swagger[^/]*\.(ya?ml|json)$/i, /(^|\/)urls\.py$/i],
+  // Deployment described in the repository: IaC, containers and orchestration,
+  // platform manifests, process managers, and CI pipelines (a CI workflow is a
+  // deployment surface with its own supply-chain risk).
+  infrastructure: [
+    /\.(tf|tfvars|bicep)$/i, /(^|\/)(terraform|pulumi|cdk|k8s|kubernetes|helm|charts|ansible|infra|infrastructure|deploy|deployment)\//i,
+    /(^|\/)(Dockerfile|Containerfile)[^/]*$/i, /(^|\/)(docker-)?compose[^/]*\.ya?ml$/i, /(^|\/)Chart\.yaml$/, /(^|\/)(Pulumi|serverless)[^/]*\.ya?ml$/i,
+    /(^|\/)(cdk|vercel|firebase)\.json$/i, /(^|\/)(fly|netlify|wrangler)\.toml$/i, /(^|\/)(Procfile|Jenkinsfile)$/, /(^|\/)ecosystem\.config\.[cm]?js$/i,
+    /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i, /(^|\/)\.gitlab-ci\.ya?ml$/i, /(^|\/)\.circleci\//i, /(^|\/)azure-pipelines\.ya?ml$/i, /(^|\/)cloudformation\//i,
+  ],
 };
 
 /**
@@ -63,6 +73,10 @@ const CAPABILITY_PATTERNS = {
  */
 const CAPABILITY_TTL_MS = 60 * 1000;
 const capabilityCache = new Map();
+// The not-applicable rulings, on the same TTL: every automated dispatch lane and
+// the burn status page ask per step, and the answer changes only when an audit
+// of this app completes.
+const notApplicableCache = new Map();
 
 const missingPatterns = AUDIT_REPO_CAPABILITIES.filter(capability => !CAPABILITY_PATTERNS[capability]);
 if (missingPatterns.length) {
@@ -120,8 +134,10 @@ export async function detectRepoCapabilities(app) {
   // share one repoPath — so it is OR'd in AFTER the (path-keyed) cache read.
   // A compiled or templated front end leaves no .jsx behind, but a served UI
   // port is direct evidence there is an interface to audit.
+  // It proves the UI capability, never the completeness of a shallow listing:
+  // only a full inventory licenses "this repo has no tests / no deploy config".
   const capabilities = { ...scan.capabilities, ui: scan.capabilities.ui || Boolean(app.uiPort) };
-  return { capabilities, scanned: scan.scanned, complete: scan.complete || Boolean(app.uiPort) };
+  return { capabilities, scanned: scan.scanned, complete: scan.complete };
 }
 
 /** The file-derived half of the verdict — cacheable because it is per-checkout. */
@@ -129,30 +145,44 @@ async function scanRepoCapabilities(repoPath) {
   const capabilities = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
   const { files, complete } = await listRepoFiles(repoPath);
   const scanned = files.filter(path => !VENDOR_SEGMENTS.test(path));
+  const pending = Object.entries(CAPABILITY_PATTERNS);
   for (const path of scanned) {
-    for (const [capability, patterns] of Object.entries(CAPABILITY_PATTERNS)) {
-      if (!capabilities[capability] && patterns.some(pattern => pattern.test(path))) capabilities[capability] = true;
+    for (let index = pending.length - 1; index >= 0; index -= 1) {
+      const [capability, patterns] = pending[index];
+      if (!patterns.some(pattern => pattern.test(path))) continue;
+      capabilities[capability] = true;
+      pending.splice(index, 1);
     }
+    if (!pending.length) break;
   }
   return { capabilities, scanned: scanned.length, complete: complete && scanned.length > 0 };
 }
 
 /**
- * Categories a past audit of THIS app reported as not applicable. The auditing
+ * Categories a recent audit of THIS app reported as not applicable. The auditing
  * agent inspected the repository, so its ruling outranks the path heuristics
- * above. Read directly rather than through `enrichAppsWithQuality`, which also
- * fans out to sync peers — a peer's view of a different checkout is not
- * evidence about this one.
+ * above — but only while it is fresh: a repository that later gains a UI or a
+ * deployment manifest must get the audit back, so a ruling older than the
+ * quality freshness window (the same 30 days after which a score goes stale)
+ * no longer counts. Read directly rather than through `enrichAppsWithQuality`,
+ * which also fans out to sync peers — a peer's view of a different checkout is
+ * not evidence about this one.
  */
-async function loadNotApplicableCategories(appId) {
+async function loadNotApplicableCategories(appId, now = Date.now()) {
+  const cached = notApplicableCache.get(appId);
+  if (cached && now - cached.at < CAPABILITY_TTL_MS) return cached.value;
   const result = await query(
-    `SELECT DISTINCT ON (category) category, report FROM app_quality_measurements
+    `SELECT DISTINCT ON (category) category, assessed_at, report FROM app_quality_measurements
      WHERE app_id = $1 ORDER BY category, assessed_at DESC, agent_id DESC`,
     [appId]
   ).catch(() => null);
+  // A failed read is "no rulings known", and is not cached — the next ask retries.
   if (!result) return new Set();
-  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable')
+  const value = new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable'
+    && isFreshAssessment(row.assessed_at, now))
     .map(row => normalizeAuditTaskType(row.category)));
+  notApplicableCache.set(appId, { at: now, value });
+  return value;
 }
 
 /**
@@ -175,19 +205,82 @@ export async function resolveQualityChecks(app) {
   // deselect most of the catalog over a repository nobody actually looked at.
 
   const checks = AUDIT_TASK_TYPE_LIST.map(taskType => {
-    const requirement = auditCapabilityRequirement(taskType);
-    let applicable = true;
-    let reason = null;
-    if (notApplicable.has(taskType)) {
-      applicable = false;
-      reason = 'a previous audit reported this category as not applicable here';
-    } else if (requirement && complete && !capabilities[requirement]) {
-      applicable = false;
-      reason = AUDIT_CAPABILITY_MISSING_REASON[requirement];
-    }
-    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable, reason };
+    const reason = notApplicable.has(taskType)
+      ? 'a previous audit reported this category as not applicable here'
+      : missingCapabilityReason(taskType, capabilities, complete);
+    return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable: !reason, reason };
   });
   return { checks, capabilities, scanned, complete };
+}
+
+/**
+ * Whether ONE audit is worth dispatching for this app — the programmatic
+ * bail-out every dispatch lane consults before an agent is spawned, so a
+ * mobile-responsive audit of a repository with no client code costs a
+ * `git ls-files` (cached) instead of a provider call. Same verdict as the
+ * schedule form's, by construction: both read `resolveQualityChecks`.
+ *
+ * Non-audit task types and apps with no checkout always apply — the gate only
+ * ever REMOVES work it has evidence against.
+ *
+ * @param {object} app - The managed app record
+ * @param {string} taskType - Scheduled task type
+ * @returns {Promise<{ applicable: boolean, reason: string|null }>}
+ */
+export async function resolveAuditApplicability(app, taskType) {
+  const category = normalizeAuditTaskType(taskType);
+  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_DEFINITIONS, category)) return { applicable: true, reason: null };
+  const { checks } = await resolveQualityChecks(app);
+  const check = checks.find(entry => entry.taskType === category);
+  return { applicable: check?.applicable !== false, reason: check?.reason || null };
+}
+
+/**
+ * The repository-shape half of the verdict: why `taskType` cannot apply to a
+ * checkout with these capabilities, or null. Only a COMPLETE inventory licenses
+ * a negative (see `resolveQualityChecks`).
+ */
+function missingCapabilityReason(taskType, capabilities, complete) {
+  const requirement = auditCapabilityRequirement(taskType);
+  return requirement && complete && !capabilities[requirement] ? AUDIT_CAPABILITY_MISSING_REASON[requirement] : null;
+}
+
+/**
+ * Every category this app's repository shape rules out, as
+ * `{ [category]: reason }` — the shape `summarizeAppQuality` takes. Reads the
+ * cached file scan only: the summary already sees each category's own
+ * `not-applicable` report, so re-reading the measurements here would repeat
+ * the query the caller just made.
+ *
+ * @param {object} app - The managed app record
+ * @returns {Promise<Record<string, string>>}
+ */
+export async function inapplicableAuditReasons(app) {
+  const { capabilities, complete } = await detectRepoCapabilities(app);
+  return Object.fromEntries(AUDIT_TASK_TYPE_LIST
+    .map(taskType => [taskType, missingCapabilityReason(taskType, capabilities, complete)])
+    .filter(([, reason]) => reason));
+}
+
+/**
+ * The same verdict keyed by app id, for the sequencing lanes (maintenance runs,
+ * quota-burn steps) that hold an id rather than a record. Returns WHY the audit
+ * does not apply, or null when it does — or when that cannot be determined, so
+ * an unreadable app or a failed detection never blocks work.
+ *
+ * @param {string|null} appId - Managed app id
+ * @param {string} taskType - Scheduled task type
+ * @returns {Promise<string|null>}
+ */
+export async function inapplicableAuditReason(appId, taskType) {
+  if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, normalizeAuditTaskType(taskType))) return null;
+  const verdict = await getAppById(appId)
+    // The schedule form's recorded override is the user's choice for this app,
+    // whichever lane dispatches the audit.
+    .then(app => (app && app.taskTypeOverrides?.[taskType]?.taskMetadata?.runInapplicableAudit !== true
+      ? resolveAuditApplicability(app, taskType) : null))
+    .catch(() => null);
+  return verdict && !verdict.applicable ? verdict.reason || 'not applicable to this repository' : null;
 }
 
 /**
@@ -298,14 +391,19 @@ export async function applyQualitySchedulePlan(app, options = {}) {
   const scheduled = new Map(plan.slots.map(slot => [slot.taskType, slot]));
   const existing = await getAppTaskTypeOverrides(app.id);
 
+  const inapplicable = new Set(built.checks.filter(check => !check.applicable).map(check => check.taskType));
   const patches = {};
   for (const taskType of AUDIT_TASK_TYPE_LIST) {
     const slot = scheduled.get(taskType);
+    // A check the user selected although it was marked not applicable is an
+    // explicit override: record it so the scheduled lane's applicability gate
+    // runs it instead of skipping it. Cleared again once the check applies.
+    const { runInapplicableAudit: _previousOverride, ...storedMetadata } = existing[taskType]?.taskMetadata || {};
     patches[taskType] = slot
       // Merge rather than replace: the stored metadata may carry a provider
       // pin or reviewer choice the user set on the Schedule page, and the plan
       // only has an opinion about the delivery mode.
-      ? { enabled: true, interval: slot.cron, taskMetadata: { ...existing[taskType]?.taskMetadata, fileIssues: slot.fileIssues } }
+      ? { enabled: true, interval: slot.cron, taskMetadata: { ...storedMetadata, fileIssues: slot.fileIssues, ...(inapplicable.has(taskType) ? { runInapplicableAudit: true } : {}) } }
       // Clearing the interval alongside `enabled: false` keeps a stale cron
       // from reviving on the next manual enable.
       : { enabled: false, interval: null };

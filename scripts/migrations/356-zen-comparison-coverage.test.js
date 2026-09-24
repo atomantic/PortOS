@@ -16,8 +16,10 @@ it('upgrades an existing catalog without losing researched evidence and fails cl
   const zen = seed.observations.filter(row => row.provider === 'OpenCode Zen');
   expect(zen).toHaveLength(8);
   expect(zen.every(row => row.quality === null && row.tokensPerSecond === null && row.inputPerMillion.value === 0)).toBe(true);
+  const nonZenObservation = seed.observations.find(row => row.provider !== 'OpenCode Zen');
+  expect(nonZenObservation).toBeDefined();
   const researched = { ...zen[0], notes: 'Example locally researched evidence' };
-  const prior = { schemaVersion: 1, observations: [seed.observations[0], researched] };
+  const prior = { schemaVersion: 1, observations: [nonZenObservation, researched] };
   const path = join(rootDir, 'data/model-comparison.json');
   await writeFile(path, JSON.stringify(prior));
   expect(await migration.up({ rootDir })).toEqual({ added: 7 });

@@ -931,6 +931,13 @@ describe('needsSlashdoSubmodule', () => {
     })).toBe(true);
   });
 
+  it('initializes slashdo when the audit catalog scope-coverage contract is selected', () => {
+    expect(needsSlashdoSubmodule({
+      ...basePlan,
+      server: { files: ['server/lib/auditCatalog.test.js'], sources: [] },
+    })).toBe(true);
+  });
+
   it('is true when a contract source file is selected', () => {
     expect(needsSlashdoSubmodule({
       ...basePlan,

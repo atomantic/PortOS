@@ -56,7 +56,7 @@ export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskTy
  * invocation yields fresh step identities. An optional claimHandler replaces
  * the provider/model/effort bundle for drains only; omitted keeps legacy pins.
  */
-export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
+export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
   if (taskTypes !== null && (!Array.isArray(taskTypes) || !taskTypes.length || taskTypes.some(type => !Object.hasOwn(AUDIT_DEFINITIONS, type)))) {
     throw new Error('Quality checks must name known audit categories');
   }
@@ -70,6 +70,6 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     jobType: null,
     runOnce: true,
     drain: taskType === MAINTENANCE_DRAIN_TASK,
-    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true } : {}) } : maintenanceStepParams(taskType, mode) },
+    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true } : {}), ...(explicitCheck ? { runInapplicableAudit: true } : {}) } : maintenanceStepParams(taskType, mode) },
   }));
 }

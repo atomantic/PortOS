@@ -1,7 +1,7 @@
 {
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
-    "api-contract": "cf02b10a5993baf473e0d320771f26b6",
+    "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
@@ -10,7 +10,7 @@
     "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "ae6e8164698faebc2a5fd4fecb3d41e8",
-    "claim-issue": "f6f3c5865744d46da2edde702beecf27",
+    "claim-issue": "811ff55f4e797ee554b43f5c0911bc19",
     "claim-issue-gitlab": "542e10eb02e850fb40d11fab6497deee",
     "claim-issue-jira": "64ccd403371ea2b55c53b665b789dd38",
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
@@ -18,33 +18,38 @@
     "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
-    "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
+    "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
+    "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
+    "data-safety": "eb97988dfc16d4c655f1834acc91d665",
     "dependency-updates": "44de787b45e037fbce281efc87706873",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
+    "infrastructure": "b4ad755eb115b82679c601a0df1ffd7b",
     "issue-reconcile": "541afc6566aa012ebc400ccff391ce2b",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
-    "model-comparison-refresh": "dc1702b07c7fb8be6165feb776d5acb6",
+    "model-comparison-refresh": "219ed3aac32a878ee6f78a90e98daec1",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
-    "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
-    "performance": "b69bf4cbd2b3c272b5650608c62cede3",
-    "plan-feature": "87f71a894757f89354da4e2119e07118",
+    "observability": "243e58bcfae2759f82caf3ff6c8fc9c5",
+    "performance": "8b297d723f9f39154c9cf6d501738494",
+    "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "8a53a518714cc4029d751fdad92f9b05",
-    "plan-task-claim": "ff9ef899c1b0d13ae2f6d7e31c13a10f",
+    "plan-task-claim": "ac25c5c94a1e5ba5fb728abcb2e0aadb",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
-    "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
+    "privacy": "ecf3c57c064e3c4ab662d70252c686fb",
+    "reference-watch": "57221102b6245d40852ac258fbf9ebbf",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
+    "reliability": "2a99be77b8f34653f4b926db0a773ea5",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
-    "security": "c5e35a12eeb06e6afe4617f4428fa1ab",
+    "security": "4bd26243a5792a39040da0b49321ca27",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
     "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
@@ -52,11 +57,11 @@
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
     "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "b8c0bde4075685625443a405b2c70b50"
+    "ux": "f90b5f38a7c6264e0d40919a2933ba4c"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
-    "api-contract": 1,
+    "api-contract": 2,
     "better-cognitive-load": 1,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
@@ -64,7 +69,7 @@
     "better-structural-drift": 1,
     "better-test-quality": 1,
     "branch-reconcile": 7,
-    "claim-issue": 34,
+    "claim-issue": 35,
     "claim-issue-gitlab": 31,
     "claim-issue-jira": 20,
     "code-quality": 4,
@@ -72,29 +77,34 @@
     "code-reviewer-b": 1,
     "console-errors": 4,
     "copy": 1,
-    "data-safety": 1,
+    "cost-efficiency": 1,
+    "data-integrity": 1,
+    "data-safety": 2,
     "dependency-updates": 6,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
     "feature-ideas": 11,
+    "infrastructure": 1,
     "issue-reconcile": 7,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "mobile-responsive": 3,
-    "model-comparison-refresh": 1,
+    "model-comparison-refresh": 3,
     "module-hygiene": 1,
-    "observability": 1,
-    "performance": 4,
-    "plan-feature": 5,
+    "observability": 2,
+    "performance": 5,
+    "plan-feature": 6,
     "plan-task": 19,
     "pr-reviewer": 5,
     "pr-watcher": 2,
-    "reference-watch": 3,
+    "privacy": 1,
+    "reference-watch": 4,
     "refresh-local-llm-catalog": 4,
     "release-check": 14,
+    "reliability": 1,
     "repo-sync": 1,
-    "security": 3,
+    "security": 4,
     "simplify": 1,
     "stash-cleanup": 2,
     "test-coverage": 3,
@@ -102,9 +112,9 @@
     "ui-bugs": 3,
     "ui-lifecycle": 2,
     "user-action-review": 2,
-    "ux": 3
+    "ux": 4
   },
-  "REFERENCE_WATCH_AUDITED_VERSION": 3,
+  "REFERENCE_WATCH_AUDITED_VERSION": 4,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "accessibility": [
       "ce7377d0ac57cbf0526074cfb95e3803",
@@ -112,6 +122,9 @@
       "372916803f32b82da38a5b2130a54baf",
       "76cfcab471c1a555767b71b8b9932ae0",
       "762506421c793074d172d3eb794fe866"
+    ],
+    "api-contract": [
+      "cf02b10a5993baf473e0d320771f26b6"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"
@@ -160,7 +173,8 @@
       "8afa24181b8923cfd35b5cd8e95b5bb5",
       "d735d14f7936ada5621b8e96b53549cc",
       "0651e646940cc96677cf87d4764bd88d",
-      "b9360ef3018be5fce3e0413cae86a20d"
+      "b9360ef3018be5fce3e0413cae86a20d",
+      "f6f3c5865744d46da2edde702beecf27"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -226,6 +240,9 @@
       "2b6ed595287f0742bed9ecba6788afe6",
       "eec33a9293f9393019917a6632dd964e"
     ],
+    "data-safety": [
+      "86b07f51abdbcbe7016f840b5bb0cd9b"
+    ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
       "640a7c4214e6bdba2bbd5b9061d9d425",
@@ -274,17 +291,26 @@
       "636bdc17fa39ed2f2e27623284c8e04c",
       "16d8e7f63a673a2de48994c0ac08ef3d"
     ],
+    "model-comparison-refresh": [
+      "dc1702b07c7fb8be6165feb776d5acb6",
+      "7de58f49e5cea22a4282fb37bc9f37ab"
+    ],
+    "observability": [
+      "fdb4d77df5891cfb653a5da2553ecf8a"
+    ],
     "performance": [
       "c8224243c15f6897ee04be25d172f021",
       "4fea5eb3585bdc150980934b289016bc",
       "672bd3958b12afb0f382bcebb6dc3b33",
-      "d7e3a80f42903fbf90be0efc9b559c0b"
+      "d7e3a80f42903fbf90be0efc9b559c0b",
+      "b69bf4cbd2b3c272b5650608c62cede3"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
       "a707866783fd0d8c1037489f23ff66de",
       "b20980c8eda2256060d09d4bca397244",
-      "3df6f0a46f2a524af1dc4f83dfdf0647"
+      "3df6f0a46f2a524af1dc4f83dfdf0647",
+      "87f71a894757f89354da4e2119e07118"
     ],
     "plan-task": [
       "4df36bed4974ff41f369c86828e7f94f",
@@ -315,7 +341,8 @@
     ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
-      "722ca590fb4b6323c98850a176b9b309"
+      "722ca590fb4b6323c98850a176b9b309",
+      "e0e20754700fb08d5159b8437d9c260b"
     ],
     "refresh-local-llm-catalog": [
       "525bd0077672bf2f8beec9c0124740c8",
@@ -340,7 +367,8 @@
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
       "d0f54c1fbe62d067b1a23ee0a9f3528c",
-      "8e58c1305a391ac765b0b13ab9615eb3"
+      "8e58c1305a391ac765b0b13ab9615eb3",
+      "c5e35a12eeb06e6afe4617f4428fa1ab"
     ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"
@@ -366,7 +394,8 @@
     ],
     "ux": [
       "e03d03fc7c16faa5b5db93be2896b9ad",
-      "ac11f692eae40ffe8ddeaeaccbcf75e9"
+      "ac11f692eae40ffe8ddeaeaccbcf75e9",
+      "b8c0bde4075685625443a405b2c70b50"
     ]
   }
 }

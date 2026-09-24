@@ -334,13 +334,14 @@ export const appSchema = z.object({
 // in this file.
 // Reference-repo entry. Each app can list upstream repos it watches for
 // clean-room reimplementation; the `reference-watch` scheduled task fetches
-// each one, finds commits since `lastReviewedSha`, and appends slug-tagged
-// `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
-// `plan-task` to pick up. `notes` is the free-text "what we use from this
-// repo" field — fed into the review prompt so the agent knows which features
-// in our app are load-bearing for the watch. `repoUrl` is either a clonable
-// URL (https://github.com/owner/repo or scp-style user@host:owner/repo.git)
-// or a local filesystem path; the service detects remote URLs by matching
+// each one, finds commits since `lastReviewedSha`, and files proposals in the
+// app's configured tracker (PLAN.md checklist IDs or forge issue numbers) for
+// `/claim` / `plan-task` / `claim-issue*` to pick up. `notes` is the free-text
+// "what we use from this repo" field, fed into the review prompt so the agent
+// knows which features in our app are load-bearing for the watch. `repoUrl` is
+// either a clonable URL (https://github.com/owner/repo or scp-style
+// user@host:owner/repo.git) or a local filesystem path; the service detects
+// remote URLs by matching
 // `scheme://` or scp-style `user@host:path` (see isLocalPath in
 // services/referenceRepos.js) and treats anything else as a local path.
 // The persisted record's server-owned fields (id, status, lastError,
@@ -2217,10 +2218,22 @@ export * from './spriteValidation.js';
 export * from './agentContextValidation.js';
 export * from './eidoverseValidation.js';
 
-// Public benchmark observations. A source is attached to each metric because
-// price, quality and runtime measurements often come from different workloads.
+// Reference prices and PortOS-run benchmark observations. A source is attached
+// to each metric because prices, scores and runtime measurements differ.
+const isAllowedComparisonSourceUrl = value => {
+  if (/^portos:\/\/model-comparison\/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+};
 const comparisonSourceSchema = z.object({
-  url: z.string().url().max(2000).refine(value => /^https:\/\//i.test(value), 'Source must use HTTPS'),
+  url: z.string().min(1).max(2000).refine(
+    isAllowedComparisonSourceUrl,
+    'Source must use HTTPS or identify a PortOS benchmark run',
+  ),
   retrievedAt: z.string().datetime().refine(value => Date.parse(value) <= Date.now(), 'Source date cannot be in the future'),
   methodology: z.string().min(1).max(1000),
 }).strict();
@@ -2231,7 +2244,7 @@ export const modelComparisonObservationSchema = z.object({
   model: z.string().min(1).max(200),
   effort: z.string().min(1).max(80),
   configuration: z.string().min(1).max(500),
-  billing: z.enum(['api', 'subscription', 'local', 'unknown']),
+  billing: z.enum(['api', 'subscription', 'local', 'free', 'unknown']),
   benchmark: z.string().min(1).max(160),
   quality: comparisonMetricSchema.nullable(),
   costPerTask: comparisonMetricSchema.nullable(),
@@ -2240,30 +2253,48 @@ export const modelComparisonObservationSchema = z.object({
   reasoningPerMillion: comparisonMetricSchema.nullable(),
   responseSeconds: comparisonMetricSchema.nullable(),
   tokensPerSecond: comparisonMetricSchema.nullable(),
+  tokensPerRun: comparisonMetricSchema.nullable().optional(),
+  inputTokens: comparisonMetricSchema.nullable().optional(),
+  outputTokens: comparisonMetricSchema.nullable().optional(),
+  apiEquivalentCost: comparisonMetricSchema.nullable().optional(),
+  tokenBasis: z.enum(['measured', 'estimated', 'mixed']).nullable().optional(),
+  completedTasks: z.number().int().nonnegative().max(1000).nullable().optional(),
+  totalTasks: z.number().int().positive().max(1000).nullable().optional(),
   quota: z.object({ unitsPerTask: z.number().finite().nonnegative(), unit: z.string().min(1).max(80), source: comparisonSourceSchema }).strict().nullable(),
   notes: z.string().max(2000),
 }).strict();
-export const modelComparisonImportSchema = z.object({
+const modelComparisonCatalogBaseSchema = z.object({
   schemaVersion: z.literal(1),
-  // The on-demand Epoch AI sync imports several thousand independently
-  // attributed model/benchmark/configuration rows in one atomic catalog merge.
-  observations: z.array(modelComparisonObservationSchema).min(1).max(12000),
+  // Source imports can contain thousands of independently attributed rows and
+  // are applied as one atomic catalog merge.
+  observations: z.array(modelComparisonObservationSchema).max(12000),
 }).strict().superRefine((value, ctx) => {
   const ids = new Set();
   value.observations.forEach((row, index) => {
     if (ids.has(row.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index, 'id'], message: 'Duplicate observation id' });
     ids.add(row.id);
-    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.reasoningPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota) {
+    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.reasoningPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota && !row.tokensPerRun && !row.inputTokens && !row.outputTokens && !row.apiEquivalentCost) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index], message: 'At least one sourced metric is required' });
     }
   });
 });
+// A migration may legitimately retire the last legacy observation. The stored
+// catalog can then be empty, but client imports still need at least one row.
+export const modelComparisonCatalogSchema = modelComparisonCatalogBaseSchema;
+export const modelComparisonImportSchema = modelComparisonCatalogBaseSchema.refine(
+  value => value.observations.length > 0,
+  { message: 'At least one observation is required', path: ['observations'] },
+);
 
 export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
 export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
 export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
 
-export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();
+export const modelComparisonBenchmarkRunSchema = z.object({
+  providerId: z.string().min(1).max(200),
+  model: z.string().min(1).max(200),
+  effort: z.string().min(1).max(80).nullable().optional(),
+}).strict();
 
 // =============================================================================
 // HARNESS ENABLEMENT + CREDENTIAL BOOTSTRAP APPS (#7564)

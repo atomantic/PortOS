@@ -8,7 +8,7 @@ Nothing calls an AI provider when a page loads or when the server starts.
 The browser explicitly requests `includeQuality=true` on app reads; bare
 `/api/apps` peer probes retain their existing response without assessment prose.
 
-All 25 scheduled audit categories first inventory first-party source roots, scan
+All 30 scheduled audit categories first inventory first-party source roots, scan
 for their category's signals, rank the top five candidates (or all if fewer),
 and validate the strongest candidates before selecting a bounded investigation.
 The raw worst offender may be passed over only with an explanation such as a
@@ -42,7 +42,13 @@ eligible inventory; deep investigation still stays bounded. Partial, stale,
 low-confidence, unavailable and inapplicable assessments remain visible but do
 not contribute. Missing categories do not count as 100. The contributing category
 count is shown beside the score so a single good category cannot imply complete
-coverage. An app with no eligible assessments shows **not assessed**, not zero.
+coverage. Its denominator is the number of categories that **apply** to the
+repository (`applicableCategories`): a category is inapplicable when the
+repository scan says so (see "Which checks" below — the app detail read runs it)
+or its own fresh assessment reported `not-applicable`, unless a fresh rated
+assessment shows it applies after all. Inapplicable categories stay listed at
+the bottom of the breakdown with their reason; `totalCategories` keeps the
+catalog size for existing readers. An app with no eligible assessments shows **not assessed**, not zero.
 Database failures show **unavailable** while app management stays usable.
 
 The completion sentinel summary contains one `QUALITY_AUDIT_JSON: {...}` line
@@ -67,7 +73,27 @@ boundaries. Product-facing coverage comes from UX (including onboarding and
 successful task completion), UI bugs, console errors, accessibility,
 mobile/responsive behavior and copy clarity.
 
-This change keeps those 25 lenses rather than adding overlapping tasks.
+Those lenses grew out of a web app with a UI, so five service and
+data-platform lenses cover what a backend API, data platform, or infrastructure
+repository is judged on and nothing above owns:
+
+| Category | Owns | Distinct from |
+| --- | --- | --- |
+| `infrastructure` | IaC, containers, orchestration, platform manifests, CI: exposure, identity grants, secrets, pinning, resource limits and probes, state config, CI supply chain, environment drift | `security` (application code), `dependency-updates` |
+| `data-integrity` | Runtime data correctness: idempotency under retry/redelivery, partial writes, lost updates, boundary validation, schema evolution of stored data, semantic corruption, pagination, retention reach, transfer checks | `data-safety` (upgrades, migrations, destructive defaults, backups) |
+| `reliability` | System behavior under restart, overload and multiple instances: shutdown draining, truthful health checks, backpressure, job leasing/checkpoints, startup fragility, mixed-version deploys | `error-handling` (per-call timeouts, retries, fallbacks) |
+| `privacy` | Personal/sensitive data: operational exposure, third-party minimization, API over-exposure, retention, erasure reach, real data in fixtures — under the project's documented sharing model | `security` (authz, injection) |
+| `cost-efficiency` | Metered spend: repeated paid/model calls, unrequested provider work, retry multiplication, unbounded cloud scans, storage growth, over-provisioning, egress | `performance` (latency, throughput) |
+
+All five default to file-issues. `infrastructure` is gated on deployment
+configuration being present; the others apply to any repository and report
+`not-applicable` when they do not. The same pass broadened five existing
+prompts for services: `security` (tenant isolation, SSRF, unsafe
+deserialization), `performance` (query plans, streaming, batch shape, pools,
+partition pruning, cold start), `api-contract` (framework-neutral; spec drift,
+breaking changes, idempotency keys, pagination bounds), `observability`
+(correlation, alertable metrics, truthful health, audit trails) and
+`data-safety` (backup restorability, bulk/backfill safety, retention reach).
 Real-user product outcomes such as retention or satisfaction cannot be inferred
 reliably from a source audit and are not fabricated into this codebase score.
 A future distinct category must register both its scheduled prompt and a
@@ -112,10 +138,24 @@ ordering uses a transient digest of the row, computed when the file is read.
 That file is not the peer federation payload. Peers still exchange schema v1
 objects. Upgrading the file does not require every peer to upgrade.
 
+The category catalog can grow without breaking that exchange. A requester sends
+the categories it can parse (`categories=` on `GET /api/apps/quality-federation`),
+and the peer answering returns only those. A request without the parameter, from
+an install that predates it, gets only the 25 categories that existed before the
+service and data-platform lenses (`FEDERATION_LEGACY_CATEGORIES`), because such an
+install rejects a whole payload over one row it cannot parse. On receipt, rows are
+validated one at a time, so a malformed or unknown row costs that row, not the
+peer's other evidence.
+
 Readers accept a v1 `.quality.json` and, when that file is absent, the historical
 `quality-snapshot.json` name. A read never rewrites the checkout. Future schemas,
 unrecognized documents (including TSV, CSV, or NDJSON), malformed snapshots, and
-oversize files are not evidence and are not overwritten. TSV is not the
+oversize files are not evidence and are not overwritten. A v2 file whose
+category dictionary names categories this install does not know yet — written by
+a newer install after the catalog grew — is read for the rows it does know and is
+never rewritten, since canonicalizing it would drop the newer rows. (Installs
+predating that rule treat such a file as malformed: safe, but its scores are not
+shown until they upgrade.) TSV is not the
 canonical artifact: an append-only text log would grow without a bound and would
 be harder to validate, while the database is already the history.
 
@@ -134,13 +174,15 @@ cron expression per audit on the Schedule page. It writes ordinary per-app task-
 overrides, so every entry it creates stays editable there afterwards.
 
 **Which checks.** Checks are pre-selected by applicability. A category an earlier
-audit reported as `coverage: not-applicable` is skipped — the auditing agent read
-the repository, so its ruling wins. Otherwise applicability comes from the shapes
+audit reported as `coverage: not-applicable` within the last 30 days is skipped —
+the auditing agent read the repository, so its ruling wins until it ages out
+(a repository that later gains a UI gets its UI audits back). Otherwise applicability comes from the shapes
 present in the tracked files (`git ls-files`): the UI lenses (UX, accessibility,
 mobile/responsive, UI bugs, console errors, UI lifecycle, copy) need a user
 interface or a configured UI port, typing needs TypeScript sources, dependency
 freedom needs a dependency manifest, test quality needs existing tests, and API
-contracts need a route/API surface. Test **coverage** is deliberately never gated
+contracts need a route/API surface, and infrastructure needs IaC, container,
+deployment, process-manager, or CI configuration. Test **coverage** is deliberately never gated
 on tests — a repository with none is the one it has the most to say about. Each
 audit declares its own requirement as `requiresCapability` in
 `AUDIT_DEFINITIONS` (`server/lib/auditCatalog.js`), beside its other metadata
@@ -152,8 +194,25 @@ fully inventoried offers every check rather than deselecting the catalog for wan
 of evidence — a `git ls-files` that fails falls back to a two-level listing, which
 is explicitly not evidence of absence.
 
-**When.** The selection is spread across the week — the 25 shipped checks become
-four a day — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names
+**Dispatch-time bail-out.** The same verdict (`resolveAuditApplicability`) is
+checked again before an agent is spawned for automated work, with no provider
+call: the scheduled lane skips the audit and records the execution so its
+cadence advances, a maintenance run completes the step as skipped (recorded in
+the run's `skipped` map, and named in its completion reason) and moves on, and
+a quota-burn step is declined so the burn picks other work. Detection failures
+never block: the gate only removes work it has evidence against.
+
+An explicit choice always wins over the verdict. A manual **Run** of one task
+type is not gated. The Quality tab's **Run checks** batch selections leave
+inapplicable categories out, but picking a single category by name runs it
+(its step carries `runInapplicableAudit`). A check the user selects in the
+weekly schedule form despite its skip reason is saved with
+`runInapplicableAudit: true` in that app's task metadata, so the scheduled
+lane runs it; the flag is cleared when a later plan finds the check applies.
+
+**When.** The selection is spread across the week as evenly as it allows — the
+30 shipped checks become five slots a day, filled 5,5,4,4,4,4,4 so no day is
+left empty — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names
 as its predecessors, and laid out in clock order within each day so that sequence
 survives. Asking for more checks per day uses fewer days; asking for fewer than
 the week needs is raised to the floor, with a warning saying so. The hours are

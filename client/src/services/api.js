@@ -12,6 +12,7 @@ export * from './apiScaffold.js';
 export * from './apiHarnesses.js';
 export * from './apiProviders.js';
 export * from './apiModelComparison.js';
+export * from './apiModelPerformance.js';
 export * from './apiPrompts.js';
 export * from './apiRuns.js';
 export * from './apiHistory.js';

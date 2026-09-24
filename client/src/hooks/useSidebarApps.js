@@ -27,9 +27,11 @@ export function useSidebarApps({ includeDetails = false } = {}) {
     };
     fetchApps();
     socket.on('apps:changed', fetchApps);
+    socket.on('connect', fetchApps);
     return () => {
       cancelled = true;
       socket.off('apps:changed', fetchApps);
+      socket.off('connect', fetchApps);
     };
   }, [includeDetails]);
   return apps;

@@ -101,6 +101,64 @@ describe('browserService config persistence', () => {
   });
 });
 
+// Issue #8164: the strict, mapped-shape reader (`listProcessesStrict`)
+// replaces a private `execPm2(['jlist'])` parse here — `null` (a FAILED read)
+// must not collapse into the same `exists: false` a genuinely absent process
+// reports.
+describe('getProcessStatus (PM2 read — absent-vs-empty contract)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.doUnmock('./pm2.js');
+  });
+
+  async function importServiceWithPm2(listProcessesStrictImpl) {
+    vi.doMock('./pm2.js', () => ({
+      execPm2: vi.fn(),
+      listProcessesStrict: vi.fn(listProcessesStrictImpl)
+    }));
+    return import('./browserService.js');
+  }
+
+  it('reports the matched process from the mapped shape', async () => {
+    const service = await importServiceWithPm2(async () => [
+      { name: 'portos-browser', status: 'online', pm_id: 1, pid: 456, memory: 1024, cpu: 2, uptime: 9999, restarts: 0, unstableRestarts: 0 }
+    ]);
+
+    const status = await service.getProcessStatus();
+
+    expect(status).toEqual({
+      exists: true,
+      status: 'online',
+      pm2_id: 1,
+      pid: 456,
+      memory: 1024,
+      cpu: 2,
+      uptime: 9999,
+      restarts: 0,
+      unstableRestarts: 0
+    });
+  });
+
+  it('reports not_found for a successful read with no matching process', async () => {
+    const service = await importServiceWithPm2(async () => []);
+
+    const status = await service.getProcessStatus();
+
+    expect(status).toEqual({ exists: false, status: 'not_found', pm2_id: null });
+  });
+
+  it('reports unavailable, never exists:false, when the PM2 read fails', async () => {
+    const service = await importServiceWithPm2(async () => null);
+
+    const status = await service.getProcessStatus();
+
+    expect(status).toEqual({ exists: null, status: 'unavailable', pm2_id: null });
+  });
+});
+
 describe('pickMainFrameHops (SSRF pin — main-frame connection IPs)', () => {
   // Pure helper: no data-root proxy needed, import the real module directly.
   let pickMainFrameHops;

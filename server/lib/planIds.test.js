@@ -294,6 +294,16 @@ describe('planIds.js', () => {
       expect(extractSlugFromRef('origin/cos/task/slug/agent')).toBe('slug');
     });
 
+    it('extracts the slug from next/<slug> (slashdo /do:next, #8161)', () => {
+      expect(extractSlugFromRef('next/issue-8149')).toBe('issue-8149');
+      expect(extractSlugFromRef('next/some-plan-slug')).toBe('some-plan-slug');
+    });
+
+    it('strips a single leading remote prefix before matching next/', () => {
+      expect(extractSlugFromRef('origin/next/issue-12')).toBe('issue-12');
+      expect(extractSlugFromRef('upstream/next/issue-12')).toBe('issue-12');
+    });
+
     it('returns null for unrelated refs (the false-positive case)', () => {
       // Without this gate, a slug literally named "main"/"fix"/etc. would be
       // falsely flagged as in-flight against virtually every branch.
@@ -304,6 +314,9 @@ describe('planIds.js', () => {
       expect(extractSlugFromRef('origin/HEAD')).toBeNull();
       expect(extractSlugFromRef('fix-typo')).toBeNull();
       expect(extractSlugFromRef('refs/tags/v1.0.0')).toBeNull();
+      // A branch that merely starts with "next" but isn't the next/<slug>
+      // convention must not false-positive on a word-boundary miss.
+      expect(extractSlugFromRef('nextgen-feature')).toBeNull();
     });
 
     it('returns null for malformed cos refs', () => {

@@ -27,6 +27,7 @@ import {
 import { getProviders } from '../services/apiProviders';
 import Pill from '../components/ui/Pill';
 import { buildStageGroups, stageGroupKeyFor } from '../lib/promptStageGroups';
+import { STAGE_MODEL_TIER_OPTIONS, canonicalStageModelTier } from '../lib/stageModelTiers';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -898,15 +899,13 @@ export default function PromptManager() {
                       {!stageConfig.provider ? (
                         <select
                           aria-label="Model tier"
-                          value={stageConfig.model || 'default'}
+                          value={canonicalStageModelTier(stageConfig.model) || 'default'}
                           onChange={(e) => setStageConfig({ ...stageConfig, model: e.target.value })}
                           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                         >
-                          <option value="default">Default</option>
-                          <option value="quick">Quick</option>
-                          <option value="coding">Coding</option>
-                          <option value="heavy">Heavy</option>
-                          <option value="ultra">Ultra</option>
+                          {STAGE_MODEL_TIER_OPTIONS.map(({ value, label }) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
                         </select>
                       ) : (
                         <ProviderModelSelector
@@ -1350,15 +1349,13 @@ export default function PromptManager() {
                   {!newStageForm.provider ? (
                     <select
                       aria-label="Model tier"
-                      value={newStageForm.model}
+                      value={canonicalStageModelTier(newStageForm.model) || 'default'}
                       onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     >
-                      <option value="default">Default</option>
-                      <option value="quick">Quick</option>
-                      <option value="coding">Coding</option>
-                      <option value="heavy">Heavy</option>
-                          <option value="ultra">Ultra</option>
+                      {STAGE_MODEL_TIER_OPTIONS.map(({ value, label }) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
                     </select>
                   ) : (
                     <ProviderModelSelector

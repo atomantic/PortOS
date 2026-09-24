@@ -18,10 +18,10 @@ import {
   isFileIssuesMode,
   isExplicitFileIssuesRequest,
   FILE_ISSUES_DELIVERY_SETTINGS,
-  getAuditFilingPreset,
   metricLabelFromSlugPrefix,
   modeContractFor,
   applyAuditModeWrapper,
+  DO_BETTER_SCOPE_COVERAGE,
   DO_BETTER_LENS_COVERAGE,
   AUDIT_RUN_GUIDANCE,
   AUDIT_SUGGESTED_AFTER,
@@ -266,20 +266,23 @@ describe('getAuditFilingPreset', () => {
   });
 });
 
-// The `better-*` audit types exist to give each slashdo `do:better` audit lens
-// a schedulable counterpart. The coverage map is the contract between the two,
-// and it only means anything if both halves are checked: that every type it
-// names is real, and that every lens upstream declares is actually named.
-describe('DO_BETTER_LENS_COVERAGE', () => {
+// PortOS's focused `better-*` tasks map onto current generic slashdo scopes.
+// Keep both directions checked so upstream scope changes cannot leave schedule
+// labels stale or scopes without owners.
+describe('DO_BETTER_SCOPE_COVERAGE', () => {
   it('names only registered audit types, without duplicates', () => {
-    for (const [lens, owners] of Object.entries(DO_BETTER_LENS_COVERAGE)) {
-      expect(Array.isArray(owners), lens).toBe(true);
-      expect(owners.length, lens).toBeGreaterThan(0);
+    for (const [scope, owners] of Object.entries(DO_BETTER_SCOPE_COVERAGE)) {
+      expect(Array.isArray(owners), scope).toBe(true);
+      expect(owners.length, scope).toBeGreaterThan(0);
       for (const owner of owners) {
-        expect(AUDIT_TASK_TYPES.has(owner), `${lens} -> ${owner}`).toBe(true);
+        expect(AUDIT_TASK_TYPES.has(owner), `${scope} -> ${owner}`).toBe(true);
       }
-      expect(new Set(owners).size, `${lens} lists a duplicate owner`).toBe(owners.length);
+      expect(new Set(owners).size, `${scope} lists a duplicate owner`).toBe(owners.length);
     }
+  });
+
+  it('keeps the former exported name as the same coverage map', () => {
+    expect(DO_BETTER_LENS_COVERAGE).toBe(DO_BETTER_SCOPE_COVERAGE);
   });
 
   // The seeded schedule row ALWAYS sets taskMetadata.fileIssues, so for a
@@ -295,17 +298,16 @@ describe('DO_BETTER_LENS_COVERAGE', () => {
     }
   });
 
-  it('gives every better-prefixed audit type a lens to be in parity with', () => {
-    const covered = new Set(Object.values(DO_BETTER_LENS_COVERAGE).flat());
+  it('maps every better-prefixed audit type to a current slashdo scope', () => {
+    const covered = new Set(Object.values(DO_BETTER_SCOPE_COVERAGE).flat());
     const orphaned = [...AUDIT_TASK_TYPES]
       .filter((type) => type.startsWith('better-') && !covered.has(type));
     expect(orphaned).toEqual([]);
   });
 
-  // Reads the bundled submodule when it is initialized. A lens added upstream
-  // with no entry here is a category of app quality that silently became
-  // unschedulable — exactly the gap these task types were added to close.
-  it('covers every lens the bundled do:better command declares', async () => {
+  // Reads the bundled submodule when it is initialized. This parses the current
+  // scope table rather than the retired `For <lens>:` checklist format.
+  it('covers every scope the bundled do:better command declares', async () => {
     const { existsSync, readFileSync } = await import('fs');
     const { join } = await import('path');
     const { PATHS } = await import('./paths.js');
@@ -318,11 +320,13 @@ describe('DO_BETTER_LENS_COVERAGE', () => {
       return;
     }
     const body = readFileSync(auditRef, 'utf8');
-    // Each lens is introduced as: For `<slug>`:
-    const declared = [...body.matchAll(/^For `([a-z-]+)`:/gm)].map(([, slug]) => slug);
+    // Scope names are the first code span in each row of the current table.
+    const declared = [...body.matchAll(/^\|\s*`([a-z-]+)`/gm)].map(([, scope]) => scope);
     expect(declared.length).toBeGreaterThan(5);
-    const missing = declared.filter((lens) => !DO_BETTER_LENS_COVERAGE[lens]);
+    const missing = declared.filter((scope) => !DO_BETTER_SCOPE_COVERAGE[scope]);
     expect(missing).toEqual([]);
+    const stale = Object.keys(DO_BETTER_SCOPE_COVERAGE).filter((scope) => !declared.includes(scope));
+    expect(stale).toEqual([]);
   });
 });
 

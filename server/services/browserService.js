@@ -11,7 +11,7 @@ import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
-import { execPm2 } from './pm2.js';
+import { execPm2, listProcessesStrict } from './pm2.js';
 
 const PM2_SETTLE_MS = 1500;
 const HEALTH_TIMEOUT_MS = 3000;
@@ -153,8 +153,19 @@ export async function restartBrowser() {
 // ---------- PM2 status (process-level) ----------
 
 export async function getProcessStatus() {
-  const { stdout } = await execPm2(['jlist']);
-  const processes = safeJSONParse(stdout, [], { allowArray: true });
+  // `listProcessesStrict()` returns `null` when the PM2 read itself FAILED (vs
+  // `[]` for a successful read with no processes) — the absent-vs-empty
+  // contract from issue #968, now the one non-test owner of raw `pm2 jlist`
+  // execution/parsing alongside `autofixer/shared.js` (#8164).
+  const processes = await listProcessesStrict();
+
+  if (processes === null) {
+    // A failed read must never report `exists: false` — that claims the
+    // browser process is confidently absent when its status is actually
+    // unavailable (a transient PM2 blip should not read as "not installed").
+    return { exists: null, status: 'unavailable', pm2_id: null };
+  }
+
   const browserProc = processes.find(p => p.name === 'portos-browser');
 
   if (!browserProc) {
@@ -163,14 +174,14 @@ export async function getProcessStatus() {
 
   return {
     exists: true,
-    status: browserProc.pm2_env?.status || 'unknown',
+    status: browserProc.status || 'unknown',
     pm2_id: browserProc.pm_id,
     pid: browserProc.pid,
-    memory: browserProc.monit?.memory || 0,
-    cpu: browserProc.monit?.cpu || 0,
-    uptime: browserProc.pm2_env?.pm_uptime || null,
-    restarts: browserProc.pm2_env?.restart_time || 0,
-    unstableRestarts: browserProc.pm2_env?.unstable_restarts || 0
+    memory: browserProc.memory || 0,
+    cpu: browserProc.cpu || 0,
+    uptime: browserProc.uptime || null,
+    restarts: browserProc.restarts || 0,
+    unstableRestarts: browserProc.unstableRestarts || 0
   };
 }
 

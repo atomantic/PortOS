@@ -32,6 +32,7 @@ import {
   derivedPresetPatch,
   materializeDerivedPreset,
   planPresetBackfill,
+  presetBackfillVerdict,
 } from '../lib/providerPresets.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
@@ -103,6 +104,14 @@ let graphEnabled = false;
 /** Re-entrancy latch: a projection's own file write must not re-trigger a pass. */
 let reconciling = false;
 let queue = Promise.resolve();
+/**
+ * Why each routed legacy record stayed legacy on the LAST pass (#7565), by
+ * provider id. The editor offers "Convert to derived preset" only where this
+ * holds no reason: the conversion runs the very same pass, so a record the pass
+ * just refused would refuse again (the pre-fix editor offered the button to
+ * every shipped preset it could never convert).
+ */
+let presetSkipReasons = new Map();
 
 /**
  * One-at-a-time execution. A rejected pass must not poison the next one.
@@ -117,11 +126,15 @@ export { serialize as serializeProviderGraph };
 
 export const providerGraphEnabled = () => graphEnabled;
 
+/** The reason the last pass left `providerId` a legacy preset, or null when it did not refuse it. */
+export const presetSkipReason = (providerId) => presetSkipReasons.get(providerId) ?? null;
+
 /** Test seam: reset module state between suites. */
 export function resetProviderGraphState() {
   graphEnabled = false;
   reconciling = false;
   queue = Promise.resolve();
+  presetSkipReasons = new Map();
 }
 
 const providerService = () => requireToolkit().services.providers;
@@ -214,6 +227,7 @@ async function reconcilePass(reason) {
     bindings: [...graph.bindings, ...plan.imports.bindings],
     routes: [...graph.routes.filter((route) => !removed.has(route.providerId)), ...plan.imports.routes],
   }, providers);
+  presetSkipReasons = new Map(presets.skipped.map(({ id, reason }) => [id, reason]));
 
   const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
   const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
@@ -287,6 +301,43 @@ export async function rematerializeDerivedPresets(connection, { providerIds = nu
   const written = await writeProviderPatches(patches);
   if (written.length > 0) console.log(`🔗 Re-derived ${written.length} preset(s) from service ${connection.slug}`);
   return written;
+}
+
+/**
+ * Refresh the cached preset-conversion verdict — {@link presetSkipReason} —
+ * for every LEGACY (not yet derived) record routed on `connection`, against
+ * `connection` AS JUST SAVED (#8159).
+ *
+ * `presetSkipReasons` is otherwise updated only by a full reconcile pass
+ * (`reconcilePass`, on boot or a `providers.json` write), so a connection
+ * SETTINGS edit — which changes nothing `onProvidersSaved` watches — left the
+ * "Convert to derived preset" gate answering against whatever the connection
+ * looked like at the last pass. Scoped to `connection`'s own routes rather
+ * than a whole-graph {@link planPresetBackfill}, because no OTHER route's
+ * verdict can have changed from this edit; and to {@link presetBackfillVerdict}
+ * rather than a write, because this is a read-cache refresh, not a conversion
+ * — an eligible record still needs its own reconcile pass or explicit
+ * "Convert" action to actually stamp.
+ */
+async function refreshPresetSkipReasonsForConnection(graph, connection) {
+  const boundBindings = new Set(
+    graph.bindings.filter((binding) => binding.connectionId === connection.id).map((binding) => binding.id),
+  );
+  const routes = graph.routes.filter((route) => boundBindings.has(route.bindingId));
+  if (routes.length === 0) return;
+  const { providers } = await providerService().getAllProviders();
+  const byId = new Map(providers.map((record) => [record.id, record]));
+  const legacy = routes
+    .map((route) => ({ route, record: byId.get(route.providerId) }))
+    .filter(({ record }) => record && typeof record === 'object' && !isDerivedPreset(record));
+  if (legacy.length === 0) return;
+  const instance = instanceForConnection(connection, process.env);
+  const bootstraps = await bootstrapApps();
+  for (const { route, record } of legacy) {
+    const { reason } = presetBackfillVerdict(record, { route, connection, instance, bootstraps, env: process.env });
+    if (reason) presetSkipReasons.set(record.id, reason);
+    else presetSkipReasons.delete(record.id);
+  }
 }
 
 /**
@@ -448,7 +499,7 @@ export async function previewBindingLink(input) {
   const { graph, binding, source, target } = await resolveLink(input);
   const routes = graph.routes.filter((route) => route.bindingId === binding.id);
   const { differences } = compareBackendEndpoints(asProfile(source), asProfile(target));
-  const catalogDiffers = source.catalog.models.join(' ') !== target.catalog.models.join(' ');
+  const catalogDiffers = source.catalog.models.join('\u0000') !== target.catalog.models.join('\u0000');
 
   return {
     bindingId: binding.id,
@@ -695,10 +746,15 @@ export function updateConnectionSettings({
       credentialVia: nextVia,
     };
     const revision = await saveConnectionSettings(next);
+    const saved = { ...next, revision: revision ?? next.revision };
     const applied = await projectRoutes(routes.map((route) => route.providerId), next);
     // The derived presets on this instance follow the whole row, not only the
     // profile-owned half the projection carried (#7565).
-    const rederived = await rematerializeDerivedPresets({ ...next, revision: revision ?? next.revision });
+    const rederived = await rematerializeDerivedPresets(saved);
+    // This connection's still-legacy routes may have just become convertible,
+    // or stopped being — keep `presetSkipReason` current rather than leaving
+    // it to the next full reconcile pass, which this write never triggers (#8159).
+    await refreshPresetSkipReasonsForConnection(graph, saved);
     console.log(`🔗 Updated connection ${connection.id} (${applied.length} routes projected, ${rederived.length} presets re-derived)`);
     return { connectionId: connection.id, revision, affectedRouteIds: [...new Set([...applied, ...rederived])] };
   });

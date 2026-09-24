@@ -813,6 +813,9 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     model: config.model,
     effort: config.effort,
     objective,
+    // Task screenshots are objective evidence. The local reviewer receives
+    // their bounded image content inside the OBJECTIVE block, not as diff data.
+    objectiveScreenshots: task.metadata?.screenshots,
     diff,
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');

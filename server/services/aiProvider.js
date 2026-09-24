@@ -254,10 +254,17 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   // OpenAI-compatible bodies report token counts under `usage`; surface the completion
   // token count so the AI Core landmark can size its activity beam by output volume
   // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
-  const completionTokens = Number(data.usage?.completion_tokens);
+  const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
+  const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
   return {
     text: content,
     tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
+    ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+      ? { usage: {
+        ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
+        ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
+      } }
+      : {}),
   };
 }
 
@@ -335,7 +342,14 @@ async function callCodexSubscription(provider, model, prompt, {
     if (!turn.error) {
       if (turn.effortClamped) statusOp.update('model:corrected', turn.clampReason, { model: turn.model });
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(turn.usage?.outputTokens));
-      return { result: { text: turn.text, usage: turn.usage } };
+      return { result: {
+        text: turn.text,
+        usage: turn.usage,
+        model: turn.model,
+        effort: turn.effort,
+        effortClamped: turn.effortClamped,
+        clampReason: turn.clampReason,
+      } };
     }
 
     reason = turn.error.message;
@@ -391,7 +405,9 @@ const reportedResetsAt = (readiness) => {
 
 /**
  * Call an API-based AI provider with a simple prompt.
- * Returns { text } on success, { error } on failure.
+ * Returns { text, usage? } on success, { error } on failure. HTTP providers
+ * surface reported prompt/completion counts when present; callers may estimate
+ * only the missing side rather than treating it as a measured zero.
  *
  * On an LM Studio "No models loaded" 400, this auto-loads a model from the
  * provider's configured models list and retries once. The retry uses the
@@ -512,7 +528,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   const first = await postChatCompletion(provider, model, body, opts);
   if (!first.error) {
     statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));
-    return { text: first.text };
+    return { text: first.text, ...(first.usage ? { usage: first.usage } : {}) };
   }
 
   // Recover by retrying the call against `retryModel` (already loaded/healed),
@@ -522,10 +538,10 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     const retry = await postChatCompletion(provider, retryModel, body, opts);
     if (!retry.error) {
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: retryModel, ...throughput(retry.tokens) });
-      return { text: retry.text };
+      return { text: retry.text, ...(retry.usage ? { usage: retry.usage } : {}) };
     }
     statusOp.error(retry.error, { model: retryModel });
-    return { error: retry.error };
+    return { error: retry.error, ...(Number.isInteger(retry.status) ? { status: retry.status } : {}) };
   };
 
   if (options.allowModelRecovery !== false && first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
@@ -551,7 +567,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   }
 
   statusOp.error(first.error);
-  return { error: first.error };
+  return { error: first.error, ...(Number.isInteger(first.status) ? { status: first.status } : {}) };
 }
 
 // Extracted to lib/llmText.js in #4901 — unfencing a string needs no provider,

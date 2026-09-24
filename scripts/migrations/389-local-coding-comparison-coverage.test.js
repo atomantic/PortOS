@@ -7,7 +7,7 @@ import migration from './389-local-coding-comparison-coverage.js';
 let rootDir;
 afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
 
-it('upgrades an existing catalog without losing researched evidence and fails closed on future versions', async () => {
+it('does not re-add retired coding scores or overwrite a catalog and fails closed on future versions', async () => {
   rootDir = await mkdtemp(join(tmpdir(), 'portos-coding-seed-'));
   await mkdir(join(rootDir, 'data'));
   await mkdir(join(rootDir, 'data.reference'));
@@ -16,18 +16,15 @@ it('upgrades an existing catalog without losing researched evidence and fails cl
   // No install catalog yet — a fresh install gets the seed through setup-data.
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });
 
-  // Seed CONTENT is asserted in scripts/prune-model-comparison-seed.test.js;
-  // here it only has to be the set this migration backfills.
   const coding = seed.observations.filter(row => row.id.startsWith('swe-bench-2026-09-16-'));
-  expect(coding).toHaveLength(10);
+  expect(coding).toEqual([]);
 
-  const researched = { ...coding[0], notes: 'Example locally researched evidence' };
-  const prior = { schemaVersion: 1, observations: [seed.observations[0], researched] };
+  const prior = { schemaVersion: 1, observations: [seed.observations[0]] };
   const path = join(rootDir, 'data/model-comparison.json');
   await writeFile(path, JSON.stringify(prior));
-  expect(await migration.up({ rootDir })).toEqual({ added: 9 });
+  expect(await migration.up({ rootDir })).toEqual({ added: 0 });
   const result = JSON.parse(await readFile(path, 'utf8'));
-  expect(result.observations.slice(0, 2)).toEqual(prior.observations);
+  expect(result.observations).toEqual(prior.observations);
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });
 
   const future = JSON.stringify({ ...prior, schemaVersion: 99 });

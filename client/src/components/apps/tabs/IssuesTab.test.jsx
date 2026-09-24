@@ -614,10 +614,10 @@ describe('IssuesTab', () => {
 
     // The tinted div is the row root — exactly 4 levels above the title button.
     const rowOf = (title) => screen.getByText(title).closest('div').parentElement.parentElement.parentElement;
-    expect(rowOf('Crash on save').className).toBe('bg-port-card');
-    expect(rowOf('Being worked right now').className).toBe('bg-port-warning/10');
-    expect(rowOf('Waiting on a dependency').className).toBe('bg-port-error/10');
-    expect(rowOf('Worked but stuck').className).toBe('bg-port-error/10');
+    expect(rowOf('Crash on save').classList.contains('bg-port-card')).toBe(true);
+    expect(rowOf('Being worked right now').classList.contains('bg-port-warning/10')).toBe(true);
+    expect(rowOf('Waiting on a dependency').classList.contains('bg-port-error/10')).toBe(true);
+    expect(rowOf('Worked but stuck').classList.contains('bg-port-error/10')).toBe(true);
   });
 
   it('toggles a label chip off to hide every issue carrying that label', async () => {

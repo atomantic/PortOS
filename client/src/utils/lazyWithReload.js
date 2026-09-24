@@ -30,8 +30,8 @@ export const importWithRetry = (importFn, retriesLeft = MAX_RETRIES) =>
 // once to pick up the new bundle. Everything else re-throws so error boundaries
 // can see it.
 export const lazyWithReload = (importFn) => lazy(() =>
-  importWithRetry(importFn).catch(err => {
-    if (isStaleChunkError(err) && reloadOnceForStaleChunk()) {
+  importWithRetry(importFn).catch(async (err) => {
+    if (isStaleChunkError(err, { duringImport: true }) && await reloadOnceForStaleChunk()) {
       return new Promise(() => {});
     }
     throw err;

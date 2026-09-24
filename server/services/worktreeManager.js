@@ -675,6 +675,80 @@ export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName
   return { path: holder.path, agentId };
 }
 
+// How long a sibling `/do:next` tree must sit untouched before a follow-up may
+// release its branch. An agent that finished and kept its tree (waiting on CI,
+// say) goes quiet for far longer; a live session touches its index constantly.
+export const SIBLING_NEXT_HOLDER_IDLE_MS = 10 * 60 * 1000;
+
+/**
+ * Free `branchName` from an idle slashdo `/do:next` worktree that sits OUTSIDE
+ * `data/cos/worktrees/`, by DETACHING that tree's HEAD in place.
+ *
+ * `/do:next` cuts `next/<slug>` into a sibling directory of the repo
+ * (`../next-issue-<n>`). A run that finished but kept its tree still holds the
+ * branch, and the review-loop follow-up for that PR then cannot `worktree add`
+ * it — adoption refuses any tree outside the managed root, so the follow-up
+ * waits out its whole `worktree-busy` budget and blocks. Unlike adoption this
+ * never moves or deletes the directory: a detached HEAD at the same commit keeps
+ * every file, and `git switch <branch>` restores it.
+ *
+ * Refuses (returns false) unless ALL hold: the branch is `next/…`; the holder is
+ * a linked worktree (never the primary checkout) outside the managed root,
+ * unlocked; no running/paused agent works inside it; nothing in it changed for
+ * `idleMs`; the tree is clean, untracked files included; and HEAD is already on
+ * the remote, so nothing is left only in that tree.
+ *
+ * @param {string} sourceWorkspace
+ * @param {string} branchName
+ * @param {{ activeWorkspacePaths?: string[], idleMs?: number, nowMs?: number }} [options]
+ * @returns {Promise<{ path: string }|null>} the released holder, or null
+ */
+export async function releaseIdleSiblingNextHolder(sourceWorkspace, branchName, {
+  activeWorkspacePaths = [],
+  idleMs = SIBLING_NEXT_HOLDER_IDLE_MS,
+  nowMs = Date.now(),
+} = {}) {
+  if (!sourceWorkspace || !branchName?.startsWith('next/')) return null;
+
+  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
+  const holderIndex = worktrees.findIndex(wt => wt.branch?.replace('refs/heads/', '') === branchName);
+  // Index 0 is the main worktree — the user's own checkout is never released.
+  if (holderIndex <= 0) return null;
+  const holder = worktrees[holderIndex];
+  if (holder.locked || holder.prunable || !existsSync(holder.path)) return null;
+  if (isPathInsideDir(WORKTREES_DIR, holder.path)) return null;
+  if (activeWorkspacePaths.some(p => p && (pathsEqual(p, holder.path) || isPathInsideDir(holder.path, p)))) return null;
+
+  const git = (args) => execGit(args, holder.path).then(r => r.stdout.trim());
+  // Idleness first; `--no-optional-locks` keeps `status` from refreshing the
+  // index and so resetting the very clock this reads on a refused attempt.
+  const gitDir = await git(['rev-parse', '--absolute-git-dir']).catch(() => null);
+  if (!gitDir) return null;
+  const mtimes = await Promise.all(['index', 'HEAD', join('logs', 'HEAD')]
+    .map(f => stat(join(gitDir, f)).then(s => s.mtimeMs, () => 0)));
+  if (nowMs - Math.max(...mtimes) < idleMs) return null;
+
+  // Stricter than `classifyWorktreeDirt` on purpose: this tree isn't PortOS's,
+  // so no path counts as disposable scratch.
+  const porcelain = await git(['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all']).catch(() => null);
+  if (porcelain !== '') return null;
+  const remoteRef = await git(['rev-parse', '--verify', '--quiet', `${branchName}@{upstream}`])
+    .catch(() => git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`]))
+    .catch(() => null);
+  if (!remoteRef) return null;
+  const pushed = await execGit(['merge-base', '--is-ancestor', 'HEAD', remoteRef], holder.path)
+    .then(() => true, () => false);
+  if (!pushed) return null;
+
+  const detached = await execGit(['switch', '--detach', '--quiet'], holder.path).then(() => true, (err) => {
+    console.warn(`⚠️ Could not detach ${holder.path} to release ${branchName}: ${err.message}`);
+    return false;
+  });
+  if (!detached) return null;
+  console.log(`🌳 Released ${branchName} from idle /do:next worktree ${holder.path} (HEAD detached in place)`);
+  return { path: holder.path };
+}
+
 /**
  * Adopt an INTERRUPTED agent's surviving worktree on behalf of the agent that is
  * retrying its task, instead of building a fresh one from the default branch.

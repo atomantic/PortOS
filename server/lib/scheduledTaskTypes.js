@@ -20,9 +20,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // review submission, rebase/CI policy enforcement, and merging are hooks.
   'issue-watcher',
   // Watches `referenceRepos` configured on the app — fetches each upstream
-  // repo, finds commits since lastReviewedSha, and appends slug-tagged
-  // `[ref-watch-…]` checklist items to the app's PLAN.md for `/claim` /
-  // `plan-task` to pick up. No source-code edits, no separate review file.
+  // repo, finds commits since lastReviewedSha, and files proposals in the
+  // app's configured tracker (PLAN.md checklist IDs or forge issue numbers)
+  // for `/claim` / `plan-task` / `claim-issue*` to pick up. No source-code
+  // edits, no separate review file.
   'reference-watch',
   // Walks the running app UI with a UX reviewer's eye (Playwright MCP) against a
   // named checklist — buried primary actions, dead-end empty/error states,
@@ -59,10 +60,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // and the `copy` metric label; narrower than the `ux` audit, which walks the
   // running UI. File-issues.
   'copy',
-  // The six lanes below complete the scheduled counterparts of the slashdo
-  // `do:better` audit lenses (DO_BETTER_LENS_COVERAGE in lib/auditCatalog.js),
-  // so every category of app quality can be scheduled on its own cadence
-  // instead of fanning eight sub-agents out of one command run.
+  // The six PortOS-owned specialist missions below map onto current slashdo
+  // `do:better` scopes through DO_BETTER_SCOPE_COVERAGE in lib/auditCatalog.js.
+  // They can be scheduled independently while shared runtime contracts own
+  // audit orchestration and tracker filing.
   // Measured branching per function — ranks the hottest high-complexity
   // functions by churn and reduces them with a named transformation. The
   // structural cousin of `module-hygiene` (which owns responsibility and
@@ -92,6 +93,28 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `test-coverage`, which owns the GAPS. Files under `tests` plus the
   // `test-quality` metric label.
   'better-test-quality',
+  // Service and data-platform lenses — what a backend API, data platform, or
+  // infrastructure repository is judged on that the UI-shaped audits above
+  // do not own. `infrastructure` is gated on IaC/container/CI files; the rest
+  // apply to any service and report `not-applicable` when they do not.
+  // Deployment configuration: exposure, identity grants, secrets, pinning,
+  // resource limits and probes, CI supply chain. Distinct from `security`
+  // (application code) and `dependency-updates` (package bumps).
+  'infrastructure',
+  // Runtime data correctness: idempotent ingestion under redelivery, atomic
+  // multi-step writes, consistency, schema evolution of stored data. Distinct
+  // from `data-safety`, which owns upgrade/migration/destructive-default risk.
+  'data-integrity',
+  // System-level behavior under restart, overload and multi-instance runs.
+  // Distinct from `error-handling`, which owns per-call timeouts and retries.
+  'reliability',
+  // Personal and sensitive data: exposure through logs/exports/third parties,
+  // minimization, retention and erasure. Distinct from `security` (authz,
+  // injection) — honors the project's documented data-sharing model.
+  'privacy',
+  // Metered spend: paid API/model calls, unbounded cloud scans, storage tiers,
+  // over-provisioning. Distinct from `performance` (latency and throughput).
+  'cost-efficiency',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence

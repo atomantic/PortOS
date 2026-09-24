@@ -224,14 +224,40 @@ export default defineConfig(({ command, mode }) => {
           // `vite.chunkGroups.js`, so a group naming an uninstalled package fails
           // a test instead of silently grouping nothing.
           codeSplitting: {
-            groups: CHUNK_GROUPS.map(({ name, test }) => ({ name, test }))
-          }
+            // Pass every rolldown-recognized field through — not just
+            // `name`/`test`. A narrower destructure here silently drops group
+            // options like `includeDependenciesRecursively` before rolldown
+            // ever sees them (#8146): the config value looks right when you
+            // print `CHUNK_GROUPS`, but the build behaves as if it were never
+            // set. `packages` is `vite.chunkGroups.js`'s own bookkeeping (used
+            // to derive `test` and by its installed-package test), not a
+            // rolldown option, so it's the one field left out here.
+            groups: CHUNK_GROUPS.map(({ packages, ...group }) => group)
+          },
+          // `vendor-three-loaders` disables recursive dependency capture to
+          // keep the loaders out of the main three chunk. Rolldown warns that
+          // this can create invalid execution order across chunks; preserve
+          // source module order so lazy routes don't evaluate against missing
+          // runtime exports.
+          strictExecutionOrder: true,
         }
       },
       // Enable source maps for debugging in production
       sourcemap: false,
-      // Increase chunk size warning limit (icons are large)
-      chunkSizeWarningLimit: 600
+      // Chunk size warning budget (#8146). `vendor-three` — three.js core plus
+      // @react-three/fiber and drei's own runtime (troika text rendering,
+      // camera-controls, meshline, zustand, …), all lazy-loaded and shared by
+      // every 3D page (Model Detail, Brain/Memory graph, Goals tree, CoS
+      // avatars) — measures ~1.08 MB minified / ~300 KB gzip. That floor is
+      // three.js's own footprint, not something PortOS's imports control: the
+      // GLTF/DRACO/KTX2/HDR loaders and the USDZ exporter are already split
+      // into their own `vendor-three-loaders` chunk (~114 KB / ~35 KB gzip)
+      // that only pages actually loading an asset pay for, and drei's helper
+      // runtime is deliberately kept IN `vendor-three` rather than
+      // re-duplicated into each page's own chunk (see `vite.chunkGroups.js`).
+      // 1200 KB gives `vendor-three` headroom without silencing every other
+      // chunk's real regression budget.
+      chunkSizeWarningLimit: 1200
     }
   };
 });

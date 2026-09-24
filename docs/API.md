@@ -789,7 +789,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
-| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, OpenRouter routed pricing and endpoint performance, Epoch AI, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
+| `/api/providers/comparison` | Read-only public benchmark results and token prices shipped with this PortOS release (see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
+| `/api/models/performance/task-benchmark` | Machine-local PortOS task benchmark history and configured-provider inventory; `POST /discover` and `POST /run` perform explicit user-requested actions |
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |

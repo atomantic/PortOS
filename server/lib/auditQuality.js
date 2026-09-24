@@ -31,6 +31,11 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'better-runtime-safety': 'Scan asynchronous callbacks, resource cleanup, nullable access and process lifecycles across source roots; rank reachable crashes, corrupted state and leaked resources.',
   'better-dependency-freedom': 'Inventory manifests and actual imports across packages; rank dependency cost, advisory exposure and removable surface against the complexity of a concrete replacement.',
   'better-test-quality': 'Inventory suites and public boundaries; search assertion-free tests, overmocking, tautologies and redundant cases, prioritizing suites that falsely protect critical behavior.',
+  infrastructure: 'Inventory infrastructure-as-code, container, orchestration, deployment and CI files; scan exposure, identity grants, secrets, pinning, resource limits and probes, ranking reachable production exposure and irreproducible deploys first.',
+  'data-integrity': 'Inventory every write path, ingestion entry point, consumer, batch/backfill job and stored data format; trace retry and redelivery behavior and multi-step writes, ranking silent duplication, loss and wrong results first.',
+  reliability: 'Inventory process entry points, signal handling, health endpoints, queues, workers and scheduled jobs; trace shutdown, restart, overload and multi-instance behavior, ranking dropped work and outage amplification first.',
+  privacy: 'Inventory personal and sensitive fields in schemas and payloads, then trace them to logs, errors, analytics, caches, exports, third-party calls and deletion paths; rank exposure already happening over missing governance.',
+  'cost-efficiency': 'Inventory metered dependencies (paid APIs, model providers, cloud storage/query/compute, egress) and their call sites, schedules and retry paths; rank spend by frequency times unit cost and growth with usage.',
 });
 
 export function auditQualityInstructions(taskType) {
@@ -85,7 +90,25 @@ export function parseAuditQualityReport(summary, category) {
 
 export const AUDIT_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
 
-export function summarizeAppQuality(records = [], now = Date.now()) {
+/** Whether an assessment taken at `assessedAt` still counts at `now` (not future-dated, not older than the window). */
+export function isFreshAssessment(assessedAt, now = Date.now()) {
+  const age = now - Date.parse(assessedAt);
+  return Number.isFinite(age) && age >= 0 && age <= AUDIT_FRESHNESS_MS;
+}
+
+/**
+ * Roll the newest measurement per category into the app's quality summary.
+ *
+ * `inapplicable` maps category → reason for categories this repository cannot
+ * have findings for (from `resolveQualityChecks`; the caller supplies it only
+ * where it can afford the repository scan). A category is inapplicable when that
+ * map names it OR its own fresh report says `not-applicable` — unless it holds
+ * a fresh rated assessment anyway, which is evidence that it does apply.
+ * `applicableCategories` is the honest denominator: a backend API is not
+ * "3 of 30 rated" because seven UI audits have nothing to look at.
+ * `totalCategories` keeps its catalog-size meaning for existing readers.
+ */
+export function summarizeAppQuality(records = [], now = Date.now(), { inapplicable = {} } = {}) {
   const normalizedRecords = records.map(record => ({
     ...record,
     category: normalizeAuditTaskType(record.category),
@@ -95,16 +118,25 @@ export function summarizeAppQuality(records = [], now = Date.now()) {
     const report = auditQualityReportSchema.safeParse(record?.report);
     const valid = report.success && report.data.category === id;
     const assessedAt = record?.assessedAt;
-    const age = now - Date.parse(assessedAt);
-    const stale = valid && (!Number.isFinite(age) || age < 0 || age > AUDIT_FRESHNESS_MS);
-    return { id, label: definition.label, ...(valid ? report.data : { score: null, coverage: 'unavailable' }), assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale };
+    const stale = valid && !isFreshAssessment(assessedAt, now);
+    const contributes = valid && !stale && report.data.coverage === 'broad' && report.data.confidence !== 'low' && report.data.score !== null;
+    // Only this install's own ruling, as the dispatch gate reads it: a peer's
+    // or a release snapshot's describes a different checkout of the repository.
+    const local = !record?.sourcePeerId && !record?.sourcePeerName;
+    const reportedNotApplicable = valid && !stale && local && report.data.coverage === 'not-applicable';
+    const detectedReason = Object.hasOwn(inapplicable, id) ? inapplicable[id] : null;
+    const applicable = contributes || !(reportedNotApplicable || detectedReason);
+    const inapplicableReason = applicable ? null
+      : detectedReason || 'the latest audit reported this category as not applicable';
+    return { id, label: definition.label, ...(valid ? report.data : { score: null, coverage: 'unavailable' }), assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason };
   });
-  const rated = categories.filter(c => !c.stale && c.coverage === 'broad' && c.confidence !== 'low' && c.score !== null);
+  const rated = categories.filter(c => c.contributes);
   return {
     score: rated.length ? Math.round(rated.reduce((sum, c) => sum + c.score, 0) / rated.length) : null,
     ratedCategories: rated.length,
     totalCategories: categories.length,
-    categories,
+    applicableCategories: categories.filter(c => c.applicable).length,
+    categories: categories.map(({ contributes: _contributes, ...category }) => category),
   };
 }
 
@@ -153,4 +185,8 @@ export function compareQualityRecords(a, b) {
 
 export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({
   repository: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  // The categories the requesting install can parse, comma-separated. Absent on
+  // a request from an install that predates it — see FEDERATION_LEGACY_CATEGORIES.
+  categories: z.string().max(4000).regex(/^[a-z0-9-]+(,[a-z0-9-]+)*$/).optional()
+    .transform(value => (value ? value.split(',') : undefined)),
 });

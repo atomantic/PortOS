@@ -334,6 +334,17 @@ export function mintRouteIds({ harnessId, kind, modes, taken }) {
  * so the spawner and `providerConnectionProfile` classify it onto that service:
  * the runtime's `*Backed` boolean, or `gatewayBacked: '<id>'`. Slotstream and
  * a plain API endpoint carry none, exactly as {@link connectionKindMarkers}.
+ *
+ * Written unconditionally, including onto a direct `type: 'api'` record — the
+ * round-trip contract `materializeRoute` owes (`routeDescribesService`) needs
+ * it there too: `localRuntimeKind`'s id/port fallback only covers `ollama` /
+ * `lmstudio` (by id, name or default port) and `mtplx` (by id alone, and only
+ * when the record's id is literally `mtplx`), never `llama` / `vllm` /
+ * `sglang`, and a freshly minted direct record's id is `direct.api@<slug>`,
+ * not the shipped sample's own id. A direct API preset's DRIFT check is what
+ * ignores this marker instead (`derivedPresetDrift`, #8159) — the shipped
+ * `ollama` / `lmstudio` / `mtplx` samples predate the graph and never carried
+ * one, but nothing on the direct API path reads it either way.
  */
 const serviceMarkers = (definition, { wrapper }) => {
   if (definition.localRuntime) return connectionKindMarkers(definition.localRuntime) || {};
@@ -374,6 +385,7 @@ const serviceConnectionKind = ({ definition, slug }) =>
  *   - `SERVICE_ENDPOINT_REQUIRED` — the binding needs a base URL the instance
  *     does not declare (a local daemon's port is an install-specific fact)
  *   - `SERVICE_CREDENTIAL_REQUIRED` — the program refuses to start without one
+ *     (a binding's `optionalOnPlans` names the plans it starts keyless on)
  *   - `SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED` — the instance's credential is
  *     minted by a bootstrap CLI at spawn, and none was supplied
  *
@@ -463,7 +475,8 @@ export function materializeRouteOutcome({
   const credentialEnvName = credentialVia === 'gatewayEnv'
     ? definition.gateway.apiKeyEnv
     : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
-  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap';
+  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap'
+    && !credential.optionalOnPlans?.includes(instance.plan);
   if (credentialRequired && apiKey === '') {
     return refuse('SERVICE_CREDENTIAL_REQUIRED',
       `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);

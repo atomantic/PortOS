@@ -49,6 +49,14 @@ const AUDIT_TEMPLATE_WITH_TOKEN = [
 ].join('\n');
 
 const promptTemplate = vi.hoisted(() => ({ body: null }));
+// Per-type applicability verdicts; absent = applies. The repository scan that
+// produces them is covered in appQualitySchedule.test.js.
+const applicability = vi.hoisted(() => ({ inapplicable: {} }));
+vi.mock('./appQualitySchedule.js', () => ({
+  resolveAuditApplicability: vi.fn(async (_app, taskType) => (applicability.inapplicable[taskType]
+    ? { applicable: false, reason: applicability.inapplicable[taskType] }
+    : { applicable: true, reason: null })),
+}));
 
 vi.mock('./taskPromptService.js', () => ({
   getTaskPrompt: vi.fn(async () => promptTemplate.body),
@@ -165,6 +173,28 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
   beforeEach(() => {
     vi.clearAllMocks();
     promptTemplate.body = AUDIT_TEMPLATE;
+    applicability.inapplicable = {};
+  });
+
+  it('bails out before generating an audit that cannot apply, advancing the cadence', async () => {
+    applicability.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
+    const { recordExecution } = await import('./taskSchedule.js');
+    expect(await generate('mobile-responsive')).toBeNull();
+    expect(recordExecution).toHaveBeenCalledWith('mobile-responsive', 'app-1');
+    // A sibling audit that does apply still generates.
+    expect(await generate('reliability')).not.toBeNull();
+  });
+
+  it('runs an inapplicable audit the user explicitly chose: an override or a manual Run', async () => {
+    applicability.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    // An on-demand request (a manual Run) is an explicit choice and is not gated —
+    // whether the drain serves it or idle review steals it.
+    expect(await generate('mobile-responsive', { skipPreconditions: true })).not.toBeNull();
+    expect(await generate('mobile-responsive', { onDemand: true })).not.toBeNull();
+    // The schedule form's recorded override lets the scheduled lane run it too.
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { runInapplicableAudit: true } });
+    expect(await generate('mobile-responsive')).not.toBeNull();
   });
 
   it.each(AUDIT_TYPES)('%s — file-issues mode renders no commit/push/PR/auto-merge directive', async (taskType) => {

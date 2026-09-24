@@ -23,7 +23,7 @@ import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest, appSchema, appUpdateSchema } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { usesPm2 } from '../../services/streamingDetect.js';
+import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
@@ -35,8 +35,8 @@ const router = Router();
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
-  const { days, repository } = validateRequest(appQualityFederationQuerySchema, req.query);
-  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository);
+  const { days, repository, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories);
   if (!payload) throw new ServerError('Quality sharing requires a registered enabled sync peer and a known repository', {
     status: 403,
     code: 'PEER_PULL_FORBIDDEN',
@@ -136,7 +136,13 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     hasSubmodules = gitmodules;
   }
 
-  const [enrichedApp] = includeQuality === 'true' ? await enrichAppsWithQuality([app]) : [app];
+  // The detail read alone scans the checkout for applicability (cached per repo),
+  // so the Quality tab's denominator and runner skip audits that cannot apply.
+  const [enrichedApp] = includeQuality === 'true'
+    ? await enrichAppsWithQuality([app], {
+      resolveApplicability: async (target) => (await import('../../services/appQualitySchedule.js')).inapplicableAuditReasons(target),
+    })
+    : [app];
   res.json({ ...enrichedApp, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
 }));
 
@@ -151,6 +157,7 @@ router.post('/', asyncHandler(async (req, res, next) => {
   }
 
   const app = await appsService.createApp(data);
+  notifyAppsChanged('create', app.id);
   res.status(201).json(app);
 }));
 
@@ -220,10 +227,12 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
 
   if (liUpdate !== undefined) {
     const merged = await appsService.updateAppLayeredIntelligence(req.params.id, liUpdate);
+    notifyAppsChanged('update', req.params.id);
     res.json(merged || app);
     return;
   }
 
+  notifyAppsChanged('update', req.params.id);
   res.json(app);
 }));
 
@@ -259,7 +268,7 @@ router.post('/:id/archive', asyncHandler(async (req, res) => {
   }
 
   console.log(`📦 Archived app: ${app.name}`);
-  notifyAppsChanged('archive');
+  notifyAppsChanged('archive', app.id);
   res.json(app);
 }));
 
@@ -272,7 +281,7 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
   }
 
   console.log(`📤 Unarchived app: ${app.name}`);
-  notifyAppsChanged('unarchive');
+  notifyAppsChanged('unarchive', app.id);
   res.json(app);
 }));
 

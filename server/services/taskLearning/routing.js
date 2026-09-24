@@ -2,7 +2,8 @@
  * Task Learning — heuristic routing & scheduling decisions
  *
  * The "read" side of the learning data that drives runtime decisions:
- * priority multipliers, model-tier suggestions, routing-accuracy matrices,
+ * priority multipliers, advisory model-tier suggestions (reported in the CoS
+ * Learning view, never applied at dispatch — #8149), routing-accuracy matrices,
  * adaptive cooldowns, skip/rehabilitation gating, and per-task-type
  * confidence tiers. None of these mutate the store except the
  * rehabilitation path, which delegates the actual reset to the metrics
@@ -19,12 +20,13 @@ import { computeCorrelationQuality, isCorrelationProven } from './correlationQua
  * that both clear the high-success threshold: prefer the cheapest tier that
  * still works well.
  *
- * The keys here are whatever `selectModelForTask` records as `tier`
- * (agentModelSelection.js → agentLifecycle.js `modelTier`), which is a mixed
- * namespace: the literal tiers (`light`/`default`/`medium`/`heavy`) AND the
- * thinking-level names from thinkingLevels.js (`off`/`minimal`/`low`/`medium`/
- * `high`/`xhigh`, where `minimal`/`low` are local-preferred and therefore the
- * cheapest, and `high`/`xhigh` map to provider-heavy/opus). An unknown name
+ * The keys here are whatever `selectModelForTask` recorded as `tier`
+ * (agentModelSelection.js → agentLifecycle.js `modelTier`). Today that is a
+ * literal tier (`light`/`default`/`medium`/`heavy`/`ultra`) or
+ * `user-specified`, but learning data recorded before #8149 also carries the
+ * retired thinking-level names (`off`/`minimal`/`low`/`medium`/`high`/
+ * `xhigh`, where `minimal`/`low` were local-preferred and therefore the
+ * cheapest, and `high`/`xhigh` mapped to the provider's heavy model). An unknown name
  * (e.g. `user-specified`, or a future tier) must NOT be treated as cheap, or
  * the "prefer lightest" logic would pick it over a known-light tier — so the
  * fallback ranks unknowns as heaviest.
@@ -64,6 +66,20 @@ const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low', 'ultra']);
  * never-flaggable tier as "predicted safe" would skew the global gauge (#2344).
  */
 export const isNonRoutableLearnedTier = (tier) => NON_ROUTABLE_LEARNED_TIERS.has(tier);
+
+/**
+ * A recorded tier name → the tier a user can actually pin today, or null.
+ * Learning data from before #8149 carries the retired thinking-level names;
+ * pinning one (`high`) would be read as a literal model id, so advice maps them
+ * onto the tier they resolved to (`off` → the provider default, `high`/`xhigh`
+ * → heavy). `user-specified` and the local-only levels name no pinnable tier,
+ * so they never appear as advice — their history stays in the matrix.
+ */
+const ADVISORY_TIERS = Object.freeze({
+  light: 'light', medium: 'medium', heavy: 'heavy', ultra: 'ultra', default: 'default',
+  off: 'default', high: 'heavy', xhigh: 'heavy',
+});
+const advisoryTier = (tier) => (Object.hasOwn(ADVISORY_TIERS, tier) ? ADVISORY_TIERS[tier] : null);
 
 /** Minimum success rate (%) for a tier to count as "proven" for a task type. */
 const HIGH_SUCCESS_THRESHOLD = 80;
@@ -253,15 +269,24 @@ export async function getTaskTypePriorityMultiplier(taskType) {
 /**
  * Suggest model tier based on historical performance for a task type
  * Enhanced with negative signal awareness: avoids tiers that consistently fail
- * and prefers tiers with proven success for the task type
+ * and prefers tiers with proven success for the task type.
+ *
+ * ADVISORY ONLY (#8149): surfaced per task type by `getRoutingAccuracy` for the
+ * CoS Learning view. Dispatch never reads it — a tier the user did not ask for
+ * silently replaced a task's configured default model (#8148).
  */
 export async function suggestModelTier(taskType) {
   // Sandboxed fallback (issue #2333): the `external/untyped` bucket aggregates
   // heterogeneous work, so its tier success rates are meaningless — never let it
-  // drive a model-tier suggestion. Let the selector fall through to its default.
+  // drive a model-tier suggestion.
   if (isSandboxedTaskType(taskType)) return null;
+  return suggestModelTierFrom(await loadLearningData(), taskType);
+}
 
-  const data = await loadLearningData();
+// `suggestModelTier` over an already-loaded snapshot, so a caller walking every
+// task type (getRoutingAccuracy) loads — and clones — the store once, not per row.
+function suggestModelTierFrom(data, taskType) {
+  if (isSandboxedTaskType(taskType)) return null;
 
   // Auto-adjustment aggressiveness gate (issue #2344): the enriched failure
   // signal steers routing more aggressively only once the correlation-quality
@@ -475,6 +500,17 @@ export async function getRoutingAccuracy() {
     }
   }
   misroutes.sort((a, b) => a.successRate - b.successRate);
+
+  // Advice, not routing: the tier each task type's history recommends, for the
+  // user to pin on the task or schedule if they agree.
+  for (const entry of matrix) {
+    const suggestion = suggestModelTierFrom(data, entry.taskType);
+    const tier = advisoryTier(suggestion?.suggested);
+    const avoidTiers = [...new Set((suggestion?.avoidTiers || []).map(advisoryTier).filter(Boolean))];
+    if (tier || avoidTiers.length > 0) {
+      entry.suggestion = { tier, avoidTiers, reason: suggestion.reason || null };
+    }
+  }
 
   return { matrix, tierOverview, misroutes, totalMisroutes: misroutes.length };
 }

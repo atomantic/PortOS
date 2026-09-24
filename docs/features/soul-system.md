@@ -28,7 +28,7 @@ LLMs can embody specific personas, but creating comprehensive identity documents
 
 - Soul context automatically injected into agent prompts when enabled
 - Settings control `autoInjectToCoS` and `maxContextTokens`
-- Prompt template `cos-agent-briefing.md` includes `{{soulSection}}`
+- API-provider CoS agents receive it in their briefing (built by `agentPromptBuilder.js`; there is no editable briefing template)
 
 ## Directory Structure
 

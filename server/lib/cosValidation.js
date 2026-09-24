@@ -941,6 +941,11 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // Audit-type toggle: file tracker issues (no code) vs implement the fix.
   // Dispatch stamps `noCodeOutput` when this is true. See server/lib/auditCatalog.js.
   'fileIssues',
+  // The user chose to run this audit although the repository scan says it
+  // cannot apply (a UI audit of a repo with no UI). Set by the quality schedule
+  // form and a single-check quality run; without it, the scheduled and batch
+  // lanes skip an inapplicable audit before spawning an agent.
+  'runInapplicableAudit',
   // Dispatch gate: when true, the generated system task is always awaiting-
   // approve — including an explicit Run Now. Absent/false keeps the default
   // (Run Now consents; unattended runs follow confidence/safety-kind).

@@ -11,6 +11,13 @@ import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
+import { parseTsMs } from '../lib/lwwTimestamp.js';
+import { isTombstoned, mergeTombstones, pruneTombstones } from '../lib/tombstones.js';
+import {
+  DAILY_LOG_TOMBSTONES_KEY,
+  dailyLogEventLiveStamp,
+  queueDailyLogWrite,
+} from './meatspaceDailyLog.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -111,7 +118,7 @@ const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
 const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
 const MEATSPACE_FILES = {
-  'daily-log.json': { arrayKey: 'entries', idField: 'date', mergeRecord: mergeMeatspaceDailyLogEntry },
+  'daily-log.json': { type: 'daily-log' }, // mergeDailyLogFile
   'blood-tests.json': { arrayKey: 'tests', idField: 'date' },
   'epigenetic-tests.json': { arrayKey: 'tests', idField: 'date' },
   'eyes.json': { arrayKey: 'exams', idField: 'date' },
@@ -141,13 +148,53 @@ const mergeNonEmptyObject = (local, remote) => {
   return merged;
 };
 
-const mergeUniqueRecords = (local, remote) => {
+const logEventId = (record) => (
+  isPlainObject(record) && typeof record.id === 'string' && record.id ? record.id : null
+);
+
+const logEventStampMs = (record) => parseTsMs(record.updatedAt) ?? parseTsMs(record.createdAt) ?? -Infinity;
+
+// Pick one of two copies of the same logged event. The order is total, so the
+// winner is the same whichever copy is local and whichever peer syncs first.
+// Newer `updatedAt` wins. On equal stamps the larger `count` wins: a peer from
+// before #8143 adds a same-product log to an existing row in place without
+// restamping it, and that increment is a real drink/item. Then canonical text.
+const preferLogEventCopy = (a, b) => {
+  const stampDiff = logEventStampMs(a) - logEventStampMs(b);
+  if (stampDiff !== 0 && !Number.isNaN(stampDiff)) return stampDiff > 0 ? a : b;
+  const countDiff = (Number(a.count) || 1) - (Number(b.count) || 1);
+  if (countDiff !== 0) return countDiff > 0 ? a : b;
+  return canonicalStringify(a) >= canonicalStringify(b) ? a : b;
+};
+
+// Merge one day's alcohol drinks or nicotine items (#8143). A row with an `id` is
+// one logged event: copies of it collapse to the preferred copy, and two
+// identical rows with different ids stay two events. A row without an `id` was
+// logged before events had identity, so it keeps the old content-keyed dedupe —
+// its identical twin on a peer is the same row synced earlier, not a new event —
+// and is dropped once an edit has turned it into an identified event (`replaces`).
+const mergeDailyLogEvents = (local, remote) => {
+  const records = [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])];
   const merged = [];
-  const seen = new Set();
-  for (const record of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+  const indexById = new Map();
+  const seenLegacy = new Set(
+    records.filter((r) => logEventId(r) && isPlainObject(r.replaces)).map((r) => canonicalStringify(r.replaces)),
+  );
+  for (const record of records) {
+    const id = logEventId(record);
+    if (id) {
+      const index = indexById.get(id);
+      if (index === undefined) {
+        indexById.set(id, merged.length);
+        merged.push(record);
+      } else {
+        merged[index] = preferLogEventCopy(merged[index], record);
+      }
+      continue;
+    }
     const key = canonicalStringify(record);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seenLegacy.has(key)) continue;
+    seenLegacy.add(key);
     merged.push(record);
   }
   return merged;
@@ -160,7 +207,7 @@ const mergeDailyLogCategory = (local, remote, listKey, totalKey, totalForItem) =
   const hasList = Array.isArray(localCategory[listKey]) || Array.isArray(remoteCategory[listKey]);
   if (!hasList) return merged;
 
-  const records = mergeUniqueRecords(localCategory[listKey], remoteCategory[listKey]);
+  const records = mergeDailyLogEvents(localCategory[listKey], remoteCategory[listKey]);
   merged[listKey] = records;
   if (records.length > 0) {
     merged[totalKey] = roundToHundredth(records.reduce((total, record) => total + totalForItem(record), 0));
@@ -209,6 +256,95 @@ function mergeMeatspaceDailyLogEntry(local, remote) {
     merged.body = mergeNonEmptyObject(localEntry.body, remoteEntry.body);
   }
   return merged;
+}
+
+const DAILY_LOG_EVENT_LISTS = [
+  { category: 'alcohol', listKey: 'drinks', totalKey: 'standardDrinks', totalFor: standardDrinksFor },
+  { category: 'nicotine', listKey: 'items', totalKey: 'totalMg', totalFor: nicotineMilligramsFor },
+];
+
+// Whole-log pass over identified alcohol/nicotine events (#8154), run after the
+// per-date merge on entries already sorted by date:
+//  - A date move keeps the event's `id` and restamps it, so copies of one id on
+//    several dates collapse to the single copy `preferLogEventCopy` picks, on
+//    whichever date that copy lives. That order is total, so the result does not
+//    depend on which peer is local — no per-date tombstone is needed for a move.
+//  - A tombstoned id is dropped unless its live stamp (newer of createdAt /
+//    updatedAt) is strictly newer than the deletion, i.e. edited after it.
+// Rows without an `id` are left alone: they have no identity to match.
+// Returns the surviving tombstones (pruned of ones an edit superseded).
+const reconcileDailyLogEvents = (entries, tombstones) => {
+  const liveStamps = [];
+  for (const { category, listKey, totalKey, totalFor } of DAILY_LOG_EVENT_LISTS) {
+    const winners = new Map();
+    for (const entry of entries) {
+      for (const record of entry?.[category]?.[listKey] ?? []) {
+        const id = logEventId(record);
+        if (!id) continue;
+        const current = winners.get(id);
+        winners.set(id, current ? preferLogEventCopy(current, record) : record);
+      }
+    }
+    for (const entry of entries) {
+      const list = entry?.[category]?.[listKey];
+      if (!Array.isArray(list)) continue;
+      const kept = list.filter((record) => {
+        const id = logEventId(record);
+        if (!id) return true;
+        if (winners.get(id) !== record) return false;
+        return !isTombstoned(tombstones, id, dailyLogEventLiveStamp(record), 'id');
+      });
+      for (const record of kept) {
+        const id = logEventId(record);
+        if (id) liveStamps.push({ id, stamp: dailyLogEventLiveStamp(record) });
+      }
+      if (kept.length === list.length) continue;
+      if (kept.length === 0) {
+        delete entry[category];
+      } else {
+        entry[category] = {
+          ...entry[category],
+          [listKey]: kept,
+          [totalKey]: roundToHundredth(kept.reduce((total, record) => total + totalFor(record), 0)),
+        };
+      }
+    }
+  }
+  return pruneTombstones(tombstones, liveStamps, { keyField: 'id', timestampField: 'stamp' });
+};
+
+// Merge a peer's whole `daily-log.json` into the local one. Pure: returns the
+// file to persist. Tombstones union in both directions (#8154) before the
+// reconcile pass, so a deletion made on either side removes the event on both.
+function mergeDailyLogFile(local, remote) {
+  const localFile = isPlainObject(local) ? local : {};
+  const remoteFile = isPlainObject(remote) ? remote : {};
+  const { merged } = mergeArraysByKey(
+    Array.isArray(localFile.entries) ? localFile.entries : [],
+    Array.isArray(remoteFile.entries) ? remoteFile.entries : [],
+    'date',
+    null,
+    mergeMeatspaceDailyLogEntry,
+  );
+  // Shallow copies: the reconcile pass replaces or deletes a category on an
+  // entry, and must not do that to the caller's local objects.
+  const entries = merged.map((entry) => (isPlainObject(entry) ? { ...entry } : entry));
+  entries.sort((a, b) => (a?.date || '').localeCompare(b?.date || ''));
+  const { merged: unionTombstones } = mergeTombstones(
+    localFile[DAILY_LOG_TOMBSTONES_KEY],
+    remoteFile[DAILY_LOG_TOMBSTONES_KEY],
+    { keyField: 'id' },
+  );
+  const tombstones = reconcileDailyLogEvents(entries, unionTombstones);
+  const mergedFile = {
+    ...remoteFile,
+    ...localFile,
+    entries,
+    lastEntryDate: entries[entries.length - 1]?.date || null,
+  };
+  if (tombstones.length > 0) mergedFile[DAILY_LOG_TOMBSTONES_KEY] = tombstones;
+  else delete mergedFile[DAILY_LOG_TOMBSTONES_KEY];
+  return mergedFile;
 }
 
 /**
@@ -404,6 +540,22 @@ async function applyMeatspaceRemote(remoteData) {
     if (!remoteFile) continue;
 
     const filePath = join(MEATSPACE_DIR, filename);
+
+    if (config.type === 'daily-log') {
+      // Through the same write queue as the local drink/nicotine/body writers,
+      // so a sync cannot overwrite a delete (and its tombstone) made between
+      // this read and write.
+      const written = await queueDailyLogWrite(async () => {
+        const local = await readJSONFile(filePath, null, { strict: true });
+        const merged = mergeDailyLogFile(local, remoteFile);
+        if (canonicalStringify(merged) === canonicalStringify(local)) return false;
+        await atomicWrite(filePath, merged);
+        return true;
+      });
+      if (written) totalApplied++;
+      continue;
+    }
+
     const local = await readJSONFile(filePath, null, { strict: true });
 
     if (config.type === 'object-lww') {
@@ -416,21 +568,12 @@ async function applyMeatspaceRemote(remoteData) {
       // Array merge
       const localArr = local?.[config.arrayKey] || [];
       const remoteArr = remoteFile[config.arrayKey] || [];
-      const { merged, changed } = mergeArraysByKey(
-        localArr,
-        remoteArr,
-        config.idField,
-        null,
-        config.mergeRecord,
-      );
+      const { merged, changed } = mergeArraysByKey(localArr, remoteArr, config.idField);
 
       if (changed) {
         // Sort by idField (usually date)
         merged.sort((a, b) => (a[config.idField] || '').localeCompare(b[config.idField] || ''));
         const mergedFile = { ...(remoteFile || {}), ...(local || {}), [config.arrayKey]: merged };
-        if (filename === 'daily-log.json') {
-          mergedFile.lastEntryDate = merged[merged.length - 1]?.[config.idField] || null;
-        }
         await atomicWrite(filePath, mergedFile);
         totalApplied++;
       }
@@ -906,7 +1049,7 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   goals: [],
   character: [],
   digitalTwin: [],
-  meatspace: [],
+  meatspace: ['meatspace'],
   videoHistory: [],
   storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
   // Per-instance digests replaced whole under an LWW stamp, with every field

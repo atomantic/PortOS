@@ -744,6 +744,46 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a wrapper it cannot fully read) is worse, and a retraction that reaches
   // nobody is still better than one that corrupts.
   eidoverseFoundations: 3,
+  // v1 = identified daily-log events (#8143). The meatspace snapshot's
+  // `daily-log.json` alcohol drinks and nicotine items now carry `id` +
+  // `createdAt`/`updatedAt`; a v1 receiver merges them by id (newest copy wins)
+  // so identical independently-logged events stay distinct and a replay stays
+  // idempotent. NOT a record kind — it gates the 60s meatspace snapshot in
+  // dataSync `applyRemote` (SNAPSHOT_CATEGORY_SCHEMA_KEYS), so it rides
+  // NON_RECORD_SCHEMA_CATEGORIES below.
+  //
+  // Mixed versions are deliberately NOT blocked, because neither direction can
+  // corrupt the other and pausing would strand drinks logged meanwhile:
+  //  - v0 → v1: a v0 payload is `behind` (never gated). Its rows without an `id`
+  //    keep the old content-keyed dedupe; copies of an id'd row that the v0 peer
+  //    bumped in place (it folds a same-product log into the existing row without
+  //    restamping) resolve to the larger `count` on equal stamps.
+  //  - v1 → v0: a v0 receiver scopes meatspace to no schema keys, so it cannot
+  //    gate; it unions the id'd rows by content and keeps them verbatim.
+  //    Its content union still keeps an edited row beside the unedited copy (it
+  //    cannot read `replaces`) — the same double row an edit between two v0
+  //    peers has always produced, cleared once that peer upgrades.
+  //
+  // Still v1 after #8154, which added deletes and date moves for id'd events:
+  // a top-level `eventTombstones: [{ id, deletedAt }]` list (unioned both ways)
+  // and a whole-log pass that keeps one copy per id, on whichever date the
+  // newest copy lives. That is additive, and a bump would make every older
+  // receiver refuse ALL daily-log data, new drinks included. With a pre-#8154
+  // peer in the federation:
+  //  - It keeps a deleted or moved-away copy (it cannot read tombstones and
+  //    merges ids per date) and sends it back each cycle. A current receiver
+  //    drops that copy again — it is not newer than the tombstone, and the
+  //    moved copy's newer stamp wins the id — so only the old peer
+  //    double-counts, until it upgrades.
+  //  - It cannot strip tombstones from a current peer: the list is unioned, and
+  //    the old peer's own writes keep unknown top-level fields. Its own copy of
+  //    the list only refreshes when its local file lacks the key, so it may
+  //    send a stale subset back, which a union ignores.
+  // Rows without an `id` (logged before #8143) are still add-only: deleting
+  // or moving one does not reach peers.
+  // The key exists so the NEXT incompatible daily-log change can bump to 2 and
+  // have v1 receivers reject it.
+  meatspace: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -831,11 +871,15 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * The repository file format is versioned separately (`appQualitySnapshotFormat.js`)
  * and a file-schema change must not bump this wire version.
  *
+ * `meatspace` (#8143): the daily-log snapshot category, gated by dataSync
+ * `applyRemote` through SNAPSHOT_CATEGORY_SCHEMA_KEYS; meatspace is never a
+ * per-record push.
+ *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

@@ -6,11 +6,13 @@ const query = vi.fn();
 const getAppTaskTypeOverrides = vi.fn();
 const updateAppTaskTypeOverrides = vi.fn();
 const loadSchedule = vi.fn();
+const getAppById = vi.fn();
 
 vi.mock('fs/promises', () => ({ readdir: (...args) => readdir(...args) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGit(...args) }));
 vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
 vi.mock('./apps.js', () => ({
+  getAppById: (...args) => getAppById(...args),
   getAppTaskTypeOverrides: (...args) => getAppTaskTypeOverrides(...args),
   updateAppTaskTypeOverrides: (...args) => updateAppTaskTypeOverrides(...args),
 }));
@@ -21,6 +23,8 @@ const {
   buildQualitySchedulePlan,
   collectBusyOccupancies,
   detectRepoCapabilities,
+  inapplicableAuditReason,
+  resolveAuditApplicability,
   resolveQualityChecks,
 } = await import('./appQualitySchedule.js');
 
@@ -43,6 +47,44 @@ beforeEach(() => {
   loadSchedule.mockResolvedValue({ tasks: {} });
   readdir.mockResolvedValue([]);
   vi.spyOn(console, 'log').mockImplementation(() => {});
+});
+
+describe('audit applicability gate', () => {
+  it('bails out of a UI audit for a pure API repository, keeps the service lenses', async () => {
+    const app = appWith(NODE_SERVICE);
+    expect(await resolveAuditApplicability(app, 'mobile-responsive')).toEqual({ applicable: false, reason: expect.stringMatching(/no user interface/) });
+    expect(await resolveAuditApplicability(app, 'reliability')).toEqual({ applicable: true, reason: null });
+    // Infrastructure needs deployment config, which this service lacks.
+    expect((await resolveAuditApplicability(app, 'infrastructure')).applicable).toBe(false);
+  });
+
+  it('recognizes deployment configuration as infrastructure', async () => {
+    for (const file of ['infra/main.tf', 'Dockerfile', 'deploy/values.yaml', '.github/workflows/ci.yml', 'ecosystem.config.cjs', 'charts/api/Chart.yaml']) {
+      const { capabilities } = await detectRepoCapabilities(appWith(['package.json', file]));
+      expect(capabilities.infrastructure, file).toBe(true);
+    }
+  });
+
+  it('never gates non-audit work or an app without a checkout', async () => {
+    expect(await resolveAuditApplicability(appWith(NODE_SERVICE), 'claim-issue')).toEqual({ applicable: true, reason: null });
+    expect(await resolveAuditApplicability({ id: 'x', name: 'X' }, 'accessibility')).toEqual({ applicable: true, reason: null });
+    expect(execGit).not.toHaveBeenCalled();
+  });
+
+  it('honors the schedule form\'s per-app override on the sequencing lanes too', async () => {
+    const app = appWith(NODE_SERVICE, { taskTypeOverrides: { accessibility: { taskMetadata: { runInapplicableAudit: true } } } });
+    getAppById.mockResolvedValueOnce(app);
+    expect(await inapplicableAuditReason(app.id, 'accessibility')).toBeNull();
+  });
+
+  it('answers by app id for the sequencing lanes, and fails open when the app is unreadable', async () => {
+    const app = appWith(NODE_SERVICE);
+    getAppById.mockResolvedValueOnce(app);
+    expect(await inapplicableAuditReason(app.id, 'accessibility')).toMatch(/no user interface/);
+    getAppById.mockRejectedValueOnce(new Error('boom'));
+    expect(await inapplicableAuditReason(app.id, 'accessibility')).toBeNull();
+    expect(await inapplicableAuditReason(null, 'accessibility')).toBeNull();
+  });
 });
 
 describe('resolveQualityChecks', () => {
@@ -76,15 +118,23 @@ describe('resolveQualityChecks', () => {
   });
 
   it('lets an auditing agent that reported not-applicable overrule the path heuristics', async () => {
-    query.mockResolvedValue({ rows: [{ category: 'security', report: { coverage: 'not-applicable' } }] });
+    query.mockResolvedValue({ rows: [{ category: 'security', assessed_at: new Date().toISOString(), report: { coverage: 'not-applicable' } }] });
     const { checks } = await resolveQualityChecks(appWith(NODE_SERVICE));
     const security = checks.find(check => check.taskType === 'security');
     expect(security.applicable).toBe(false);
     expect(security.reason).toMatch(/previous audit/);
   });
 
+  // A repository that gained a UI (or a deployment manifest) since the ruling
+  // must get the audit back once the ruling ages out.
+  it('stops honoring a not-applicable ruling once it is older than the freshness window', async () => {
+    query.mockResolvedValue({ rows: [{ category: 'security', assessed_at: new Date(Date.now() - 31 * 86400000).toISOString(), report: { coverage: 'not-applicable' } }] });
+    const { checks } = await resolveQualityChecks(appWith(NODE_SERVICE));
+    expect(checks.find(check => check.taskType === 'security').applicable).toBe(true);
+  });
+
   it('recognizes a retired lifecycle category in stored applicability results', async () => {
-    query.mockResolvedValue({ rows: [{ category: 'react-lifecycle', report: { coverage: 'not-applicable' } }] });
+    query.mockResolvedValue({ rows: [{ category: 'react-lifecycle', assessed_at: new Date().toISOString(), report: { coverage: 'not-applicable' } }] });
     const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/App.jsx']));
     expect(checks.find(check => check.taskType === 'ui-lifecycle')).toMatchObject({
       applicable: false,
@@ -102,6 +152,11 @@ describe('resolveQualityChecks', () => {
     const { checks, complete } = await resolveQualityChecks({ id: 'skim', name: 'Skim', repoPath: '/repos/skim' });
     expect(complete).toBe(false);
     expect(checks.every(check => check.applicable)).toBe(true);
+    // A served UI port proves there is a UI, not that the skim saw everything:
+    // it must not turn the misses into "no tests / no deploy config".
+    const served = await resolveQualityChecks({ id: 'skim-ui', name: 'Skim UI', repoPath: '/repos/skim-ui', uiPort: 5555 });
+    expect(served.complete).toBe(false);
+    expect(served.checks.every(check => check.applicable)).toBe(true);
   });
 
   it('does not let one app’s uiPort decide a sibling app sharing the checkout', async () => {
@@ -186,6 +241,18 @@ describe('buildQualitySchedulePlan', () => {
 });
 
 describe('applyQualitySchedulePlan', () => {
+  // Without the recorded override the scheduled lane's applicability gate would
+  // skip, every week, a check the user deliberately selected.
+  it('records an override on a check selected although it does not apply, and clears it once it does', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({ security: { enabled: true, taskMetadata: { runInapplicableAudit: true, reviewer: 'codex' } } });
+    await applyQualitySchedulePlan(appWith(NODE_SERVICE), { taskTypes: ['accessibility', 'security'], claimBetween: false });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    expect(patches.accessibility.taskMetadata).toMatchObject({ runInapplicableAudit: true });
+    expect(patches.security.taskMetadata).not.toHaveProperty('runInapplicableAudit');
+    // Unrelated stored settings survive the merge.
+    expect(patches.security.taskMetadata).toMatchObject({ reviewer: 'codex' });
+  });
+
   it('retires a claim drain an earlier plan planted when the drain is switched off', async () => {
     getAppTaskTypeOverrides.mockResolvedValue({ 'claim-work': { enabled: true, interval: '0 6,14 * * *' } });
     const app = appWith(NODE_SERVICE);
@@ -232,7 +299,7 @@ describe('applyQualitySchedulePlan', () => {
   });
 
   it('writes each audit\u2019s catalog delivery default when the form states no preference', async () => {
-    const app = appWith(NODE_SERVICE);
+    const app = appWith([...NODE_SERVICE, 'client/App.jsx']);
     await applyQualitySchedulePlan(app, { taskTypes: ['security', 'ux'] });
     const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
     // security ships defaultFileIssues:false, ux ships true — a form-wide

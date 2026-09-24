@@ -62,15 +62,12 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 
 ## Model Selection Rules
 
-The `selectModelForTask` function routes tasks to appropriate model tiers:
+`selectModelForTask` runs a task on exactly what it was configured with:
 
-| Tier | Trigger | Example Tasks |
-|------|---------|---------------|
-| **heavy** | Critical priority, visual analysis, complex reasoning | Architect, refactor, security audit, long context |
-| **medium** | Standard development tasks, default | Most coding tasks, bug fixes, feature implementation |
-| **light** | Documentation-only tasks | Update README, write docs, format text |
+1. **An explicit model or tier** — the task's `metadata.model` (or an orchestration role's `model`). A tier (`light`/`medium`/`heavy`/`ultra`) resolves on the provider that actually runs the task, including a fallback provider.
+2. **Otherwise the provider's Default Model.**
 
-**Important**: Light model (haiku) is NEVER used for coding tasks. Tasks containing keywords like `fix`, `bug`, `implement`, `test`, `feature`, `api`, `component`, etc. are automatically routed to medium tier or higher.
+Nothing picks a tier automatically — not the description, priority, context size, or learning history (#8149). The Learning tab reports each task type's per-tier success rate and any tier its history suggests; pin that tier on the task or schedule to act on it. See [MODEL_TIERS.md](../MODEL_TIERS.md).
 
 ## Configuration
 
@@ -149,7 +146,6 @@ Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
 
 | Template | Purpose |
 |----------|---------|
-| cos-agent-briefing | Brief sub-agent on task |
 | cos-evaluate | Evaluate tasks and decide actions |
 | cos-report-summary | Generate daily summary |
 | cos-self-improvement | Analyze and suggest improvements |

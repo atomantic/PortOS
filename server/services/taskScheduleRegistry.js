@@ -165,6 +165,18 @@ export const createPrReviewerDefaultStages = () => ([
 // win when a schedule is loaded. A `feature` association is the exception: it
 // is code-owned and makes the task invisible and non-runnable while that
 // install-wide feature is disabled.
+/**
+ * The shared shape of an on-demand audit that files issues by default, with open
+ * issues + PRs preloaded so it dedups against in-flight work without spending its
+ * own forge calls. A factory, not a shared object: each type gets its own
+ * `taskMetadata`, so a write to one row can never leak into another.
+ */
+const fileIssuesAuditInterval = () => ({
+  type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null,
+  dataInputs: ['open-issues', 'open-pull-requests'],
+  taskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
+});
+
 export const DEFAULT_TASK_INTERVALS = {
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
@@ -311,15 +323,13 @@ export const DEFAULT_TASK_INTERVALS = {
   // do-replan audits PLAN.md after open PRs and stale branches have been cleaned up,
   // so the plan reflects what actually merged.
   'do-replan':           { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, runAfter: ['pr-reviewer', 'branch-reconcile'], taskMetadata: { useWorktree: true, openPR: true } },
-  // Writable — the v2 reference-watch prompt (PROMPT_VERSIONS['reference-watch'] = 2)
-  // instructs the agent to APPEND slug-tagged `[ref-watch-…]` checklist items to
-  // PLAN.md and commit them. `readOnly: true` would inject the "do not modify or
-  // commit files" guard into the system prompt and the agent would refuse to write
-  // the PLAN entries — defeating the whole flow. Worktree off because the task body
-  // itself reads from data/cos/reference-repos (managed clones the user can't
-  // accidentally clobber) and the PLAN.md write is small enough that the in-place
-  // commit on the source repo is simpler than a worktree round-trip. Mirrors the
-  // on-commit trigger path in referenceRepos.js#triggerReferenceAnalysis.
+  // Writable — the v4 reference-watch prompt records proposals through the
+  // resolved tracker instructions: PLAN.md commits checklist items, while forge
+  // trackers create issues. `readOnly: true` would inject the "do not modify or
+  // commit files" guard and prevent both paths. Worktree off because the task
+  // reads managed clones under data/cos/reference-repos and its PLAN.md write is
+  // small enough to commit in place. Mirrors the on-commit trigger path in
+  // referenceRepos.js#triggerReferenceAnalysis.
   // `readOnly` is coupled to PROMPT_VERSIONS['reference-watch'] — see
   // REFERENCE_WATCH_AUDITED_VERSION above; bumping the prompt version requires
   // re-auditing this default (a guard test in taskSchedule.test.js enforces it).
@@ -345,12 +355,20 @@ export const DEFAULT_TASK_INTERVALS = {
   // must not land a refactor) and on-demand until the user picks a cadence.
   // Open issues + PRs are preloaded so the agent dedups against in-flight
   // work without spending its own forge calls, the way module-hygiene does.
-  'better-complexity':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-cognitive-load':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-structural-drift':    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-runtime-safety':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-dependency-freedom':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'better-test-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-complexity':          fileIssuesAuditInterval(),
+  'better-cognitive-load':      fileIssuesAuditInterval(),
+  'better-structural-drift':    fileIssuesAuditInterval(),
+  'better-runtime-safety':      fileIssuesAuditInterval(),
+  'better-dependency-freedom':  fileIssuesAuditInterval(),
+  'better-test-quality':        fileIssuesAuditInterval(),
+  // Service and data-platform lenses (see AUDIT_DEFINITIONS). File-issues by
+  // default — their findings usually touch production configuration — with
+  // open issues + PRs preloaded for dedup like the do:better lanes above.
+  'infrastructure':             fileIssuesAuditInterval(),
+  'data-integrity':             fileIssuesAuditInterval(),
+  'reliability':                fileIssuesAuditInterval(),
+  'privacy':                    fileIssuesAuditInterval(),
+  'cost-efficiency':            fileIssuesAuditInterval(),
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },
@@ -553,6 +571,11 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
   'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',
+  'infrastructure': 'Infrastructure & deployment — IaC, containers, orchestration and CI: exposure, identity grants, secrets, pinning, limits; file issues (default) or implement fixes',
+  'data-integrity': 'Data integrity — idempotent ingestion, atomic writes, consistency, schema evolution of stored data; file issues (default) or implement fixes',
+  'reliability': 'Reliability — graceful shutdown, health/readiness, backpressure, job leasing, mixed-version deploys; file issues (default) or implement fixes',
+  'privacy': 'Privacy & data governance — personal data in logs/exports/third parties, minimization, retention and erasure; file issues (default) or implement fixes',
+  'cost-efficiency': 'Cost efficiency — metered API/model calls, unbounded scans, storage tiers, over-provisioning; file issues (default) or implement fixes',
   'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',

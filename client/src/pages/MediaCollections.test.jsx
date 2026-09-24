@@ -4,6 +4,26 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router';
 import { typeSettled } from '../test/settledInput';
 
+// ── Spy on the shared cancelable-debounce boundary ───────────────────────────
+// Wraps the REAL hook (not a stand-in) so its actual schedule/cancel
+// semantics stay in force — a spy that merely recorded a call, without also
+// exercising real cancellation, would pass even if `cancel()` were a no-op.
+// This lets a rendered test assert both that MediaCollections calls cancel
+// before navigating to a newly-created collection AND that doing so actually
+// stops the pending query→URL mirror from firing afterward (#8187) — a
+// stale write left free to fire after that navigation can land later and
+// clobber the detail route back to the list route.
+const { cancelQueryMirrorSpy } = vi.hoisted(() => ({ cancelQueryMirrorSpy: vi.fn() }));
+vi.mock('../hooks/useCancelableDebounce', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    default: (...args) => {
+      const [schedule, cancel] = actual.default(...args);
+      return [schedule, (...cancelArgs) => { cancelQueryMirrorSpy(...cancelArgs); return cancel(...cancelArgs); }];
+    },
+  };
+});
+
 // ── Mock API calls ───────────────────────────────────────────────────────────
 vi.mock('../services/api', () => ({
   listMediaCollections: vi.fn().mockResolvedValue([
@@ -88,6 +108,7 @@ function renderPage(entry = '/media/collections') {
 describe('MediaCollections', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cancelQueryMirrorSpy.mockClear();
     // clearAllMocks resets calls, not implementations — restore the shared
     // fixture so a test that emptied it can't leak into the next one.
     mockUnsortedItems = [{ kind: 'image', ref: 'loose.png', addedAt: '2024-01-02' }];
@@ -225,6 +246,37 @@ describe('MediaCollections', () => {
     // pass on a half-typed name — assert what was actually sent.
     await waitFor(() => expect(createMediaCollection).toHaveBeenCalledWith({ name: 'Fresh Bucket' }, { silent: true }));
     await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4'));
+  });
+
+  it('cancels the pending query-mirror write before navigating to a new collection', async () => {
+    // #8187 regression: the 300ms query→URL mirror is armed on mount (and
+    // re-armed on every keystroke) and is still pending — not yet fired —
+    // when create resolves. React's own unmount cleanup for that timer runs
+    // asynchronously relative to the `navigate()` call in `handleCreate`
+    // (it waits for the router to re-render and commit), so under load the
+    // stale write can still land AFTER the navigation and clobber the
+    // detail route back to the list route. Creating a collection must
+    // cancel the pending mirror synchronously, before navigating, rather
+    // than relying on that unmount race to resolve in its favor.
+    const { createMediaCollection } = await import('../services/api');
+    createMediaCollection.mockResolvedValueOnce({ id: 'col-4', name: 'Fresh Bucket', items: [] });
+    const user = userEvent.setup();
+    // An active search keeps the mirror's debounce genuinely armed (a
+    // change from the mounted `?q=alpha`) at the moment create fires.
+    renderPage('/media/collections?q=alpha');
+    await waitFor(() => screen.getByText('Alpha'));
+    expect(cancelQueryMirrorSpy).not.toHaveBeenCalled();
+    await typeSettled(user, screen.getByLabelText('New collection name'), 'Fresh Bucket');
+    await user.click(screen.getByRole('button', { name: /create/i }));
+    await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4'));
+    expect(cancelQueryMirrorSpy).toHaveBeenCalled();
+
+    // The cancel call is only meaningful if it actually stops the mirror
+    // from firing — wait past its 300ms delay (real timers; the mock above
+    // wraps the REAL hook) and confirm the detail route is still current
+    // rather than having been clobbered back to the list route.
+    await new Promise((resolve) => { setTimeout(resolve, 350); });
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4');
   });
 
   it('preserves sibling URL params when one filter changes', async () => {

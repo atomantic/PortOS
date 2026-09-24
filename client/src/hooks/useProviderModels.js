@@ -5,6 +5,7 @@ import {
   filterSelectableModels,
   isProviderHardwareCompatible,
   isProviderModelHardwareCompatible,
+  isTuiProvider,
   providerModelList,
   selectableModelsForProvider,
   withStaleAntigravityPin,
@@ -27,6 +28,18 @@ const sourceModels = (provider, withEffort) => {
   const models = providerModelList(provider);
   return withEffort ? selectableModelsForProvider(provider, models) : models;
 };
+
+/**
+ * The provider a picker opens on. With an Auto option (`allowDefault`), only the
+ * active provider or nothing. Without one, the configured active provider, else
+ * the first TUI provider (the shipped agent default), else the first listed —
+ * never simply whichever provider the registry happens to list first.
+ */
+function preferredInitialProvider(providers, activeProviderId, { allowDefault = false } = {}) {
+  const active = providers.find(provider => provider.id === activeProviderId);
+  if (active || allowDefault) return active || null;
+  return providers.find(isTuiProvider) || providers[0] || null;
+}
 
 /**
  * Hook for loading AI providers and managing two-step provider > model selection.
@@ -143,9 +156,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     setProviders(filtered);
     if ((!allowDefault || preselectDefaults) && filtered.length > 0 && !hasSetInitialRef.current) {
       hasSetInitialRef.current = true;
-      const initial = preselectDefaults
-        ? filtered.find(provider => provider.id === data.activeProvider)
-        : filtered[0];
+      const initial = preferredInitialProvider(filtered, data.activeProvider, { allowDefault });
       if (initial) {
         setSelectedProviderId(initial.id);
         setSelectedModel(pickInitialModelRef.current(initial));

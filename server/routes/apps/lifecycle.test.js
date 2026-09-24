@@ -36,8 +36,9 @@ vi.mock('../../services/history.js', () => ({
 
 vi.mock('../../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
+}));
+vi.mock('../../services/appProcessTypes.js', () => ({
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
-  NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift']),
   isDesktopType: vi.fn((type) => type === 'desktop')
 }));
 

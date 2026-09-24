@@ -117,10 +117,10 @@ describe('planServiceColumnBackfill', () => {
 describe('applyServicePlanFilter', () => {
   const zen = serviceDefinitionById('opencode-zen');
   const nim = serviceDefinitionById('nvidia-nim');
-  const listing = ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash-free'];
+  const listing = ['big-pickle', 'example-paid-model', 'mimo-v2.5-free', 'deepseek-v4-flash-free'];
 
   it('narrows a free plan only where the definition marks its free tier', () => {
-    expect(applyServicePlanFilter(zen, 'free', listing)).toEqual(['mimo-v2.5-free', 'deepseek-v4-flash-free']);
+    expect(applyServicePlanFilter(zen, 'free', listing)).toEqual(['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash-free']);
     expect(applyServicePlanFilter(zen, 'paid', listing)).toEqual(listing);
     // NIM's listing carries no tier: both plans see everything.
     expect(applyServicePlanFilter(nim, 'free', listing)).toEqual(listing);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdir, readFile, writeFile, rm } from 'fs/promises';
 import { dirname, join } from 'path';
 import { mockPathsDataRoot, mockNoPeers, mockNoPeerSync, mockTestIdentity } from '../lib/mockPathsDataRoot.js';
@@ -41,6 +41,8 @@ const subscriptions = await import('./sharing/subscriptions.js');
 const manifests = await import('./sharing/manifest.js');
 const importer = await import('./sharing/importer.js');
 const annotations = await import('./sharing/annotationsSync.js');
+const alcohol = await import('./meatspaceAlcohol.js');
+const nicotine = await import('./meatspaceNicotine.js');
 const { PATHS } = await import('../lib/fileUtils.js');
 const bucketPath = join(tempRoot, 'bucket');
 let bucket;
@@ -171,6 +173,200 @@ it('merges same-date daily-log tenants without duplicating them on replay', asyn
   const replayed = JSON.parse(await readFile(path, 'utf8'));
   expect(replay).toEqual({ applied: false, count: 0 });
   expect(replayed.entries[0]).toEqual(entry);
+});
+
+// Identified alcohol/nicotine events (#8143): identical rows logged on two peers
+// are two events, a replay adds nothing, and legacy/v0 payloads stay safe.
+describe('daily-log event identity (#8143)', () => {
+  const date = '2026-01-03';
+  const path = () => join(PATHS.meatspace, 'daily-log.json');
+  const stamp = '2026-01-03T20:00:00.000Z';
+  const lager = (id, extra = {}) => ({ id, name: 'Example Lager', oz: 12, abv: 5, count: 1, createdAt: stamp, updatedAt: stamp, ...extra });
+  const day = (drinks) => ({ date, alcohol: { drinks, standardDrinks: 0 } });
+  const snapshot = (...entries) => ({ 'daily-log.json': { entries } });
+  afterEach(() => vi.useRealTimers());
+  const savedDay = async () => JSON.parse(await readFile(path(), 'utf8')).entries.find((e) => e.date === date);
+
+  // Each "peer" logs through the real services onto an empty log at the same
+  // instant, so the rows are identical apart from their event identity.
+  const logOnFreshPeer = async () => {
+    await rm(path(), { force: true });
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(stamp) });
+    await alcohol.logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date });
+    await nicotine.logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 1, date });
+    return JSON.parse(await readFile(path(), 'utf8'));
+  };
+
+  it('keeps identical independent events from both peers in either sync order', async () => {
+    const peers = [await logOnFreshPeer(), await logOnFreshPeer()];
+    vi.useRealTimers();
+    for (const [local, remote] of [peers, [...peers].reverse()]) {
+      await seed(path(), local);
+      const peer = { 'daily-log.json': remote };
+      expect(await dataSync.applyRemote('meatspace', peer)).toEqual({ applied: true, count: 1 });
+      const merged = await savedDay();
+      expect(merged.alcohol.drinks).toHaveLength(2);
+      expect(merged.alcohol.standardDrinks).toBe(2);
+      expect(merged.nicotine.items).toHaveLength(2);
+      expect(merged.nicotine.totalMg).toBe(6);
+
+      expect(await dataSync.applyRemote('meatspace', peer)).toEqual({ applied: false, count: 0 });
+      expect(await savedDay()).toEqual(merged);
+    }
+  });
+
+  it('resolves copies of one event the same way whichever side holds which', async () => {
+    const legacy = { name: 'Example Stout', oz: 12, abv: 5, count: 1 };
+    const newerEdit = lager('drink-x', { count: 1, abv: 10, updatedAt: '2026-01-04T08:00:00.000Z' });
+    // A pre-#8143 peer folds a second log into the row in place, without restamping.
+    const bumpedInPlace = lager('drink-x', { count: 2 });
+    const cases = [
+      // Equal stamps: the in-place increment is a real drink, so the larger count wins.
+      [[lager('drink-x'), legacy], [legacy, lager('drink-x'), bumpedInPlace], 2, 3],
+      [[bumpedInPlace, legacy], [legacy, lager('drink-x')], 2, 3],
+      // A restamped edit wins over a stale copy regardless of its count.
+      [[bumpedInPlace, legacy], [newerEdit, legacy], 1, 3],
+      [[newerEdit, legacy], [bumpedInPlace, legacy], 1, 3],
+    ];
+    for (const [localDrinks, remoteDrinks, count, total] of cases) {
+      await seed(path(), { entries: [day(localDrinks)] });
+      await dataSync.applyRemote('meatspace', snapshot(day(remoteDrinks)));
+      const merged = await savedDay();
+      // The legacy row keeps content dedupe; the identified event is one row.
+      expect(merged.alcohol.drinks).toHaveLength(2);
+      expect(merged.alcohol.drinks.find((d) => d.id === 'drink-x').count).toBe(count);
+      expect(merged.alcohol.standardDrinks).toBe(total);
+    }
+  });
+
+  it('does not merge a legacy row back in after one peer edits it', async () => {
+    const legacyLog = { entries: [day([{ name: 'Example Stout', oz: 12, abv: 5, count: 1 }])] };
+    await seed(path(), legacyLog);
+    await alcohol.updateDrink(date, 0, { count: 2 });
+    const edited = JSON.parse(await readFile(path(), 'utf8'));
+
+    // Pulling the unedited peer's copy leaves the edit as the only row...
+    await dataSync.applyRemote('meatspace', { 'daily-log.json': legacyLog });
+    expect((await savedDay()).alcohol.drinks).toEqual(edited.entries[0].alcohol.drinks);
+    // ...and the unedited peer drops its legacy copy when it pulls the edit.
+    await seed(path(), legacyLog);
+    await dataSync.applyRemote('meatspace', { 'daily-log.json': edited });
+    const merged = await savedDay();
+    expect(merged.alcohol.drinks).toEqual(edited.entries[0].alcohol.drinks);
+    expect(merged.alcohol.standardDrinks).toBe(2);
+  });
+
+  it('refuses a daily log from a peer on a newer meatspace schema', async () => {
+    await seed(path(), { entries: [day([lager('drink-a')])] });
+    const before = await readFile(path(), 'utf8');
+    const result = await dataSync.applyRemote('meatspace', snapshot(day([lager('drink-b')])), {
+      portosMeta: { portosVersion: '99.0.0', schemaVersions: { meatspace: 2 } },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.blockedBySchema.ahead).toEqual([{ category: 'meatspace', senderV: 2, receiverV: 1 }]);
+    expect(await readFile(path(), 'utf8')).toBe(before);
+  });
+});
+
+// Deletes and date moves of identified events converge across peers (#8154).
+// Peer A acts through the real services on a log both peers share; peer B
+// still holds the original rows, as an offline (or pre-#8154) peer would.
+describe('daily-log deletes and date moves (#8154)', () => {
+  const date = '2026-01-03';
+  const nextDate = '2026-01-04';
+  const stamp = '2026-01-03T20:00:00.000Z';
+  const path = () => join(PATHS.meatspace, 'daily-log.json');
+  const lager = (id, extra = {}) => ({ id, name: 'Example Lager', oz: 12, abv: 5, count: 1, createdAt: stamp, updatedAt: stamp, ...extra });
+  const pouch = { id: 'pouch-1', product: 'Example Pouch', mgPerUnit: 3, count: 1, createdAt: stamp, updatedAt: stamp };
+  const shared = () => ({
+    entries: [{
+      date,
+      alcohol: { drinks: [lager('drink-1'), lager('drink-2', { oz: 24 })], standardDrinks: 3 },
+      nicotine: { items: [{ ...pouch }], totalMg: 3 },
+    }],
+  });
+  const read = async () => JSON.parse(await readFile(path(), 'utf8'));
+  const drinkIdsByDate = (log) => Object.fromEntries(
+    log.entries.filter((e) => e.alcohol).map((e) => [e.date, e.alcohol.drinks.map((d) => d.id)]),
+  );
+  afterEach(() => vi.useRealTimers());
+
+  const actOnPeerA = async (action, at = '2026-01-05T09:00:00.000Z') => {
+    await seed(path(), shared());
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(at) });
+    await action();
+    vi.useRealTimers();
+    return read();
+  };
+
+  // Row order within a day follows whichever side is local; identity does not.
+  const byId = (a, b) => (a.id < b.id ? -1 : 1);
+  const unordered = (log) => log.entries.map((e) => ({
+    ...e,
+    ...(e.alcohol && { alcohol: { ...e.alcohol, drinks: [...e.alcohol.drinks].sort(byId) } }),
+    ...(e.nicotine && { nicotine: { ...e.nicotine, items: [...e.nicotine.items].sort(byId) } }),
+  }));
+
+  // Merge in both directions; each side must reach the same log, and a replay
+  // of the same snapshot must be a no-op.
+  const syncBothWays = async (peerA, peerB) => {
+    const results = [];
+    for (const [local, remote] of [[peerA, peerB], [peerB, peerA]]) {
+      await seed(path(), local);
+      await dataSync.applyRemote('meatspace', { 'daily-log.json': remote });
+      const merged = await read();
+      expect(await dataSync.applyRemote('meatspace', { 'daily-log.json': remote })).toEqual({ applied: false, count: 0 });
+      results.push(merged);
+    }
+    expect(unordered(results[1])).toEqual(unordered(results[0]));
+    expect(results[1].eventTombstones).toEqual(results[0].eventTombstones);
+    return results[0];
+  };
+
+  it('keeps a deleted drink and nicotine item deleted on both peers', async () => {
+    const peerA = await actOnPeerA(async () => {
+      await alcohol.removeDrink(date, 0);
+      await nicotine.removeNicotine(date, 0);
+    });
+    const merged = await syncBothWays(peerA, shared());
+    const day = merged.entries.find((e) => e.date === date);
+    expect(day.alcohol.drinks.map((d) => d.id)).toEqual(['drink-2']);
+    expect(day.alcohol.standardDrinks).toBe(2);
+    expect(day.nicotine).toBeUndefined();
+    // The receiving peer keeps the tombstones so it can pass the delete on.
+    expect(merged.eventTombstones.map((t) => t.id).sort()).toEqual(['drink-1', 'pouch-1']);
+  });
+
+  it('leaves exactly one copy of a moved drink, on the new date', async () => {
+    const peerA = await actOnPeerA(() => alcohol.updateDrink(date, 0, { date: nextDate }));
+    const merged = await syncBothWays(peerA, shared());
+    expect(drinkIdsByDate(merged)).toEqual({ [date]: ['drink-2'], [nextDate]: ['drink-1'] });
+    expect(merged.entries.find((e) => e.date === date).alcohol.standardDrinks).toBe(2);
+    expect(merged.entries.find((e) => e.date === nextDate).alcohol.standardDrinks).toBe(1);
+  });
+
+  it('does not suppress an identical drink logged again after the delete', async () => {
+    const peerA = await actOnPeerA(async () => {
+      await alcohol.removeDrink(date, 0);
+      await alcohol.logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date });
+    });
+    const merged = await syncBothWays(peerA, shared());
+    const drinks = merged.entries.find((e) => e.date === date).alcohol.drinks;
+    expect(drinks.map((d) => d.id)).not.toContain('drink-1');
+    expect(drinks).toHaveLength(2);
+    expect(merged.entries.find((e) => e.date === date).alcohol.standardDrinks).toBe(3);
+  });
+
+  it('keeps a drink a peer edited after the delete, and retires the tombstone', async () => {
+    const peerA = await actOnPeerA(() => alcohol.removeDrink(date, 0));
+    const peerB = shared();
+    peerB.entries[0].alcohol.drinks[0].count = 2;
+    peerB.entries[0].alcohol.drinks[0].updatedAt = '2026-01-06T09:00:00.000Z';
+    const merged = await syncBothWays(peerA, peerB);
+    const drinks = merged.entries.find((e) => e.date === date).alcohol.drinks;
+    expect(drinks.find((d) => d.id === 'drink-1').count).toBe(2);
+    expect(merged.eventTombstones).toBeUndefined();
+  });
 });
 
 // An unreadable shared identity must not leave a new local registry entry.

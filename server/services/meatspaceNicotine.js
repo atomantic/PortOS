@@ -7,7 +7,13 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import {
+  loadMeatspaceDailyLog,
+  mutateDailyLog,
+  newDailyLogEvent,
+  stampDailyLogEventEdit,
+  tombstoneDailyLogEvent
+} from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -42,7 +48,8 @@ export function computeRollingAverages(entries) {
   // Today's total
   const todayEntry = allEntries.find(e => e.date === today);
   const todayMg = todayEntry?.nicotine?.totalMg ?? 0;
-  const todayCount = todayEntry?.nicotine?.items?.length ?? 0;
+  // Units consumed, not rows: each log is a separate event row (#8143).
+  const todayCount = (todayEntry?.nicotine?.items ?? []).reduce((sum, i) => sum + (i?.count ?? 1), 0);
 
   // Helper: average over last N days
   const rollingAverage = (days) => {
@@ -164,12 +171,12 @@ export async function logNicotine({ product, mgPerUnit, count = 1, date }) {
     if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
     if (!entry.nicotine) entry.nicotine = { items: [], totalMg: 0 };
 
-    const existing = entry.nicotine.items.find(i => i.product === item.product && i.mgPerUnit === item.mgPerUnit);
-    if (existing) existing.count = (existing.count || 1) + count;
-    else entry.nicotine.items.push(item);
+    // Every log is its own event (see logDrink, #8143).
+    const event = newDailyLogEvent(item);
+    entry.nicotine.items.push(event);
     recalcDayTotal(entry);
 
-    return { item, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
+    return { item: event, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
   }, { label: 'Nicotine' });
 
   averageCache = null;
@@ -200,7 +207,7 @@ export async function updateNicotine(date, index, updates) {
     const entry = log.entries.find(e => e.date === date);
     if (!entry?.nicotine?.items?.[index]) return null;
 
-    const item = entry.nicotine.items[index];
+    const item = stampDailyLogEventEdit(entry.nicotine.items[index]);
     if (updates.product !== undefined) item.product = updates.product;
     if (updates.mgPerUnit !== undefined) item.mgPerUnit = updates.mgPerUnit;
     if (updates.count !== undefined) item.count = updates.count;
@@ -263,6 +270,7 @@ export async function removeNicotine(date, index) {
     if (!entry?.nicotine?.items?.[index]) return null;
 
     const removed = entry.nicotine.items.splice(index, 1)[0];
+    tombstoneDailyLogEvent(log, removed);
     if (entry.nicotine.items.length === 0) delete entry.nicotine;
     else recalcDayTotal(entry);
     return removed;

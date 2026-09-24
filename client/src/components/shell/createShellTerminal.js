@@ -4,6 +4,8 @@ import '@xterm/xterm/css/xterm.css';
 import { buildTerminalTheme, parseCssColorToHex } from '../../lib/terminalTheme';
 import { isFocusEscapeKey } from '../../lib/a11yKeyboard';
 
+export const TERMINAL_SCROLLBACK_LINES = 5000;
+
 // The xterm construction both Shell views share — the PortOS PTY view
 // (hooks/useShellSession.js) and the iTerm2 view (hooks/useItermSession.js) —
 // so the font stack, theme, links and keyboard-escape rule cannot drift apart.
@@ -36,7 +38,7 @@ export const createShellTerminal = (container, options = {}) => {
     fontSize: 14,
     fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
     theme: readTerminalTheme(),
-    scrollback: 5000,
+    scrollback: TERMINAL_SCROLLBACK_LINES,
     allowProposedApi: true,
     // Screen-reader mode is what makes xterm build its .xterm-accessibility
     // live region — without it every rendered row stays aria-hidden and a

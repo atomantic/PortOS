@@ -1,15 +1,13 @@
 /**
- * Map a PortOS provider model id onto an Artificial Analysis catalog slug.
+ * Map a PortOS provider model id onto a canonical model identity.
  *
- * The comparison catalog is a public benchmark index of the whole industry —
- * hundreds of models, most of which PortOS can never dispatch (retired
- * generations like claude-2.0, research checkpoints, models behind harnesses we
- * do not ship). The chart is only useful when it is scoped to models the user
- * can actually select in Settings > AI Providers > Models, so the model pills
- * default to that scope and everything else is opt-in.
+ * The reference catalog can cover models PortOS cannot dispatch (retired
+ * generations, research checkpoints, and models behind unsupported harnesses).
+ * Shipped reference rows are scoped to models the user can actually select in
+ * Settings > AI Providers > Models.
  *
- * Provider model ids are written for the harness that runs them, not for the
- * benchmark index, so the two namespaces have to be reconciled:
+ * Provider model ids are written for the harness that runs them, so aliases
+ * used in model metadata and price references have to be reconciled:
  *
  *   us.anthropic.claude-sonnet-5      Bedrock region prefix
  *   global.anthropic.claude-opus-5[1m]  region prefix + context-window suffix
@@ -20,8 +18,8 @@
  *   claude-haiku-4-5                  family/version order flipped vs the index
  *
  * Everything here is textual normalization plus a small alias table for the
- * cases where the two namespaces genuinely disagree on a name. A provider id
- * that maps to no catalog slug simply contributes nothing to the scope.
+ * cases where the namespaces genuinely disagree on a name. A provider id that
+ * maps to no canonical model identity simply contributes nothing to the scope.
  *
  * A LOCAL install id is the exception: any id the `localLlmCatalog.js` catalog
  * recognizes at all is resolved by lookup against the `benchmarkModel` its
@@ -132,8 +130,8 @@ function isLocalCatalogId(modelId) {
 /**
  * The catalog's own spelling of a model slug.
  *
- * Sources spell a version with either a dash or a dot — Artificial Analysis
- * minted Fable 5.1's max row as `claude-fable-5-1` and its other efforts as
+ * Model sources spell a version with either a dash or a dot — the old public
+ * index minted Fable 5.1's max row as `claude-fable-5-1` and its other efforts as
  * `claude-fable-5.1`, which split one reasoning curve into two series. Only a
  * trailing all-digit pair is a version, so `qwen3-235b-a22b-2507` and
  * `deepseek-r1-0528` are left alone.

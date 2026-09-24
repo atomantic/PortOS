@@ -59,6 +59,29 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
   });
 
+  it('reference-watch leaves tracker IDs and filing mechanics to the shared tracker block', () => {
+    const current = DEFAULT_TASK_PROMPTS['reference-watch'];
+
+    expect(PROMPT_VERSIONS['reference-watch']).toBe(4);
+    expect(current).toContain('{trackerInstructions}');
+    expect(current).toContain('compare the upstream repository and commit SHA(s)');
+    expect(current).toContain('The issue number or key is its');
+    expect(current).toContain('PLAN.md keeps the');
+    expect(current).not.toContain('[ref-watch-…]');
+    expect(current).not.toContain('A slug-tagged title');
+    expect(current).not.toContain('gh issue create');
+  });
+
+  it('ux filings use tracker IDs instead of title slugs', () => {
+    const current = DEFAULT_TASK_PROMPTS.ux;
+
+    expect(PROMPT_VERSIONS.ux).toBe(4);
+    expect(current).toContain('{trackerInstructions}');
+    expect(current).toContain('short, human-readable title');
+    expect(current).not.toContain('[ux-…]');
+    expect(current).not.toContain('slug-tagged title');
+  });
+
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 
@@ -116,10 +139,10 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('line number, column, byte offset');
   });
 
-  // Each `better-*` lane mirrors one slashdo do:better audit lens. The bodies
-  // are what make them worth scheduling separately, so each is pinned to the
-  // discipline that distinguishes it from its neighbors — a counted metric, a
-  // proof obligation, or an explicit hand-off — rather than to prose.
+  // Each PortOS-owned `better-*` mission has a focused discipline that justifies
+  // scheduling it separately. Pin its distinction from neighboring missions —
+  // a counted metric, a proof obligation, or an explicit hand-off — rather than
+  // duplicating slashdo's orchestration and tracker-filing workflow.
   it.each([
     ['better-complexity', ['1 + the number of independent decision points', 'Length is not complexity', 'Name the transformation', 'Behavior preservation is the contract']],
     ['better-cognitive-load', ['reader cost', 'Flag arguments', 'Action at a distance', 'are not your findings']],
@@ -150,6 +173,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(gitlab).toContain('ascii_downcase');
     expect(gitlab).toContain('--squash --remove-source-branch');
     expect(gitlab).toContain('Never force-delete with `-D`');
+  });
+
+  it('every claim flow publishes a review-blocked PR instead of stranding the branch (#8201)', () => {
+    for (const key of ['plan-task-claim', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira']) {
+      const body = DEFAULT_TASK_PROMPTS[key];
+      expect(body, key).toContain('**Required-review publication rule:**');
+      expect(body, key).toContain('REVIEW_STATUS=review-blocked');
+      expect(body, key).not.toContain('never open the PR on the strength of it');
+    }
   });
 
   it('plan-task v18 scheduled default omits review while plan-task-claim preserves it', () => {
@@ -264,10 +296,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PROMPT_VERSIONS['feature-ideas']).toBe(11);
   });
 
-  // plan-feature v5: omitted optional preloads fall back to direct inventory.
-  it('plan-feature v5 handles omitted preloads', () => {
+  // plan-feature v6 uses tracker-defined IDs, and v5's omitted optional preloads
+  // still fall back to direct inventory.
+  it('plan-feature v6 handles omitted preloads and plain forge titles', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-feature'];
-    expect(PROMPT_VERSIONS['plan-feature']).toBe(5);
+    expect(PROMPT_VERSIONS['plan-feature']).toBe(6);
     expect(current).toContain('Preloaded task data');
     expect(current).toContain('do NOT list it again');
     expect(current).toContain('corresponding section that is absent');
@@ -280,6 +313,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('AGENTS.md');
     expect(current).not.toContain('REJECTED.md');
     expect(current).not.toContain('ALSO read PLAN.md');
+    expect(current).toContain('short, human-readable title');
+    expect(current).not.toContain('[plan-feature-…]');
+    expect(current).not.toContain('slug-tagged title');
   });
 
   it('do-replan v2 rejects future-only proposals', () => {
@@ -750,7 +786,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(34);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(35);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -765,7 +801,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   });
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 34], ['claim-issue-gitlab', 31], ['claim-issue-jira', 20]];
+    const cases = [['claim-issue', 35], ['claim-issue-gitlab', 31], ['claim-issue-jira', 20]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];

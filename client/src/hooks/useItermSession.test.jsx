@@ -1,21 +1,45 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, cleanup } from '@testing-library/react';
+import { render, renderHook, act, cleanup } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
-const { handlers, emitted, socketMock } = vi.hoisted(() => {
+const { handlers, emitted, socketMock, terminalHarness } = vi.hoisted(() => {
   const handlers = new Map();
   const emitted = [];
+  const terminal = {
+    options: {},
+    cols: 80,
+    rows: 24,
+    reset: vi.fn(),
+    write: vi.fn(),
+    writeln: vi.fn(),
+    resize: vi.fn(function resize(cols, rows) {
+      this.cols = cols;
+      this.rows = rows;
+    }),
+    focus: vi.fn(),
+    dispose: vi.fn(),
+    onData: vi.fn(() => ({ dispose: vi.fn() })),
+  };
+  const terminalHarness = {
+    terminal,
+    createShellTerminal: vi.fn(() => terminal),
+  };
   const socketMock = {
     connected: true,
     on: (event, fn) => { handlers.set(event, fn); },
     off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
     emit: (event, ...args) => { emitted.push([event, ...args]); },
   };
-  return { handlers, emitted, socketMock };
+  return { handlers, emitted, socketMock, terminalHarness };
 });
 vi.mock('../services/socket', () => ({ default: socketMock, getSocket: () => socketMock }));
 vi.mock('../components/ThemeContext', () => ({
   useThemeContext: () => ({ themeId: 'test', theme: { mode: 'night' } }),
+}));
+vi.mock('../components/shell/createShellTerminal', () => ({
+  createShellTerminal: terminalHarness.createShellTerminal,
+  readTerminalTheme: vi.fn(() => ({})),
+  TERMINAL_SCROLLBACK_LINES: 5000,
 }));
 
 import { useItermSession } from './useItermSession.js';
@@ -41,8 +65,29 @@ const renderAt = (path) => renderHook(() => {
   ),
 });
 
+const MountedTerminal = () => {
+  location = useLocation();
+  const state = useItermSession({ itermSessionId: location.pathname.split('/')[3], enabled: true });
+  return <div ref={state.terminalRef} />;
+};
+const renderWithTerminal = (path) => render(
+  <MemoryRouter initialEntries={[path]}>
+    <Routes><Route path="*" element={<MountedTerminal />} /></Routes>
+  </MemoryRouter>
+);
+
 describe('useItermSession', () => {
-  beforeEach(() => { handlers.clear(); emitted.length = 0; socketMock.connected = true; });
+  beforeEach(() => {
+    handlers.clear();
+    emitted.length = 0;
+    socketMock.connected = true;
+    terminalHarness.createShellTerminal.mockClear();
+    terminalHarness.terminal.reset.mockClear();
+    terminalHarness.terminal.write.mockClear();
+    terminalHarness.terminal.writeln.mockClear();
+    terminalHarness.terminal.resize.mockClear();
+    terminalHarness.terminal.rows = 24;
+  });
   afterEach(cleanup);
 
   it('lists iTerm2 sessions and never speaks the PortOS shell protocol', () => {
@@ -137,5 +182,22 @@ describe('useItermSession', () => {
     // Now it really closes.
     fire('iterm:sessions', { status: { state: 'connected' }, sessions: [session('iterm-AAAA')] });
     expect(location.pathname).toBe('/shell/iterm/iterm-AAAA');
+  });
+
+  it('restores seeded scrollback and advances it with newly scrolled rows', () => {
+    renderWithTerminal('/shell/iterm/iterm-AAAA');
+    expect(terminalHarness.createShellTerminal).toHaveBeenCalledWith(expect.anything(), {
+      scrollback: 5000,
+      cursorBlink: false,
+    });
+    fire('iterm:sessions', LIST);
+    fire('iterm:attached', { id: 'iterm-AAAA', cols: 100, rows: 30, bufferedOutput: '' });
+
+    fire('iterm:output', { id: 'iterm-AAAA', data: 'history + screen snapshot', reset: true });
+    expect(terminalHarness.terminal.reset).toHaveBeenCalledTimes(3);
+    expect(terminalHarness.terminal.write).toHaveBeenLastCalledWith('history + screen snapshot');
+
+    fire('iterm:output', { id: 'iterm-AAAA', data: 'live frame', scrollbackRows: 2 });
+    expect(terminalHarness.terminal.write).toHaveBeenLastCalledWith('\x1b[30;1H\n\nlive frame');
   });
 });

@@ -43,7 +43,6 @@ import { readFileSync } from 'node:fs';
  * dialog, so they read as UI copy rather than module paths.
  */
 export const SYSTEM_STAGE_USAGE = Object.freeze({
-  'cos-agent-briefing': Object.freeze(['CoS sub-agent task briefing']),
   'cos-evaluate': Object.freeze(['CoS task evaluation']),
   'cos-report-summary': Object.freeze(['CoS daily reports']),
   'cos-self-improvement': Object.freeze(['CoS self-improvement tasks']),

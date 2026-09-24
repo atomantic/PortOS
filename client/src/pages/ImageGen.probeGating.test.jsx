@@ -139,6 +139,22 @@ describe('ImageGen backend-probe gating', () => {
     expect(state.generateImage.mock.calls[0][0]).toMatchObject({ mediaProviderPeerId: 'peer-example' });
   });
 
+  it('reseeds cleaner defaults when the selected backend changes', async () => {
+    state.settings = {
+      imageGen: {
+        mode: 'local',
+        local: { pythonPath: '/usr/bin/python3', denoise: false },
+        grok: { enabled: true, denoise: true },
+      },
+    };
+    state.getImageGenStatus.mockImplementation(async (mode) => ({ connected: true, mode, model: mode }));
+    await mount();
+
+    expect(screen.getByRole('checkbox', { name: /Denoise/, hidden: true })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /Grok/i }));
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: /Denoise/, hidden: true })).toBeChecked());
+  });
+
   it('keeps prompt and Generate ahead of closed mobile Options', async () => {
     await mount();
 

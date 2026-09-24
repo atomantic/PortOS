@@ -50,11 +50,21 @@ const PROVIDER_FIELD_RANGES = {
 
 /** A space-separated argv input as the array the provider schema takes. */
 const argList = (text) => (text ? text.split(' ').filter(Boolean) : []);
+const modelListFromText = (text) => text.split(',').map(model => model.trim()).filter(Boolean);
 
 const rangeMessage = (label, { min, max }, unit = '') =>
   `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
 
+// The four optional capability-tier overrides, in picker order (#8149).
+const TIER_FIELDS = [
+  { key: 'lightModel', label: 'Light (fast)', dot: 'bg-port-success', placeholder: 'haiku' },
+  { key: 'mediumModel', label: 'Medium (balanced)', dot: 'bg-port-warning', placeholder: 'sonnet' },
+  { key: 'heavyModel', label: 'Heavy (powerful)', dot: 'bg-port-error', placeholder: 'opus' },
+  { key: 'ultraModel', label: 'Ultra (frontier)', dot: 'bg-port-error', placeholder: 'Fable or Astra model ID' },
+];
+
 export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
+  const [modelsText, setModelsText] = useState(() => providerModelCatalog(provider).join(', '));
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -234,11 +244,14 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // providers, whose ladder is keyed on `ollamaBacked`. Merge the live edits
   // over the stored record instead, so edits to command/endpoint/envVars count
   // immediately while the markers survive.
-  // Shared option list for the Default Model + Light/Medium/Heavy tier selects,
-  // so the sentinel option can't be added to some and missed on others.
-  const modelSelectOptions = (
+  // Shared option list for the Default Model + tier selects, so the sentinel
+  // option can't be added to some and missed on others. Only the empty row's
+  // meaning differs: no Default Model is "None", while an empty tier INHERITS
+  // the Default Model (resolveProviderModelTier) — so a preset only sets the
+  // tiers it wants on a different model (#8149).
+  const modelSelectOptions = (emptyLabel = 'None') => (
     <>
-      <option value="">None</option>
+      <option value="">{emptyLabel}</option>
       {configuredDefault && (
         <option value={configuredDefault}>Use the CLI&apos;s configured default</option>
       )}
@@ -387,6 +400,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
       ...formData,
+      models: modelListFromText(modelsText),
       args: argList(formData.args),
       headlessArgs: argList(formData.headlessArgs),
       contextWindow: parseOptionalIntField(formData.contextWindow),
@@ -1009,12 +1023,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   {formData.type === 'api' && <span className="text-xs text-gray-500 ml-2">(Use Refresh button after saving)</span>}
                 </>}>
                 <textarea
-                  value={(formData.models || []).join(', ')}
+                  value={modelsText}
                   onChange={(e) => {
-                    const models = e.target.value
-                      .split(',')
-                      .map(m => m.trim())
-                      .filter(Boolean);
+                    const text = e.target.value;
+                    setModelsText(text);
+                    const models = modelListFromText(text);
                     setFormData(prev => ({ ...prev, models }));
                   }}
                   placeholder="model-1, model-2, model-3"
@@ -1044,7 +1057,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     onChange={(e) => setFormData(prev => ({ ...prev, defaultModel: e.target.value }))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   >
-                    {modelSelectOptions}
+                    {modelSelectOptions()}
                   </select>
                 ) : (
                   <input
@@ -1075,100 +1088,36 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
 
               {/* Model Tiers */}
               <div className="border-t border-port-border pt-4 mt-4">
-                <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
+                <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tier Overrides</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
-                      <span className="inline-block w-2 h-2 rounded-full bg-port-success mr-1"></span>
-                      Light (fast)
-                    </>}>
-                    {availableModels.length > 0 ? (
-                      <select
-                        value={formData.lightModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, lightModel: e.target.value }))}
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      >
-                        {modelSelectOptions}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={formData.lightModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, lightModel: e.target.value }))}
-                        placeholder="haiku"
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      />
-                    )}
-                  </FormField>
-                  <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
-                      <span className="inline-block w-2 h-2 rounded-full bg-port-warning mr-1"></span>
-                      Medium (balanced)
-                    </>}>
-                    {availableModels.length > 0 ? (
-                      <select
-                        value={formData.mediumModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, mediumModel: e.target.value }))}
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      >
-                        {modelSelectOptions}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={formData.mediumModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, mediumModel: e.target.value }))}
-                        placeholder="sonnet"
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      />
-                    )}
-                  </FormField>
-                  <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
-                      <span className="inline-block w-2 h-2 rounded-full bg-port-error mr-1"></span>
-                      Heavy (powerful)
-                    </>}>
-                    {availableModels.length > 0 ? (
-                      <select
-                        value={formData.heavyModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, heavyModel: e.target.value }))}
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      >
-                        {modelSelectOptions}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={formData.heavyModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, heavyModel: e.target.value }))}
-                        placeholder="opus"
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      />
-                    )}
-                  </FormField>
-                  <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
-                      <span className="inline-block w-2 h-2 rounded-full bg-port-error mr-1"></span>
-                      Ultra (frontier)
-                    </>}>
-                    {availableModels.length > 0 ? (
-                      <select
-                        value={formData.ultraModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, ultraModel: e.target.value }))}
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      >
-                        {modelSelectOptions}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={formData.ultraModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, ultraModel: e.target.value }))}
-                        placeholder="Fable or Astra model ID"
-                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                      />
-                    )}
-                  </FormField>
+                  {TIER_FIELDS.map(({ key, label, dot, placeholder }) => (
+                    <FormField key={key} labelClassName="block text-xs text-gray-400 mb-1" label={<>
+                        <span className={`inline-block w-2 h-2 rounded-full ${dot} mr-1`}></span>
+                        {label}
+                      </>}>
+                      {availableModels.length > 0 ? (
+                        <select
+                          value={formData[key]}
+                          onChange={(e) => setFormData(prev => ({ ...prev, [key]: e.target.value }))}
+                          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                        >
+                          {modelSelectOptions(key === 'ultraModel' ? 'Inherit Heavy' : 'Inherit Default Model')}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={formData[key]}
+                          onChange={(e) => setFormData(prev => ({ ...prev, [key]: e.target.value }))}
+                          placeholder={placeholder}
+                          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                        />
+                      )}
+                    </FormField>
+                  ))}
                 </div>
                 <p className="text-xs text-gray-500 mt-2">
                   {availableModels.length > 0
-                    ? 'Capability mappings for tasks and prompt stages. Ultra is explicit opt-in and falls back to Heavy when unset.'
+                    ? 'Optional. A task, role, or prompt stage that names a tier runs on its model here; a blank tier uses the Default Model (Ultra uses Heavy first). Nothing picks a tier automatically.'
                     : 'Save provider, then use Test or Refresh to fetch available models'}
                 </p>
               </div>

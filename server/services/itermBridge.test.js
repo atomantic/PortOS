@@ -32,6 +32,7 @@ const startFakeIterm = async (socketPath) => {
     requests: [],
     sockets: new Set(),
     layout: LAYOUT,
+    screenStartLine: 500,
     onGetBuffer: null,
   };
   const httpServer = createServer();
@@ -52,12 +53,25 @@ const startFakeIterm = async (socketPath) => {
       } else if (msg.sendTextRequest) reply({ sendTextResponse: { status: 0 } });
       else if (msg.getBufferRequest) {
         await state.onGetBuffer?.(ws, msg);
+        const { lineRange = {} } = msg.getBufferRequest;
+        const includesHistory = Number.isInteger(lineRange.trailingLines);
+        const visible = [
+          { text: `screen of ${msg.getBufferRequest.session}` },
+          { text: '$ ' },
+        ];
+        const history = includesHistory ? [{ text: `history of ${msg.getBufferRequest.session}` }] : [];
         reply({
           getBufferResponse: {
             status: 0,
-            contents: [{ text: `screen of ${msg.getBufferRequest.session}` }, { text: '$ ' }],
-            cursor: { x: 2, y: 501 },
-            windowedCoordRange: { coordRange: { start: { x: 0, y: 500 }, end: { x: 0, y: 502 } } },
+            contents: [...history, ...visible],
+            cursor: { x: 2, y: state.screenStartLine + 1 },
+            numLinesAboveScreen: state.screenStartLine,
+            windowedCoordRange: {
+              coordRange: {
+                start: { x: 0, y: state.screenStartLine - history.length },
+                end: { x: 0, y: state.screenStartLine + visible.length },
+              },
+            },
           },
         });
       }
@@ -178,23 +192,52 @@ describe('itermBridge', () => {
     expect(closure.has(resolve(here, 'workspaceContext.js'))).toBe(false);
   });
 
-  it('subscribes screen updates on first view, streams a rendered frame, and unsubscribes on last detach', async () => {
+  it('loads bounded iTerm2 history for each viewer and unsubscribes on last detach', async () => {
     await listAndConnect();
     const viewerA = fakeSocket('a');
     const viewerB = fakeSocket('b');
     expect(bridge.attachViewer('iterm-AAAA-2', viewerA)).toMatchObject({ id: 'iterm-AAAA-2', cols: 80, rows: 24 });
     await vi.waitFor(() => expect(viewerA.last('iterm:output')?.data).toContain('screen of AAAA-2'));
+    expect(viewerA.last('iterm:output')).toMatchObject({ reset: true });
+    expect(viewerA.last('iterm:output').data).toContain('history of AAAA-2');
+    expect(fake.requests.find((r) => r.getBufferRequest)?.getBufferRequest.lineRange.trailingLines).toBe(5_024);
     // Cursor y=501 with row 1 at absolute line 500 → screen row 2, col 3.
     expect(viewerA.last('iterm:output').data).toContain('\x1b[2;3H');
     const screenSubs = () => fake.requests.filter((r) => r.notificationRequest?.notificationType === ITERM_NOTIFICATION.SCREEN_UPDATE);
     expect(screenSubs().map((r) => [r.notificationRequest.session, r.notificationRequest.subscribe])).toEqual([['AAAA-2', true]]);
 
-    // A second viewer gets the cached frame without a second subscription.
+    // A second viewer gets its own scrollback snapshot without a second subscription.
     expect(bridge.attachViewer('iterm-AAAA-2', viewerB).bufferedOutput).toContain('screen of AAAA-2');
+    await vi.waitFor(() => expect(viewerB.last('iterm:output')?.reset).toBe(true));
+    expect(viewerB.last('iterm:output').data).toContain('history of AAAA-2');
     bridge.detachViewer('iterm-AAAA-2', viewerA);
     expect(screenSubs()).toHaveLength(1);
     bridge.detachViewer('iterm-AAAA-2', viewerB);
     await vi.waitFor(() => expect(screenSubs().map((r) => r.notificationRequest.subscribe)).toEqual([true, false]));
+  });
+
+  it('advances live viewer scrollback when iTerm2 scrolls the screen', async () => {
+    await listAndConnect();
+    const viewer = fakeSocket('v');
+    bridge.attachViewer('iterm-AAAA-1', viewer);
+    await vi.waitFor(() => expect(viewer.last('iterm:output')?.reset).toBe(true));
+
+    fake.screenStartLine += 2;
+    fake.notify({ screenUpdateNotification: { session: 'AAAA-1' } });
+    await vi.waitFor(() => expect(viewer.last('iterm:output')?.scrollbackRows).toBe(2));
+    expect(viewer.last('iterm:output').reset).toBeUndefined();
+  });
+
+  it('replaces a viewer snapshot after more rows scroll than its prior screen held', async () => {
+    await listAndConnect();
+    const viewer = fakeSocket('v');
+    bridge.attachViewer('iterm-AAAA-1', viewer);
+    await vi.waitFor(() => expect(viewer.last('iterm:output')?.reset).toBe(true));
+
+    fake.screenStartLine += 25;
+    fake.notify({ screenUpdateNotification: { session: 'AAAA-1' } });
+    await vi.waitFor(() => expect(viewer.all('iterm:output').filter((item) => item.reset)).toHaveLength(2));
+    expect(viewer.last('iterm:output').data).toContain('history of AAAA-1');
   });
 
   it('coalesces a burst of screen updates to one in-flight fetch plus one trailing fetch', async () => {

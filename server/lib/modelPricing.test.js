@@ -86,6 +86,13 @@ describe('resolveModelRates', () => {
     expect(fable5).toMatchObject({ cacheReadPer1M: 1.0, cacheWritePer1M: 12.5 });
   });
 
+  it('prices Opus 5.5 at its own launch rate, not the Opus tier rate', () => {
+    expect(resolveModelRates('claude-code', 'claude-opus-5-5')).toMatchObject({
+      matched: 'exact', inputPer1M: 4, outputPer1M: 20, cacheReadPer1M: 0.2, cacheWritePer1M: 5,
+    });
+    expect(resolveModelRates('claude-code', 'claude-opus-5')).toMatchObject({ inputPer1M: 5, outputPer1M: 25 });
+  });
+
   it('resolves Bedrock-prefixed ids through family rules', () => {
     const r = resolveModelRates('claude-code-bedrock', 'global.anthropic.claude-opus-4-8');
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', matched: 'family' });

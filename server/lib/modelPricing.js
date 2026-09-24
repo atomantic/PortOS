@@ -1,8 +1,8 @@
 /**
- * Per-model API billing rates for the "what would this have cost" estimates on
- * /devtools/usage. PortOS runs on provider subscriptions, so these numbers are
- * informational only — they answer "what would the recorded usage have cost
- * under API billing," never an actual bill.
+ * Per-model API billing rates for informational cost estimates. Subscription
+ * plans and local providers do not expose a bill per benchmark run, so these
+ * rates answer "what would the recorded tokens cost under API billing," never
+ * the actual subscription allowance consumed or a local inference bill.
  *
  * Rates are USD per 1M tokens. Standard input/output come from the table below;
  * the prompt-cache tiers are derived from the input rate by the multipliers in
@@ -30,6 +30,19 @@
  */
 
 export const PRICING_AS_OF = '2026-09-01';
+
+// Newer model launch rates are tracked separately so the baseline date above
+// does not imply that every vendor's pricing was re-verified on that date.
+const MODEL_RATE_AS_OF = Object.freeze({
+  'claude-opus-5-5': '2026-09-23',
+  'gpt-6-sol': '2026-09-22',
+  'gpt-6-luna': '2026-09-22',
+  'gpt-5.6-sol': '2026-09-22',
+  'gpt-5.6-luna': '2026-09-22',
+});
+
+export const pricingAsOfForModel = (model) =>
+  MODEL_RATE_AS_OF[String(model || '').trim().toLowerCase()] || PRICING_AS_OF;
 
 /**
  * Every shipped Claude Opus generation bills at the same published rate, so the
@@ -62,6 +75,9 @@ const FABLE_MODEL_IDS = ['claude-fable-5-1', 'claude-fable-5'];
 const EXACT_RATES = {
   // Anthropic
   'claude-fable-5-1': [10.0, 50.0],
+  // Opus 5.5 launched below the $5/$25 Opus tier rate, so it is its own row
+  // rather than a member of OPUS_MODEL_IDS.
+  'claude-opus-5-5': [4.0, 20.0],
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
   // Cloned per row so each key owns its pair exactly as the hand-written rows
@@ -74,11 +90,15 @@ const EXACT_RATES = {
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
   'claude-haiku-4-5': [1.0, 5.0],
-  // OpenAI (Codex CLI)
+  // OpenAI (Codex CLI). GPT-6 Sol/Luna and updated GPT-5.6 Sol/Luna rates were
+  // verified against the 2026-09-22 model launch:
+  // https://openai.com/index/introducing-gpt-6-sol-and-luna/
   'gpt-6-astra': [10.0, 50.0],
-  'gpt-5.6-sol': [5.0, 30.0],
+  'gpt-6-sol': [2.0, 10.0],
+  'gpt-6-luna': [0.1, 0.5],
+  'gpt-5.6-sol': [4.0, 20.0],
   'gpt-5.6-terra': [2.5, 15.0],
-  'gpt-5.6-luna': [1.0, 6.0],
+  'gpt-5.6-luna': [0.2, 1.2],
   'gpt-5.5': [5.0, 30.0],
   'gpt-5.5-pro': [30.0, 180.0],
   'gpt-5.4': [2.5, 15.0],
@@ -199,6 +219,8 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok/, read: 0.15, write: 1.25 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
+  // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
+  { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
 ];
 
 const cacheMultipliers = (rateModel) => {

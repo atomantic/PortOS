@@ -131,6 +131,23 @@ describe('TaskAddForm responsive layout', () => {
     expect(api.addCosTask).toHaveBeenCalledTimes(1);
   });
 
+  it('does not submit twice while the first request is pending', async () => {
+    localStorage.clear();
+    let resolveTask;
+    api.addCosTask.mockReturnValue(new Promise((resolve) => { resolveTask = resolve; }));
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    const input = screen.getByRole('textbox', { name: /Task description/ });
+    fireEvent.change(input, { target: { value: 'Submit once' } });
+    const button = screen.getByRole('button', { name: 'Add' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(api.addCosTask).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveTask({ id: 'example-task' }); });
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
   it.each([false, true])('keeps a new app selection after restoring a draft (deferred apps: %s)', async (deferred) => {
     localStorage.clear();
     localStorage.setItem('portos-cos-task-description-draft', JSON.stringify({ description: 'Inspect the selected app', app: 'draft-app' }));
@@ -148,6 +165,29 @@ describe('TaskAddForm responsive layout', () => {
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
     expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'chosen-app' }), { silent: true });
+  });
+
+  it('keeps the target app selector on the main queue-first form', async () => {
+    localStorage.clear();
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    render(<TaskAddForm queueFirst providers={[]} defaultApp="first-app"
+      apps={[{ id: 'first-app', name: 'First App' }, { id: 'chosen-app', name: 'Chosen App' }]}
+      onTaskAdded={vi.fn()} />);
+
+    const appSelect = screen.getByLabelText('Target application');
+    expect(appSelect).toHaveValue('first-app');
+    expect(appSelect.closest('#task-configuration')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Task configuration' })).not.toBeInTheDocument();
+
+    await user.selectOptions(appSelect, 'chosen-app');
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect the chosen app');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({
+      app: 'chosen-app',
+      description: 'Inspect the chosen app',
+    }), { silent: true });
   });
 
   // #7796: hiding configuration must not reset the draft or silently change

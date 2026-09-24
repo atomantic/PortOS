@@ -691,6 +691,7 @@ export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
  * otherwise sit blocked forever.
  */
 async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
+  let revived = 0;
   for (const task of blocked || []) {
     if (!TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory) || !task.metadata?.cooldownUntil) continue;
     // An unparseable `cooldownUntil` yields NaN, and NaN loses BOTH comparisons —
@@ -710,7 +711,9 @@ async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
         cooldownUntil: undefined
       }
     }, task.taskType || defaultTaskType);
+    revived++;
   }
+  return revived;
 }
 
 /**
@@ -723,10 +726,13 @@ async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
  * version re-derived the queue of origin with `userBlocked.includes(task)` per
  * task, an O(N) scan inside an O(N) loop (#3500). Passing the origin down makes
  * classification O(1) and the whole pass linear.
+ *
+ * @returns {Promise<number>} how many tasks were revived
  */
 export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
-  await unblockExpiredCooldownsInQueue(userTaskData.grouped?.blocked, 'user');
-  await unblockExpiredCooldownsInQueue(cosTaskData.grouped?.blocked, 'internal');
+  const user = await unblockExpiredCooldownsInQueue(userTaskData.grouped?.blocked, 'user');
+  const internal = await unblockExpiredCooldownsInQueue(cosTaskData.grouped?.blocked, 'internal');
+  return user + internal;
 }
 
 /**
@@ -2002,10 +2008,14 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // stealing the request means inheriting its card, because the on-demand drain
   // will never see that request again. See `finishPreflightDispatch`.
   let stolenCardId = null;
+  // A stolen request's run parameters (a quota-burn or maintenance step's
+  // `params`), forwarded exactly as the on-demand drain forwards them.
+  let stolenRunOverrides = null;
 
   if (appRequests.length > 0) {
     const request = appRequests[0];
     targetPullRequest = request.targetPullRequest ?? null;
+    stolenRunOverrides = request.burn?.overrides?.params ?? null;
     const { cardIdForRequest } = await import('./preflightTaskCard.js');
     stolenCardId = cardIdForRequest(request);
     await taskSchedule.clearOnDemandRequest(request.id);
@@ -2055,6 +2065,8 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
     targetPullRequest,
+    onDemand: selectionReason === 'on-demand',
+    runOverrides: stolenRunOverrides,
     // The deterministic pre-agent work (pr-reviewer's security preflight)
     // reports into the stolen Run's card as it runs, exactly as it does on the
     // on-demand drain — this is the whole reason the card is opened early.
@@ -2392,6 +2404,25 @@ function buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, app
 }
 
 /**
+ * The dispatch-side half of audit applicability (see `resolveAuditApplicability`).
+ * A detection failure never blocks work — the gate only removes what it has
+ * evidence against.
+ *
+ * @returns {Promise<boolean>} true when the dispatch must be skipped
+ */
+async function skipInapplicableAudit(app, taskType, taskSchedule) {
+  const { resolveAuditApplicability } = await import('./appQualitySchedule.js');
+  const verdict = await resolveAuditApplicability(app, taskType).catch((err) => {
+    emitLog('warn', `Audit applicability check failed for ${taskType}/${app.name}: ${err.message}`, { appId: app.id, analysisType: taskType });
+    return { applicable: true, reason: null };
+  });
+  if (verdict.applicable) return false;
+  emitLog('info', `⏭️ Skipping ${taskType} for ${app.name}: not applicable — ${verdict.reason}`, { appId: app.id, analysisType: taskType });
+  await taskSchedule.recordExecution(taskType, app.id);
+  return true;
+}
+
+/**
  * Run a task type's registered buildTaskInput hook (taskTypeHooks.js) for
  * deterministic pre-agent data collection. Returns `{ skip: true }` when the
  * hook opts out (execution recorded so cadence advances), otherwise
@@ -2707,6 +2738,10 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
 export async function prepareManagedAppImprovementTask(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
+  // An on-demand request this call is serving (a user Run, a quota-burn or
+  // maintenance step), whichever lane picked it up. Exempts it from the
+  // scheduled lane's audit-applicability gate.
+  onDemand = false,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
@@ -2764,6 +2799,19 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // pass, so an invocation can carry nothing a stored override could not.
   const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
   if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
+
+  // Audit applicability bail-out — before preflights or a spawn slot. On the
+  // SCHEDULED lane, a quality audit this repository cannot have findings for (a
+  // mobile audit of a pure API, an infrastructure audit of a repo with no
+  // deployment config) is skipped with a logged reason instead of paying a
+  // provider call to be told "not applicable"; execution is recorded so the
+  // cadence advances. An on-demand request is not gated here — whether the
+  // drain or idle review serves it: a manual Run is an explicit choice, and the
+  // automated on-demand callers (maintenance runs, quota-burn steps) gate in
+  // `resolveQuotaBurnStep` before they queue. `runInapplicableAudit` is the
+  // user's recorded override from the schedule form.
+  if (!skipPreconditions && !onDemand && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
+    && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);

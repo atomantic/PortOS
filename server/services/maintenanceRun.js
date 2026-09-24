@@ -55,6 +55,8 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
+import { pluralize } from '../lib/textUtils.js';
 import { isQueuedContinuation } from '../lib/agentOutcome.js';
 import { cosEvents } from './cosEvents.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
@@ -176,7 +178,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -202,7 +204,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
     id, appId, familyId, claimFamilyId, ...pins,
     taskTypes,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes, explicitCheck }),
     completed: {},
     active: null,
     reason: null,
@@ -318,23 +320,38 @@ async function evaluate(id, { ignoreTaskId }) {
 
   const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
+  // Step id → why it did not apply. Persisted with a hold too, so a later hold
+  // does not throw away skips this pass decided — but only when the pass moved
+  // the ledger, so an unchanged hold still costs no write or broadcast.
+  const skipped = { ...run.skipped };
+  const ledger = () => (Object.keys(completed).length !== Object.keys(run.completed || {}).length ? { completed, skipped } : null);
   for (const step of run.steps) {
     if (completed[step.id]) continue;
     const shape = sequenceStepShapeReason(step);
-    if (shape) return hold(shape);
+    if (shape) return hold(shape, ledger());
     if (step.drain) {
       const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
       if (probe.drained) {
         completed[step.id] = new Date().toISOString();
         continue;
       }
-      if (!probe.job) return hold(probe.reason);
+      if (!probe.job) return hold(probe.reason, ledger());
     }
     const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
-    if (!result.dispatched) return hold(result.reason, { completed });
+    // An audit this repository cannot have findings for is COMPLETED as
+    // skipped: holding on it would leave the step pending forever, since the
+    // verdict will not change on the next evaluation.
+    if (result.code === QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE) {
+      completed[step.id] = new Date().toISOString();
+      skipped[step.id] = result.reason;
+      console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — ${result.reason}`);
+      continue;
+    }
+    if (!result.dispatched) return hold(result.reason, { completed, skipped });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {
       completed,
+      skipped,
       steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
       reason: null,
       active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
@@ -342,12 +359,19 @@ async function evaluate(id, { ignoreTaskId }) {
     console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
     return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
   }
+  // Name the skips in the reason the run view shows: a run whose only selected
+  // check did not apply would otherwise finish as a bare "complete" with no
+  // explanation of why nothing ran.
+  const skippedCount = Object.keys(skipped).length;
+  const reason = skippedCount
+    ? `maintenance sequence complete — skipped ${pluralize(skippedCount, 'check that does', 'checks that do')} not apply to this repository`
+    : 'maintenance sequence complete';
   await patchRun(id, {
-    completed, active: null, reason: 'maintenance sequence complete',
+    completed, skipped, active: null, reason,
     status: MAINTENANCE_RUN_STATUS.COMPLETED, finishedAt: new Date().toISOString(),
   });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
-  return { dispatched: false, completed: true, reason: 'maintenance sequence complete' };
+  return { dispatched: false, completed: true, reason };
 }
 
 /**

@@ -181,6 +181,7 @@ import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { configureTailcatIngress } from './services/tailcatIngress.js';
 import { createModelComparisonRoutes } from './routes/modelComparison.js';
+import { createModelPerformanceBenchmarkRoutes } from './routes/modelPerformanceBenchmarks.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
 
@@ -296,7 +297,8 @@ app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 
 // AI Toolkit routes with PortOS extensions
-app.use('/api/providers/comparison', createModelComparisonRoutes(aiToolkit.services.providers));
+app.use('/api/providers/comparison', createModelComparisonRoutes());
+app.use('/api/models/performance/task-benchmark', createModelPerformanceBenchmarkRoutes(aiToolkit.services.providers));
 app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
 app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
 app.use('/api/prompts', createPortOSPromptsRoutes(aiToolkit));

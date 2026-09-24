@@ -8,10 +8,11 @@
  * (e.g., PortOS itself watches `phosphene` for video-gen ideas). The
  * `reference-watch` scheduled task asks this service to fetch each ref
  * and find commits since `lastReviewedSha`. The CoS sub-agent then records
- * slug-tagged `[ref-watch-…]` proposals in the target app's CONFIGURED work
- * tracker — PLAN.md, GitHub Issues, GitLab Issues, or JIRA (resolved via
- * `resolveAppWorkTracker`) — which `/claim` / `plan-task` / `claim-issue*`
- * picks up later. The destination-specific guidance is injected into the
+ * proposals in the target app's CONFIGURED work tracker — PLAN.md, GitHub
+ * Issues, GitLab Issues, or JIRA (resolved via `resolveAppWorkTracker`). PLAN.md
+ * keeps its checklist IDs; forge titles are human-readable and use the issue
+ * number/key as the ID. `/claim` / `plan-task` / `claim-issue*` picks up later.
+ * The destination-specific guidance is injected into the
  * prompt's `{trackerInstructions}` block by BOTH dispatch paths —
  * `triggerReferenceAnalysis` here (the on-commit trigger) and
  * `resolveReferenceWatchBlock` in cosTaskPreStepBlocks.js (the WEEKLY scheduled
@@ -707,10 +708,10 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
       // Resolved work tracker the prompt told the agent to file proposals into
       // (PLAN.md / GitHub / GitLab / JIRA) — recorded for traceability.
       workTracker: workTracker.resolved,
-      // The reference-watch prompt v3 instructs the agent to record proposals in
-      // the resolved tracker: the PLAN.md path APPENDS slug-tagged checklist
-      // items (and commits); the GitHub/GitLab paths shell out to `gh`/`glab
-      // issue create`. readOnly:true would inject the "do not modify or commit
+      // The reference-watch prompt v4 instructs the agent to record proposals in
+      // the resolved tracker: PLAN.md commits checklist items; GitHub/GitLab
+      // use plain issue titles and the shared `gh`/`glab` filing instructions.
+      // readOnly:true would inject the "do not modify or commit
       // files" guard into the system prompt and the agent would refuse to
       // write/commit/shell — defeating the whole flow. Mark writable.
       readOnly: false,

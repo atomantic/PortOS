@@ -32,6 +32,8 @@ vi.mock('../../services/pm2.js', () => ({
 vi.mock('../../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
   writeEcosystemPortEdits: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, remapApplied: true, applied: [], unapplied: [] }),
+}));
+vi.mock('../../services/appProcessTypes.js', () => ({
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
   NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
 }));
@@ -65,11 +67,13 @@ describe('Apps CRUD Routes', () => {
     exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
     const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
     expect(result.status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined, undefined);
     expect(appsService.getAppById).not.toHaveBeenCalled();
     const repository = 'a'.repeat(64);
     expect((await request(app).get(`/api/apps/quality-federation?repository=${repository}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository, undefined);
+    await request(app).get('/api/apps/quality-federation?categories=security,privacy').set('X-PortOS-Instance-Id', 'peer');
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, undefined, ['security', 'privacy']);
     expect((await request(app).get('/api/apps/quality-federation?repository=invalid')).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
@@ -297,6 +301,7 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(201);
       expect(response.body.id).toBe('app-001');
       expect(appsService.createApp).toHaveBeenCalledWith(expect.objectContaining({ name: 'New App' }));
+      expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('create', 'app-001');
     });
 
     it('should return 400 if validation fails', async () => {
@@ -320,6 +325,7 @@ describe('Apps CRUD Routes', () => {
 
       expect(response.status).toBe(200);
       expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.objectContaining({ name: 'Updated Name' }));
+      expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('update', 'app-001');
     });
 
     it('should return 404 if app not found', async () => {

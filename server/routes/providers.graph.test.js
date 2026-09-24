@@ -22,6 +22,7 @@ const graph = {
   linkBinding: vi.fn(),
   unlinkBinding: vi.fn(),
   removeConnection: vi.fn(),
+  presetSkipReason: vi.fn(() => null),
 };
 vi.mock('../services/providerGraph.js', () => graph);
 

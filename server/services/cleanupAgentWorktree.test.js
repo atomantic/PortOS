@@ -142,12 +142,6 @@ vi.mock('./toolStateMachine.js', () => ({
   getStats: vi.fn()
 }));
 
-vi.mock('./thinkingLevels.js', () => ({
-  resolveThinkingLevel: vi.fn(),
-  getModelForLevel: vi.fn(),
-  isLocalPreferred: vi.fn(() => false)
-}));
-
 vi.mock('./executionLanes.js', () => ({
   determineLane: vi.fn(),
   acquire: vi.fn(() => ({ success: true })),

@@ -1,5 +1,6 @@
 import { buildEnv, spawnPm2 } from '../services/pm2.js';
-import { getAppById, resolvePm2HomeForProcess } from '../services/apps.js';
+import { getAppById } from '../services/apps.js';
+import { resolvePm2HomeForProcess } from '../services/appProcessStatus.js';
 import {
   logsSubscribeSchema,
   logsUnsubscribeSchema,

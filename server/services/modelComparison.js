@@ -1,14 +1,24 @@
-/** Machine-local public reference catalog; see docs/MODEL-COMPARISON.md. */
+/** Shipped public reference data and machine-local PortOS benchmark observations. */
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { readFile } from 'fs/promises';
 import { PATHS } from '../lib/paths.js';
 import { atomicWrite } from '../lib/fileCore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { modelComparisonImportSchema } from '../lib/validation.js';
+import { modelComparisonCatalogSchema, modelComparisonImportSchema } from '../lib/validation.js';
 
 const queueWrite = createFileWriteQueue();
 const catalogPath = () => join(PATHS.data, 'model-comparison.json');
+const retiredExternalBenchmark = row => /^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i.test(row?.benchmark || '')
+  || /^(?:aa-v\d|swebench-)/i.test(row?.id || '');
+const isPortosBenchmarkObservation = row => row?.id?.startsWith('portos:')
+  || /^PortOS Task Bench v\d+\b/.test(row?.benchmark || '');
+const hasPortosRunSource = row => [
+  row?.quality, row?.costPerTask, row?.inputPerMillion, row?.outputPerMillion,
+  row?.reasoningPerMillion, row?.responseSeconds, row?.tokensPerSecond,
+  row?.tokensPerRun, row?.inputTokens, row?.outputTokens, row?.apiEquivalentCost,
+].some(metric => typeof metric?.source?.url === 'string'
+  && /^portos:\/\/model-comparison\/[0-9a-f-]{36}$/i.test(metric.source.url));
 
 export async function getModelComparison() {
   const raw = await readFile(catalogPath(), 'utf8').catch(error => {
@@ -17,30 +27,67 @@ export async function getModelComparison() {
   });
   // A malformed or future-version catalog must surface an error, never be
   // replaced with an empty store by the next import.
-  return modelComparisonImportSchema.parse(JSON.parse(raw));
+  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  return { ...catalog, observations: catalog.observations.filter(row => !retiredExternalBenchmark(row)) };
+}
+
+/** Public comparison data always comes from the shipped catalog, never local files. */
+export async function getShippedModelComparison() {
+  const raw = await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8');
+  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  return {
+    ...catalog,
+    observations: catalog.observations.filter(row =>
+      !retiredExternalBenchmark(row) && !isPortosBenchmarkObservation(row) && !hasPortosRunSource(row)),
+  };
+}
+
+/** Local task-benchmark history is exposed only to Models → Performance. */
+export async function getPortosModelBenchmarkObservations() {
+  const catalog = await getModelComparison();
+  return {
+    schemaVersion: catalog.schemaVersion,
+    observations: catalog.observations.filter(isPortosBenchmarkObservation),
+  };
+}
+
+async function mergeModelComparison(incoming) {
+  const current = await getModelComparison();
+  const rows = new Map(current.observations.map(row => [row.id, row]));
+  for (const row of incoming.observations) {
+    const prior = rows.get(row.id);
+    if (prior) {
+      // Stable ids cannot silently change the meaning of existing evidence.
+      for (const key of ['provider', 'model', 'effort', 'configuration', 'billing', 'benchmark']) {
+        if (row[key] !== prior[key]) throw new ServerError(`Observation identity changed: ${row.id}`, { status: 409 });
+      }
+      for (const key of ['quality', 'costPerTask', 'apiEquivalentCost', 'inputPerMillion', 'outputPerMillion', 'reasoningPerMillion', 'responseSeconds', 'tokensPerSecond', 'tokensPerRun', 'inputTokens', 'outputTokens', 'quota']) {
+        const before = prior[key];
+        if (before && (!row[key] || Date.parse(row[key].source.retrievedAt) < Date.parse(before.source.retrievedAt))) row[key] = before;
+      }
+    }
+    rows.set(row.id, row);
+  }
+  const result = modelComparisonCatalogSchema.parse({ schemaVersion: 1, observations: [...rows.values()] });
+  await atomicWrite(catalogPath(), result);
+  return result;
 }
 
 export function importModelComparison(input) {
   const incoming = modelComparisonImportSchema.parse(input);
-  return queueWrite(async () => {
-    const current = await getModelComparison();
-    const rows = new Map(current.observations.map(row => [row.id, row]));
-    for (const row of incoming.observations) {
-      const prior = rows.get(row.id);
-      if (prior) {
-        // Stable ids cannot silently change the meaning of existing evidence.
-        for (const key of ['provider', 'model', 'effort', 'configuration', 'billing', 'benchmark']) {
-          if (row[key] !== prior[key]) throw new ServerError(`Observation identity changed: ${row.id}`, { status: 409 });
-        }
-        for (const key of ['quality', 'costPerTask', 'inputPerMillion', 'outputPerMillion', 'reasoningPerMillion', 'responseSeconds', 'tokensPerSecond', 'quota']) {
-          const before = prior[key];
-          if (before && (!row[key] || Date.parse(row[key].source.retrievedAt) < Date.parse(before.source.retrievedAt))) row[key] = before;
-        }
-      }
-      rows.set(row.id, row);
-    }
-    const result = modelComparisonImportSchema.parse({ schemaVersion: 1, observations: [...rows.values()] });
-    await atomicWrite(catalogPath(), result);
-    return result;
-  });
+  if (incoming.observations.some(retiredExternalBenchmark)) {
+    throw new ServerError('Artificial Analysis and SWE-bench imports have been retired; use PortOS-run benchmark results.', { status: 410 });
+  }
+  if (incoming.observations.some(row => isPortosBenchmarkObservation(row) || hasPortosRunSource(row))) {
+    throw new ServerError('PortOS benchmark observations can only be created by the explicit benchmark run.', { status: 400 });
+  }
+  return queueWrite(() => mergeModelComparison(incoming));
+}
+
+export function recordPortosModelBenchmark(observation) {
+  const incoming = modelComparisonImportSchema.parse({ schemaVersion: 1, observations: [observation] });
+  if (!isPortosBenchmarkObservation(observation) || !hasPortosRunSource(observation)) {
+    throw new ServerError('Invalid PortOS benchmark observation.', { status: 400 });
+  }
+  return queueWrite(() => mergeModelComparison(incoming));
 }

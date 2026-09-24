@@ -115,7 +115,8 @@ function runCli(cmd, args, cwd, env) {
 
 /**
  * Extract a GitHub issue number from a git ref ONLY when it matches a documented
- * claim pattern (`claim/issue-<num>` or `cos/<task>/issue-<num>/<agent>`).
+ * claim pattern (`claim/issue-<num>`, `cos/<task>/issue-<num>/<agent>`, or the
+ * slashdo `/do:next` branch `next/issue-<num>`, #8161).
  * Reuses extractSlugFromRef so the ref-matching rules stay in one place.
  */
 export function issueNumberFromRef(ref) {
@@ -167,10 +168,11 @@ async function resolveGitlabNamespace(repoPath) {
 
 /**
  * Collect the set of issue numbers currently in flight, evidenced by an open
- * `claim/issue-<num>` / `cos/.../issue-<num>/...` branch (local or remote) or an
- * open PR/MR source ref. Best-effort — degrades to whatever evidence is reachable.
- * `forge` selects how open changes are listed: GitHub PR head refs
- * (`gh pr list`) vs GitLab MR source branches (`glab mr list`).
+ * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
+ * `/do:next`, #8161) branch (local or remote) or an open PR/MR source ref.
+ * Best-effort — degrades to whatever evidence is reachable. `forge` selects
+ * how open changes are listed: GitHub PR head refs (`gh pr list`) vs GitLab
+ * MR source branches (`glab mr list`).
  */
 async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   const nums = new Set();
@@ -761,7 +763,13 @@ export async function listConfiguredForgeIssues(cli, app, options, env) {
   const result = await detectForgeIssues(
     cli === 'glab' ? 'claim-issue-gitlab' : 'claim-issue', app, options, true, env
   );
-  return { ok: !result.transient && result.reason !== 'no-repo-path', issues: result.issues || [], truncated: result.truncated === true };
+  const ok = !result.transient && result.reason !== 'no-repo-path';
+  return {
+    ok,
+    issues: result.issues || [],
+    truncated: result.truncated === true,
+    ...(ok ? {} : { error: result.detail || result.reason || '' }),
+  };
 }
 
 // Forge-specific detector entry points (thin wrappers over the shared factory).

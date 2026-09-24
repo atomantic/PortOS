@@ -853,11 +853,11 @@ describe('taskSchedule', () => {
       expect(interval.enabled).toBe(false)
     })
 
-    it('reference-watch default is writable so the v3 prompt can record proposals (PLAN.md commit or gh/glab issue create)', async () => {
-      // The v3 reference-watch prompt records proposals in the app's resolved
-      // work tracker: the PLAN.md path appends slug-tagged checklist items and
-      // commits them; the GitHub/GitLab paths shell out to `gh`/`glab issue
-      // create`. Both need a writable agent — if `readOnly` flips back to true,
+    it('reference-watch default is writable so the v4 prompt can record proposals (PLAN.md commit or gh/glab issue create)', async () => {
+      // The v4 reference-watch prompt records proposals in the app's resolved
+      // work tracker: PLAN.md commits its checklist items; GitHub/GitLab use
+      // the shared `gh`/`glab` issue instructions. Both need a writable agent —
+      // if `readOnly` flips back to true,
       // agentPromptBuilder injects the "## Read-Only Task" guard and the agent
       // refuses to write/commit/shell, silently breaking the flow. Pin the
       // contract so a future "default to read-only" refactor surfaces here.
@@ -874,13 +874,13 @@ describe('taskSchedule', () => {
       expect(PROMPT_VERSIONS['reference-watch']).toBe(REFERENCE_WATCH_AUDITED_VERSION)
     })
 
-    it('reference-watch v3 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
-      // The coupling the audit anchor protects: at the audited version (v3), the prompt
+    it('reference-watch v4 prompt requires a writable default so it can record proposals (PLAN.md commit or gh/glab issue create) (issue #734)', () => {
+      // The coupling the audit anchor protects: at the audited version (v4), the prompt
       // writes to the resolved tracker (PLAN.md commit, or `gh`/`glab issue create`), so the
       // raw default must be writable. If a future re-audit flips
       // REFERENCE_WATCH_AUDITED_VERSION to a propose-only version, update this expectation
       // alongside the default and the anchor.
-      if (REFERENCE_WATCH_AUDITED_VERSION === 3) {
+      if (REFERENCE_WATCH_AUDITED_VERSION === 4) {
         expect(DEFAULT_TASK_INTERVALS['reference-watch'].taskMetadata.readOnly).toBe(false)
       }
     })
@@ -1766,7 +1766,8 @@ describe('taskSchedule', () => {
       const prompt = await getTaskPrompt('ux')
       // The tracker block is injected at dispatch, so the token must survive here.
       expect(prompt).toContain('{trackerInstructions}')
-      expect(prompt).toContain('[ux-…]')
+      expect(prompt).toContain('short, human-readable title')
+      expect(prompt).not.toContain('[ux-…]')
       // Read-only-on-source is carried by the injected mode banner, not restated
       // in the body. ux is a file-issues-CAPABLE audit that merely DEFAULTS to
       // filing, so a body that hardcoded "no branches, no PRs" contradicted the
@@ -1822,7 +1823,8 @@ describe('taskSchedule', () => {
       const app = { repoPath: '/tmp/example-repo', workTracker: 'github' }
       const block = await resolveTrackerFilingBlock(app, 'plan-feature')
       expect(block.workTracker).toBe('github')
-      expect(block.trackerInstructions).toContain('[plan-feature-…]')
+      expect(block.trackerInstructions).toContain('The issue number is its ID')
+      expect(block.trackerInstructions).not.toContain('ID beginning with `plan-feature-`')
     })
 
     it('ships a prompt that plans without implementing', async () => {

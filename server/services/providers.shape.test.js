@@ -19,7 +19,7 @@ import { collectServerSources, readServerSource, SERVER_DIR } from '../lib/testH
  */
 describe('getAllProviders returns an envelope, not a list', () => {
   it('is documented as such at the definition', () => {
-    const src = readFileSync(join(SERVER_DIR, 'lib/aiToolkit/providers.js'), 'utf8');
+    const src = readFileSync(join(SERVER_DIR, 'lib/aiToolkit/internal/providerCrudService.js'), 'utf8');
     // The toolkit builds the envelope inline; if this shape ever changes, every
     // `listProviders` consumer has to be revisited.
     expect(src).toMatch(/return \{\s*activeProvider: data\.activeProvider,\s*providers: Object\.values\(data\.providers\)/);

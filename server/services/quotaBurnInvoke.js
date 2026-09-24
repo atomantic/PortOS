@@ -56,6 +56,7 @@ import {
   enabledAppIdsByTaskType,
   resolveQuotaBurnStepAvailability,
 } from '../lib/quotaBurnTaskRef.js';
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { isProgrammaticScheduledTaskType } from '../lib/taskTargetScope.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -185,7 +186,7 @@ export function isBurnEligibleCustomJob(job) {
  * An unset override inherits; nothing here writes back to the schedule or the
  * job record.
  */
-export async function resolveQuotaBurnStep(step, catalog = null) {
+export async function resolveQuotaBurnStep(step, catalog = null, { explicit = false } = {}) {
   const resolvedCatalog = catalog || await getQuotaBurnTaskCatalog();
   const unavailable = resolveQuotaBurnStepAvailability(step, resolvedCatalog);
   if (unavailable) return { unavailable };
@@ -207,6 +208,12 @@ export async function resolveQuotaBurnStep(step, catalog = null) {
   if (!interval) {
     return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.UNKNOWN_TASK, reason: `scheduled task "${ref.taskType}" could not be read` } };
   }
+  const effective = effectiveSettings(step, interval);
+  // Here rather than at invoke, so the status page's probe and the runner agree
+  // that an audit which cannot apply to its app is not ready work, and so a
+  // maintenance run can complete it as skipped from the same verdict.
+  const notApplicable = explicit ? null : await notApplicableReason(ref, effective.params);
+  if (notApplicable) return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE, reason: notApplicable } };
   return {
     kind: isProgrammaticScheduledTaskType(ref.taskType) ? 'programmatic' : 'builtin',
     // Handed back so a caller that resolved through a catalog keeps reading that
@@ -214,8 +221,16 @@ export async function resolveQuotaBurnStep(step, catalog = null) {
     catalog: resolvedCatalog,
     ref,
     interval,
-    effective: effectiveSettings(step, interval),
+    effective,
   };
+}
+
+/** Why an audit step cannot apply to its app, or null — honoring the user's explicit override. */
+async function notApplicableReason(ref, params) {
+  if (!ref.appId || params?.runInapplicableAudit === true || !isAuditTaskType(ref.taskType)) return null;
+  const { inapplicableAuditReason } = await import('./appQualitySchedule.js');
+  const reason = await inapplicableAuditReason(ref.appId, ref.taskType);
+  return reason ? `"${ref.taskType}" does not apply to this app: ${reason}` : null;
 }
 
 /**
@@ -403,8 +418,12 @@ async function queuedOnDemandReason(queued, taskType, appId) {
  * spends a subscription while the user has CoS improvement switched off.
  */
 export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null, maintenanceRunId = null } = {}) {
-  const resolved = await resolveQuotaBurnStep(step, catalog);
-  if (resolved.unavailable) return declined(resolved.unavailable.reason);
+  // A forced run is the user clicking this one step: like a manual Run, it is an
+  // explicit choice and is not refused as not-applicable.
+  const resolved = await resolveQuotaBurnStep(step, catalog, { explicit: force });
+  // The code rides along so a caller can tell "does not apply" (a maintenance
+  // run completes that step as skipped) from a refusal it must hold on.
+  if (resolved.unavailable) return { ...declined(resolved.unavailable.reason), code: resolved.unavailable.code };
 
   if (resolved.kind === 'programmatic') return runProgrammaticStep({ resolved, family, context, force });
   if (resolved.kind === 'custom') return runCustomJobStep({ resolved, step, family, candidate, maintenanceRunId });
@@ -449,6 +468,7 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   // further down; a request has no such backstop.
   const queued = await queuedOnDemandReason(resolved.catalog?.queued, resolved.ref.taskType, resolved.ref.appId);
   if (queued) return declined(queued);
+
 
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return declined(picked.error);

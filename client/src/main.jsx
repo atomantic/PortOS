@@ -17,19 +17,25 @@ import './index.css';
 // only — no-op in dev and over plain-HTTP Tailnet). See lib/registerServiceWorker.
 registerServiceWorker();
 
-// Vite emits `vite:preloadError` when a code-split chunk's preload 404s —
-// usually because the server rebuilt and the chunk filename changed while
-// this tab was still open. Catching it here reloads before React's error
-// boundary ever sees the failure.
+// Start checking for a newer build as soon as a chunk preload fails. Vite also
+// emits this for module evaluation errors, so the recovery helper reloads only
+// after the live shell confirms this tab is stale.
 window.addEventListener('vite:preloadError', (event) => {
-  if (reloadOnceForStaleChunk()) event.preventDefault?.();
+  if (isStaleChunkError(event.payload, { duringImport: true })) {
+    void reloadOnceForStaleChunk();
+  }
 });
 
 // Handle unhandled promise rejections — also a chance to catch stale chunks
 // that surface as a rejected dynamic-import promise outside React's tree.
 window.addEventListener('unhandledrejection', (event) => {
-  if (isStaleChunkError(event.reason) && reloadOnceForStaleChunk()) {
+  if (isStaleChunkError(event.reason, { duringImport: true })) {
     event.preventDefault();
+    void reloadOnceForStaleChunk().then((reloaded) => {
+      if (reloaded) return;
+      reportClientError({ type: 'unhandledrejection', reason: event.reason });
+      console.error('❌ Unhandled Promise Rejection:', event.reason);
+    });
     return;
   }
   // Report first so a hostile `event.reason` (throwing toString / circular)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { itermStyleToSgr, renderItermFrame } from './itermScreenRender.js';
+import { itermStyleToSgr, renderItermFrame, renderItermSnapshot } from './itermScreenRender.js';
 
 const E = '\x1b[';
 
@@ -59,5 +59,35 @@ describe('renderItermFrame', () => {
     const frame = renderItermFrame({ lines: [{ text: 'a\x1b[2Jb' }], cols: 10, rows: 1 });
     expect(frame).toContain('a [2Jb');
     expect(frame).not.toContain('\x1b[2J');
+  });
+});
+
+describe('renderItermSnapshot', () => {
+  it('seeds prior rows into scrollback before painting the current screen', () => {
+    const snapshot = renderItermSnapshot({
+      lines: [{ text: 'prior output' }, { text: 'current prompt' }, { text: '$ ' }],
+      firstVisibleLine: 501,
+      rangeStartLine: 500,
+      cursor: { x: 2, y: 502 },
+      cols: 20,
+      rows: 2,
+    });
+
+    expect(snapshot.indexOf('prior output')).toBeLessThan(snapshot.indexOf('current prompt'));
+    expect(snapshot).toContain('\r\n\r\n');
+    expect(snapshot.endsWith(`${E}2;3H${E}?25h`)).toBe(true);
+  });
+
+  it('does not invent scrollback when the returned range starts at the live screen', () => {
+    const snapshot = renderItermSnapshot({
+      lines: [{ text: '$ ' }],
+      firstVisibleLine: 501,
+      rangeStartLine: 501,
+      cols: 20,
+      rows: 2,
+    });
+
+    expect(snapshot.startsWith(`${E}?25l${E}H`)).toBe(true);
+    expect(snapshot).not.toContain('\r\n');
   });
 });

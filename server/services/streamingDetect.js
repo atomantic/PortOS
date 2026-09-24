@@ -2,12 +2,11 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { homedir } from 'os';
-import { execPm2 } from './pm2.js';
+import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { detectAppIcon } from './appIconDetect.js';
-
-/** App types that do not use PM2 for process management */
-export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
+import { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType } from './appProcessTypes.js';
+export { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType };
 
 /**
  * Language markers, checked FIRST: a repo's LANGUAGE beats its packaging, so a
@@ -92,19 +91,6 @@ export const NON_STANDARDIZABLE_TYPES = new Set([...NON_PM2_TYPES, ...NON_NODE_T
 export const isStandardizable = (type) => !NON_STANDARDIZABLE_TYPES.has(type);
 
 /**
- * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot
- * game binary). These are still supervised through PM2, but launched from the
- * app's own `startCommands` — never an ecosystem web-server config — and with
- * autorestart OFF: the user closing the window is a NORMAL exit (code 0), not a
- * crash to relaunch. Port-dependent surfaces (Open UI, HTTP probes) branch on
- * "has a port" rather than assuming one.
- */
-export const DESKTOP_TYPES = new Set(['desktop']);
-
-/** Check if an app type is a portless GUI/desktop process. */
-export const isDesktopType = (type) => DESKTOP_TYPES.has(type);
-
-/**
  * Detect an optional native Godot launch target alongside the repo's normal
  * web-process configuration.
  *
@@ -146,9 +132,6 @@ export function detectGodotNativeLaunch(dirPath) {
  * and silently reverts on the next refresh.
  */
 const ECOSYSTEM_CONFIG_FILENAMES = ['ecosystem.config.js', 'ecosystem.config.cjs'];
-
-/** Check if an app type uses PM2 for process management */
-export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
 /**
  * Count the run of consecutive backslashes immediately before `idx`.
@@ -1410,53 +1393,56 @@ export async function streamDetection(socket, dirPath) {
     emit('pm2', 'skipped', { message: `Not applicable for ${result.type} apps` });
   } else {
     emit('pm2', 'running', { message: 'Checking PM2 processes...' });
-    // Use custom PM2_HOME if detected from ecosystem config
-    const pm2Env = result.pm2Home ? { ...process.env, PM2_HOME: result.pm2Home } : undefined;
-    const { stdout } = await execPm2(['jlist'], pm2Env ? { env: pm2Env } : {}).catch(() => ({ stdout: '[]' }));
-    // pm2 jlist may output ANSI codes and warnings before JSON
-    let jsonStart = stdout.indexOf('[{');
-    if (jsonStart < 0) {
-      const emptyMatch = stdout.match(/\[\](?![0-9])/);
-      jsonStart = emptyMatch ? stdout.indexOf(emptyMatch[0]) : -1;
-    }
-    const pm2Json = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
-    const pm2Processes = safeJSONParse(pm2Json, []);
+    // `listProcessesStrict()` returns `null` when the read itself FAILED (vs
+    // `[]` for a successful read with no processes) — the absent-vs-empty
+    // contract from issue #968, now the one non-test owner of raw `pm2 jlist`
+    // execution/parsing alongside `autofixer/shared.js` (#8164). Use custom
+    // PM2_HOME if detected from ecosystem config.
+    const pm2Processes = await listProcessesStrict(result.pm2Home || null);
 
-    // Look for processes that might be this app
-    const possibleNames = [
-      result.name,
-      result.name.toLowerCase(),
-      result.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
-      `${result.name}-ui`,
-      `${result.name}-api`
-    ];
-
-    const matchingProcesses = pm2Processes.filter(p =>
-      possibleNames.some(name => p.name.includes(name) || name.includes(p.name))
-    );
-
-    if (matchingProcesses.length > 0) {
-      result.pm2Status = matchingProcesses.map(p => ({
-        name: p.name,
-        status: p.pm2_env?.status,
-        pid: p.pid
-      }));
-      // Use actual found PM2 process names
-      result.pm2ProcessNames = matchingProcesses.map(p => p.name);
-      emit('pm2', 'done', {
-        message: `Found ${matchingProcesses.length} running process(es)`,
-        pm2Status: result.pm2Status,
-        pm2ProcessNames: result.pm2ProcessNames
-      });
+    if (pm2Processes === null) {
+      // A failed read must not be reported as "no matching processes" — that
+      // would silently drop the pm2ProcessNames the ecosystem config already
+      // found. Leave result.pm2Status/pm2ProcessNames as already derived and
+      // surface the read failure on its own stage.
+      emit('pm2', 'error', { message: 'PM2 process read failed — status is unavailable' });
     } else {
-      emit('pm2', 'done', { message: 'No matching PM2 processes found' });
-      // Generate PM2 process names only if none found from ecosystem.config
-      if (result.pm2ProcessNames.length === 0) {
-        const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-        if (result.type === 'vite+express') {
-          result.pm2ProcessNames = [`${baseName}-ui`, `${baseName}-api`];
-        } else {
-          result.pm2ProcessNames = [baseName];
+      // Look for processes that might be this app
+      const possibleNames = [
+        result.name,
+        result.name.toLowerCase(),
+        result.name.toLowerCase().replace(/[^a-z0-9]/g, '-'),
+        `${result.name}-ui`,
+        `${result.name}-api`
+      ];
+
+      const matchingProcesses = pm2Processes.filter(p =>
+        possibleNames.some(name => p.name.includes(name) || name.includes(p.name))
+      );
+
+      if (matchingProcesses.length > 0) {
+        result.pm2Status = matchingProcesses.map(p => ({
+          name: p.name,
+          status: p.status,
+          pid: p.pid
+        }));
+        // Use actual found PM2 process names
+        result.pm2ProcessNames = matchingProcesses.map(p => p.name);
+        emit('pm2', 'done', {
+          message: `Found ${matchingProcesses.length} running process(es)`,
+          pm2Status: result.pm2Status,
+          pm2ProcessNames: result.pm2ProcessNames
+        });
+      } else {
+        emit('pm2', 'done', { message: 'No matching PM2 processes found' });
+        // Generate PM2 process names only if none found from ecosystem.config
+        if (result.pm2ProcessNames.length === 0) {
+          const baseName = result.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+          if (result.type === 'vite+express') {
+            result.pm2ProcessNames = [`${baseName}-ui`, `${baseName}-api`];
+          } else {
+            result.pm2ProcessNames = [baseName];
+          }
         }
       }
     }

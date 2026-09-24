@@ -110,3 +110,38 @@ export const renderItermFrame = ({ lines = [], cursor, firstVisibleLine = 0, col
   if (cursor) out += `${ESC}?25h`;
   return out;
 };
+
+/**
+ * Seed an xterm scrollback buffer with the historical rows before painting the
+ * live screen. The extra line feeds scroll those rows above the viewport so
+ * the following frame can occupy the current screen without losing history.
+ */
+export const renderItermSnapshot = ({
+  lines = [], cursor, firstVisibleLine = 0, rangeStartLine, cols, rows,
+}) => {
+  const width = Math.max(1, cols || 0);
+  const height = Math.max(1, rows || lines.length || 1);
+  const firstReturnedLine = Number.isFinite(rangeStartLine)
+    ? rangeStartLine
+    : Math.max(0, firstVisibleLine - Math.max(0, lines.length - height));
+  const historyCount = clamp(firstVisibleLine - firstReturnedLine, 0, lines.length);
+  const historyLines = lines.slice(0, historyCount);
+  const screenLines = lines.slice(historyCount);
+
+  let history = '';
+  if (historyLines.length > 0) {
+    history = `${ESC}?25l${ESC}H`;
+    for (const line of historyLines) {
+      history += `${renderLine(line, width)}${ESC}0m${ESC}K\r\n`;
+    }
+    history += '\r\n'.repeat(height - 1);
+  }
+
+  return history + renderItermFrame({
+    lines: screenLines,
+    cursor,
+    firstVisibleLine,
+    cols: width,
+    rows: height,
+  });
+};

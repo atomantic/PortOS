@@ -100,11 +100,8 @@ export function transformAAModelsToObservations(models, options = {}) {
       },
     } : null;
 
-    // AA omits cost_per_task for most sub-max effort rows, and a stored value
-    // carries an AA source url + methodology — so a hand-entered figure would
-    // persist, federate and re-sync as something AA published. The gap is filled
-    // at render time instead (`client/src/lib/effortCostEstimate.js`), where it
-    // is drawn and labelled as an estimate.
+    // Preserve only costs Artificial Analysis actually publishes. PortOS no
+    // longer derives missing per-effort costs from another model's score curve.
     const costVal = m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost;
 
     const costPerTask = Number.isFinite(costVal) ? {

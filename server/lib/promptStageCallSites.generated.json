@@ -27,9 +27,6 @@
   "cd-treatment": [
     "server/services/creativeDirectorPrompts.js"
   ],
-  "cos-agent-briefing": [
-    "server/services/agentPromptBuilder.js"
-  ],
   "cos-task-enhance": [
     "server/services/persistentMindTaskCapability.js",
     "server/services/taskEnhancer.js"

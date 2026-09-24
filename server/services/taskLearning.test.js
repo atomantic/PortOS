@@ -807,6 +807,54 @@ describe('TaskLearning - getRoutingAccuracy', () => {
     expect(tiers[1].tier).toBe('medium');  // 60%
     expect(tiers[2].tier).toBe('light');   // 20%
   });
+
+  it('reports the learned tier advice per task type, and omits it where history says nothing', async () => {
+    const data = makeLearningData({
+      byTaskType: {
+        'self-improve:ui': {
+          completed: 20, succeeded: 8, failed: 12,
+          totalDurationMs: 2000000, avgDurationMs: 100000,
+          successRate: 40
+        }
+      },
+      routingAccuracy: {
+        'self-improve:ui': {
+          light: { succeeded: 1, failed: 9, lastAttempt: '2026-01-25T00:00:00.000Z' },
+          heavy: { succeeded: 7, failed: 3, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        },
+        'user-task': {
+          medium: { succeeded: 2, failed: 0, lastAttempt: '2026-01-26T00:00:00.000Z' }
+        }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await getRoutingAccuracy();
+    const byType = Object.fromEntries(result.matrix.map((entry) => [entry.taskType, entry]));
+
+    expect(byType['self-improve:ui'].suggestion.avoidTiers).toContain('light');
+    expect(byType['user-task'].suggestion).toBeUndefined();
+  });
+
+  it('advises only pinnable tiers: retired thinking-level names map to their tier, user-specified never appears', async () => {
+    const outcome = { completed: 15, succeeded: 12, failed: 3, totalDurationMs: 1500000, avgDurationMs: 100000, successRate: 80 };
+    const data = makeLearningData({
+      byTaskType: { 'legacy-high': outcome, 'pinned-only': outcome },
+      routingAccuracy: {
+        'legacy-high': { high: { succeeded: 9, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' } },
+        'pinned-only': { 'user-specified': { succeeded: 9, failed: 1, lastAttempt: '2026-01-26T00:00:00.000Z' } }
+      }
+    });
+    readFile.mockResolvedValue(JSON.stringify(data));
+
+    const result = await getRoutingAccuracy();
+    const byType = Object.fromEntries(result.matrix.map((entry) => [entry.taskType, entry]));
+
+    expect(byType['legacy-high'].suggestion.tier).toBe('heavy');
+    expect(byType['pinned-only'].suggestion).toBeUndefined();
+    // History is kept verbatim — only the advice is normalized.
+    expect(byType['legacy-high'].tiers[0].tier).toBe('high');
+  });
 });
 
 describe('TaskLearning - suggestModelTier with routing signals', () => {

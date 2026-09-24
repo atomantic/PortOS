@@ -125,8 +125,8 @@ export default function AppQualityScheduleForm({ app }) {
     toast.success(`Scheduled ${result.plan.slots.length} quality checks across the week`);
   };
 
-  if (error && !data) return <section aria-label="Weekly quality schedule" className="border-t border-port-border pt-3">
-    <h4 className="font-medium">Weekly quality schedule</h4>
+  if (error && !data) return <section aria-label="Weekly quality schedule">
+    <h4 className="sr-only">Weekly quality schedule</h4>
     <p role="alert" className="text-sm text-port-error">{error}</p>
     <button type="button" onClick={() => { setError(''); setReloadToken(token => token + 1); }}
       className="mt-2 text-xs text-port-accent hover:underline">Try again</button>
@@ -159,13 +159,12 @@ export default function AppQualityScheduleForm({ app }) {
     : null;
 
   return (
-    <section aria-label="Weekly quality schedule" className="border-t border-port-border pt-3 space-y-3">
-      <h4 className="font-medium">Weekly quality schedule</h4>
+    <section aria-label="Weekly quality schedule" className="space-y-3">
+      <h4 className="sr-only">Weekly quality schedule</h4>
       <p className="text-xs text-gray-400">
-        Spreads the selected checks over {daysUsed === 7 ? 'all seven days' : `${daysUsed} day${daysUsed === 1 ? '' : 's'}`} and picks the hours itself, avoiding the windows this app’s other
-        scheduled jobs already run in. {applicable.length} of {checks.length} checks apply to this repository
-        {complete ? '' : ' (the repository could not be fully scanned, so every check is offered)'}
-        {skipped.length > 0 && `; ${skipped.length} skipped`}. Nothing is saved until you press Apply.
+        {applicable.length} of {checks.length} checks apply to this repository
+        {complete ? '' : ' (scan incomplete, so every check is offered)'}
+        {skipped.length > 0 && `; ${skipped.length} skipped`}. Spread over {daysUsed === 7 ? 'all seven days' : `${daysUsed} day${daysUsed === 1 ? '' : 's'}`}, clear of this app’s other scheduled jobs.
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
@@ -297,8 +296,7 @@ export default function AppQualityScheduleForm({ app }) {
         <Link to="/cos/schedule" className="text-xs text-port-accent hover:underline">Review on the Schedule page</Link>
       </div>
       <p className="text-xs text-gray-500">
-        Applying enables the selected checks on this app with the planned cron expressions and DISABLES the ones you left out.
-        Other task types are untouched, and every entry stays editable on the Schedule page afterwards.
+        Apply enables the selected checks and disables the unselected ones. Other task types are untouched.
       </p>
     </section>
   );

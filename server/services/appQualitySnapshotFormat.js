@@ -165,9 +165,20 @@ export function serializeQualitySnapshot(repository, records) {
   return canonicalize(repository, normalized);
 }
 
-function parseDictionary(values, allowed) {
-  if (!Array.isArray(values) || values.length > allowed.size) return null;
-  if (values.some(value => typeof value !== 'string' || !allowed.has(value))) return null;
+/**
+ * The category dictionary may name categories a NEWER install added — the
+ * catalog grows, and a snapshot committed by an upgraded peer reaches installs
+ * that have not upgraded yet. Accept any well-formed name here; rows that use
+ * an unknown one are set aside by `parseV2` instead of failing the whole file.
+ */
+const MAX_CATEGORY_NAMES = 256;
+const CATEGORY_NAME = /^[a-z][a-z0-9-]{0,63}$/;
+const parseCategoryDictionary = values => parseDictionary(values, { max: MAX_CATEGORY_NAMES, accepts: value => CATEGORY_NAME.test(value) });
+
+/** A dictionary of unique strings, each passing `accepts`, at most `max` long — or null. */
+function parseDictionary(values, { max, accepts }) {
+  if (!Array.isArray(values) || values.length > max) return null;
+  if (values.some(value => typeof value !== 'string' || !accepts(value))) return null;
   if (new Set(values).size !== values.length) return null;
   return values;
 }
@@ -198,6 +209,9 @@ function parseV1(value) {
     : { status: 'malformed' };
 }
 
+/** A well-formed row naming a category this install does not know yet. */
+const UNKNOWN_CATEGORY_ROW = Symbol('unknown-category-row');
+
 function parseV2Row(row, categories, coverage, confidence) {
   if (!Array.isArray(row) || row.length !== 8) return null;
   const [assessedAt, categoryIndex, score, worstSeverity, coverageIndex, confidenceIndex, scannedFiles, totalFiles] = row;
@@ -208,6 +222,7 @@ function parseV2Row(row, categories, coverage, confidence) {
   if (!isInt(coverageIndex, 0, Math.max(coverage.length - 1, 0)) || coverageIndex >= coverage.length) return null;
   if (!isInt(confidenceIndex, 0, Math.max(confidence.length - 1, 0)) || confidenceIndex >= confidence.length) return null;
   if (!isInt(scannedFiles, 0, Number.MAX_SAFE_INTEGER) || !isInt(totalFiles, 0, Number.MAX_SAFE_INTEGER)) return null;
+  if (!READABLE_CATEGORIES.has(categories[categoryIndex])) return UNKNOWN_CATEGORY_ROW;
   return normalizeRecord({
     assessedAt,
     category: categories[categoryIndex],
@@ -225,21 +240,29 @@ function parseV2(value) {
     return { status: 'malformed' };
   }
   if (typeof value.repository !== 'string' || !REPOSITORY.test(value.repository)) return { status: 'malformed' };
-  const categories = parseDictionary(value.categories, READABLE_CATEGORIES);
-  const coverage = parseDictionary(value.coverage, COVERAGE);
-  const confidence = parseDictionary(value.confidence, CONFIDENCE);
+  const categories = parseCategoryDictionary(value.categories);
+  const coverage = parseDictionary(value.coverage, { max: COVERAGE.size, accepts: v => COVERAGE.has(v) });
+  const confidence = parseDictionary(value.confidence, { max: CONFIDENCE.size, accepts: v => CONFIDENCE.has(v) });
   if (!categories || !coverage || !confidence) return { status: 'malformed' };
   if (!Array.isArray(value.measurements) || value.measurements.length > MAX_QUALITY_SNAPSHOT_ROWS) return { status: 'malformed' };
   if (value.measurements.length > 0 && (categories.length === 0 || coverage.length === 0 || confidence.length === 0)) {
     return { status: 'malformed' };
   }
   const records = [];
+  let unknownRows = 0;
   for (const row of value.measurements) {
     const record = parseV2Row(row, categories, coverage, confidence);
     if (!record) return { status: 'malformed' };
+    if (record === UNKNOWN_CATEGORY_ROW) {
+      unknownRows += 1;
+      continue;
+    }
     records.push(record);
   }
   if (duplicateDays(records)) return { status: 'malformed' };
+  // Readable, but not ours to rewrite: canonicalizing would drop the rows a
+  // newer install wrote. Readers use the known records; writers leave the file.
+  if (unknownRows) return { status: 'future-categories', repository: value.repository, records, canonical: null };
   const canonical = canonicalize(value.repository, records);
   return canonical
     ? { status: 'v2', repository: value.repository, records, canonical }

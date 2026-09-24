@@ -97,7 +97,7 @@ If you find additional problems, mention them in the summary — do not expand s
  * one that audit has the most to say about. Its sibling `better-test-quality`
  * IS gated, because it assesses tests that exist.
  */
-export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api']);
+export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api', 'infrastructure']);
 
 /** Read aliases kept only for in-flight tasks and historical quality records. */
 export const LEGACY_AUDIT_TASK_TYPE_ALIASES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
@@ -112,6 +112,7 @@ export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
   tests: 'no test files found in this repository',
   dependencies: 'no dependency manifest found in this repository',
   api: 'no HTTP route or API surface found in this repository',
+  infrastructure: 'no infrastructure-as-code, container, deployment, or CI configuration found in this repository',
 });
 
 /**
@@ -382,18 +383,13 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'copy finding(s)',
     }),
   },
-  // The six types below give every `do:better` audit lens a scheduled
-  // counterpart (DO_BETTER_LENS_COVERAGE, at the bottom of this file). They
-  // are refactor- or defect-hunting lanes carved out of the broader
-  // code-quality / module-hygiene / test-coverage bodies so each can be
-  // scheduled, pinned to a provider, and toggled between filing and fixing on
-  // its own. Each still files under an existing category (`code-quality`,
-  // `bug`, `tests`, `dependencies`) and ALSO under the metric slug
-  // (`cognitive-load`, `structural-drift`, `runtime-safety`, …) so the
-  // backlog can be filtered by lens without parsing titles. The refactor
-  // lanes require a managed worktree in do-work mode: a mechanical
-  // restructuring of a hot function or a dependency swap is exactly the edit
-  // that must never land in the user's live checkout.
+  // These six PortOS-owned focused missions map onto the current generic
+  // `/do:better` scopes through DO_BETTER_SCOPE_COVERAGE below. Their
+  // scheduleable mission bodies add narrow checks; they do not copy slashdo's
+  // audit orchestration or tracker-filing procedure. Each keeps its existing
+  // category label and an additional metric label where needed. Refactor lanes
+  // require a managed worktree in do-work mode so edits never land in a live
+  // checkout.
   'better-complexity': {
     quotaBurnId: null,
     label: 'Cyclomatic complexity',
@@ -476,6 +472,86 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       issueLabel: 'tests',
       labelDescription: 'Proposed from a test-quality audit',
       noun: 'test-quality finding(s)',
+    }),
+  },
+  // Service and data-platform lenses. The catalog above grew out of a web app
+  // with a UI; these cover what a backend service, data platform, or
+  // infrastructure repository is judged on and nothing above owns: the
+  // deployment it describes, the correctness of the data flowing through it,
+  // how it behaves under restarts and load, what it does with personal data,
+  // and what it costs to run. Each defaults to file-issues — their findings
+  // usually touch production configuration, where an unattended edit is the
+  // wrong default.
+  infrastructure: {
+    quotaBurnId: null,
+    label: 'Infrastructure & deployment',
+    description: 'Infrastructure-as-code, container, deployment and CI audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    requiresCapability: 'infrastructure',
+    filing: filing({
+      slugPrefix: 'infrastructure-',
+      label: 'infrastructure-audit',
+      issueLabel: 'infrastructure',
+      labelDescription: 'Proposed from an infrastructure/deployment audit',
+      noun: 'infrastructure finding(s)',
+    }),
+  },
+  'data-integrity': {
+    quotaBurnId: null,
+    label: 'Data integrity & pipelines',
+    description: 'Data-correctness audit (ingestion, idempotency, consistency, schema evolution) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'data-integrity-',
+      label: 'data-integrity-audit',
+      // Same category as its upgrade-time sibling; the metric label
+      // `data-integrity` separates runtime data correctness in the backlog.
+      issueLabel: 'data-safety',
+      labelDescription: 'Proposed from a data-integrity/pipeline audit',
+      noun: 'data-integrity finding(s)',
+    }),
+  },
+  reliability: {
+    quotaBurnId: null,
+    label: 'Reliability & operability',
+    description: 'Service reliability audit (shutdown, health checks, backpressure, job leasing, mixed-version deploys) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'reliability-',
+      label: 'reliability-audit',
+      // Filed beside error-handling's call-level findings; the metric label
+      // `reliability` marks the system-level ones.
+      issueLabel: 'resilience',
+      labelDescription: 'Proposed from a reliability/operability audit',
+      noun: 'reliability finding(s)',
+    }),
+  },
+  privacy: {
+    quotaBurnId: null,
+    label: 'Privacy & data governance',
+    description: 'Personal/sensitive-data handling audit (exposure, minimization, retention, erasure) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'privacy-',
+      label: 'privacy-audit',
+      issueLabel: 'privacy',
+      labelDescription: 'Proposed from a privacy/data-governance audit',
+      noun: 'privacy finding(s)',
+    }),
+  },
+  'cost-efficiency': {
+    quotaBurnId: null,
+    label: 'Cost & resource efficiency',
+    description: 'Metered-spend audit (paid API calls, unbounded scans, storage tiers, over-provisioning) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'cost-',
+      label: 'cost-efficiency-audit',
+      // Spend is a performance-family concern; the metric label `cost` keeps
+      // it filterable apart from latency work.
+      issueLabel: 'performance',
+      labelDescription: 'Proposed from a cost/resource-efficiency audit',
+      noun: 'cost finding(s)',
     }),
   },
 });
@@ -651,31 +727,24 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
 }
 
 /**
- * Which scheduled audit types cover each `do:better` audit lens
- * (lib/slashdo/lib/better-audit.md, the `For \`<lens>\`:` list). The slashdo
- * command fans the same lenses out to sub-agents in one run; PortOS exposes
- * each as its own schedulable, provider-pinnable task so a managed app can run
- * every category of self-improvement on its own cadence. Keys are the lens
- * slugs slashdo uses; values are the AUDIT_DEFINITIONS types that own that
- * lens's findings, in no significant order — the relation is many-to-many both
- * ways (`security` answers three lenses; `bugs-perf` has four owners), which
- * is why this is a lens-keyed map rather than a field on each definition. A
- * per-definition field could not answer the question the map exists for: did
- * upstream add a lens that NOTHING here owns?
+ * Scheduled audit types mapped onto the scope table in slashdo's
+ * `lib/better-audit.md`. The exported `DO_BETTER_LENS_COVERAGE` name remains
+ * as a compatibility alias for callers that used the old per-lens roster;
+ * the source of truth is now slashdo's generic scope table. Values are
+ * AUDIT_DEFINITIONS types that cover a scope; the relation is many-to-many.
  *
- * It drives schedule discovery labels, never dispatch or execution ordering.
- * auditCatalog.test.js checks it two ways: every
- * listed type is a real audit type, and (when the submodule is checked out)
- * every lens slashdo declares has an entry here, so a lens added upstream
- * cannot silently go unschedulable.
+ * This map drives schedule discovery labels, never dispatch or execution
+ * ordering. The test parses the bundled table and checks both directions, so
+ * adding a slashdo scope without a scheduled owner or leaving stale scope
+ * labels fails at the source boundary.
  */
-export const DO_BETTER_LENS_COVERAGE = Object.freeze({
-  security: ['security'],
+export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
+  security: ['security', 'privacy'],
   'code-quality': ['code-quality', 'observability'],
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
-  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability'],
-  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security'],
+  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency'],
+  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality'],
   ux: ['ux', 'mobile-responsive', 'copy'],
@@ -683,15 +752,18 @@ export const DO_BETTER_LENS_COVERAGE = Object.freeze({
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
 });
 
+/** @deprecated Use DO_BETTER_SCOPE_COVERAGE; kept for API compatibility. */
+export const DO_BETTER_LENS_COVERAGE = DO_BETTER_SCOPE_COVERAGE;
+
 /** Display metadata is derived, so upgrades never rewrite durable task IDs. */
 export function getAuditScheduleMetadata(taskType) {
   const canonicalType = normalizeAuditTaskType(taskType);
   if (!isAuditTaskType(canonicalType)) return { displayName: taskType, defaultLabels: [] };
-  const lenses = Object.entries(DO_BETTER_LENS_COVERAGE)
-    .filter(([, types]) => types.includes(canonicalType)).map(([lens]) => lens);
+  const scopes = Object.entries(DO_BETTER_SCOPE_COVERAGE)
+    .filter(([, types]) => types.includes(canonicalType)).map(([scope]) => scope);
   return {
     displayName: canonicalType.startsWith('better-') ? canonicalType : `better-${canonicalType}`,
-    defaultLabels: ['codebase-improvement', 'slashdo', ...lenses],
+    defaultLabels: ['codebase-improvement', 'slashdo', ...scopes],
   };
 }
 
@@ -737,6 +809,12 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // Measure and describe the shape that survived the ladder.
   performance: Object.freeze(['better-complexity']),
   documentation: Object.freeze(['performance', 'better-cognitive-load']),
+  // Service lenses: deployment config after the code-level security pass it
+  // shares findings with; system-level reliability after call-level failure
+  // handling; spend after latency, since a performance fix often moves cost.
+  infrastructure: Object.freeze(['security']),
+  reliability: Object.freeze(['error-handling']),
+  'cost-efficiency': Object.freeze(['performance']),
 });
 
 // WHY each audit sits where it does in the order above — rationale only. The
@@ -759,4 +837,9 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'code-quality': 'Broad triage that points at the focused audit worth running; avoid overlapping fixes in the same slice.',
   documentation: 'Describes the final result, so it runs once behavior and structure have settled.',
   performance: 'Measure a real bottleneck before optimizing, and remeasure after structural and complexity changes.',
+  'data-integrity': 'Head of the order — duplicated, dropped, or silently wrong data compounds with every run, so it is fixed before code moves around it.',
+  privacy: 'Head of the order — exposed personal data is a harm already happening, whatever cleanup is queued.',
+  infrastructure: 'Follows the code-level security pass, so deployment findings (exposure, credentials, unpinned images) do not duplicate what it already filed.',
+  reliability: 'Follows call-level failure handling: once each call fails safely, look at how the service as a whole restarts, drains, and sheds load.',
+  'cost-efficiency': 'Follows performance, because a latency fix often changes what the path costs; measure spend on the shape that survived.',
 });

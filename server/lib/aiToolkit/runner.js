@@ -5,7 +5,7 @@ import { existsSync } from 'fs';
 import { join, extname, basename, isAbsolute, delimiter } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
-import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
+import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
@@ -16,6 +16,8 @@ import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/
 // — and beat — the two above. The streaming request goes through a dispatcher
 // with those disabled so the run's declared bounds are the only ones.
 import { streamTransportDispatcher } from './internal/streamTransport.js';
+import { createRunLifecycle } from './internal/runLifecycle.js';
+import { createRunFinalizer } from './internal/runFinalizer.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -661,55 +663,7 @@ export function createRunnerService(config = {}) {
 
       const startTime = Date.now();
       let output = '';
-      // Declared beside `output` rather than next to the stream reader that
-      // fills it, because all THREE terminal paths read it — clean finish,
-      // mid-stream throw, and the wall-clock timeout, whose `finalizeTimeout`
-      // closure is built further up than the reader is. A `let` further down
-      // would leave that closure reading it through the temporal dead zone: a
-      // timer firing before the response arrives (a hung `ensureProviderReady`,
-      // headers that never come) would throw ReferenceError instead of
-      // finalizing, leaking the run slot the timeout exists to reclaim.
       let reasoning = '';
-
-      // The question every terminal path asks, stated once: a reasoning model
-      // that produced no content still produced an answer, and the run's text
-      // is its reasoning. Restating the test at each site is how they drift.
-      const reasoningIsTheOutput = () => !output.trim() && reasoning.trim().length > 0;
-
-      /**
-       * Open the metadata record for a NON-SUCCESS terminal path (cancel,
-       * timeout, mid-stream throw), persisting whatever the run produced first.
-       *
-       * All three ended identically — salvage, write `output.txt`, re-read the
-       * record, stamp endTime/duration/success and the three salvage fields —
-       * and stating it three times is how they drifted: the cancel path never
-       * had the salvage at all, so stopping a reasoning model (which spends
-       * nearly its whole budget in the hidden channel before the first content
-       * token) discarded every token it had produced and stamped
-       * `outputSize: 0`, indistinguishable from a provider that answered
-       * nothing. That is why 16 NVIDIA NIM nemotron runs killed at 302s by
-       * promptRunner's mis-armed backstop read as dead-provider records rather
-       * than the healthy streams they were (#7665). Stated once, a fourth
-       * terminal path cannot quietly omit it.
-       *
-       * Returns the salvaged text alongside the record, because the failure
-       * hooks take it as the output tail they quote.
-       */
-      const openTerminalMetadata = async () => {
-        const usedReasoningAsFallback = reasoningIsTheOutput();
-        const partialOutput = usedReasoningAsFallback ? reasoning : output;
-        if (partialOutput) await atomicWrite(outputPath, partialOutput).catch(() => {});
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.success = false;
-        metadata.outputSize = Buffer.byteLength(partialOutput);
-        // Distinguishes a terminal run that streamed from one that never got a
-        // byte, without reading the output file back.
-        metadata.hadReasoning = reasoning.length > 0;
-        metadata.usedReasoningAsFallback = usedReasoningAsFallback;
-        return { metadata, partialOutput };
-      };
 
       const headers = {
         'Content-Type': 'application/json'
@@ -719,141 +673,40 @@ export function createRunnerService(config = {}) {
       }
 
       const controller = new AbortController();
-      // Clear any stale marker a previous run of this id left behind, matching
-      // registerExternalRun's contract — a stop only ever describes the run
-      // that was in flight when it was requested.
       activeStopRequests.delete(runId);
       activeRuns.set(runId, controller);
 
-      // TWO bounds with a single-settlement gate. Without a ceiling a hung
-      // provider (opens the stream then stalls, never responds, or — via the
-      // `ensureProviderReady` hook — never even reaches the abortable fetch)
-      // holds the AbortController in `activeRuns` forever, leaking the run
-      // slot. But one wall-clock ceiling cannot tell that hang apart from a
-      // healthy model that is streaming and simply slow, so it killed both
-      // (#7560). They are split:
-      //
-      //  - `stallTimeout` — the NO-PROGRESS bound, re-armed by
-      //    `noteStreamProgress()` on every read that yields bytes. This is the
-      //    one that catches a genuinely hung upstream. It takes the caller's /
-      //    provider's configured value, so a provider that goes quiet is still
-      //    cut off at exactly the moment it was before this split.
-      //  - `absoluteTimeout` — total runtime, never extended, so a provider
-      //    trickling one byte per minute still cannot hold the slot forever.
-      //    `Math.max` keeps it from ever landing BELOW the configured bound: an
-      //    install that deliberately raised `provider.timeout` past the default
-      //    cap keeps running exactly as long as it asked to.
-      //
-      // `markSettled()` ensures exactly one of {either timer, response paths}
-      // finalizes the run: whoever wins clears BOTH timers and flips the flag;
-      // the losers no-op. When a timer wins it aborts the fetch/reader AND
-      // independently finalizes the run as a TIMEOUT (so a hung setup hook that
-      // never reaches the fetch is still bounded, and the failure is classified
-      // as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
       const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
       const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
-      let settled = false;
-      let stallTimeoutHandle = null;
-      let absoluteTimeoutHandle = null;
-      const markSettled = () => {
-        if (settled) return false;
-        settled = true;
-        // BOTH, or the survivor keeps the event loop alive past the run and
-        // fires an abort at a controller nobody is reading any more.
-        clearTimeout(stallTimeoutHandle);
-        clearTimeout(absoluteTimeoutHandle);
-        stallTimeoutHandle = null;
-        absoluteTimeoutHandle = null;
-        return true;
-      };
-      // A Stop is a lifecycle outcome, not a failed AI attempt. Finalize it as
-      // ERROR_CATEGORIES.CANCELED and fire NO `onRunFailed` hook, so the host
-      // neither benches the provider nor escalates a tier-4 investigation task
-      // over a human pressing Stop. This writes the same terminal shape the
-      // CLI/TUI path already does (`canceled` + `completionReason`), which is
-      // what promptRunner reads to stamp `code: 'RUN_CANCELED'` on its
-      // rejection so `isRunCanceledError` callers skip the fallback cascade.
-      // Every persistence step is best-effort: `onComplete` must settle the
-      // caller even if a write fails, or a canceled run hangs its awaiter.
-      const finalizeCanceled = async () => {
-        activeRuns.delete(runId);
-        const { metadata } = await openTerminalMetadata();
-        metadata.canceled = true;
-        metadata.completionReason = 'canceled';
-        metadata.error = 'API run canceled';
-        metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
-        await atomicWrite(metadataPath, metadata).catch((err) => {
-          console.error(`❌ API run ${runId} cancel finalize error: ${err.message}`);
-        });
-        // Not `onRunFailed`: a Stop must not bench the provider. The host uses
-        // this hook to drop the run from the shared activity snapshot.
-        safeSettle(() => hooks.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
-        safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
-      };
-      // `bound` is 'stall' or 'absolute'. The two mean different things — one
-      // says the provider went quiet, the other says it was productive but ran
-      // past its budget — so the message names which fired and the metadata
-      // carries it as a field, letting a host's failure classifier branch on it
-      // without parsing prose. Neither message may contain the literal
-      // "timeout": `analyzeError`'s NETWORK_ERROR pattern matches that
-      // substring and is tested BEFORE the timeout pattern, so it would
-      // misclassify the run as a connectivity fault. "timed out" is the phrase
-      // that reaches ERROR_CATEGORIES.TIMEOUT.
-      const finalizeTimeout = async (bound) => {
-        if (!markSettled()) return;
-        activeRuns.delete(runId);
-        // The timer's own abort caused this, so TIMEOUT stays authoritative
-        // even if a Stop raced it — just drop the marker so it can't leak.
-        consumeActiveStop(runId);
-        const error = bound === 'absolute'
-          ? `API execution timed out after ${absoluteTimeout}ms: absolute runtime cap reached`
-          : `API execution timed out after ${stallTimeout}ms with no stream progress`;
-        try {
-          const { metadata, partialOutput } = await openTerminalMetadata();
-          metadata.error = error;
-          metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
-          // Which ceiling ended the run: 'stall' (the provider went quiet) or
-          // 'absolute' (it stayed productive past the total-runtime cap). A
-          // stalled provider is a candidate for benching; a productive one that
-          // outran its budget is not.
-          metadata.timeoutBound = bound;
-          // Hosts classify a failure from `errorAnalysis`, not `errorCategory`
-          // (PortOS's onRunFailed hook reads only the former), so setting the
-          // category alone left every API-run timeout looking like an
-          // uncategorized failure downstream — escalated for investigation
-          // instead of recognized as the timeout it is. Build it from the same
-          // pattern table the other failure paths use so the two can't drift.
-          metadata.errorAnalysis = analyzeError(error);
-          await atomicWrite(metadataPath, metadata);
-          // The hook's third arg is the output tail the host quotes into an
-          // investigation task, so it gets the salvaged text too.
-          safeSettle(() => hooks.onRunFailed?.(metadata, error, partialOutput), `Run ${runId} onRunFailed hook`);
-          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
-        } catch (finalErr) {
-          console.error(`❌ API run ${runId} timeout finalize error: ${finalErr.message}`);
-          const salvaged = reasoningIsTheOutput() ? reasoning : output;
-          safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(salvaged) }), `Run ${runId} onComplete`);
-        }
-      };
-      const fireTimeout = (bound) => {
-        console.log(`⏱️ API run ${runId} timed out: ${bound} bound of ${bound === 'absolute' ? absoluteTimeout : stallTimeout}ms`);
-        controller.abort();
-        finalizeTimeout(bound).catch((err) => console.error(`❌ API run ${runId} timeout handler error: ${err.message}`));
-      };
-      const armStallTimer = () => {
-        stallTimeoutHandle = setTimeout(() => fireTimeout('stall'), stallTimeout);
-      };
-      // Re-arm the no-progress bound from the read loop. Guarded on `settled`
-      // so a chunk that lands in the same tick a terminal path claimed the run
-      // cannot resurrect a timer nobody will ever clear — that would hold the
-      // event loop open past the run and fire an abort at a dead controller.
-      const noteStreamProgress = () => {
-        if (settled) return;
-        if (stallTimeoutHandle) clearTimeout(stallTimeoutHandle);
-        armStallTimer();
-      };
-      armStallTimer();
-      absoluteTimeoutHandle = setTimeout(() => fireTimeout('absolute'), absoluteTimeout);
+      let finalizer;
+      const lifecycle = createRunLifecycle({
+        runId,
+        controller,
+        stallTimeout,
+        absoluteTimeout,
+        onTimeout: bound => finalizer.finalize({ type: 'timeout', bound }),
+      });
+      finalizer = createRunFinalizer({
+        runId,
+        provider,
+        startTime,
+        activeRuns,
+        lifecycle,
+        stallTimeout,
+        absoluteTimeout,
+        outputPath,
+        metadataPath,
+        getOutput: () => output,
+        getReasoning: () => reasoning,
+        providerStatusService,
+        hooks,
+        onComplete,
+        handleProviderError,
+        safeJsonParse,
+        safeSettle,
+        consumeActiveStop,
+      });
+      lifecycle.start();
 
       hooks.onRunStarted?.({ runId, provider: provider.name, model });
 
@@ -921,55 +774,17 @@ export function createRunnerService(config = {}) {
         : { ok: false, error: ready.error || 'Provider readiness check failed', status: 0 };
 
       if (!response.ok) {
-        // Read the (possibly stalled) error body BEFORE claiming settlement so
-        // the abort timer stays armed through the read — a provider that sends
-        // non-2xx headers then holds the body open is cancelled by the timeout
-        // instead of hanging here forever. `response.text()` consumes the same
-        // signal-bound body, so an abort rejects it (swallowed to the fallback).
         let responseBody = response.error || '';
         if (response.text) {
           responseBody = await response.text().catch(() => response.error || '');
         }
-
-        // The timeout path may already own this run (an abort surfaces here as
-        // a rejected fetch, or the read above was aborted) — if so it has
-        // finalized as a TIMEOUT; don't double-complete or reclassify.
-        if (!markSettled()) return runId;
-
-        // A Stop that lands before the response headers arrives here as the
-        // fetch's AbortError, not as a provider status.
-        if (consumeActiveStop(runId)) {
-          await finalizeCanceled();
-          return runId;
-        }
-
-        activeRuns.delete(runId);
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.success = false;
-
-        const errorAnalysis = analyzeHttpError({
-          status: response.status || 0,
-          statusText: response.statusText || '',
+        await finalizer.finalize({
+          type: 'response-error',
+          status: response.status,
+          statusText: response.statusText,
           body: responseBody,
           headers: response.headers,
         });
-
-        metadata.error = errorAnalysis.message || `API error: ${response.status}`;
-        metadata.errorCategory = errorAnalysis.category;
-        metadata.errorAnalysis = errorAnalysis;
-
-        if (errorAnalysis.hasError &&
-            (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
-             errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-          await handleProviderError(provider.id, errorAnalysis, responseBody);
-        }
-
-        await atomicWrite(metadataPath, metadata);
-
-        hooks.onRunFailed?.(metadata, metadata.error, '');
-        onComplete?.(metadata);
         return runId;
       }
 
@@ -1051,7 +866,7 @@ export function createRunnerService(config = {}) {
           // it as a heartbeat would let a reader spinning on zero-length reads
           // hold the stall bound open indefinitely. The absolute cap is what
           // bounds a provider that DOES trickle real bytes forever.
-          if (value?.byteLength > 0) noteStreamProgress();
+          if (value?.byteLength > 0) lifecycle.noteStreamProgress();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
@@ -1071,134 +886,24 @@ export function createRunnerService(config = {}) {
         // Capture the fallback decision BEFORE mutating `output` — otherwise
         // the metadata check below is always false on the reasoning-only path
         // because `output` was just overwritten with the reasoning text.
-        const usedReasoningAsFallback = reasoningIsTheOutput();
+        const usedReasoningAsFallback = !output.trim() && reasoning.trim().length > 0;
         if (usedReasoningAsFallback) {
           console.log(`🧠 Reasoning model detected - using reasoning as output (${reasoning.length} chars)`);
           output = reasoning;
           onData?.({ text: reasoning, isReasoning: true });
         }
 
-        // A timeout firing between the last read and here would have finalized
-        // the run already — don't overwrite a TIMEOUT with a spurious success.
-        // Once we claim settlement the outer processStream().catch bails, so
-        // this block owns cleanup end-to-end: release the slot up front and
-        // guarantee onComplete fires even if a persistence write throws (full
-        // disk, rename failure) — otherwise the caller would hang forever.
-        if (!markSettled()) return;
-        activeRuns.delete(runId);
-        // A Stop that lost the race to the last chunk leaves a marker no
-        // failure path will consume; drop it so it can't outlive the run.
-        consumeActiveStop(runId);
-        try {
-          await atomicWrite(outputPath, output);
-
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          metadata.endTime = new Date().toISOString();
-          metadata.duration = Date.now() - startTime;
-          metadata.exitCode = 0;
-          metadata.success = true;
-          metadata.outputSize = Buffer.byteLength(output);
-          metadata.hadReasoning = reasoning.length > 0;
-          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
-          if (finishReason) metadata.finishReason = finishReason;
-          await atomicWrite(metadataPath, metadata);
-
-          if (typeof providerStatusService?.markApiSuccess === 'function') {
-            await providerStatusService.markApiSuccess(provider.id).catch(err => {
-              console.error(`❌ Failed to clear provider rate-limit state: ${err.message}`);
-            });
-          }
-
-          safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
-          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
-        } catch (writeErr) {
-          console.error(`❌ Run ${runId} success finalize error: ${writeErr.message}`);
-          // Build the failure from the stored record so runId/provider/model/
-          // workspace survive, and best-effort persist it so run history is
-          // terminal rather than stuck at `success: null`.
-          const failMetadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          failMetadata.endTime = new Date().toISOString();
-          failMetadata.duration = Date.now() - startTime;
-          failMetadata.success = false;
-          failMetadata.error = `Run finalization failed: ${writeErr.message}`;
-          failMetadata.errorCategory = ERROR_CATEGORIES.UNKNOWN;
-          failMetadata.outputSize = Buffer.byteLength(output);
-          await atomicWrite(metadataPath, failMetadata).catch(() => {});
-          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
-          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
-        }
+        await finalizer.finalize({
+          type: 'success',
+          finishReason,
+          usedReasoningAsFallback,
+        });
       };
 
-      processStream().catch(async (err) => {
-        // This catch runs detached (the promise is not awaited), so an
-        // unguarded throw from handleProviderError/atomicWrite below would
-        // surface as an unhandled rejection and crash the process. Wrap it.
-        try {
-          // If the timeout won the race (this catch is the aborted reader
-          // rejecting), it already finalized as a TIMEOUT — bail out.
-          if (!markSettled()) return;
-
-          // A Stop mid-stream rejects the reader with Node's bare
-          // `AbortError: This operation was aborted` — no pattern matches it,
-          // so without this check it is classified UNKNOWN and escalated.
-          if (consumeActiveStop(runId)) {
-            await finalizeCanceled();
-            return;
-          }
-
-          activeRuns.delete(runId);
-
-          const { metadata, partialOutput } = await openTerminalMetadata();
-
-          // `describeTransportError`, not `err.message` — the same reason the
-          // pre-header fetch uses it, applied to the half the run that reads
-          // the body. undici reports a connection dropped MID-STREAM as
-          // `TypeError: terminated` and hangs the actionable reason
-          // (`UND_ERR_SOCKET` / `other side closed`) off `.cause`, so
-          // classifying the bare message matched no pattern: an NVIDIA NIM
-          // nemotron run that streamed reasoning for 319s and then lost its
-          // socket persisted `errorCategory: null`, which the host's cascade
-          // reads as UNKNOWN and escalates to a tier-4 investigation task
-          //. The flattened chain classifies it as NETWORK_ERROR — a
-          // transient connectivity fault with a bounded retry. Non-transport
-          // rejections have no `.cause`, so the chain flattens to exactly the
-          // message this always passed.
-          const errorDescription = describeTransportError(err);
-          const errorAnalysis = analyzeError(errorDescription);
-          metadata.error = errorAnalysis.message || errorDescription;
-          metadata.errorCategory = errorAnalysis.category;
-          metadata.errorAnalysis = errorAnalysis;
-
-          if (errorAnalysis.hasError &&
-              (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
-               errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-            await handleProviderError(provider.id, errorAnalysis, partialOutput);
-          }
-
-          await atomicWrite(metadataPath, metadata);
-
-          // Isolate the hook + onComplete so a throwing onRunFailed doesn't
-          // bounce into the recovery path and call onRunFailed a second time.
-          // The hook's third arg is the output tail the host quotes into an
-          // investigation task, so it gets the salvaged text too.
-          safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, partialOutput), `Run ${runId} onRunFailed hook`);
-          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
-        } catch (handlerErr) {
+      processStream().catch(err => {
+        void finalizer.finalize({ type: 'stream-error', error: err }).catch(handlerErr => {
           console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
-          // Still settle callers waiting on onComplete so a persistence/hook
-          // failure surfaces as a failed run instead of hanging forever. Isolate
-          // the hook from onComplete — a throwing onRunFailed must NOT prevent
-          // onComplete from settling the caller.
-          const failMetadata = {
-            endTime: new Date().toISOString(),
-            duration: Date.now() - startTime,
-            success: false,
-            error: `Run finalization failed: ${handlerErr.message}`,
-            outputSize: Buffer.byteLength(output),
-          };
-          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
-          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
-        }
+        });
       });
 
       return runId;
