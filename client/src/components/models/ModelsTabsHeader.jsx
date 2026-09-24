@@ -87,6 +87,21 @@ export function ModelsDesktopNavigator({ activeTab }) {
   );
 }
 
+// Keep the collapsed-sidebar destination list beside the route's content.
+// Legacy Models destinations render their own page shells, so this layout is
+// shared with `/models` to keep the desktop navigation from becoming a tall
+// block above the page body.
+export function ModelsSectionLayout({ activeTab, children }) {
+  return (
+    <div className="flex h-full min-h-0 min-w-0 overflow-hidden">
+      <ModelsDesktopNavigator activeTab={activeTab} />
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export default function ModelsTabsHeader({ activeTab, desktop = true }) {
   const { pathname } = useLocation();
   const resolvedActiveTab = activeTabForPath(pathname, activeTab);
