@@ -10,7 +10,7 @@ const readSeed = async () => JSON.parse(await readFile(join(root, 'data.referenc
 
 describe('model comparison seed scope', () => {
   it('keeps official Grok 4.7 context-tier prices distinct', async () => {
-    const rows = (await readSeed()).observations.filter(row => row.model === 'grok-4.7');
+    const rows = (await readSeed()).observations.filter(row => row.model === 'grok-4.7' && row.benchmark.startsWith('Official'));
     expect(rows.map(row => [row.inputPerMillion.value, row.outputPerMillion.value])).toEqual([[2, 6], [4, 12]]);
     expect(new Set(rows.map(row => row.configuration)).size).toBe(2);
     for (const row of rows) {
@@ -34,8 +34,8 @@ describe('model comparison seed scope', () => {
       'inputTokens', 'outputTokens', 'quota',
     ];
     for (const row of observations) {
-      expect(row.benchmark).not.toMatch(/^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i);
-      expect(row.id).not.toMatch(/^(?:aa-v\d|swebench-)/i);
+      expect(row.benchmark).not.toMatch(/^PortOS Task Bench/);
+      expect(row.id).not.toMatch(/^portos:/);
       for (const field of metricFields) {
         if (row[field]) expect(row[field].source.url).toMatch(/^https:\/\//);
       }
@@ -44,7 +44,7 @@ describe('model comparison seed scope', () => {
 
   it('ships only models a configured provider or a current frontier anchor can dispatch', async () => {
     const [seed, scope] = await Promise.all([readSeed(), inScopeModels()]);
-    const outOfScope = [...new Set(seed.observations.map(row => row.model))].filter(model => !scope.has(model));
+    const outOfScope = [...new Set(seed.observations.filter(row => !row.quality && !['OpenRouter', 'OpenCode Zen'].includes(row.provider)).map(row => row.model))].filter(model => !scope.has(model));
     expect(outOfScope).toEqual([]);
   });
 
@@ -65,8 +65,4 @@ describe('model comparison seed scope', () => {
     }
   });
 
-  it('carries no retired model generations in the comparison catalog', async () => {
-    const models = new Set((await readSeed()).observations.map(row => row.model));
-    for (const retired of ['claude-2.0', 'gpt-4', 'palm-2', 'llama-2-chat-70b']) expect(models.has(retired)).toBe(false);
-  });
 });

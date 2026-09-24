@@ -6,19 +6,20 @@ import migration from './375-aa-comparison-v43.js';
 
 let rootDir;
 afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
-it('does not re-add retired benchmark rows or overwrite a catalog and fails closed on future versions', async () => {
+it('adds versioned shipped evidence once while preserving existing observations and rejecting future versions', async () => {
   rootDir = await mkdtemp(join(tmpdir(), 'portos-aa-seed-'));
   await mkdir(join(rootDir, 'data'));
   await mkdir(join(rootDir, 'data.reference'));
   const seed = JSON.parse(await readFile(new URL('../../data.reference/model-comparison.json', import.meta.url), 'utf8'));
-  expect(seed.observations.filter(row => row.id.startsWith('aa-v4.3-'))).toEqual([]);
   await writeFile(join(rootDir, 'data.reference/model-comparison.json'), JSON.stringify(seed));
+  const additions = seed.observations.filter(row => row.id.startsWith('aa-v4.3-'));
+  expect(additions.length).toBeGreaterThan(0);
   const prior = { schemaVersion: 1, observations: [seed.observations[0]] };
   const path = join(rootDir, 'data/model-comparison.json');
   await writeFile(path, JSON.stringify(prior));
-  expect(await migration.up({ rootDir })).toEqual({ added: 0 });
+  expect(await migration.up({ rootDir })).toEqual({ added: additions.length });
   const result = JSON.parse(await readFile(path, 'utf8'));
-  expect(result.observations).toEqual(prior.observations);
+  expect(result.observations).toEqual([...prior.observations, ...additions]);
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });
   const future = JSON.stringify({ ...prior, schemaVersion: 99 });
   await writeFile(path, future);

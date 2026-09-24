@@ -376,11 +376,14 @@ const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, max
  * point of showing the number at all.
  * @param {number|string|null|undefined} n
  * @param {object} [options]
+ * @param {number} [options.maximumFractionDigits=0] - Optional precision for scores and other fractional values
  * @param {string} [options.fallback='—'] - Rendered when the value is missing/unparseable
  * @returns {string} e.g. "2,762"
  */
-export function formatCount(n, { fallback = '—' } = {}) {
-  const value = roundForDisplay(n, 0);
+export function formatCount(n, { fallback = '—', maximumFractionDigits = 0 } = {}) {
+  const precision = Number.isInteger(maximumFractionDigits) ? Math.max(0, Math.min(8, maximumFractionDigits)) : 0;
+  const value = roundForDisplay(n, precision);
+  if (precision && value !== null) return new Intl.NumberFormat('en-US', { maximumFractionDigits: precision }).format(value + 0);
   // `+ 0` folds the -0 that a negative fraction rounds to (-0.4 → -0), which
   // Intl would render as the nonsense "-0".
   return value === null ? fallback : GROUPED_INTEGER.format(value + 0);
@@ -451,10 +454,10 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
  * @param {number} value - Dollar amount (nullish renders as $0.00; a non-nullish
  *   value that fails to parse as a finite number — NaN, a broken calc — renders
  *   `fallback` instead, so a computation failure never masquerades as "$0.00")
- * @param {{ signed?: boolean, trimWhole?: boolean, fallback?: string }} [options]
+ * @param {{ signed?: boolean, trimWhole?: boolean, fallback?: string, maximumFractionDigits?: number }} [options]
  * @returns {string} e.g. "$12.34", "-$5.00", "$200"
  */
-export function formatUsd(value, { signed = false, trimWhole = false, fallback = '—' } = {}) {
+export function formatUsd(value, { signed = false, trimWhole = false, fallback = '—', maximumFractionDigits = 2 } = {}) {
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
   // Anything under half a cent renders as zero, and Intl signs it (`-$0.00`)
@@ -462,10 +465,11 @@ export function formatUsd(value, { signed = false, trimWhole = false, fallback =
   // must not read as a loss, so snap it onto a true zero and drop the sign with
   // it — `signed && n < 0` alone would still print the minus.
   const raw = signed ? Math.abs(n) : n;
-  const magnitude = Math.abs(raw) < 0.005 ? 0 : raw;
+  const precision = Number.isInteger(maximumFractionDigits) ? Math.max(2, Math.min(8, maximumFractionDigits)) : 2;
+  const magnitude = Math.abs(raw) < 0.5 * 10 ** -precision ? 0 : raw;
   const body = trimWhole && Number.isInteger(magnitude)
     ? GROUPED_INTEGER.format(magnitude)
-    : USD_CENTS.format(magnitude);
+    : precision === 2 ? USD_CENTS.format(magnitude) : new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: precision }).format(magnitude);
   return `${signed && n < 0 && magnitude !== 0 ? '-' : ''}$${body}`;
 }
 

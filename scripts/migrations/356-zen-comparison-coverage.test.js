@@ -13,7 +13,7 @@ it('upgrades an existing catalog without losing researched evidence and fails cl
   const seed = JSON.parse(await readFile(new URL('../../data.reference/model-comparison.json', import.meta.url), 'utf8'));
   await writeFile(join(rootDir, 'data.reference/model-comparison.json'), JSON.stringify(seed));
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });
-  const zen = seed.observations.filter(row => row.provider === 'OpenCode Zen');
+  const zen = seed.observations.filter(row => row.id.startsWith('zen-free-2026-09-'));
   expect(zen).toHaveLength(8);
   expect(zen.every(row => row.quality === null && row.tokensPerSecond === null && row.inputPerMillion.value === 0)).toBe(true);
   const nonZenObservation = seed.observations.find(row => row.provider !== 'OpenCode Zen');

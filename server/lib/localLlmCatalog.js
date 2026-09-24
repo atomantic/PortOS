@@ -396,6 +396,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'gpt-oss-20b',
+    benchmarkModel: 'gpt-oss-20b',
     name: 'GPT-OSS 20B',
     category: 'reasoning',
     recommendedFor: ['reasoning'],

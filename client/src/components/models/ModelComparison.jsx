@@ -1,232 +1,169 @@
-import { useEffect, useMemo, useState } from 'react';
-import { BarChart3 } from 'lucide-react';
-import {
-  CartesianGrid,
-  ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { getModelComparison } from '../../services/apiModelComparison';
-import { formatCount, formatUsd } from '../../utils/formatters';
+import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
+import { formatCount, formatUsd, formatPercent } from '../../utils/formatters';
+import ComparisonResearch from './ComparisonResearch';
+import ComparisonValueGuide from './ComparisonValueGuide';
 
-const COLORS = ['#2563eb', '#f97316', '#16a34a', '#9333ea', '#0891b2', '#db2777', '#ca8a04'];
-const PRICE_METRICS = [
-  { id: 'outputPerMillion', label: 'Output price', axis: 'Published output price (USD per 1M tokens)' },
-  { id: 'inputPerMillion', label: 'Input price', axis: 'Published input price (USD per 1M tokens)' },
+const STORAGE = 'portos-composite-comparison-v1';
+const COLORS = ['#2563eb', '#f97316', '#16a34a', '#9333ea', '#0891b2', '#db2777', '#ca8a04', '#dc2626'];
+const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unspecified', 'reasoning'];
+const PRICES = [
+  ['blendedPerMillion', 'Blended token price (3:1 input/output)', 'USD / 1M total tokens'],
+  ['inputPerMillion', 'Input token price', 'USD / 1M input tokens'],
+  ['outputPerMillion', 'Output token price', 'USD / 1M output tokens'],
+  ['costPerTask', 'Sourced benchmark task cost', 'USD / Intelligence Index task'],
 ];
+const buttonClass = 'rounded-lg border border-port-border px-3 py-2 text-xs disabled:opacity-50';
+const valueText = (metric, money = false) => metric ? `${metric.estimated ? '≈ ' : ''}${money ? formatUsd(metric.value, { maximumFractionDigits: 4 }) : formatCount(metric.value, { maximumFractionDigits: 1 })}` : 'Needs research';
 
-const metricDate = metric => metric?.source?.retrievedAt?.slice(0, 10) || '—';
-const hasPublicPrice = row => Boolean(row.inputPerMillion || row.outputPerMillion);
-const hasFamilyPrice = metric => /family-level/i.test(metric?.source?.methodology || '');
-
-function SourceLink({ metric, label = 'Source' }) {
-  if (!metric?.source?.url) return '—';
-  return (
-    <a className="text-port-accent underline underline-offset-2" href={metric.source.url} target="_blank" rel="noreferrer">
-      {label}
-    </a>
-  );
+function MetricEvidence({ metric }) {
+  if (!metric) return <span>Needs research</span>;
+  return <details><summary className="cursor-pointer">{metric.estimated ? 'Estimated' : 'Sourced'} · {formatCount(metric.sources.length)} references</summary>
+    <p className="my-2 max-w-xl whitespace-normal text-port-text-muted">{metric.method}</p>
+    <ul className="space-y-1">{metric.sources.map(source => <li key={source.url + source.retrievedAt}><a className="text-port-accent underline break-all" href={source.url} target="_blank" rel="noreferrer">{new URL(source.url).hostname}</a> · {source.retrievedAt.slice(0, 10)}<p className="max-w-xl whitespace-normal text-port-text-muted">{source.methodology}</p></li>)}</ul>
+  </details>;
 }
 
-function ComparisonTooltip({ active, payload, priceMetric }) {
+function ComparisonTooltip({ active, payload, priceId }) {
   const row = payload?.[0]?.payload;
-  const priceName = priceMetric.label.toLowerCase();
   if (!active || !row) return null;
-  return (
-    <div className="max-w-xs rounded-lg border border-port-border bg-port-card p-3 text-sm shadow-lg">
-      <div className="font-semibold">{row.model}</div>
-      <div className="text-port-text-muted">{row.provider} · {row.effort}</div>
-      <div>{formatCount(row.y)}% benchmark score</div>
-      <div>{row.familyRate ? '~' : ''}{formatUsd(row.x)} / 1M tokens ({priceName})</div>
-      <div className="text-port-text-muted">Score sourced {metricDate(row.quality)}</div>
-      <div className="text-port-text-muted">Price sourced {metricDate(row[priceMetric.id])}</div>
-    </div>
-  );
+  return <div className="max-w-xs rounded-lg border border-port-border bg-port-card p-3 text-sm shadow-lg">
+    <strong>{row.model} ({row.effort})</strong><p>{row.provider}</p>{row.endpointModel !== row.model && <p className="text-xs break-all">{row.endpointModel}</p>}
+    <p>{valueText(row.quality)} PortOS index</p><p>{valueText(row[priceId], true)}</p>
+    <p className="mt-1 text-xs text-port-text-muted">{row.quality?.method}</p>
+    <p className="mt-1 text-xs text-port-text-muted">{row[priceId]?.method}</p>
+  </div>;
+}
+
+function GenerationDelta({ rows, priceId }) {
+  const models = [...new Set(rows.map(row => row.model))].sort();
+  if (models.length !== 2) return null;
+  const efforts = [...new Set(rows.map(row => row.effort))].sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
+  const metricFor = (model, effort, field) => {
+    const metrics = rows.filter(row => row.model === model && row.effort === effort).map(row => row[field]).filter(Boolean);
+    return metrics.length && new Set(metrics.map(metric => metric.value)).size === 1 ? metrics[0] : null;
+  };
+  return <section className="rounded-xl border border-port-border bg-port-card p-4" aria-label="Pair comparison">
+    <h2 className="font-semibold break-words">{models[1]} compared with {models[0]}</h2>
+    <p className="text-xs text-port-text-muted">Matched effort levels. Differences with estimates carry ≈. Multiple provider prices require a narrower provider selection.</p>
+    <div className="overflow-x-auto"><table className="mt-2 w-full text-left text-sm"><thead><tr><th className="p-2">Effort</th><th className="p-2">Intelligence change</th><th className="p-2">Cost change</th></tr></thead><tbody>{efforts.map(effort => {
+      const before = metricFor(models[0], effort, 'quality'), after = metricFor(models[1], effort, 'quality');
+      const oldCost = metricFor(models[0], effort, priceId), newCost = metricFor(models[1], effort, priceId);
+      const delta = before && after ? after.value - before.value : null;
+      const costChange = oldCost && newCost && oldCost.value > 0 ? (newCost.value - oldCost.value) / oldCost.value * 100 : null;
+      return <tr key={effort} className="border-t border-port-border"><td className="p-2">{effort}</td><td className="p-2">{delta === null ? 'Not comparable' : `${before.estimated || after.estimated ? '≈ ' : ''}${delta > 0 ? '+' : ''}${formatCount(delta, { maximumFractionDigits: 2 })} points`}</td><td className="p-2">{costChange === null ? 'Not comparable' : `${oldCost.estimated || newCost.estimated ? '≈ ' : ''}${costChange > 0 ? '+' : ''}${formatPercent(costChange, { decimals: 1 })}`}</td></tr>;
+    })}</tbody></table></div>
+  </section>;
 }
 
 export default function ModelComparison() {
   const [catalog, setCatalog] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [benchmark, setBenchmark] = useState('');
-  const [priceMetricId, setPriceMetricId] = useState('outputPerMillion');
-
+  const [settings, setSettings] = useState(() => {
+    const saved = safeReadJsonStorage(STORAGE, {});
+    return {
+      models: Array.isArray(saved?.models) ? saved.models : null,
+      efforts: Array.isArray(saved?.efforts) ? saved.efforts : null,
+      provider: typeof saved?.provider === 'string' ? saved.provider : '',
+      priceId: PRICES.some(([id]) => id === saved?.priceId) ? saved.priceId : 'blendedPerMillion',
+      height: [420, 600, 720].includes(saved?.height) ? saved.height : 600,
+      log: saved?.log === true,
+    };
+  });
+  const [query, setQuery] = useState('');
+  const [zoom, setZoom] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [showEstimates, setShowEstimates] = useState(true);
+  const [evidenceLimit, setEvidenceLimit] = useState(100);
+  const update = patch => setSettings(previous => ({ ...previous, ...patch }));
+  useEffect(() => { safeWriteJsonStorage(STORAGE, settings); }, [settings]);
   useEffect(() => {
-    getModelComparison({ silent: true })
-      .then(setCatalog)
-      .catch(err => setError(err.message || 'Could not load the comparison data shipped with this PortOS release.'))
-      .finally(() => setLoading(false));
+    let active = true;
+    getModelComparison({ silent: true }).then(data => { if (active) setCatalog(data); })
+      .catch(err => { if (active) setError(err.message); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
-
-  const observations = catalog?.observations || [];
-  const benchmarks = useMemo(
-    () => [...new Set(observations.filter(row => row.quality).map(row => row.benchmark))].sort(),
-    [observations],
-  );
-
-  useEffect(() => {
-    if (benchmarks.length && !benchmarks.includes(benchmark)) setBenchmark(benchmarks[0]);
-  }, [benchmark, benchmarks]);
-
-  const priceMetric = PRICE_METRICS.find(metric => metric.id === priceMetricId) || PRICE_METRICS[0];
-  const scoredRows = useMemo(
-    () => observations
-      .filter(row => row.benchmark === benchmark && row.quality)
-      .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model) || a.effort.localeCompare(b.effort)),
-    [benchmark, observations],
-  );
-  const plotted = useMemo(() => scoredRows
-    .filter(row => row[priceMetric.id])
-    .map(row => ({
-      ...row,
-      x: row[priceMetric.id].value,
-      y: row.quality.value,
-      familyRate: hasFamilyPrice(row[priceMetric.id]),
-    })), [priceMetric.id, scoredRows]);
-  const grouped = useMemo(() => {
-    const providers = [...new Set(plotted.map(row => row.provider))];
-    return providers.map((name, index) => ({
-      name,
-      color: COLORS[index % COLORS.length],
-      rows: plotted.filter(row => row.provider === name),
-    }));
+  const reload = useCallback(() => {
+    setLoading(true); setError('');
+    getModelComparison({ silent: true }).then(setCatalog).catch(err => setError(err.message)).finally(() => setLoading(false));
+  }, []);
+  const rows = useMemo(() => (catalog?.composite?.rows || []).map(row => {
+    const result = { ...row, endpointModel: row.model, model: row.comparisonModel || row.model };
+    for (const field of ['quality', 'inputPerMillion', 'outputPerMillion', 'blendedPerMillion', 'costPerTask']) {
+      const metric = row[field];
+      if (metric) result[field] = { ...metric, sources: metric.sources || (metric.sourceIds || []).map(id => catalog.composite.sources[id]).filter(Boolean) };
+    }
+    return result;
+  }), [catalog]);
+  const providers = [...new Map(rows.map(row => [row.providerId, row.provider])).entries()];
+  const scoped = rows.filter(row => !settings.provider || row.providerId === settings.provider);
+  const models = [...new Set(scoped.map(row => row.model))].sort();
+  const matches = models.filter(model => !query || query.toLowerCase().split(',').some(term => model.toLowerCase().includes(term.trim())));
+  const efforts = [...new Set(scoped.map(row => row.effort))].sort((a, b) => EFFORTS.indexOf(a) - EFFORTS.indexOf(b));
+  const selected = scoped.filter(row => (settings.models === null || settings.models.includes(row.model)) && (settings.efforts === null || settings.efforts.includes(row.effort)));
+  const price = PRICES.find(([id]) => id === settings.priceId) || PRICES[0];
+  const plotCandidates = selected.filter(row => row.quality && row[price[0]] && (showEstimates || (!row.quality.estimated && !row[price[0]].estimated)) && (!settings.log || row[price[0]].value > 0))
+    .map(row => ({ ...row, x: row[price[0]].value, y: row.quality.value, label: `${row.model} (${row.effort})${row.quality.estimated ? ' ≈' : ''}` }));
+  const plotted = [...plotCandidates.reduce((unique, row) => {
+    const key = `${row.model}:${row.effort}:${row.x}:${row.y}:${row.quality.estimated}:${row[price[0]].estimated}`;
+    const prior = unique.get(key);
+    if (prior) {
+      if (!prior.providers.includes(row.provider)) prior.providers.push(row.provider);
+      prior.provider = prior.providers.join(', ');
+    } else unique.set(key, { ...row, providers: [row.provider] });
+    return unique;
+  }, new Map()).values()];
+  const excludedCount = selected.length - plotCandidates.length;
+  const groups = useMemo(() => {
+    const result = new Map();
+    for (const row of plotted) {
+      if (!result.has(row.modelKey)) result.set(row.modelKey, []);
+      result.get(row.modelKey).push(row);
+    }
+    return [...result].map(([key, points]) => ({ key, points: points.sort((a, b) => EFFORTS.indexOf(a.effort) - EFFORTS.indexOf(b.effort)) }));
   }, [plotted]);
+  const toggle = (key, value, all) => update({ [key]: (settings[key] ?? all).includes(value) ? (settings[key] ?? all).filter(item => item !== value) : [...(settings[key] ?? all), value] });
+  const researchCount = rows.filter(row => row.needsResearch).length;
 
-  const pricingOnlyRows = useMemo(
-    () => observations.filter(row => !row.quality && hasPublicPrice(row))
-      .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)),
-    [observations],
-  );
-
-  if (loading && !catalog) {
-    return <div role="status" className="p-6 text-sm text-port-text-muted">Loading shipped model comparison data…</div>;
-  }
-
-  return (
-    <div className="mx-auto w-full max-w-7xl space-y-5 p-4 md:p-6">
-      <header>
-        <h1 className="flex items-center gap-2 text-2xl font-bold"><BarChart3 size={24} /> Model comparison</h1>
-        <p className="mt-1 max-w-4xl text-sm text-port-text-muted">
-          Public benchmark results and token prices collected online and shipped with this PortOS release. This page reads the shipped snapshot; it does not discover providers or run models.
-        </p>
-      </header>
-
-      {error && <p role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 p-3 text-sm text-port-error">{error}</p>}
-
-      <section className="rounded-xl border border-port-border bg-port-card p-4 md:p-5" aria-labelledby="comparison-chart-title">
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 id="comparison-chart-title" className="text-lg font-semibold">Published token price vs. benchmark performance</h2>
-            <p className="text-sm text-port-text-muted">Each point uses one public score and the selected model’s published API rate. Prices are per 1M tokens, not measured task costs or subscription charges.</p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <div>
-              <label htmlFor="comparison-benchmark" className="mb-1 block text-xs font-medium text-port-text-muted">Benchmark</label>
-              <select id="comparison-benchmark" value={benchmark} onChange={event => setBenchmark(event.target.value)} disabled={benchmarks.length === 0} className="min-w-60 rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm">
-                {benchmarks.length === 0 && <option value="">No scored benchmark data</option>}
-                {benchmarks.map(value => <option key={value} value={value}>{value}</option>)}
-              </select>
-            </div>
-            <div>
-              <label htmlFor="comparison-price-metric" className="mb-1 block text-xs font-medium text-port-text-muted">Token price</label>
-              <select id="comparison-price-metric" value={priceMetricId} onChange={event => setPriceMetricId(event.target.value)} className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm">
-                {PRICE_METRICS.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {plotted.length === 0 ? (
-          <div className="flex min-h-64 items-center justify-center rounded-lg border border-dashed border-port-border px-4 text-center text-sm text-port-text-muted">
-            No models in this benchmark currently have a sourced {priceMetric.label.toLowerCase()}. The benchmark scores remain available in the table below.
-          </div>
-        ) : (
-          <>
-            <div className="h-[420px] w-full" role="img" aria-label={`${benchmark}: published token price versus benchmark score`}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 12, right: 20, bottom: 28, left: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--port-border)" />
-                  <XAxis type="number" dataKey="x" name={priceMetric.label} tickFormatter={value => formatUsd(value)} label={{ value: priceMetric.axis, position: 'insideBottom', offset: -14 }} />
-                  <YAxis type="number" dataKey="y" name="Benchmark score" domain={[0, 100]} tickFormatter={value => `${value}%`} label={{ value: 'Benchmark score (%)', angle: -90, position: 'insideLeft' }} />
-                  <Tooltip content={<ComparisonTooltip priceMetric={priceMetric} />} />
-                  {grouped.map(group => <Scatter key={group.name} name={group.name} data={group.rows} fill={group.color} />)}
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-port-text-muted" aria-label="Chart legend">
-              {grouped.map(group => <span key={group.name} className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: group.color }} />{group.name}</span>)}
-            </div>
-          </>
-        )}
-        <p className="mt-3 text-xs text-port-text-muted">Some rates are published for a model family rather than the exact dated benchmark snapshot; those chart points are marked with ~. A missing rate is left blank, and a free endpoint’s published $0 rate does not promise unlimited use.</p>
-      </section>
-
-      <section className="rounded-xl border border-port-border bg-port-card p-4 md:p-5" aria-labelledby="benchmark-results-title">
-        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-          <div>
-            <h2 id="benchmark-results-title" className="text-lg font-semibold">Shipped benchmark results</h2>
-            <p className="text-sm text-port-text-muted">Scores and pricing retain separate source links and retrieval dates.</p>
-          </div>
-          <span className="text-sm text-port-text-muted">{scoredRows.length} configurations · {plotted.length} with this price</span>
-        </div>
-        {scoredRows.length === 0 ? (
-          <p className="text-sm text-port-text-muted">No scored rows are shipped for this benchmark yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
-              <thead className="border-b border-port-border text-xs uppercase text-port-text-muted">
-                <tr><th className="py-2 pr-3">Provider / model</th><th className="py-2 pr-3">Effort</th><th className="py-2 pr-3">Score</th><th className="py-2 pr-3">Input / 1M</th><th className="py-2 pr-3">Output / 1M</th><th className="py-2 pr-3">Score source</th><th className="py-2 pr-3">Rate source</th></tr>
-              </thead>
-              <tbody>
-                {scoredRows.map(row => (
-                  <tr key={row.id} className="border-b border-port-border/60 last:border-0">
-                    <td className="py-2 pr-3"><span className="font-medium">{row.model}</span><span className="block text-xs text-port-text-muted">{row.provider}</span></td>
-                    <td className="py-2 pr-3">{row.effort === 'unspecified' ? '—' : row.effort}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">{formatCount(row.quality.value)}%</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">{row.inputPerMillion ? `${hasFamilyPrice(row.inputPerMillion) ? '~' : ''}${formatUsd(row.inputPerMillion.value)}` : '—'}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap">{row.outputPerMillion ? `${hasFamilyPrice(row.outputPerMillion) ? '~' : ''}${formatUsd(row.outputPerMillion.value)}` : '—'}</td>
-                    <td className="py-2 pr-3 whitespace-nowrap"><SourceLink metric={row.quality} /> <span className="text-xs text-port-text-muted">{metricDate(row.quality)}</span></td>
-                    <td className="py-2 pr-3 whitespace-nowrap"><SourceLink metric={row[priceMetric.id]} label={row[priceMetric.id] ? 'Source' : '—'} />{row[priceMetric.id] && <span className="ml-1 text-xs text-port-text-muted">{metricDate(row[priceMetric.id])}</span>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-port-border bg-port-card p-4 md:p-5" aria-labelledby="pricing-only-title">
-        <h2 id="pricing-only-title" className="mb-1 text-lg font-semibold">Pricing without benchmark results</h2>
-        <p className="mb-3 text-sm text-port-text-muted">These are public price and free-endpoint references. PortOS has no matched public score for these exact model configurations yet.</p>
-        {pricingOnlyRows.length === 0 ? (
-          <p className="text-sm text-port-text-muted">No pricing-only records are shipped.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px] text-left text-sm">
-              <thead className="border-b border-port-border text-xs uppercase text-port-text-muted">
-                <tr><th className="py-2 pr-3">Provider / model</th><th className="py-2 pr-3">Input / 1M</th><th className="py-2 pr-3">Output / 1M</th><th className="py-2 pr-3">Reference</th><th className="py-2 pr-3">Source</th></tr>
-              </thead>
-              <tbody>
-                {pricingOnlyRows.map(row => {
-                  const rate = row.inputPerMillion || row.outputPerMillion;
-                  return (
-                    <tr key={row.id} className="border-b border-port-border/60 last:border-0">
-                      <td className="py-2 pr-3"><span className="font-medium">{row.model}</span><span className="block text-xs text-port-text-muted">{row.provider}</span></td>
-                      <td className="py-2 pr-3">{row.inputPerMillion ? `${hasFamilyPrice(row.inputPerMillion) ? '~' : ''}${formatUsd(row.inputPerMillion.value)}` : '—'}</td>
-                      <td className="py-2 pr-3">{row.outputPerMillion ? `${hasFamilyPrice(row.outputPerMillion) ? '~' : ''}${formatUsd(row.outputPerMillion.value)}` : '—'}</td>
-                      <td className="py-2 pr-3">{row.benchmark}</td>
-                      <td className="py-2 pr-3 whitespace-nowrap"><SourceLink metric={rate} /> <span className="text-xs text-port-text-muted">{metricDate(rate)}</span></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+  return <div className="@container mx-auto w-full min-w-0 space-y-4 p-3 md:p-5">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h1 className="text-xl font-semibold">Cost vs. intelligence</h1><p className="text-sm text-port-text-muted">Compare generations, peers and reasoning efforts across your selectable models.</p></div>
+      <div className="flex flex-wrap gap-2"><button className={buttonClass} onClick={reload} disabled={loading}>{loading ? 'Loading…' : 'Reload data'}</button><button className={buttonClass} aria-expanded={researchOpen} onClick={() => setResearchOpen(value => !value)}>Research gaps ({formatCount(researchCount)})</button></div>
     </div>
-  );
+    {error && <p role="alert" className="text-port-error">{error}</p>}
+    {researchOpen && <ComparisonResearch />}
+    <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Comparison controls">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0"><label htmlFor="comparison-price" className="block text-xs mb-1">Cost axis</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-price" value={price[0]} onChange={event => update({ priceId: event.target.value })}>{PRICES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>
+        <div className="min-w-0"><label htmlFor="comparison-provider" className="block text-xs mb-1">Provider</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-provider" value={settings.provider} onChange={event => update({ provider: event.target.value })}><option value="">All providers</option>{providers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></div>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showEstimates} onChange={event => setShowEstimates(event.target.checked)} />Include estimates</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={settings.log} onChange={event => update({ log: event.target.checked })} />Log cost scale</label>
+      </div>
+      <div className="flex flex-wrap items-center gap-2" aria-label="Effort toggles"><span className="text-sm">Effort</span><button className={buttonClass} onClick={() => update({ efforts: null })}>All efforts</button>{efforts.map(effort => <button key={effort} className={buttonClass} aria-pressed={settings.efforts === null || settings.efforts.includes(effort)} onClick={() => toggle('efforts', effort, efforts)}>{settings.efforts === null || settings.efforts.includes(effort) ? '✓ ' : ''}{effort}</button>)}</div>
+      <div className="flex flex-wrap items-center gap-2"><label htmlFor="comparison-search" className="sr-only">Filter models</label><input id="comparison-search" className="min-w-0 w-72 max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" placeholder="Find models, e.g. luna or comma-separated names" value={query} onChange={event => setQuery(event.target.value)} /><button className={buttonClass} onClick={() => update({ models: matches })}>Compare matching</button><button className={buttonClass} onClick={() => update({ models: null })}>All models</button><button className={buttonClass} onClick={() => update({ models: [] })}>Clear models</button></div>
+      <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto" aria-label="Model toggles">{matches.map(model => <button key={model} className={`${buttonClass} max-w-full break-all text-left`} aria-pressed={settings.models === null || settings.models.includes(model)} onClick={() => toggle('models', model, models)}>{settings.models === null || settings.models.includes(model) ? '✓ ' : ''}{model}</button>)}</div>
+      <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider points combined. ≈ identifies estimates. Zero prices remain visible on the linear scale.</p>
+    </section>
+    <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3" aria-label="Cost versus intelligence chart">
+      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">PortOS intelligence index vs. {price[1].toLowerCase()}</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} aria-pressed={zoom} onClick={() => setZoom(value => !value)}>{zoom ? 'Reset axes' : 'Fit visible'}</button>{[420, 600, 720].map(height => <button key={height} className={buttonClass} aria-pressed={settings.height === height} onClick={() => update({ height })}>{height}px</button>)}</div></div>
+      {plotted.length ? <div style={{ height: settings.height }} className="w-full min-w-0" role="img" aria-label="PortOS intelligence versus cost; lower cost and higher intelligence are preferred">
+        <ResponsiveContainer width="100%" height="100%"><ScatterChart margin={{ top: 35, right: 30, bottom: 35, left: 10 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--port-border))" />
+          <XAxis tick={{ fill: 'rgb(var(--port-text-muted))' }} type="number" dataKey="x" scale={settings.log ? 'log' : 'auto'} domain={settings.log || zoom ? ['dataMin', 'dataMax'] : [0, 'auto']} tickFormatter={value => formatUsd(value, { maximumFractionDigits: 4 })} label={{ value: price[2], fill: 'rgb(var(--port-text-muted))', position: 'insideBottom', offset: -20 }} />
+          <YAxis tick={{ fill: 'rgb(var(--port-text-muted))' }} type="number" dataKey="y" domain={zoom ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} label={{ value: 'PortOS intelligence index', fill: 'rgb(var(--port-text-muted))', angle: -90, position: 'insideLeft' }} />
+          <Tooltip content={<ComparisonTooltip priceId={price[0]} />} />
+          {groups.map(({ key, points }) => <Scatter isAnimationActive={false} key={key} name={key} data={points} fill={COLORS[models.indexOf(points[0].model) % COLORS.length]} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>)}
+        </ScatterChart></ResponsiveContainer>
+      </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : 'No points match these choices. Select models and efforts, change the cost axis, or research missing evidence.'}</p>}
+      <div className="flex flex-wrap gap-3 text-xs" aria-label="Chart legend">{[...new Set(plotted.map(row => row.model))].map(model => <span key={model} className="break-all" style={{ color: COLORS[models.indexOf(model) % COLORS.length] }}>● {model}</span>)}</div>
+      <p className="mt-3 text-xs text-port-text-muted">Token prices are API references, not subscription charges or local operating costs. Effort usually changes token usage, not the per-token rate. Use sourced task cost to compare reasoning expense where published.</p>
+    </section>
+    <ComparisonValueGuide rows={selected} />
+    <GenerationDelta rows={selected} priceId={price[0]} />
+    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {catalog?.composite?.anchor || 'the versioned reference index'} as its stable scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
+    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Selected configurations and evidence ({formatCount(selected.length)})</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead><tr><th className="p-2">Model / provider</th><th className="p-2">Effort</th><th className="p-2">Intelligence</th><th className="p-2">Cost</th><th className="p-2">Performance evidence</th><th className="p-2">Cost evidence</th></tr></thead><tbody>{selected.slice(0, evidenceLimit).map(row => <tr key={row.id} className="border-t border-port-border"><td className="p-2">{row.model}<span className="block text-xs text-port-text-muted">{row.provider}{row.endpointModel !== row.model ? ` · ${row.endpointModel}` : ''}</span></td><td className="p-2">{row.effort}</td><td className="p-2">{valueText(row.quality)}</td><td className="p-2">{valueText(row[price[0]], true)}</td><td className="p-2">{row.incomparableReason ? <p className="max-w-sm whitespace-normal">{row.incomparableReason}</p> : <MetricEvidence metric={row.quality} />}</td><td className="p-2"><MetricEvidence metric={row[price[0]]} /></td></tr>)}</tbody></table></div>{selected.length > evidenceLimit && <button className={buttonClass} onClick={() => setEvidenceLimit(value => value + 100)}>Show 100 more configurations</button>}</details>
+  </div>;
 }
