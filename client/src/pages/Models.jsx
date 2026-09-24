@@ -119,7 +119,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
     <ModelsSectionLayout activeTab={activeTab}>
       <PageHeader icon={DestinationIcon} title={destination?.label || 'Models'} />
 
-      <ModelsTabsHeader activeTab={activeTab} desktop={false} />
+      <ModelsTabsHeader activeTab={activeTab} />
 
       <div className="flex-1 min-w-0 overflow-auto p-4">
         {/* Local boundary rather than the App-level one: a lazy tab must not blank

@@ -8,10 +8,9 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { ModelsDesktopNavigator, TABS } from '../components/models/ModelsTabsHeader';
-import SidebarContext from '../components/SidebarContext';
+import { TABS } from '../components/models/ModelsTabsHeader';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({
   default: ({ taskView, assessmentKey }) => (
@@ -173,31 +172,6 @@ describe('Models', () => {
     const tabs = within(bar).getAllByRole('tab');
     expect(tabs.map((t) => t.textContent)).toEqual(TABS.map((t) => t.label));
     expect(tabs.every((t) => t.querySelector('svg') && t.querySelector('.max-sm\\:sr-only'))).toBe(true);
-  });
-
-  it('renders grouped desktop destinations with one active link and keyboard-sized targets', () => {
-    render(
-      <MemoryRouter initialEntries={['/models/llms/abuse']}>
-        <SidebarContext.Provider value={{ collapsed: true, desktop: true }}>
-          <ModelsDesktopNavigator activeTab="llms" />
-        </SidebarContext.Provider>
-      </MemoryRouter>,
-    );
-
-    const nav = screen.getByRole('navigation', { name: 'Models destinations' });
-    expect(within(nav).getByRole('heading', { name: 'Connect' })).toBeInTheDocument();
-    expect(within(nav).getByRole('heading', { name: 'Evaluate' })).toBeInTheDocument();
-    expect(within(nav).getByRole('heading', { name: 'Library' })).toBeInTheDocument();
-    expect(within(nav).getByRole('heading', { name: 'Operate' })).toBeInTheDocument();
-    expect(within(nav).getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
-
-    const abuse = within(nav).getByRole('link', { name: 'Abuse Guard' });
-    expect(abuse).toHaveAttribute('aria-current', 'page');
-    expect(within(nav).getByRole('link', { name: 'Model Library' })).not.toHaveAttribute('aria-current');
-    expect(within(nav).getAllByRole('link').every((link) => link.getAttribute('class').includes('min-h-[44px]'))).toBe(true);
-
-    fireEvent.click(within(nav).getByRole('link', { name: 'Decision Classifiers' }));
-    expect(within(nav).getByRole('link', { name: 'Decision Classifiers' })).toHaveAttribute('aria-current', 'page');
   });
 
   // A tab listed in the header but missing from TAB_CONTENT falls through to the
