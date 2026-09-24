@@ -49,6 +49,24 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('WorkflowTab timeline defaults and layout', () => {
+  it('announces initial loading until the timeline is available', async () => {
+    let resolveWorkflow;
+    api.getCosWorkflow.mockReturnValue(new Promise(resolve => { resolveWorkflow = resolve; }));
+
+    render(
+      <MemoryRouter initialEntries={['/cos/workflow']}>
+        <WorkflowTab apps={[]} providers={[]} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Building schedule timeline…');
+
+    await act(async () => { resolveWorkflow(SAMPLE_GRAPH); });
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getAllByText('code-quality').length).toBeGreaterThan(0);
+  });
+
   it('defaults to 7 day timeline (168 hours) when no query param is provided', async () => {
     await act(async () => {
       render(
