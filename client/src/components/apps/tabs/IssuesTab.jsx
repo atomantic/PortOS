@@ -811,8 +811,8 @@ export default function IssuesTab({ appId, appName }) {
           {issues.map(issue => {
             const isOpen = expanded.has(issue.number);
             return (
-              <div key={issue.number} className={issueRowTint(issue)}>
-                <div className="flex flex-col sm:flex-row sm:items-start gap-3 p-3">
+              <div key={issue.number} className={`${issueRowTint(issue)} @container`}>
+                <div className="flex flex-col @min-[64rem]:flex-row @min-[64rem]:items-start gap-3 p-3">
                   <button
                     onClick={() => toggleExpanded(issue.number)}
                     aria-expanded={isOpen}
@@ -829,7 +829,7 @@ export default function IssuesTab({ appId, appName }) {
                       <button
                         onClick={() => toggleExpanded(issue.number)}
                         aria-expanded={isOpen}
-                        className="text-sm font-medium text-white text-left hover:text-port-accent transition-colors break-words flex-1"
+                        className="text-sm font-medium text-white text-left hover:text-port-accent transition-colors break-words flex-1 min-w-0"
                       >
                         {issue.title || '(no title)'}
                       </button>
@@ -860,7 +860,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:flex-wrap sm:items-center sm:w-auto sm:min-w-0 sm:self-start">
+                  <div className="grid grid-cols-2 gap-2 w-full @min-[64rem]:flex @min-[64rem]:flex-wrap @min-[64rem]:items-center @min-[64rem]:w-auto @min-[64rem]:min-w-0 @min-[64rem]:self-start">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];
@@ -875,7 +875,7 @@ export default function IssuesTab({ appId, appName }) {
                             key={action}
                             to="/cos/agents"
                             aria-label={`${spec.label} #${issue.number}: ${RUN_STATUS_LABEL[state] || 'Queued — view'}`}
-                            className="min-h-[44px] sm:min-h-0 w-full sm:w-auto px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center justify-center sm:justify-start gap-1.5 transition-colors"
+                            className="min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto min-w-0 px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center justify-center @min-[64rem]:justify-start gap-1.5 transition-colors"
                           >
                             <Icon size={14} /> {spec.label} · {RUN_STATUS_LABEL[state] || 'Queued — view'}
                           </Link>
@@ -889,7 +889,7 @@ export default function IssuesTab({ appId, appName }) {
                           disabled={action === 'claim' && invalidReviewOverride}
                           title={spec.title(issue.number, appName)}
                           icon={Icon}
-                          className={`min-h-[44px] sm:min-h-0 w-full sm:w-auto sm:min-w-[7.5rem] px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
+                          className={`min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto @min-[64rem]:min-w-[7.5rem] px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
                         >
                           {spec.label}
                         </RunActionButton>
@@ -903,7 +903,7 @@ export default function IssuesTab({ appId, appName }) {
                           label: `#${issue.number} ${issue.title || ''}`.trim()
                         }}
                         buttonText="Thread"
-                        className="min-h-[44px] sm:min-h-0 w-full sm:w-auto justify-center px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                        className="min-h-[44px] @min-[64rem]:min-h-0 w-full @min-[64rem]:w-auto justify-center px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
                       />
                     )}
                     {issue.url && (
@@ -920,10 +920,10 @@ export default function IssuesTab({ appId, appName }) {
                             window.open(issue.url, '_blank', 'noreferrer');
                           }
                         }}
-                        className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors shrink-0"
+                        className="min-h-[44px] min-w-[44px] @min-[64rem]:min-h-0 @min-[64rem]:min-w-0 w-full @min-[64rem]:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors"
                       >
                         <ExternalLink size={14} />
-                        <span className="sm:inline">{forgeLabel}</span>
+                        <span>{forgeLabel}</span>
                       </a>
                     )}
                   </div>
