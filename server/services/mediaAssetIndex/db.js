@@ -93,8 +93,7 @@ export async function removeAsset(mediaKey) {
 
 // Parameters stay bound, including literal substring search (percent and underscore
 // in a prompt are not SQL wildcards). Count and page share exactly one predicate.
-function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}) {
-  const params = [];
+function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}, params = []) {
   const clauses = [];
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
   if (hidden !== undefined) {
@@ -136,11 +135,11 @@ function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, e
 // Videos stay authoritative in video-history: prompt/visibility edits and uploads
 // do not all refresh the derived index. Mixed pages join that snapshot in SQL,
 // rather than using stale video rows or downloading either full list to the client.
-function assetSource(params, videos) {
+function assetSource(params, videos, materialized = false) {
   if (videos === undefined) return { cte: '', table: 'media_assets' };
   params.push(JSON.stringify(videos.map(data => ({ data, createdAt: Number.isFinite(Date.parse(data.createdAt)) ? new Date(data.createdAt).toISOString() : new Date(0).toISOString() }))));
   return {
-    cte: `WITH gallery_assets AS (
+    cte: `WITH gallery_assets AS ${materialized ? 'MATERIALIZED ' : ''}(
       SELECT media_key, kind, ref, data, created_at FROM media_assets WHERE kind = 'image'
       UNION ALL
       SELECT 'video:' || (value->'data'->>'id'), 'video', value->'data'->>'id', value->'data',
@@ -177,6 +176,43 @@ export async function countAssets({ videos, ...filters } = {}) {
   const { cte, table } = assetSource(params, videos);
   const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${table}${where}`, params);
   return parseInt(result.rows[0].count, 10);
+}
+
+/** One snapshot expansion serves the mixed page and every summary count. */
+export async function listMixedGalleryPage({
+  videos = [], limit = 60, offset = 0, orderedKeys, cover, countMediaKeys, ...filters
+} = {}) {
+  const params = [];
+  const { cte, table } = assetSource(params, videos, true);
+  const predicate = options => assetFilter(options, params).where.slice(' WHERE '.length) || 'TRUE';
+  const totalFilter = predicate(filters);
+  const hiddenFilter = predicate({ ...filters, hidden: true });
+  // Chips follow search/collection/visibility, before kind and favorites.
+  const facetFilter = predicate({ ...filters, kind: undefined, mediaKeys: countMediaKeys });
+  const pageFilter = predicate({ ...filters, cover });
+  let order = 'created_at DESC, media_key ASC';
+  if (orderedKeys) {
+    params.push(orderedKeys);
+    order = `array_position($${params.length}::text[], media_key), media_key ASC`;
+  }
+  params.push(limit, offset);
+  const result = await query(`${cte}, gallery_page AS (
+      SELECT * FROM ${table} WHERE ${pageFilter}
+      ORDER BY ${order} LIMIT $${params.length - 1} OFFSET $${params.length}
+    )
+    SELECT
+      (SELECT COALESCE(jsonb_agg(jsonb_build_object('kind', kind, 'data', data)
+        ORDER BY ${order}), '[]'::jsonb) FROM gallery_page) AS items,
+      COUNT(*) FILTER (WHERE ${totalFilter}) AS total,
+      COUNT(*) FILTER (WHERE ${hiddenFilter}) AS "hiddenTotal",
+      COUNT(*) FILTER (WHERE (${facetFilter}) AND kind = 'image') AS image,
+      COUNT(*) FILTER (WHERE (${facetFilter}) AND kind = 'video') AS video
+    FROM ${table}`, params);
+  const row = result.rows[0];
+  const image = Number(row.image);
+  const video = Number(row.video);
+  return { items: row.items, total: Number(row.total), hiddenTotal: Number(row.hiddenTotal),
+    counts: { image, video, all: image + video } };
 }
 
 /** Compact global picker options, independent of the loaded page/search. */
