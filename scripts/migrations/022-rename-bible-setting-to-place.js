@@ -219,23 +219,26 @@ const migrateWritersRoomWorks = async (rootDir) => {
       // this branch because `settings.json` is gone; the .bak sits as a
       // recovery breadcrumb the user can diff if anything looks missing.
       const backupPath = `${legacyPath}.bak-022`;
-      await rename(legacyPath, backupPath).catch((err) => {
-        console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to back up legacy settings.json → settings.json.bak-022 — ${err.message}`);
-      });
+      if (await fileExists(backupPath)) {
+        throw new Error(`Cannot migrate ${join('data/writers-room/works', entry.name, 'settings.json')}: settings.json.bak-022 already exists`);
+      }
+      await rename(legacyPath, backupPath);
       console.log(`🧹 ${join('data/writers-room/works', entry.name)}: both settings.json and places.json existed — kept places.json, backed up legacy settings.json → settings.json.bak-022 (diff if anything looks missing)`);
       continue;
     }
-    const raw = await readFile(legacyPath, 'utf-8').catch(() => null);
-    if (raw == null) continue;
+    const raw = await readFile(legacyPath, 'utf-8');
     let parsed;
-    try { parsed = JSON.parse(raw); } catch { parsed = null; }
-    if (parsed && Array.isArray(parsed.settings)) {
-      parsed.places = parsed.settings;
-      delete parsed.settings;
-      await writeJson(newPath, parsed);
-    } else {
-      await writeJson(newPath, parsed || { places: [], updatedAt: null });
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(`Cannot migrate ${join('data/writers-room/works', entry.name, 'settings.json')}: invalid JSON`, { cause: error });
     }
+    if (!parsed || !Array.isArray(parsed.settings)) {
+      throw new Error(`Cannot migrate ${join('data/writers-room/works', entry.name, 'settings.json')}: missing settings array`);
+    }
+    parsed.places = parsed.settings;
+    delete parsed.settings;
+    await writeJson(newPath, parsed);
     // Try unlink first (clean removal of the now-redundant legacy file).
     // If unlink fails (Windows file-lock, EACCES, etc.) the residual
     // `settings.json` would otherwise be re-discovered by the next
@@ -247,13 +250,10 @@ const migrateWritersRoomWorks = async (rootDir) => {
     const unlinkErr = await unlink(legacyPath).then(() => null, (err) => err);
     if (unlinkErr) {
       const backupPath = `${legacyPath}.bak-022`;
-      await rename(legacyPath, backupPath).catch((renameErr) => {
-        console.warn(
-          `⚠️ ${join('data/writers-room/works', entry.name)}: failed to clean up legacy settings.json after writing places.json — ` +
-          `unlink: ${unlinkErr.message}; rename to .bak-022: ${renameErr.message}. ` +
-          `Next migration run will treat this as a phantom "both files exist" case.`,
-        );
-      });
+      if (await fileExists(backupPath)) {
+        throw new Error(`Cannot back up ${join('data/writers-room/works', entry.name, 'settings.json')} after unlink failed: settings.json.bak-022 already exists`, { cause: unlinkErr });
+      }
+      await rename(legacyPath, backupPath);
     }
     renamedFiles += 1;
   }
