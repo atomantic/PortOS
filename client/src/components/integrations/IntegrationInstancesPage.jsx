@@ -24,13 +24,20 @@ export default function IntegrationInstancesPage({
   const [customFields, setCustomFields] = useState({});
 
   useEffect(() => {
+    let active = true;
     api.get(`${apiBase}/instances`, { silent: true })
-      .then(response => setInstances(response.instances || {}))
+      .then(response => {
+        if (active) setInstances(response.instances || {});
+      })
       .catch(error => {
+        if (!active) return;
         console.error(`❌ Failed to load ${title} instances: ${error.message}`);
         toast.error(`Failed to load ${title} instances: ${error.message}`);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
   }, [apiBase, title]);
 
   const resetForm = () => {
