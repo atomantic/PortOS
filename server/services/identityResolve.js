@@ -131,19 +131,6 @@ export function createHandleResolver(ctx) {
 }
 
 /**
- * Resolve many handles with one shared context (avoids N Tribe loads).
- */
-export function resolveHandles(handles = [], ctx) {
-  const out = new Map();
-  for (const h of handles) {
-    if (h == null || h === '') continue;
-    if (out.has(h)) continue;
-    out.set(h, resolveHandle(h, ctx));
-  }
-  return out;
-}
-
-/**
  * Enrich a conversation-like row that has `handle` / `title` / `participants`.
  */
 export function enrichConversationRow(row, ctx) {

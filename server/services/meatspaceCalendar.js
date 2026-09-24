@@ -269,64 +269,6 @@ export async function removeLifeEvent(id) {
   return data.events;
 }
 
-/**
- * Compute which weeks in the life grid correspond to events.
- * Returns a Map<"age-week", { type, name }> for grid coloring.
- */
-export function computeAllEventWeeks(birthDate, deathDate, events) {
-  const result = new Map();
-  const birth = new Date(birthDate);
-  const death = new Date(deathDate);
-  const now = new Date();
-  const totalYears = Math.ceil((death - birth) / (365.25 * 86400000));
-
-  for (const event of events) {
-    if (!event.enabled) continue;
-
-    if (event.recurrence === 'yearly' && event.month != null && event.day != null) {
-      // Yearly recurring: mark each future year
-      for (let y = 0; y < totalYears; y++) {
-        const yearStart = new Date(birth);
-        yearStart.setFullYear(birth.getFullYear() + y);
-        const eventDate = new Date(yearStart.getFullYear(), event.month, event.day);
-        if (eventDate <= now || eventDate > death) continue;
-        const weekOfYear = Math.floor((eventDate - yearStart) / (7 * 86400000));
-        if (weekOfYear >= 0 && weekOfYear < 52) {
-          const key = `${y}-${weekOfYear}`;
-          // Don't overwrite existing events (first-registered wins)
-          if (!result.has(key)) {
-            result.set(key, { type: event.type, name: event.name });
-          }
-        }
-      }
-    } else if (event.recurrence === 'once' && event.date) {
-      // One-time event: mark single date (or range if endDate)
-      const start = new Date(event.date);
-      const end = event.endDate ? new Date(event.endDate) : start;
-      const cursor = new Date(start);
-      while (cursor <= end && cursor <= death) {
-        if (cursor > now) {
-          // Find age and week
-          const ageMs = cursor - birth;
-          const age = Math.floor(ageMs / (365.25 * 86400000));
-          const yearStart = new Date(birth);
-          yearStart.setFullYear(birth.getFullYear() + age);
-          const weekOfYear = Math.floor((cursor - yearStart) / (7 * 86400000));
-          if (weekOfYear >= 0 && weekOfYear < 52) {
-            const key = `${age}-${weekOfYear}`;
-            if (!result.has(key)) {
-              result.set(key, { type: event.type, name: event.name });
-            }
-          }
-        }
-        cursor.setDate(cursor.getDate() + 7); // Jump by week for ranges
-      }
-    }
-  }
-
-  return result;
-}
-
 // === Exported Service Functions ===
 
 export async function getCalendarData() {

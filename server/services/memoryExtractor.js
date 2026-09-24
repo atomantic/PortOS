@@ -400,10 +400,3 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
     pendingMemories
   };
 }
-
-/**
- * Manual extraction endpoint (for API)
- */
-export async function extractFromOutput(agentId, taskId, output) {
-  return extractAndStoreMemories(agentId, taskId, output);
-}

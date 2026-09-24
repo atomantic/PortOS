@@ -149,28 +149,6 @@ export async function recordActivity(id) {
 }
 
 /**
- * Update account credentials
- */
-export async function updateCredentials(id, credentials) {
-  let found = false;
-  await store.mutate((data) => {
-    if (!data.accounts[id]) return data;
-    found = true;
-    data.accounts[id].credentials = {
-      ...data.accounts[id].credentials,
-      ...credentials
-    };
-    return data;
-  });
-
-  if (!found) return null;
-  notifyChanged('update', id);
-
-  console.log(`🔑 Updated credentials for account ${id}`);
-  return getAccountById(id);
-}
-
-/**
  * Delete a platform account
  */
 export async function deleteAccount(id) {
@@ -195,12 +173,4 @@ export async function deleteAccount(id) {
 export async function getAccountsByPlatform(platform) {
   const accounts = await getAllAccounts();
   return accounts.filter(account => account.platform === platform);
-}
-
-/**
- * Get active accounts for an agent
- */
-export async function getActiveAccountsForAgent(agentId) {
-  const accounts = await getAccountsByAgent(agentId);
-  return accounts.filter(account => account.status === 'active');
 }

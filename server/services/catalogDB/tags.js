@@ -92,30 +92,3 @@ export async function listTags({ q, limit = 20 } = {}) {
   );
   return { items: result.rows.map(rowToTag) };
 }
-
-/**
- * Patch a tag's mutable fields (description / color / parent_id). `label` is
- * intentionally NOT patchable here — relabeling would orphan the freeform
- * array values that reference the old casing. Self-parent is rejected.
- */
-export async function updateTag(id, patch = {}) {
-  const fields = [];
-  const params = [];
-  let idx = 1;
-  const fieldMap = { description: 'description', color: 'color', parentId: 'parent_id' };
-  for (const [jsField, dbField] of Object.entries(fieldMap)) {
-    if (patch[jsField] === undefined) continue;
-    if (jsField === 'parentId' && patch.parentId === id) {
-      throw new Error('a tag cannot be its own parent');
-    }
-    fields.push(`${dbField} = $${idx++}`);
-    params.push(patch[jsField] === '' ? null : patch[jsField]);
-  }
-  if (fields.length === 0) return getTag(id);
-  params.push(id);
-  const result = await query(
-    `UPDATE catalog_tags SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
-    params,
-  );
-  return rowToTag(result.rows[0]);
-}

@@ -448,8 +448,6 @@ const MFLUX_VENV_CANDIDATES = IS_WIN
       join(PATHS.data, 'python', 'venv-mflux', 'bin', 'python3'),
     ];
 
-export const MFLUX_VENV_DEFAULT = MFLUX_VENV_CANDIDATES[0];
-
 // Resolve the Python whose `mflux-train` PortOS should spawn for MLX LoRA
 // training. Preference order: (1) an explicitly-configured image-gen Python
 // that actually ships mflux-train — the historical `pip --user` layout, so
@@ -497,10 +495,6 @@ export function resolveMusicgenPython() {
   return null;
 }
 
-export function invalidateMusicgenPython() {
-  cachedMusicgenPython = null;
-}
-
 // AudioLDM2 (Pipeline Audio Phase 4c.2 — second music backend) runs in its own
 // venv at ~/.portos/venv-audioldm2 — torch + diffusers + transformers, kept
 // apart from MusicGen's MLX pile. AudioLDM2 ships in HuggingFace `diffusers` (a
@@ -533,10 +527,6 @@ export function resolveAudioldm2Python() {
     if (existsSync(p)) { cachedAudioldm2Python = p; return p; }
   }
   return null;
-}
-
-export function invalidateAudioldm2Python() {
-  cachedAudioldm2Python = null;
 }
 
 // ACE-Step (third music backend — full-song generation with vocals) runs in its
@@ -574,10 +564,6 @@ export function resolveAcestepPython() {
   return null;
 }
 
-export function invalidateAcestepPython() {
-  cachedAcestepPython = null;
-}
-
 // ACE-Step 1.5 has a different runtime from v1: its installed package supplies
 // the multi-component Transformers pipeline that loads the fixed HF snapshot
 // with trust_remote_code. Keep it in a sibling venv so v1 renders remain
@@ -604,10 +590,6 @@ export function resolveAcestep15Python() {
   return null;
 }
 
-export function invalidateAcestep15Python() {
-  cachedAcestep15Python = null;
-}
-
 const MINIMAX_MUSIC3_VENV_CANDIDATES = IS_WIN
   ? [
       join(HOME, '.portos', 'venv-minimax-music3', 'Scripts', 'python.exe'),
@@ -630,10 +612,6 @@ export function resolveMinimaxMusic3Python() {
   return null;
 }
 
-export function invalidateMinimaxMusic3Python() {
-  cachedMinimaxMusic3Python = null;
-}
-
 // MiniMax Music 3's native MLX port runs in a separate venv from the CUDA
 // Diffusers runtime above. Keeping the stacks isolated prevents a torch/
 // diffusers upgrade from changing the MLX install (and vice versa).
@@ -652,10 +630,6 @@ export function resolveMinimaxMusic3MlxPython() {
     if (existsSync(p)) { cachedMinimaxMusic3MlxPython = p; return p; }
   }
   return null;
-}
-
-export function invalidateMinimaxMusic3MlxPython() {
-  cachedMinimaxMusic3MlxPython = null;
 }
 
 // Every venv PortOS provisions with `huggingface_hub` installed, in preference

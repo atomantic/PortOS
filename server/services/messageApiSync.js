@@ -131,15 +131,3 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
   console.log(`📧 API sync complete: ${messages.length} messages fetched in ${page} page(s)`);
   return { messages, status: 'success', syncMethod: 'api' };
 }
-
-/**
- * Teams API sync is not yet available.
- * Teams v2 is a fully offline-first PWA using service workers and WebSocket (SignalR)
- * for data. The Graph API token from the browser lacks Chat.Read scope, and the
- * chatsvcagg token doesn't map to documented REST endpoints.
- * Teams continues to use Playwright scraping for now.
- * @returns null (signals fallback to Playwright)
- */
-export async function syncTeamsApi() {
-  return null;
-}

@@ -383,12 +383,3 @@ export function transformOpenRouterEndpointsToObservations(modelEndpoints, { ret
   }
   return observations;
 }
-
-export async function syncOpenRouterEndpointCatalog() {
-  const models = await fetchOpenRouterModels();
-  const endpoints = await mapWithConcurrency(models, OPENROUTER_ENDPOINT_CONCURRENCY, fetchOpenRouterModelEndpoints);
-  const observations = transformOpenRouterEndpointsToObservations(endpoints);
-  const validated = modelComparisonImportSchema.parse({ schemaVersion: 1, observations });
-  const updated = await importModelComparison(validated);
-  return { success: true, fetched: models.length, observations: observations.length, total: updated.observations.length, catalog: updated };
-}

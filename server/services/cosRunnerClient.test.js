@@ -35,8 +35,6 @@ import {
   terminateAgentViaRunner,
   killAgentViaRunner,
   getAgentStatsFromRunner,
-  terminateAllAgentsViaRunner,
-  getAgentOutputFromRunner,
   spawnTuiSessionViaRunner,
   connectTuiSessionViaRunner,
   classifyRunnerSpawnFailure,
@@ -574,46 +572,4 @@ describe('cosRunnerClient', () => {
     });
   });
 
-  // ===========================================================================
-  // terminateAllAgentsViaRunner
-  // ===========================================================================
-  describe('terminateAllAgentsViaRunner', () => {
-    it('should POST terminate-all and return result', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { terminated: 3 }));
-      const result = await terminateAllAgentsViaRunner();
-      expect(result).toEqual({ terminated: 3 });
-      expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/terminate-all'),
-        { method: 'POST' },
-        30000
-      );
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, {}));
-      await expect(terminateAllAgentsViaRunner()).rejects.toThrow('Failed to terminate agents');
-    });
-  });
-
-  // ===========================================================================
-  // getAgentOutputFromRunner
-  // ===========================================================================
-  describe('getAgentOutputFromRunner', () => {
-    it('should return agent output', async () => {
-      const output = { output: 'Hello world', lines: 10 };
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, output));
-      const result = await getAgentOutputFromRunner('agent-1');
-      expect(result).toEqual(output);
-      expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/agents/agent-1/output'),
-        {},
-        10000
-      );
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, { error: 'Not found' }));
-      await expect(getAgentOutputFromRunner('bad-id')).rejects.toThrow('Not found');
-    });
-  });
 });

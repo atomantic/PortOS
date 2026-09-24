@@ -46,13 +46,6 @@ export function getQueue(agentId) {
 }
 
 /**
- * Get all items for an agent (including completed/failed, for display)
- */
-export function getFullQueue(agentId) {
-  return queues.get(agentId) || [];
-}
-
-/**
  * Add an action to the queue
  */
 export function addAction(agentId, actionType, params = {}, scheduledFor = null) {
@@ -76,25 +69,6 @@ export function addAction(agentId, actionType, params = {}, scheduledFor = null)
   evictCompleted(queue);
   console.log(`📋 Queue: added ${actionType} for agent=${agentId} id=${item.id}`);
   queueEvents.emit('added', item);
-  return item;
-}
-
-/**
- * Pop the next pending item (FIFO), mark it as executing
- */
-export function popNext(agentId) {
-  const queue = queues.get(agentId) || [];
-  const now = new Date().toISOString();
-  const idx = queue.findIndex(item =>
-    item.status === 'pending' &&
-    (!item.scheduledFor || item.scheduledFor <= now)
-  );
-  if (idx === -1) return null;
-
-  queue[idx].status = 'executing';
-  const item = queue[idx];
-  console.log(`📋 Queue: executing ${item.actionType} id=${item.id}`);
-  queueEvents.emit('updated', item);
   return item;
 }
 

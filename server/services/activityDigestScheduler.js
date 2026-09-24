@@ -100,11 +100,3 @@ export function startActivityDigestScheduler() {
     checkSchedule().catch((err) => console.error(`🗓️  Activity digest scheduler check failed: ${err.message}`));
   }, CHECK_INTERVAL_MS);
 }
-
-export function stopActivityDigestScheduler() {
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-    console.log('🗓️  Activity digest scheduler: stopped');
-  }
-}

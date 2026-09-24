@@ -135,21 +135,3 @@ export function disconnectFromPeer(peerId) {
   instanceEvents.emit('peer:agents:updated', { peerId, agents: [] });
   console.log(`🔗 Peer relay cleaned up: ${conn.peer.name}`);
 }
-
-/**
- * Get current agent snapshot for a peer
- */
-export function getPeerAgents(peerId) {
-  const conn = peerConnections.get(peerId);
-  if (!conn) return [];
-  return Array.from(conn.agents.values());
-}
-
-/**
- * Disconnect all peer relays (for shutdown)
- */
-export function disconnectAll() {
-  for (const [peerId] of peerConnections) {
-    disconnectFromPeer(peerId);
-  }
-}

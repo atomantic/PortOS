@@ -40,7 +40,6 @@ let averageCache = null;
 let averageCacheAt = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-
 // === Pure Functions ===
 
 // 1 standard drink = 0.6 oz pure alcohol = ~14g pure alcohol
@@ -389,15 +388,4 @@ export async function removeCustomDrink(index) {
   await saveCustomDrinks(data);
   console.log(`🗑️ Removed custom drink button: ${removed.name}`);
   return removed;
-}
-
-export async function reorderCustomDrinks(fromIndex, toIndex) {
-  if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return null;
-  const data = await loadCustomDrinks();
-  if (fromIndex < 0 || fromIndex >= data.drinks.length) return null;
-  if (toIndex < 0 || toIndex >= data.drinks.length) return null;
-  const [moved] = data.drinks.splice(fromIndex, 1);
-  data.drinks.splice(toIndex, 0, moved);
-  await saveCustomDrinks(data);
-  return data.drinks;
 }

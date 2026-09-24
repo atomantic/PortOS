@@ -26,33 +26,14 @@ import { localEndpointPort } from './localEndpoint.js';
 /**
  * The PM2 process names of the local model servers PortOS manages.
  *
- * Declared here rather than in each manager so the health monitor can recognize
- * them without importing a manager (and its whole PM2/model-probe dependency
- * chain); `llamaServerManager.js`, `mtplxServerManager.js`, and
+ * Declared here rather than in each manager so process names remain consistent;
+ * `llamaServerManager.js`, `mtplxServerManager.js`, and
  * `slotstreamServerManager.js` re-export these as `LLAMA_APP` / `MTPLX_APP` /
  * `SLOTSTREAM_APP`.
  */
 export const LLAMA_APP = 'portos-llama-server';
 export const MTPLX_APP = 'portos-mtplx';
 export const SLOTSTREAM_APP = 'portos-slotstream';
-const MODEL_SERVER_APPS = [LLAMA_APP, MTPLX_APP, SLOTSTREAM_APP];
-
-/**
- * Whether a PM2 process is one of those model servers.
- *
- * A model server's resident size IS the checkpoint it loaded — llama.cpp,
- * MTPLX, and Slotstream hold multi-GB weights for as long as they are up, by
- * design. Measuring
- * them against a generic per-process memory cap produces a warning the user can
- * never clear (a 24GB llama-server against a 2GB cap is a correctly-running
- * server, not a leak), so callers policing per-process memory skip them. Genuine
- * host-wide pressure is still reported — `services/proactiveAlerts.js` alerts on
- * total used-vs-installed memory, which is where a too-large model actually
- * shows up.
- *
- * @param {string} [name] PM2 process name
- */
-export const isModelServerProcess = (name) => MODEL_SERVER_APPS.includes(name);
 
 /** Same cap both managers used, and what the launcher cards render. */
 const DEFAULT_MAX_LINES = 100;
@@ -844,4 +825,3 @@ export function _resetIdleDaemonsForTests() {
   pressureHistory = [];
   lastPressureReleaseAt = null;
 }
-

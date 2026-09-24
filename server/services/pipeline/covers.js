@@ -379,15 +379,6 @@ export async function enqueueVolumeCover(seriesId, seasonId, options = {}) {
 }
 
 /**
- * Enqueue a volume (season) BACK cover render. Returns
- * { jobId, mode, prompt, backCoverScript, variant, fromProof }.
- */
-export async function enqueueVolumeBackCover(seriesId, seasonId, options = {}) {
-  const { script, ...rest } = await enqueueVolumeCoverLike(seriesId, seasonId, 'backCover', options);
-  return { ...rest, backCoverScript: script };
-}
-
-/**
  * Enqueue + persist a volume (season) cover render (front or back) in ONE
  * service call — the shared entry point behind both the route handler and the
  * CDO orchestrator (#2220). Mirrors `renderComicCoverLike` but persists the

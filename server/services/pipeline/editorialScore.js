@@ -329,15 +329,6 @@ async function readLedger(seriesId) {
 }
 
 /**
- * Read the persisted revision-trend ledger for a series (never null — an empty
- * ledger when none has been recorded yet).
- */
-export async function getTrendLedger(seriesId) {
-  assertValidSeriesId(seriesId);
-  return readLedger(seriesId);
-}
-
-/**
  * Record a revision-trend snapshot for a series from its CURRENT review state.
  * Called after each editorial-checks / completeness run (the run is the
  * revision boundary). Reads the freshest review, derives the open-finding

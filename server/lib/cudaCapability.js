@@ -343,8 +343,3 @@ export async function getCudaUtilization({ refresh = false, now = Date.now, ...p
   utilizationExpiresAt = now() + CUDA_UTILIZATION_TTL_MS;
   return pending;
 }
-
-export function resetCudaUtilizationCache() {
-  cachedUtilization = null;
-  utilizationExpiresAt = 0;
-}
