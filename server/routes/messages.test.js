@@ -271,6 +271,39 @@ describe('Messages Routes', () => {
       expect(response.body.total).toBe(1);
     });
 
+    it('keeps large bodies out of summary pages while preserving legacy and detail reads', async () => {
+      const message = {
+        id: 'msg-large', accountId: VALID_UUID, subject: 'Synthetic large message',
+        from: { name: 'Example Sender', email: 'sender@example.com', extra: 'detail' },
+        bodyText: 'Synthetic message body. '.repeat(10000),
+        bodyHtml: '<p>Synthetic HTML</p>'.repeat(10000),
+        attachments: [{ content: 'synthetic attachment'.repeat(1000) }],
+        evaluation: { action: 'reply', priority: 'high', reasoning: 'detail'.repeat(1000) },
+      };
+      messageSync.getMessages.mockResolvedValue({ messages: Array(50).fill(message), total: 5000 });
+      messageSync.getMessage.mockResolvedValue(message);
+
+      const summary = await request(app).get('/api/messages/inbox?summary=true&search=body&offset=50');
+      expect(summary.status).toBe(200);
+      expect(summary.body.total).toBe(5000);
+      expect(summary.body.messages).toHaveLength(50);
+      expect(summary.body.messages[0]).toEqual({
+        id: message.id, accountId: VALID_UUID, subject: message.subject,
+        from: { name: 'Example Sender', email: 'sender@example.com' },
+        preview: message.bodyText.slice(0, 100),
+        evaluation: { action: 'reply', priority: 'high' },
+      });
+      expect(JSON.stringify(summary.body).length).toBeLessThan(25000);
+      expect(messageSync.getMessages).toHaveBeenCalledWith({
+        accountId: undefined, search: 'body', limit: 50, offset: 50,
+      });
+      const legacy = await request(app).get('/api/messages/inbox');
+      expect(legacy.body.messages[0]).toEqual(message);
+      const detail = await request(app).get(`/api/messages/${VALID_UUID}/${message.id}`);
+      expect(detail.status).toBe(200);
+      expect(detail.body).toEqual(message);
+    });
+
     it('should pass accountId filter', async () => {
       messageSync.getMessages.mockResolvedValue({ messages: [], total: 0 });
 
