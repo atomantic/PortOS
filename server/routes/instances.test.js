@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { remoteRequestHandler } from '../lib/requestOrigin.js';
+import { verifySession } from '../services/auth.js';
+vi.mock('../services/auth.js', () => ({
+  extractToken: req => req.headers.authorization,
+  verifySession: vi.fn().mockResolvedValue(false),
+  isAuthEnabled: vi.fn().mockResolvedValue(false),
+}));
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -414,5 +421,26 @@ describe('GET /api/instances/peers/:id/full-sync-coverage', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual(coverage);
     expect(getFullSyncCoverageForPeer).toHaveBeenCalledWith('remote-1');
+  });
+});
+
+
+describe('local peer admission configuration', () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.mocked(verifySession).mockResolvedValue(false); });
+  it('rejects an anonymous remote transport even when it forwards localhost headers', async () => {
+    const res = await request(remoteRequestHandler(buildApp())).put('/api/instances/peers/peer-a')
+      .set('Host', 'localhost').set('Origin', 'http://localhost').set('X-Forwarded-For', '127.0.0.1')
+      .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(res.status).toBe(403);
+    expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+  it('allows an authenticated operator to configure the secret remotely', async () => {
+    vi.mocked(verifySession).mockResolvedValue(true);
+    instances.updatePeer.mockResolvedValue({ id: 'peer-a', hasSyncSecret: true });
+    const res = await request(remoteRequestHandler(buildApp())).put('/api/instances/peers/peer-a')
+      .set('Authorization', 'Bearer synthetic-operator-token')
+      .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(res.status).toBe(200);
+    expect(instances.updatePeer).toHaveBeenCalledWith('peer-a', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
   });
 });

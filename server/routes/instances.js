@@ -5,6 +5,10 @@
  */
 
 import { Router } from 'express';
+import { extractToken, verifySession, isAuthEnabled } from '../services/auth.js';
+import { isCrossOrigin } from '../../lib/portosAuthCore.js';
+import { isRemoteRequest } from '../lib/requestOrigin.js';
+import { isLoopbackHostname } from '../lib/beeperOAuthOrigin.js';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
 import { getSelf, updateSelf } from '../services/instanceIdentity.js';
@@ -19,6 +23,22 @@ import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
 
 const router = Router();
+
+// Peer admission is local authority even when the instance password is off.
+// Discovery callbacks remain reachable, but cannot provision the pair secret.
+router.use(asyncHandler(async (req, _res, next) => {
+  if (!req.path.toLowerCase().startsWith('/peers') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    || ['/peers/announce', '/peers/sync-categories'].includes(req.path.toLowerCase().replace(/\/$/, ''))) return next();
+  const localAddress = String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  const origin = req.get('origin');
+  const localOrigin = !origin || (URL.canParse(origin) && isLoopbackHostname(new URL(origin).hostname));
+  const local = !isRemoteRequest(req) && isLoopbackHostname(localAddress)
+    && isLoopbackHostname(req.hostname) && localOrigin;
+  if (!isCrossOrigin(req) && (await verifySession(extractToken(req)) || (!await isAuthEnabled() && local))) return next();
+  throw new ServerError('Peer settings require an operator session or the local interface', {
+    status: 403, code: 'PEER_SETTINGS_OPERATOR_REQUIRED',
+  });
+}));
 
 // Optional HTTP Basic credential for a peer behind an auth proxy. `null` clears
 // it; an object sets it. The service's sanitizePeerAuth does the final
@@ -62,6 +82,7 @@ const updatePeerSchema = z.object({
   // Explicit consumer opt-in + model allowlist for using this peer as a media
   // provider. Provider-side sharing remains independently configured there.
   mediaProvider: federatedMediaPeerSettingsSchema.optional(),
+  syncSecret: z.string().min(32).max(256).nullable().optional(),
 });
 
 const announceSchema = z.object({

@@ -76,3 +76,5 @@ Comms & voice: [beeper](./features/beeper.md) · [openclaw-operator-chat](./feat
 - **media/** — screenshots and logo used by the root README.
 
 - [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.
+
+- [Peer push authentication](./PEER_PUSH_AUTH.md)

@@ -10,6 +10,9 @@ import { tmpdir } from 'os';
 // All other logic (subscription store, asset manifest, diff, cursor advance)
 // runs against the real on-disk paths via the tmpdir-redirect pattern below.
 
+vi.mock('./peerPushAuthorization.js', () => ({ authorizeIncomingPush: vi.fn().mockResolvedValue({}) }));
+import { authorizeIncomingPush } from './peerPushAuthorization.js';
+
 import { PATHS } from '../../lib/fileUtils.js';
 import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS, NON_RECORD_SCHEMA_CATEGORIES } from '../../lib/schemaVersions.js';
 
@@ -322,6 +325,7 @@ let originalMusicPath;
 let tmp;
 
 beforeEach(async () => {
+  vi.mocked(authorizeIncomingPush).mockResolvedValue({});
   // Capture EVERY PATHS field we (or any test in this file) might mutate so
   // the afterEach restoration is total. The sha-mismatch-for-all-kinds test
   // points PATHS.imageRefs / PATHS.videos at the per-test tmpdir; without
@@ -5216,5 +5220,46 @@ describe('media-library federation (#1566)', () => {
       });
       expect(missingResult.reverseSubscriptionCreated).toBe(false);
     });
+  });
+});
+
+
+describe('inbound peer admission before record writes', () => {
+  const secret = 'synthetic-pair-secret-32-characters-long';
+  const payload = () => ({ kind: 'universe', record: { id: 'u-admission', name: 'Example Universe' }, sourceInstanceId: 'peer-a', assetManifest: [] });
+  const admitted = () => ({ id: 'configured-peer', instanceId: 'peer-a', syncSecret: secret, enabled: true,
+    syncEnabled: true, directions: ['inbound', 'outbound'], syncCategories: { universe: true } });
+  beforeEach(async () => {
+    const real = await vi.importActual('./peerPushAuthorization.js');
+    vi.mocked(authorizeIncomingPush).mockImplementation(real.authorizeIncomingPush);
+    vi.mocked(getPeers).mockResolvedValue([admitted()]);
+  });
+  it.each([
+    ['unknown', null, secret, 'peer-a'],
+    ['announcement-only', { ...admitted(), syncSecret: undefined }, secret, 'peer-a'],
+    ['missing proof', admitted(), undefined, 'peer-a'],
+    ['wrong proof', admitted(), 'another-synthetic-secret-32-characters', 'peer-a'],
+    ['forged source', admitted(), secret, 'peer-other'],
+    ['disabled', { ...admitted(), enabled: false }, secret, 'peer-a'],
+    ['sync off', { ...admitted(), syncEnabled: false, fullSync: true }, secret, 'peer-a'],
+    ['outbound only', { ...admitted(), directions: ['outbound'] }, secret, 'peer-a'],
+    ['category denied', { ...admitted(), syncCategories: { universe: false } }, secret, 'peer-a'],
+  ])('rejects %s before merges, asset requests, or reverse subscriptions', async (_name, peer, peerToken, sourceInstanceId) => {
+    vi.mocked(getPeers).mockResolvedValue(peer ? [peer] : []);
+    await expect(applyIncomingPush({ ...payload(), sourceInstanceId }, { peerToken })).rejects.toMatchObject({ status: expect.any(Number) });
+    expect(mergeUniversesFromSync).not.toHaveBeenCalled();
+    expect(mergeIssuesFromSync).not.toHaveBeenCalled();
+    expect(peerFetch).not.toHaveBeenCalled();
+    expect(await listPeerSubscriptions()).toEqual([]);
+  });
+  it('accepts a locally admitted peer and permitted category', async () => {
+    await applyIncomingPush(payload(), { peerToken: secret });
+    expect(mergeUniversesFromSync).toHaveBeenCalled();
+  });
+  it('preserves explicit pulls while enforcing their configured peer consent', async () => {
+    await applyIncomingPush(payload(), { pullPeerId: 'configured-peer' });
+    expect(mergeUniversesFromSync).toHaveBeenCalled();
+    vi.mocked(getPeers).mockResolvedValue([{ ...admitted(), syncEnabled: false }]);
+    await expect(applyIncomingPush(payload(), { pullPeerId: 'configured-peer' })).rejects.toMatchObject({ status: 403 });
   });
 });

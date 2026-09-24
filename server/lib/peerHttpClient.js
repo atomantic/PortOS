@@ -67,10 +67,15 @@ export function __resetSelfInstanceIdForTests() {
  */
 export async function peerFetch(url, options = {}, peer = null) {
   const callerHeaders = normalizeHeaders(options.headers);
+  // Scope the pair credential to the record-push endpoint; never disclose it
+  // to general peer queries, redirects, assets, or announcement responses.
+  const syncHeaders = peer?.syncSecret && new URL(url).pathname === '/api/peer-sync/push'
+    ? { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } : {};
   const finalOptions = {
     ...options,
+    ...(Object.keys(syncHeaders).length ? { redirect: 'error' } : {}),
     headers: {
-      ...dropOverridden({ ...await selfInstanceHeader(), ...(peer ? peerAuthHeaders(peer) : {}) }, callerHeaders),
+      ...dropOverridden({ ...await selfInstanceHeader(), ...(peer ? peerAuthHeaders(peer) : {}), ...syncHeaders }, callerHeaders),
       ...callerHeaders,
     },
   };

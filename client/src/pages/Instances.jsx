@@ -29,6 +29,7 @@ import {
   retryTailcatForward, forgetTailcatForward,
   startTailcatServe,
 } from '../services/api';
+import PeerSyncSecretEditor from '../components/instances/PeerSyncSecretEditor';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
@@ -1434,6 +1435,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
         </div>
         <PeerHostEditor peer={peer} onRefresh={onRefresh} tailnetInfo={tailnetInfo} />
         <PeerAuthEditor peer={peer} onRefresh={onRefresh} />
+        <PeerSyncSecretEditor peer={peer} onRefresh={onRefresh} />
       </div>
 
       {peer.transport === 'tailcat' && (
