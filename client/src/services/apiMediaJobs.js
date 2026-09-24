@@ -7,6 +7,13 @@ export const listMediaJobs = (filters = {}, options = {}) => {
   return request(`/media-jobs${qs ? `?${qs}` : ''}`, options);
 };
 
+export const listQueueMediaJobs = (filters = {}, options = {}) => {
+  const qs = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v != null && v !== ''),
+  ).toString();
+  return request(`/media-jobs/queue${qs ? `?${qs}` : ''}`, options);
+};
+
 // `silent` so speculative lookups (e.g. MediaJobThumb hydration for old
 // panel/scene jobIds past the queue's 24h archive TTL) don't surface a
 // global toast on the routine 404 — the caller's own .catch handles the

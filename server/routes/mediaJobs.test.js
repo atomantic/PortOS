@@ -15,11 +15,14 @@ const stubs = {
   removeArchivedJob: vi.fn((id) => jobStore.delete(id)),
   resumeVideoHold: vi.fn(),
   listVideoHolds: vi.fn(() => []),
+  listQueueJobs: vi.fn(() => []),
+  sanitizeJob: vi.fn(),
 };
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   JOB_KINDS: ['video', 'image'],
   JOB_STATUSES: ['queued', 'running', 'completed', 'failed', 'canceled'],
   listJobs: () => Array.from(jobStore.values()),
+  listQueueJobs: (...args) => stubs.listQueueJobs(...args),
   getJob: (id) => jobStore.get(id) || null,
   enqueueJob: (...args) => stubs.enqueueJob(...args),
   cancelJob: (...args) => stubs.cancelJob(...args),
@@ -29,6 +32,13 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   resumeVideoHold: (...args) => stubs.resumeVideoHold(...args),
   listVideoHolds: (...args) => stubs.listVideoHolds(...args),
 }));
+vi.mock('../services/mediaJobQueue/sanitizeJob.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { sanitizeJob: (job) => {
+    stubs.sanitizeJob(job);
+    return actual.sanitizeJob(job);
+  } };
+});
 vi.mock('../services/videoGen/prepareParams.js', () => ({
   validateVideoRetryParams: vi.fn(),
 }));
@@ -47,6 +57,27 @@ describe('mediaJobs routes', () => {
   beforeEach(() => {
     jobStore.clear();
     vi.clearAllMocks();
+  });
+
+  it('GET /queue sanitizes only the selected rows and preserves the full-list API', async () => {
+    const jobs = Array.from({ length: 500 }, (_, i) => ({
+      id: `job-${i}`, kind: 'image', status: 'failed',
+      queuedAt: new Date(Date.now() - i * 1000).toISOString(), params: {},
+    }));
+    jobs.forEach((job) => jobStore.set(job.id, job));
+    stubs.listQueueJobs.mockReturnValue(jobs.slice(0, 10));
+    const app = makeApp();
+
+    const queue = await request(app).get('/api/media-jobs/queue?kind=image&limit=10');
+    expect(queue.status).toBe(200);
+    expect(queue.body).toHaveLength(10);
+    expect(stubs.listQueueJobs).toHaveBeenCalledWith({ kind: 'image', limit: 10 });
+    expect(stubs.sanitizeJob).toHaveBeenCalledTimes(10);
+
+    const full = await request(app).get('/api/media-jobs');
+    expect(full.status).toBe(200);
+    expect(full.body).toHaveLength(500);
+    expect(stubs.sanitizeJob).toHaveBeenCalledTimes(510);
   });
 
   it('GET /:id exposes progress and statusMsg while sanitizing params', async () => {
