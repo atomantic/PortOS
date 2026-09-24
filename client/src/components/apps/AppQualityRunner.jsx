@@ -13,7 +13,8 @@ import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../
 const isApplicable = category => category.applicable !== false;
 const needsCheck = category => {
   if (!isApplicable(category)) return false;
-  if (category.coverage === 'not-applicable' || (category.coverage === 'unavailable' && category.assessedAt)) return false;
+  // A stale not-applicable ruling has expired (the repo may have gained a UI), so it is re-offered.
+  if ((category.coverage === 'not-applicable' && !category.stale) || (category.coverage === 'unavailable' && category.assessedAt)) return false;
   return category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
 };
 

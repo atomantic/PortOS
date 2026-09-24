@@ -1,4 +1,5 @@
 /** Strict sequence barriers; ordinary burn rotations keep their existing semantics. */
+import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
 import { requiresInstallWideTarget } from '../lib/taskTargetScope.js';
 import { burnPlanOwnsAgent, burnPlanOwnsTask, quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { MAINTENANCE_DRAIN_TASK } from '../lib/maintenanceSequence.js';
@@ -58,6 +59,12 @@ export async function probeSequenceDrain(job, { catalog, ignoreTaskId = null }) 
   return { drained: true };
 }
 
+async function sequenceStepNotApplicable(job, catalog) {
+  const { resolveQuotaBurnStep } = await import('./quotaBurnInvoke.js');
+  const resolved = await resolveQuotaBurnStep(job, catalog);
+  return resolved.unavailable?.code === QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE;
+}
+
 export async function nextQuotaBurnSequenceJob(family, { completions, reservations, catalog, ignoreTaskId = null }) {
   const { getAllTasks } = await import('./cosTaskStore.js');
   const { user, cos } = await getAllTasks();
@@ -74,7 +81,17 @@ export async function nextQuotaBurnSequenceJob(family, { completions, reservatio
     if (job.enabled === false) return { reason: 'sequence step is disabled' };
     const shape = sequenceStepShapeReason(job);
     if (shape) return { reason: shape };
-    if (!job.drain) return { job };
+    if (!job.drain) {
+      // An audit this app's repository cannot have findings for will never
+      // become ready, so as a barrier it would stop the whole sequence for good.
+      // Record it done, as a maintenance run does, and move on.
+      if (!await sequenceStepNotApplicable(job, catalog)) return { job };
+      const written = await recordQuotaBurnJobCompletion(family.id, job.id);
+      if (!written) return { reason: 'could not record skipped sequence step' };
+      completions[quotaBurnJobKey(family.id, job.id)] = written[quotaBurnJobKey(family.id, job.id)];
+      console.log(`⏭️ Quota-burn sequence ${family.id}: skipped ${job.taskRef?.taskType} (${job.id}) — not applicable`);
+      continue;
+    }
     const probe = await probeSequenceDrain(job, { catalog, ignoreTaskId });
     if (!probe.drained) return probe;
     const written = await recordQuotaBurnJobCompletion(family.id, job.id);

@@ -27,6 +27,18 @@ beforeEach(() => {
   recordQuotaBurnJobCompletion.mockImplementation(async (f, j) => ({ [`${f}:${j}`]: 'done' }));
 });
 describe('maintenance sequence workflow', () => {
+  // Before, an audit that could never apply was a permanent barrier: every
+  // later step in the family stopped running for good.
+  it('passes an audit that does not apply to its app instead of stalling the family on it', async () => {
+    const onlyAudits = { id: 'codex', sequence: true, jobs: [audit, docs] };
+    resolveQuotaBurnStep.mockImplementation(async (job) => (job.id === 'audit'
+      ? { unavailable: { code: 'not-applicable', reason: 'does not apply' } } : {}));
+    const ctx = { completions: {}, reservations: {}, catalog: {} };
+    expect(await nextQuotaBurnSequenceJob(onlyAudits, ctx)).toEqual({ job: docs });
+    expect(recordQuotaBurnJobCompletion).toHaveBeenCalledWith('codex', 'audit');
+    expect(ctx.completions['codex:audit']).toBe('done');
+  });
+
   it('repeats claims with saved app filters, then advances only after the backlog drains', async () => {
     const ctx = context();
     expect(await nextQuotaBurnSequenceJob(family, ctx)).toEqual({ job: drain });

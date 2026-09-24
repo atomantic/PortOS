@@ -71,6 +71,12 @@ describe('audit applicability gate', () => {
     expect(execGit).not.toHaveBeenCalled();
   });
 
+  it('honors the schedule form\'s per-app override on the sequencing lanes too', async () => {
+    const app = appWith(NODE_SERVICE, { taskTypeOverrides: { accessibility: { taskMetadata: { runInapplicableAudit: true } } } });
+    getAppById.mockResolvedValueOnce(app);
+    expect(await inapplicableAuditReason(app.id, 'accessibility')).toBeNull();
+  });
+
   it('answers by app id for the sequencing lanes, and fails open when the app is unreadable', async () => {
     const app = appWith(NODE_SERVICE);
     getAppById.mockResolvedValueOnce(app);
@@ -146,6 +152,11 @@ describe('resolveQualityChecks', () => {
     const { checks, complete } = await resolveQualityChecks({ id: 'skim', name: 'Skim', repoPath: '/repos/skim' });
     expect(complete).toBe(false);
     expect(checks.every(check => check.applicable)).toBe(true);
+    // A served UI port proves there is a UI, not that the skim saw everything:
+    // it must not turn the misses into "no tests / no deploy config".
+    const served = await resolveQualityChecks({ id: 'skim-ui', name: 'Skim UI', repoPath: '/repos/skim-ui', uiPort: 5555 });
+    expect(served.complete).toBe(false);
+    expect(served.checks.every(check => check.applicable)).toBe(true);
   });
 
   it('does not let one app’s uiPort decide a sibling app sharing the checkout', async () => {

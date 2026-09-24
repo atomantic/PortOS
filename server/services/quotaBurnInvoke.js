@@ -186,7 +186,7 @@ export function isBurnEligibleCustomJob(job) {
  * An unset override inherits; nothing here writes back to the schedule or the
  * job record.
  */
-export async function resolveQuotaBurnStep(step, catalog = null) {
+export async function resolveQuotaBurnStep(step, catalog = null, { explicit = false } = {}) {
   const resolvedCatalog = catalog || await getQuotaBurnTaskCatalog();
   const unavailable = resolveQuotaBurnStepAvailability(step, resolvedCatalog);
   if (unavailable) return { unavailable };
@@ -212,7 +212,7 @@ export async function resolveQuotaBurnStep(step, catalog = null) {
   // Here rather than at invoke, so the status page's probe and the runner agree
   // that an audit which cannot apply to its app is not ready work, and so a
   // maintenance run can complete it as skipped from the same verdict.
-  const notApplicable = await notApplicableReason(ref, effective.params);
+  const notApplicable = explicit ? null : await notApplicableReason(ref, effective.params);
   if (notApplicable) return { unavailable: { code: QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE, reason: notApplicable } };
   return {
     kind: isProgrammaticScheduledTaskType(ref.taskType) ? 'programmatic' : 'builtin',
@@ -418,7 +418,9 @@ async function queuedOnDemandReason(queued, taskType, appId) {
  * spends a subscription while the user has CoS improvement switched off.
  */
 export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null, maintenanceRunId = null } = {}) {
-  const resolved = await resolveQuotaBurnStep(step, catalog);
+  // A forced run is the user clicking this one step: like a manual Run, it is an
+  // explicit choice and is not refused as not-applicable.
+  const resolved = await resolveQuotaBurnStep(step, catalog, { explicit: force });
   // The code rides along so a caller can tell "does not apply" (a maintenance
   // run completes that step as skipped) from a refusal it must hold on.
   if (resolved.unavailable) return { ...declined(resolved.unavailable.reason), code: resolved.unavailable.code };

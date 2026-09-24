@@ -138,6 +138,15 @@ ordering uses a transient digest of the row, computed when the file is read.
 That file is not the peer federation payload. Peers still exchange schema v1
 objects. Upgrading the file does not require every peer to upgrade.
 
+The category catalog can grow without breaking that exchange. A requester sends
+the categories it can parse (`categories=` on `GET /api/apps/quality-federation`),
+and the peer answering returns only those. A request without the parameter, from
+an install that predates it, gets only the 25 categories that existed before the
+service and data-platform lenses (`FEDERATION_LEGACY_CATEGORIES`), because such an
+install rejects a whole payload over one row it cannot parse. On receipt, rows are
+validated one at a time, so a malformed or unknown row costs that row, not the
+peer's other evidence.
+
 Readers accept a v1 `.quality.json` and, when that file is absent, the historical
 `quality-snapshot.json` name. A read never rewrites the checkout. Future schemas,
 unrecognized documents (including TSV, CSV, or NDJSON), malformed snapshots, and

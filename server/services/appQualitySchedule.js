@@ -134,8 +134,10 @@ export async function detectRepoCapabilities(app) {
   // share one repoPath — so it is OR'd in AFTER the (path-keyed) cache read.
   // A compiled or templated front end leaves no .jsx behind, but a served UI
   // port is direct evidence there is an interface to audit.
+  // It proves the UI capability, never the completeness of a shallow listing:
+  // only a full inventory licenses "this repo has no tests / no deploy config".
   const capabilities = { ...scan.capabilities, ui: scan.capabilities.ui || Boolean(app.uiPort) };
-  return { capabilities, scanned: scan.scanned, complete: scan.complete || Boolean(app.uiPort) };
+  return { capabilities, scanned: scan.scanned, complete: scan.complete };
 }
 
 /** The file-derived half of the verdict — cacheable because it is per-checkout. */
@@ -273,7 +275,10 @@ export async function inapplicableAuditReasons(app) {
 export async function inapplicableAuditReason(appId, taskType) {
   if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, normalizeAuditTaskType(taskType))) return null;
   const verdict = await getAppById(appId)
-    .then(app => (app ? resolveAuditApplicability(app, taskType) : null))
+    // The schedule form's recorded override is the user's choice for this app,
+    // whichever lane dispatches the audit.
+    .then(app => (app && app.taskTypeOverrides?.[taskType]?.taskMetadata?.runInapplicableAudit !== true
+      ? resolveAuditApplicability(app, taskType) : null))
     .catch(() => null);
   return verdict && !verdict.applicable ? verdict.reason || 'not applicable to this repository' : null;
 }

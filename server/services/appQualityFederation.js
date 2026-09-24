@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
+import { AUDIT_TASK_TYPE_LIST, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -24,11 +24,35 @@ const measurementSchema = z.object({
   assessedAt: z.string().datetime(),
   report: numericReportSchema,
 }).strict();
+// Rows are validated one by one (below), so a peer on a newer catalog that
+// sends a category this install does not know costs that row, not the peer.
+// Everything this install can parse, sent with each request so a peer on a
+// newer catalog withholds categories this one would reject.
+const READABLE_CATEGORY_PARAM = encodeURIComponent([
+  ...AUDIT_TASK_TYPE_LIST, ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES),
+].join(','));
+
 const payloadSchema = z.object({
   schemaVersion: z.literal(PORTOS_SCHEMA_VERSIONS.appQuality),
   repository: z.string().regex(/^[a-f0-9]{64}$/),
-  measurements: z.array(measurementSchema).max(10000),
+  measurements: z.array(z.unknown()).max(10000),
 }).strict();
+
+/**
+ * The categories every install parsed before the catalog added the service and
+ * data-platform lenses. An install that predates the `categories` request
+ * parameter validates the whole payload strictly, so one row in a category it
+ * does not know would make it drop EVERY measurement from this install. Such a
+ * requester is sent only these. Frozen: a later catalog addition is announced by
+ * the requester's own `categories` list, never by editing this one.
+ */
+export const FEDERATION_LEGACY_CATEGORIES = Object.freeze([
+  'security', 'code-quality', 'test-coverage', 'performance', 'accessibility', 'documentation',
+  'ui-bugs', 'mobile-responsive', 'error-handling', 'typing', 'console-errors', 'ux', 'data-safety',
+  'simplify', 'module-hygiene', 'api-contract', 'ui-lifecycle', 'observability', 'copy',
+  'better-complexity', 'better-cognitive-load', 'better-structural-drift', 'better-runtime-safety',
+  'better-dependency-freedom', 'better-test-quality',
+]);
 
 // PortOS's own app record always carries a repoPath; the bare `{ id: PORTOS_APP_ID }`
 // form used for self-directed calls resolves to this install's checkout.
@@ -70,7 +94,7 @@ export async function readQualityRecords(appId, days, now, deps = {}) {
 }
 
 /** New endpoint always enforces peer sharing consent, even without instance-password auth. */
-export async function exportPortosQuality(callerId, days, deps = {}, requestedRepository) {
+export async function exportPortosQuality(callerId, days, deps = {}, requestedRepository, requesterCategories = FEDERATION_LEGACY_CATEGORIES) {
   const peers = await eligiblePeers(deps);
   if (!callerId || !peers.some(peer => peer.instanceId === callerId)) return null;
   let app = { id: PORTOS_APP_ID };
@@ -82,7 +106,10 @@ export async function exportPortosQuality(callerId, days, deps = {}, requestedRe
     app = candidates.find(candidate => candidate.repository === requestedRepository)?.app;
     if (!app) return null;
   }
-  return buildQualitySnapshot(app, days, deps);
+  const snapshot = await buildQualitySnapshot(app, days, deps);
+  if (!snapshot) return snapshot;
+  const parseable = new Set(requesterCategories);
+  return { ...snapshot, measurements: snapshot.measurements.filter(row => parseable.has(row.report.category)) };
 }
 
 /** Sanitized local evidence, also used by the explicit release snapshot command. */
@@ -111,7 +138,7 @@ export async function collectAppQuality(app, days, deps = {}) {
   const now = deps.now ?? Date.now();
   const results = await Promise.allSettled(peers.map(async peer => {
     const response = await (deps.peerFetch || peerFetch)(
-      `${peerBaseUrl(peer)}/api/apps/quality-federation?days=${days}${app.id === PORTOS_APP_ID ? '' : `&repository=${repository}`}`,
+      `${peerBaseUrl(peer)}/api/apps/quality-federation?days=${days}${app.id === PORTOS_APP_ID ? '' : `&repository=${repository}`}&categories=${READABLE_CATEGORY_PARAM}`,
       { signal: AbortSignal.timeout(3000), redirect: 'error', maxBytes: MAX_PAYLOAD_BYTES }, peer);
     if (!response.ok) {
       await response.body?.cancel?.();
@@ -124,7 +151,11 @@ export async function collectAppQuality(app, days, deps = {}) {
     }
     const payload = payloadSchema.parse(JSON.parse(body.toString('utf8')));
     if (payload.repository !== repository) throw new Error('Different repository');
-    return payload.measurements.filter(row => Date.parse(row.assessedAt) <= now).map(row => ({
+    const measurements = payload.measurements.flatMap(row => {
+      const parsed = measurementSchema.safeParse(row);
+      return parsed.success ? [parsed.data] : [];
+    });
+    return measurements.filter(row => Date.parse(row.assessedAt) <= now).map(row => ({
       ...row, category: row.report.category, sourcePeerId: peer.id, sourcePeerName: peer.name || peer.id,
       report: { ...row.report, summary: sharedSummary },
     }));

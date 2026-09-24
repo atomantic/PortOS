@@ -118,6 +118,17 @@ describe('scheduled audit measurement workflow', () => {
     log.mockRestore();
   });
 
+  // The dispatch gate reads only this install's rulings; a peer's describes a
+  // different checkout, so the Quality tab must not hide the category on it.
+  it('does not let a peer\'s not-applicable ruling mark a category inapplicable here', () => {
+    const now = Date.now();
+    const peerRow = { category: 'ux', sourcePeerId: 'peer-a', sourcePeerName: 'Peer A', assessedAt: new Date(now).toISOString(),
+      report: report({ category: 'ux', score: null, coverage: 'not-applicable', confidence: 'low' }) };
+    const localRow = { ...peerRow, sourcePeerId: undefined, sourcePeerName: undefined };
+    expect(summarizeAppQuality([peerRow], now).categories.find(c => c.id === 'ux').applicable).toBe(true);
+    expect(summarizeAppQuality([localRow], now).categories.find(c => c.id === 'ux').applicable).toBe(false);
+  });
+
   // The detail read feeds the repository scan into the summary; a failing scan
   // must cost only the applicability, never the whole quality read.
   it('folds the repository-scan verdicts into the summary, and ignores a scan that fails', async () => {
