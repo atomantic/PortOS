@@ -847,7 +847,7 @@ export default function PullRequestsTab({ appId, appName }) {
                     <ScopeAdherenceCheck appId={appId} kind="pr" title={pullRequest.title || ''} />
                   </div>
 
-                  <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">
+                  <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start justify-end gap-2">
                     {rowActionsFor(pullRequest).map(kind => {
                       const { label, Icon, title } = ACTION_KINDS[kind];
                       const action = actions[kind][pullRequest.number];
