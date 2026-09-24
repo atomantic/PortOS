@@ -15,7 +15,7 @@ const jiraInstanceSchema = z.object({
   name: z.string().min(1),
   baseUrl: z.string().url(),
   email: z.string().email(),
-  apiToken: z.string().min(1),
+  apiToken: z.string().min(1).optional(),
 });
 
 const jiraTicketCreateSchema = z.object({
@@ -88,6 +88,13 @@ router.get('/instances', asyncHandler(async (req, res) => {
  */
 router.post('/instances', asyncHandler(async (req, res) => {
   const { id, name, baseUrl, email, apiToken } = validateRequest(jiraInstanceSchema, req.body);
+
+  if (!apiToken) {
+    const { instances } = await jiraService.getInstances();
+    if (!instances?.[id]?.apiToken) {
+      throw new ServerError('API token is required for a new JIRA instance', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
 
   const instance = await jiraService.upsertInstance(id, {
     name,
