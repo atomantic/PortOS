@@ -59,6 +59,37 @@ const renderView = async (ui) => {
 
 const chipFor = (title) => screen.getByRole('button', { name: new RegExp(title) });
 
+it('keeps all-day membership consistent across Day, Week, and Month views', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(2026, 8, 23, 12));
+  const allDay = (id, title, start, end) => ({
+    ...ALL_DAY, id, title,
+    startTime: new Date(2026, 8, start).toISOString(),
+    endTime: new Date(2026, 8, end).toISOString(),
+  });
+  api.getCalendarEvents.mockResolvedValue({ events: [
+    allDay('previous', 'Previous day only', 22, 23),
+    allDay('spanning', 'Spanning days', 21, 25),
+    allDay('tomorrow', 'Tomorrow only', 24, 25),
+  ] });
+
+  const mounted = render(<MemoryRouter><DayView accounts={ACCOUNTS} /></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(1);
+  expect(screen.queryByRole('button', { name: 'Previous day only' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Tomorrow only' })).not.toBeInTheDocument();
+  mounted.unmount();
+
+  const week = render(<MemoryRouter><WeekView accounts={ACCOUNTS} /></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(4);
+  week.unmount();
+
+  render(<MemoryRouter><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getAllByRole('button', { name: 'Spanning days' })).toHaveLength(4);
+});
+
 /** The graded color for the ACTIVE mode, and for the other one. */
 const expectGradedForActiveMode = (element, rawColor) => {
   const other = themeMode.current === 'day' ? 'night' : 'day';
@@ -280,10 +311,10 @@ function MonthHistory() {
 describe('MonthView overflow navigation', () => {
   beforeEach(() => {
     api.getCalendarEvents.mockResolvedValue({ events: [
-      { ...TIMED, id: 'late', title: 'Example late appointment', startTime: new Date(2027, 0, 12, 18).toISOString() },
-      { ...ALL_DAY, id: 'day', title: 'Example all-day entry', startTime: new Date(2027, 0, 12).toISOString() },
-      { ...TIMED, id: 'early', title: 'Example early appointment', startTime: new Date(2027, 0, 12, 8).toISOString() },
-      { ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString() },
+      { ...TIMED, id: 'late', title: 'Example late appointment', startTime: new Date(2027, 0, 12, 18).toISOString(), endTime: new Date(2027, 0, 12, 19).toISOString() },
+      { ...ALL_DAY, id: 'day', title: 'Example all-day entry', startTime: new Date(2027, 0, 12).toISOString(), endTime: new Date(2027, 0, 13).toISOString() },
+      { ...TIMED, id: 'early', title: 'Example early appointment', startTime: new Date(2027, 0, 12, 8).toISOString(), endTime: new Date(2027, 0, 12, 9).toISOString() },
+      { ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString(), endTime: new Date(2027, 0, 12, 13).toISOString() },
     ] });
   });
 
@@ -345,7 +376,7 @@ describe('MonthView overflow navigation', () => {
     api.getCalendarEvents.mockReturnValue(new Promise(resolve => { finish = resolve; }));
     render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=2027-01-12&event=acct-1:hidden']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    await act(async () => finish({ events: [{ ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString() }] }));
+    await act(async () => finish({ events: [{ ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString(), endTime: new Date(2027, 0, 12, 13).toISOString() }] }));
     expect(screen.getByRole('dialog', { name: 'Example hidden appointment' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
     expect(screen.getByRole('button', { name: 'Close day events' })).toBeInTheDocument();
