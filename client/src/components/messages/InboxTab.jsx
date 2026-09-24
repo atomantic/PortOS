@@ -222,10 +222,10 @@ export default function InboxTab({ accounts }) {
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
-    const params = {};
+    const params = { summary: true };
     if (selectedAccount) params.accountId = selectedAccount;
     if (debouncedSearch) params.search = debouncedSearch;
-    const result = await api.getMessageInbox(params).catch(() => ({ messages: [], total: 0 }));
+    const result = await api.getMessageInbox(params, { silent: true }).catch(() => ({ messages: [], total: 0 }));
     setMessages(result.messages || []);
     setLoading(false);
   }, [selectedAccount, debouncedSearch]);
@@ -234,60 +234,34 @@ export default function InboxTab({ accounts }) {
     fetchMessages();
   }, [fetchMessages]);
 
-  // The URL is the source of truth for the open message. Resolve it from the
-  // current list when possible, then fetch it directly for a filtered-out or
-  // not-yet-loaded message so a copied URL still opens on a fresh load.
-  // Supersession token plus the live message identity for the detail read
-  // below. Assigned during render so the comparison always sees the CURRENTLY
-  // open message — including on the paths that return without starting a read,
-  // which never reach the token.
-  const detailRequestRef = useRef(0);
-  const openMessageRef = useRef('');
-  openMessageRef.current = `${messageAccountId}/${messageId}`;
+  // List rows are summaries. The selection URL is the only trigger for a full
+  // body read, including when the selected message is already on this page.
+  const resolvedMessageAccount = messageAccountId || messages.find(message => (
+    String(message.id) === messageId
+  ))?.accountId;
 
   useEffect(() => {
-    if (!messageId) {
-      setLoadedMessage(null);
-      return undefined;
-    }
-
-    const listed = messages.find(message => (
-      String(message.id) === messageId
-      && (!messageAccountId || String(message.accountId) === messageAccountId)
-    ));
-    if (listed) {
-      setLoadedMessage(listed);
-      return undefined;
-    }
-    if (loadedMessage?.id === messageId && String(loadedMessage.accountId) === messageAccountId) {
-      return undefined;
-    }
-    if (!messageAccountId) {
-      if (!loading) closeMessage();
-      return undefined;
-    }
-
-    // A request-generation ref, not a `let cancelled` flag: `loadedMessage` is
-    // in this effect's own dependency array, so clearing it below re-runs the
-    // effect at once and a lifetime-scoped flag would be flipped by its own
-    // cleanup before the detail arrived. The re-run bumps the token, so the
-    // newest read is the one that lands however the two resolve.
-    //
-    // The identity check is the other half: selecting an ALREADY-LISTED message
-    // returns above without bumping the token, so without it a late rejection
-    // here would call closeMessage() on the message the user just opened.
-    const req = ++detailRequestRef.current;
-    const forMessage = openMessageRef.current;
-    const current = () => req === detailRequestRef.current && openMessageRef.current === forMessage;
+    let active = true;
     setLoadedMessage(null);
-    api.getMessageDetail(messageAccountId, messageId)
+    if (!messageId || !resolvedMessageAccount) return undefined;
+
+    api.getMessageDetail(resolvedMessageAccount, messageId, { silent: true })
       .then(message => {
-        if (current()) setLoadedMessage(message);
+        if (!active) return;
+        if (message) setLoadedMessage(message);
+        else closeMessage();
       })
       .catch(() => {
-        if (current()) closeMessage();
+        if (active) closeMessage();
       });
-  }, [messageId, messageAccountId, messages, loading, loadedMessage, closeMessage]);
+    return () => { active = false; };
+  }, [messageId, resolvedMessageAccount, closeMessage]);
+
+  // A legacy URL may omit its account; wait for the list to resolve it before
+  // deciding that selection is stale.
+  useEffect(() => {
+    if (messageId && !resolvedMessageAccount && !loading) closeMessage();
+  }, [messageId, resolvedMessageAccount, loading, closeMessage]);
 
   // Stream messages into the list as they arrive during sync
   useEffect(() => {
@@ -617,7 +591,7 @@ export default function InboxTab({ accounts }) {
                   {msg.subject || '(no subject)'}
                 </div>
                 <div className="text-xs text-gray-600 truncate">
-                  {msg.bodyText?.substring(0, 100) || ''}
+                  {msg.bodyText?.substring(0, 100) ?? msg.preview ?? ''}
                 </div>
               </button>
               </div>
