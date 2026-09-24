@@ -763,7 +763,13 @@ export async function listConfiguredForgeIssues(cli, app, options, env) {
   const result = await detectForgeIssues(
     cli === 'glab' ? 'claim-issue-gitlab' : 'claim-issue', app, options, true, env
   );
-  return { ok: !result.transient && result.reason !== 'no-repo-path', issues: result.issues || [], truncated: result.truncated === true };
+  const ok = !result.transient && result.reason !== 'no-repo-path';
+  return {
+    ok,
+    issues: result.issues || [],
+    truncated: result.truncated === true,
+    ...(ok ? {} : { error: result.detail || result.reason || '' }),
+  };
 }
 
 // Forge-specific detector entry points (thin wrappers over the shared factory).
