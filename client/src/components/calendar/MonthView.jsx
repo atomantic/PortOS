@@ -4,7 +4,7 @@ import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import Drawer from '../Drawer';
-import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, eventOccursOnDay } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
@@ -89,13 +89,10 @@ export default function MonthView({ accounts }) {
     updateParams({ month: localDateKey(now).slice(0, 7), day: null, event: null });
   };
 
-  // Group events by day string
-  const eventsByDay = {};
-  for (const event of events) {
-    const dayKey = new Date(event.startTime).toDateString();
-    if (!eventsByDay[dayKey]) eventsByDay[dayKey] = [];
-    eventsByDay[dayKey].push(event);
-  }
+  // The server returns a coarse range; place each event on every visible day it occupies.
+  const eventsByDay = Object.fromEntries(cells.map(cell => [
+    cell.date.toDateString(), events.filter(event => eventOccursOnDay(event, cell.date)),
+  ]));
 
   const colorMap = useMemo(() => buildSubcalendarColorMap(accounts), [accounts]);
   const selectedEventKey = searchParams.get('event');
@@ -190,7 +187,8 @@ export default function MonthView({ accounts }) {
                         >
                           {!event.isAllDay && (
                             <span className="text-gray-500 mr-1">
-                              {formatTimeOfDay(event.startTime)}
+                              {new Date(event.startTime).toDateString() === dayStr
+                                ? formatTimeOfDay(event.startTime) : 'Continues'}
                             </span>
                           )}
                           {event.title}
@@ -236,7 +234,9 @@ export default function MonthView({ accounts }) {
                 className="w-full min-h-[44px] text-left px-3 py-2 rounded transition-colors hover:brightness-125"
                 style={eventChipStyle(colorMap.get(event.subcalendarId) || null, theme?.mode)}
               >
-                <span className="block text-xs">{event.isAllDay ? 'All day' : formatTimeOfDay(event.startTime)}</span>
+                <span className="block text-xs">{event.isAllDay ? 'All day'
+                  : new Date(event.startTime).toDateString() === selectedDay.date.toDateString()
+                    ? formatTimeOfDay(event.startTime) : 'Continues'}</span>
                 <span className="block text-sm break-words">{event.title}</span>
               </button>
             ))}
