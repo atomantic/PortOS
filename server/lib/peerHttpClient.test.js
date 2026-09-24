@@ -80,6 +80,8 @@ import {
   peerSocketOptions,
   peerSocketOptionsFor,
   peerFetch,
+  readPeerBody,
+  PEER_BODY_IDLE_TIMEOUT,
   peerAuthHeaders,
   __resetSelfInstanceIdForTests,
 } from './peerHttpClient.js';
@@ -303,6 +305,56 @@ describe('peerHttpClient', () => {
       } finally {
         process.off('unhandledRejection', recordUnhandled);
       }
+    });
+  });
+
+  describe('response body idle deadline', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it.each(['json', 'arrayBuffer'])('keeps progressing %s bytes intact beyond the header budget', async (method) => {
+      vi.useFakeTimers();
+      let stream;
+      const bytes = method === 'json'
+        ? Buffer.from(JSON.stringify({ text: 'aé🙂z' }))
+        : Buffer.from([0, 255, 128, 1, 254]);
+      const response = new Response(new ReadableStream({ start(controller) { stream = controller; } }));
+      const result = readPeerBody(response, method);
+      // Each chunk arrives inside 60s, while the total exceeds both the 15s
+      // header budget and the initial body deadline. Split UTF-8 bytes too.
+      for (const byte of bytes) {
+        await vi.advanceTimersByTimeAsync(40000);
+        stream.enqueue(Uint8Array.of(byte));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      stream.close();
+      const value = await result;
+      expect(method === 'json' ? value : Buffer.from(value)).toEqual(
+        method === 'json' ? { text: 'aé🙂z' } : bytes
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('cancels a stalled body at the idle boundary and releases its reader', async () => {
+      vi.useFakeTimers();
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream({ cancel }));
+      const result = readPeerBody(response, 'json');
+      const rejected = expect(result).rejects.toMatchObject({ code: PEER_BODY_IDLE_TIMEOUT });
+      await vi.advanceTimersByTimeAsync(59999);
+      expect(cancel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(response.body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('preserves buffered HTTPS binary and bad-JSON response behavior', async () => {
+      const bytes = Buffer.from([0, 255, 128]);
+      const response = { arrayBuffer: async () => bytes, json: async () => JSON.parse('{') };
+      expect(await readPeerBody(response, 'arrayBuffer')).toEqual(bytes);
+      await expect(readPeerBody(response, 'json')).rejects.toBeInstanceOf(SyntaxError);
+      await expect(readPeerBody(new Response('{'), 'json')).rejects.toBeInstanceOf(SyntaxError);
     });
   });
 

@@ -1,3 +1,5 @@
+import http from 'node:http';
+import { once } from 'node:events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock all dependencies
@@ -88,7 +90,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn(async () => ({})),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),
-  PATHS: { data: '/mock/data' },
+  writeFileGuarded: vi.fn().mockResolvedValue(),
+  PATHS: { data: '/mock/data', images: '/mock/data/images' },
   dataPath: (name) => `/mock/data/${name}`
 }));
 vi.mock('../lib/asyncMutex.js', () => ({
@@ -101,6 +104,7 @@ vi.mock('../lib/peerHttpClient.js', async (importOriginal) => {
   return { ...actual, peerFetch: vi.fn(actual.peerFetch) };
 });
 vi.mock('fs/promises', () => ({
+  access: vi.fn().mockRejectedValue(new Error('missing')),
   writeFile: vi.fn().mockResolvedValue(),
   rename: vi.fn().mockResolvedValue()
 }));
@@ -119,7 +123,7 @@ vi.mock('./brainTombstoneGc.js', () => ({
   sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
 
-import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
 import { sweepTombstones } from './sharing/tombstoneGc.js';
 import { sweepBrainTombstones } from './brainTombstoneGc.js';
 import { getPeers } from './instances.js';
@@ -141,6 +145,7 @@ import {
   BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS,
 } from './syncOrchestrator.js';
 
+const nativeFetch = globalThis.fetch;
 const mockFetch = vi.fn();
 
 describe('syncOrchestrator', () => {
@@ -186,6 +191,77 @@ describe('syncOrchestrator', () => {
   });
 
   describe('syncWithPeer', () => {
+    it('records a stalled HTTP body failure, settles progress, and allows the next sync', async () => {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.flushHeaders();
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const peer = { ...mockPeer, address: '127.0.0.1', port: server.address().port,
+        syncCategories: { brain: true, memory: false } };
+      let headersReceived;
+      const received = new Promise(resolve => { headersReceived = resolve; });
+      mockFetch.mockImplementationOnce(async (...args) => {
+        const response = await nativeFetch(...args);
+        headersReceived();
+        return response;
+      });
+      try {
+        const sync = syncWithPeer(peer);
+        const rejected = expect(sync).rejects.toMatchObject({ code: 'PEER_BODY_IDLE_TIMEOUT' });
+        await received;
+        await vi.advanceTimersByTimeAsync(60000);
+        await rejected;
+        expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          [peer.instanceId]: expect.objectContaining({ lastSyncError: 'Peer response body stalled' })
+        }));
+        expect(instanceEvents.emit).toHaveBeenCalledWith('sync:progress', expect.objectContaining({
+          phase: 'complete', peerId: peer.instanceId, error: 'Peer response body stalled'
+        }));
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], hasMore: false }) });
+        await syncWithPeer(peer);
+        expect(instanceEvents.emit.mock.calls.filter(([, event]) => event.phase === 'start')).toHaveLength(2);
+        expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+          phase: 'complete', error: null
+        }));
+      } finally {
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+    });
+
+    it('reports an avatar body stall without persisting partial image bytes', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/data/images/')) return new Response(new ReadableStream({}));
+        return { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) };
+      });
+      const peer = { ...mockPeer, syncCategories: { brain: false, memory: false, character: true } };
+      const sync = syncWithPeer(peer);
+      await vi.advanceTimersByTimeAsync(60000);
+      await sync;
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+        phase: 'complete', error: 'character: Peer response body stalled'
+      }));
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
+    it.each([
+      ['non-success response', () => new Response('unavailable', { status: 503 })],
+      ['malformed JSON', () => new Response('{')],
+    ])('retains the no-op behavior for a %s', async (_name, response) => {
+      mockFetch.mockImplementation(async () => response());
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: false } });
+      expect(result.brain.totalApplied).toBe(0);
+      expect(applyBrainChanges).not.toHaveBeenCalled();
+      expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+        phase: 'complete', error: null
+      }));
+    });
+
     it('skips peers without instanceId', async () => {
       await syncWithPeer({ ...mockPeer, instanceId: undefined });
       expect(mockFetch).not.toHaveBeenCalled();
