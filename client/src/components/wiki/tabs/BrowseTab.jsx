@@ -1,18 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import * as api from '../../../services/api';
 import {FileText, FolderOpen,
-  ChevronDown, ChevronRight, ArrowLeft, Tag, Link2, Edit3, Save,
-  Trash2, X} from 'lucide-react';
+  ChevronDown, ChevronRight, ArrowLeft, Tag, Link2} from 'lucide-react';
 import toast from '../../ui/Toast';
-import InlineConfirmRow from '../../ui/InlineConfirmRow';
-import { timeAgo, formatBytes } from '../../../utils/formatters';
 import { WIKI_CATEGORIES } from '../constants.jsx';
-import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import useMounted from '../../../hooks/useMounted';
-import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
+import NoteDetailPane from '../../notes/NoteDetailPane.jsx';
+import useVaultNote from '../../../hooks/useVaultNote.js';
 
 const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: c.textClass }));
 const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color: 'text-gray-400' }];
@@ -20,12 +17,15 @@ const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color
 export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const noteParam = searchParams.get('note');
-  const [loadedNote, setSelectedNote] = useState(null);
-  const selectedNote = loadedNote?.path === noteParam ? loadedNote : null;
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
-  const [loadingNote, setLoadingNote] = useState(false);
-  const [noteUnavailable, setNoteUnavailable] = useState(false);
+  const {
+    note: selectedNote, setNote: setSelectedNote, loading: loadingNote,
+    error: noteUnavailable, retry: retryNote, sequenceRef: noteSequence,
+  } = useVaultNote(vaultId, noteParam, {
+    onReset: () => { setNoteContent(''); setEditing(false); setConfirmDelete(null); },
+    onLoad: note => setNoteContent(note.content),
+  });
   const [expandedFolders, setExpandedFolders] = useState(new Set(['wiki/sources', 'wiki/entities', 'wiki/concepts']));
   const [activeSection, setActiveSection] = useState('wiki');
   const [tags, setTags] = useState([]);
@@ -33,9 +33,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [skippedTagNotes, setSkippedTagNotes] = useState(0);
   const [showTags, setShowTags] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const editorRef = useRef(null);
   const mountedRef = useMounted();
-  const noteSequence = useRef(0);
 
   // Owns the write plus the iCloud force-save escape hatch (#3717).
   const { saving, save, forceOffered, dismissForce } = useNoteSave({
@@ -53,31 +51,6 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
       return next;
     }, options);
   };
-
-  // URL identity owns the read. Loading/error state must not re-trigger it, or
-  // a missing note retries forever. Cleanup also invalidates pending saves.
-  useEffect(() => {
-    const sequence = ++noteSequence.current;
-    setSelectedNote(null);
-    setNoteContent('');
-    setEditing(false);
-    setConfirmDelete(null);
-    setNoteUnavailable(false);
-    setLoadingNote(!!noteParam);
-    if (noteParam) {
-      api.getNote(vaultId, noteParam).catch(() => null).then(data => {
-        if (!mountedRef.current || sequence !== noteSequence.current) return;
-        if (data && !data.error) {
-          setSelectedNote(data);
-          setNoteContent(data.content);
-        } else {
-          setNoteUnavailable(true);
-        }
-        setLoadingNote(false);
-      });
-    }
-    return () => { ++noteSequence.current; };
-  }, [vaultId, noteParam, mountedRef]);
 
   const handleSelectNote = (notePath) => updateNoteParam(notePath);
 
@@ -243,204 +216,56 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
 
       {/* Right panel: note viewer. Hidden on mobile until a note is opened. */}
       <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${noteParam ? 'flex' : 'hidden md:flex'}`}>
-        {loadingNote ? (
-          <div className="flex items-center justify-center h-full">
-            <BrailleSpinner text="Loading" />
-          </div>
-        ) : noteUnavailable ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 p-4 text-gray-500">
-            <p className="text-sm">Page unavailable in this vault</p>
-            <button type="button" onClick={() => updateNoteParam(null, { replace: true })} className="text-sm text-port-accent hover:underline">
-              Back to list
-            </button>
-          </div>
-        ) : selectedNote ? (
-          <>
-            {/* Note header */}
-            <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
-              <button
-                onClick={() => { setSelectedNote(null); updateNoteParam(null, { replace: true }); }}
-                aria-label="Back to list"
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-white font-medium truncate">{selectedNote.name}</h2>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  {selectedNote.folder && (
-                    <span className="flex items-center gap-1">
-                      <FolderOpen size={10} />
-                      {selectedNote.folder}
-                    </span>
-                  )}
-                  <span>Modified {timeAgo(selectedNote.modifiedAt)}</span>
-                  <span>{formatBytes(selectedNote.size)}</span>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                {editing ? (
-                  <>
-                    <button
-                      onClick={() => handleSaveNote()}
-                      disabled={saving}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
-                    >
-                      <Save size={14} />
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
-                    <button
-                      onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
-                      aria-label="Cancel"
-                      className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
-                    >
-                      <X size={16} />
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={() => setEditing(true)}
-                    className="flex items-center gap-1 px-3 py-1.5 rounded bg-port-card text-gray-300 text-sm hover:text-white hover:bg-port-border"
-                  >
-                    <Edit3 size={14} />
-                    Edit
-                  </button>
-                )}
-                <button
-                  onClick={() => setConfirmDelete(selectedNote.path)}
-                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-port-error"
-                  title="Delete note" aria-label="Delete note"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
+        <NoteDetailPane
+          selectedNote={selectedNote} loading={loadingNote} error={noteUnavailable}
+          onRetry={retryNote} onBack={() => updateNoteParam(null, { replace: true })}
+          backLabel="Back to list" cancelLabel="Cancel"
+          editing={editing} onSetEditing={setEditing} noteContent={noteContent}
+          onSetContent={setNoteContent} saving={saving} onSave={handleSaveNote}
+          confirmingDelete={selectedNote ? confirmDelete === selectedNote.path : false}
+          onRequestDelete={setConfirmDelete} onDelete={handleDeleteNote}
+          onCancelDelete={() => setConfirmDelete(null)}
+          forceOffered={forceOffered} dismissForce={dismissForce}
+          renderPreview={content => (
+            <div className="prose prose-invert prose-sm max-w-none">
+              <pre className="whitespace-pre-wrap break-words text-sm text-gray-300 font-mono leading-relaxed">{content}</pre>
             </div>
-
-            {/* Delete confirmation */}
-            {confirmDelete === selectedNote.path && (
-              <InlineConfirmRow
-                variant="separator"
-                question="Delete this note permanently?"
-                onConfirm={() => handleDeleteNote(selectedNote.path)}
-                onCancel={() => setConfirmDelete(null)}
-              />
-            )}
-
-            {/* Editor-only: outside edit mode there is no buffer the user meant to
-                write, and a stray "Save anyway" click would still issue the risky
-                forced write. */}
-            <ForceSaveNoteRow
-              offered={editing && forceOffered}
-              onConfirm={() => handleSaveNote({ force: true })}
-              onCancel={dismissForce}
-            />
-
-            {/* Note content */}
-            <div className="flex-1 min-h-0 overflow-auto flex">
-              <div className="flex-1 min-w-0">
-                {editing ? (
-                  <textarea
-                    aria-label="Note content"
-                    ref={editorRef}
-                    value={noteContent}
-                    onChange={e => setNoteContent(e.target.value)}
-                    className="w-full h-full p-4 bg-port-bg text-gray-200 font-mono text-sm resize-none focus:outline-none"
-                    spellCheck={false}
-                    onKeyDown={e => {
-                      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-                        e.preventDefault();
-                        handleSaveNote();
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="p-4 prose prose-invert prose-sm max-w-none">
-                    <pre className="whitespace-pre-wrap break-words text-sm text-gray-300 font-mono leading-relaxed">
-                      {selectedNote.body || selectedNote.content}
-                    </pre>
+          )}
+          renderLinks={note => (
+            <>
+              {note.wikilinks?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-gray-400 uppercase mb-1 flex items-center gap-1">
+                    <Link2 size={10} /> Links ({note.wikilinks.length})
+                  </h4>
+                  <div className="space-y-0.5">
+                    {note.wikilinks.map(link => (
+                      <button key={link} onClick={() => {
+                        const match = allNotes.find(n => n.name.toLowerCase() === link.toLowerCase());
+                        if (match) handleSelectNote(match.path);
+                        else toast.error(`"${link}" not found`);
+                      }} className="block w-full text-left text-xs text-port-accent hover:text-white truncate">{link}</button>
+                    ))}
                   </div>
-                )}
-              </div>
-
-              {/* Sidebar: metadata */}
-              {!editing && (
-                <div className="w-56 border-l border-port-border p-3 space-y-4 shrink-0 overflow-auto hidden lg:block">
-                  {selectedNote.frontmatter && Object.keys(selectedNote.frontmatter).length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1">Properties</h4>
-                      <div className="space-y-1">
-                        {Object.entries(selectedNote.frontmatter).map(([key, val]) => (
-                          <div key={key} className="text-xs">
-                            <span className="text-gray-500">{key}:</span>{' '}
-                            <span className="text-gray-300">{Array.isArray(val) ? val.join(', ') : String(val)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedNote.tags?.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1">Tags</h4>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedNote.tags.map(tag => (
-                          <span key={tag} className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent">#{tag}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedNote.wikilinks?.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1 flex items-center gap-1">
-                        <Link2 size={10} /> Links ({selectedNote.wikilinks.length})
-                      </h4>
-                      <div className="space-y-0.5">
-                        {selectedNote.wikilinks.map(link => (
-                          <button
-                            key={link}
-                            onClick={() => {
-                              const match = allNotes.find(n => n.name.toLowerCase() === link.toLowerCase());
-                              if (match) handleSelectNote(match.path);
-                              else toast.error(`"${link}" not found`);
-                            }}
-                            className="block w-full text-left text-xs text-port-accent hover:text-white truncate"
-                          >
-                            {link}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedNote.backlinks?.length > 0 && (
-                    <div>
-                      <h4 className="text-xs font-medium text-gray-400 uppercase mb-1 flex items-center gap-1">
-                        <ArrowLeft size={10} /> Backlinks ({selectedNote.backlinks.length})
-                      </h4>
-                      <div className="space-y-0.5">
-                        {selectedNote.backlinks.map(bl => (
-                          <button
-                            key={bl.path}
-                            onClick={() => handleSelectNote(bl.path)}
-                            className="block w-full text-left text-xs text-port-accent hover:text-white truncate"
-                          >
-                            {bl.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-gray-500">
-            <FileText size={48} className="mb-3 opacity-30" />
-            <p className="text-sm">Select a page to view</p>
-          </div>
-        )}
+              {note.backlinks?.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-gray-400 uppercase mb-1 flex items-center gap-1">
+                    <ArrowLeft size={10} /> Backlinks ({note.backlinks.length})
+                  </h4>
+                  <div className="space-y-0.5">
+                    {note.backlinks.map(bl => (
+                      <button key={bl.path} onClick={() => handleSelectNote(bl.path)}
+                        className="block w-full text-left text-xs text-port-accent hover:text-white truncate">{bl.name}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          emptyIcon={FileText} emptyLabel="Select a page to view"
+        />
       </div>
     </div>
   );
