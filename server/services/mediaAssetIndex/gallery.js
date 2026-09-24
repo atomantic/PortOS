@@ -1,6 +1,6 @@
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
-import { listAssets, countAssets, galleryFacets } from './db.js';
+import { listAssets, countAssets, galleryFacets, listMixedGalleryPage } from './db.js';
 
 const escapeHatch = () => process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
@@ -77,17 +77,16 @@ export async function listGalleryPage({
       counts = { image: counted.filter(row => row.kind === 'image').length,
         video: counted.filter(row => row.kind === 'video').length, all: counted.length };
     }
+  } else if (summary && mixed) {
+    const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
+    ({ items, total, hiddenTotal, counts } = await listMixedGalleryPage({
+      ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys,
+    }));
   } else {
     [items, total, hiddenTotal] = await Promise.all([
       listAssets({ ...filters, limit, offset, typed: mixed, orderedKeys: scope.orderedKeys, cover }),
       countAssets(filters), summary ? countAssets({ ...filters, hidden: true }) : undefined,
     ]);
-    if (summary && mixed) {
-      const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
-      const base = { ...filters, mediaKeys: countScope.mediaKeys };
-      const [image, video] = await Promise.all(['image', 'video'].map(kind => countAssets({ ...base, kind })));
-      counts = { image, video, all: image + video };
-    }
   }
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }

@@ -8,9 +8,14 @@
  * so it never touches the real media-gen stack, and cleaning its rows up after.
  */
 
-import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+
+vi.mock('../../lib/db.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, query: vi.fn(actual.query) };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -110,6 +115,62 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect(await db.listAssets({ ...options, orderedKeys: [`video:${video.id}`, `image:${image.filename}`], typed: true, limit: 1 })).toEqual([{ kind: 'video', data: video }]);
     await db.removeAsset(`image:${image.filename}`);
     await db.removeAsset(`video:${video.id}`);
+  });
+
+  it('matches legacy mixed summary semantics and expands the snapshot once, including empty pages', async () => {
+    const images = [
+      { filename: `${PFX}summary-a.png`, prompt: '100% fox', createdAt: '2026-01-03', universeId: 'example-u' },
+      { filename: `${PFX}summary-b.png`, prompt: '100% fox', createdAt: '2026-01-02', hidden: true },
+    ];
+    const videos = [
+      { id: `${PFX}summary-v`, prompt: '100% fox', createdAt: '2026-01-01', thumbnail: 'example.jpg' },
+      { id: `${PFX}summary-hidden`, prompt: 'fox', createdAt: 'invalid', hidden: true },
+    ];
+    for (const image of images) await db.upsertAsset({ mediaKey: `image:${image.filename}`,
+      kind: 'image', ref: image.filename, data: image, createdAt: image.createdAt });
+    const keys = [...images.map(image => `image:${image.filename}`), ...videos.map(video => `video:${video.id}`)];
+    const cases = [
+      {}, { offset: 1 }, { offset: 99 }, { hidden: false }, { hidden: true },
+      { kind: 'video', hidden: false, q: '100% fox' },
+      { mediaKeys: [keys[2]], countMediaKeys: keys, kind: 'video' }, // starred within collection
+      { mediaKeys: [], countMediaKeys: keys }, // no favorites; chips still populated
+      { excludeKeys: [keys[0], keys[2]] }, // unsorted
+      { orderedKeys: [...keys].reverse() },
+      { cover: true }, { universeId: 'example-u' }, { filename: images[0].filename },
+      { videos: [], mediaKeys: [], countMediaKeys: [] }, // entirely empty
+      { videos: [] }, // images only
+      { mediaKeys: keys.slice(2), countMediaKeys: keys.slice(2) }, // videos only
+    ];
+    for (const options of cases) {
+      const input = { videos, limit: 1, offset: 0, mediaKeys: keys, countMediaKeys: keys, ...options };
+      const { limit, offset, orderedKeys, cover, countMediaKeys, ...filters } = input;
+      const items = await db.listAssets({ ...filters, limit, offset, orderedKeys, cover, typed: true });
+      const total = await db.countAssets(filters);
+      const hiddenTotal = await db.countAssets({ ...filters, hidden: true });
+      const image = await db.countAssets({ ...filters, kind: 'image', mediaKeys: countMediaKeys });
+      const video = await db.countAssets({ ...filters, kind: 'video', mediaKeys: countMediaKeys });
+      query.mockClear();
+      expect(await db.listMixedGalleryPage(input)).toEqual({ items, total, hiddenTotal,
+        counts: { image, video, all: image + video } });
+      expect(query).toHaveBeenCalledTimes(1);
+    }
+    // Actual PostgreSQL plan: even with every summary field, the JSONB function
+    // executes once. Synthetic records keep this deterministic, with no timing gate.
+    const syntheticVideos = Array.from({ length: 200 }, (_, i) => ({
+      id: `${PFX}synthetic-${i}`, createdAt: '2026-01-01',
+    }));
+    query.mockClear();
+    await db.listMixedGalleryPage({ videos: syntheticVideos, limit: 1 });
+    const [sql, params] = query.mock.calls[0];
+    const explained = await query(`EXPLAIN (ANALYZE, FORMAT JSON) ${sql}`, params);
+    const nodes = [];
+    const visit = node => { nodes.push(node); (node.Plans || []).forEach(visit); };
+    visit(explained.rows[0]['QUERY PLAN'][0].Plan);
+    const expansions = nodes.filter(node => node['Function Name'] === 'jsonb_array_elements');
+    expect(expansions).toHaveLength(1);
+    expect(expansions[0]['Actual Loops']).toBe(1);
+    expect(expansions[0]['Actual Rows']).toBe(200);
+    for (const image of images) await db.removeAsset(`image:${image.filename}`);
   });
 
   it('upsert refreshes data + created_at on conflict', async () => {

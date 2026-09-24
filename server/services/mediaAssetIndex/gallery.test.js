@@ -30,6 +30,29 @@ describe('indexed gallery page', () => {
     expect(disk).not.toHaveBeenCalled();
   });
 
+  it('binds and serializes the synthetic video snapshot once for a mixed summary page', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    const serialize = vi.fn(function () { return { id: this.id, createdAt: this.createdAt }; });
+    const videos = Array.from({ length: 200 }, (_, i) => ({
+      id: `example-${i}`, createdAt: '2026-01-01', toJSON: serialize,
+    }));
+    loadHistory.mockResolvedValue(videos);
+    listAnnotations.mockResolvedValue({ 'video:example-1': { own: { starred: true } } });
+    query.mockResolvedValue({ rows: [{ items: [], total: '1', hiddenTotal: '0', image: '0', video: '200' }] });
+    expect(await listGalleryPage({ kind: 'video', summary: true, starred: true, limit: 1, offset: 1 }))
+      .toEqual({ items: [], total: 1, hiddenTotal: 0, counts: { image: 0, video: 200, all: 200 }, limit: 1, offset: 1 });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(serialize).toHaveBeenCalledTimes(200);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql.match(/jsonb_array_elements/g)).toHaveLength(1);
+    expect(sql).toContain('gallery_assets AS MATERIALIZED');
+    expect(JSON.parse(params[0])).toHaveLength(200);
+    expect(params.slice(-2)).toEqual([1, 1]);
+  });
+
   it('does not turn an index failure into a full disk scan', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);
