@@ -88,6 +88,12 @@ describe('vite chunk groups', () => {
     expect(loaders.includeDependenciesRecursively).toBe(false);
   });
 
+  it('preserves module execution order when a group opts out of recursive capture', () => {
+    const resolved = viteConfig({ command: 'build', mode: 'production' });
+    expect(CHUNK_GROUPS.some((group) => group.includeDependenciesRecursively === false)).toBe(true);
+    expect(resolved.build.rolldownOptions.output.strictExecutionOrder).toBe(true);
+  });
+
   it('keeps package names from bleeding across the separator', () => {
     // A declared name must match a whole path segment: `react` must not swallow
     // `react-redux`. The trailing separator is what enforces that.

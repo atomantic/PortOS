@@ -31,7 +31,7 @@ export const importWithRetry = (importFn, retriesLeft = MAX_RETRIES) =>
 // can see it.
 export const lazyWithReload = (importFn) => lazy(() =>
   importWithRetry(importFn).catch(err => {
-    if (isStaleChunkError(err) && reloadOnceForStaleChunk()) {
+    if (isStaleChunkError(err, { duringImport: true }) && reloadOnceForStaleChunk()) {
       return new Promise(() => {});
     }
     throw err;

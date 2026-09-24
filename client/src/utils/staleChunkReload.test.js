@@ -59,9 +59,23 @@ describe('isStaleChunkError', () => {
     'Failed to fetch dynamically imported module',
     'error loading dynamically imported module',
     'Expected a JavaScript module but got MIME type text/html',
-    'The superclass is not a constructor.',
   ])('matches %s', (msg) => {
     expect(isStaleChunkError(new Error(msg))).toBe(true);
+  });
+
+  it.each([
+    'The superclass is not a constructor.',
+    "undefined is not an object (evaluating 'A.useState')",
+    "undefined is not an object (evaluating '$.jsx')",
+  ])('treats %s as stale only in dynamic-import recovery', (msg) => {
+    const error = new Error(msg);
+    expect(isStaleChunkError(error)).toBe(false);
+    expect(isStaleChunkError(error, { duringImport: true })).toBe(true);
+  });
+
+  it('does not treat unrelated Safari undefined-object errors as stale imports', () => {
+    const error = new Error("undefined is not an object (evaluating 'A.someValue')");
+    expect(isStaleChunkError(error, { duringImport: true })).toBe(false);
   });
 
   it('is case-insensitive and accepts non-Error values', () => {

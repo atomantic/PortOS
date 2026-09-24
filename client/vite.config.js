@@ -233,7 +233,13 @@ export default defineConfig(({ command, mode }) => {
             // to derive `test` and by its installed-package test), not a
             // rolldown option, so it's the one field left out here.
             groups: CHUNK_GROUPS.map(({ packages, ...group }) => group)
-          }
+          },
+          // `vendor-three-loaders` disables recursive dependency capture to
+          // keep the loaders out of the main three chunk. Rolldown warns that
+          // this can create invalid execution order across chunks; preserve
+          // source module order so lazy routes don't evaluate against missing
+          // runtime exports.
+          strictExecutionOrder: true,
         }
       },
       // Enable source maps for debugging in production

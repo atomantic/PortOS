@@ -13,11 +13,14 @@ const STALE_CHUNK_PATTERNS = [
   'failed to fetch dynamically imported module',
   'error loading dynamically imported module',
   'importing a module script failed',
-  'mime type',
-  // A mixed old/new chunk graph can resolve the module request but provide a
-  // stale superclass export, which fails while evaluating the imported module.
-  'superclass is not a constructor'
+  'mime type'
 ];
+
+// These can mean an old/new module graph supplied incompatible runtime exports,
+// but the same messages can come from real application bugs. Match them only
+// while handling a rejected dynamic import, never from global error handlers.
+const MODULE_EVALUATION_PATTERNS = ['superclass is not a constructor'];
+const SAFARI_RUNTIME_EXPORTS = ['useState', 'jsx'];
 
 const RELOAD_FLAG = 'portos.staleChunkReloadAttempted';
 
@@ -32,9 +35,15 @@ const CACHE_PREFIX = 'portos-';
 // must never leave the user stuck on the error screen — reload regardless.
 const PURGE_TIMEOUT_MS = 1500;
 
-export const isStaleChunkError = (err) => {
+export const isStaleChunkError = (err, { duringImport = false } = {}) => {
   const msg = (err?.message || String(err || '')).toLowerCase();
-  return STALE_CHUNK_PATTERNS.some(p => msg.includes(p));
+  if (STALE_CHUNK_PATTERNS.some(p => msg.includes(p))) return true;
+  if (!duringImport) return false;
+
+  return MODULE_EVALUATION_PATTERNS.some((p) => msg.includes(p))
+    || (msg.includes('undefined is not an object')
+      && msg.includes('evaluating')
+      && SAFARI_RUNTIME_EXPORTS.some((name) => msg.includes(`.${name.toLowerCase()}`)));
 };
 
 // Anti-loop guard: stash the build id we already attempted a reload for. A
