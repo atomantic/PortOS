@@ -32,7 +32,7 @@ export default function PeerSyncSecretEditor({ peer, onRefresh }) {
           <p id={`peer-sync-secret-help-${peer.id}`} className="text-gray-400">
             Enter the same randomly generated secret (32–256 characters) in this peer’s settings on both machines.
             Use a different secret for each pair. Sync and category switches still control what is accepted.
-            Configure from the local interface, or sign in with an instance password.
+            Sign in with an instance password to configure peer settings.
           </p>
           <div className="flex flex-wrap gap-3">
             <button disabled={saving || secret.length < 32} onClick={() => save(secret)} className="text-port-success disabled:opacity-50">Save secret</button>

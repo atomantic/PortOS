@@ -362,6 +362,14 @@ describe('instances.js', () => {
     });
   });
 
+  it('pairing a legacy peer preserves its outbound relationship', async () => {
+    const peer = { id: 'legacy-peer', instanceId: 'peer-a', enabled: true, syncEnabled: false };
+    readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+    await updatePeer('legacy-peer', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(peer.directions).toEqual(['outbound', 'inbound']);
+    expect(peer.syncEnabled).toBe(false);
+  });
+
   describe('redactPeerForWire', () => {
     it('strips credentials and local media-routing state before a peer crosses the wire', () => {
       const peer = {

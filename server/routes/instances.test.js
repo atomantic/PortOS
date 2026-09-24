@@ -4,7 +4,7 @@ import { remoteRequestHandler } from '../lib/requestOrigin.js';
 import { verifySession } from '../services/auth.js';
 vi.mock('../services/auth.js', () => ({
   extractToken: req => req.headers.authorization,
-  verifySession: vi.fn().mockResolvedValue(false),
+  verifySession: vi.fn().mockResolvedValue(true),
   isAuthEnabled: vi.fn().mockResolvedValue(false),
 }));
 import { request } from '../lib/testHelper.js';
@@ -433,6 +433,18 @@ describe('local peer admission configuration', () => {
       .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
     expect(res.status).toBe(403);
     expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+  it('rejects apparent loopback access without an operator session', async () => {
+    const res = await request(buildApp()).put('/api/instances/peers/peer-a')
+      .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(res.status).toBe(403);
+    expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+  it('refuses anonymous reciprocal admission of discovery peers', async () => {
+    const res = await request(remoteRequestHandler(buildApp())).post('/api/instances/peers/sync-categories')
+      .send({ instanceId: '191aaece-a492-41ee-a66d-d4661eadc132', syncCategories: { universe: true }, fullSync: true });
+    expect(res.status).toBe(403);
+    expect(instances.applyReciprocalSync).not.toHaveBeenCalled();
   });
   it('allows an authenticated operator to configure the secret remotely', async () => {
     vi.mocked(verifySession).mockResolvedValue(true);

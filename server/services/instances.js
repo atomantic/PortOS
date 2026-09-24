@@ -526,7 +526,8 @@ export async function updatePeer(id, updates) {
       peer.syncSecret = updates.syncSecret;
       // Entering the pair secret is the local inbound-admission action.
       if (peer.syncSecret && !peer.directions?.includes('inbound')) {
-        peer.directions = [...(peer.directions || []), 'inbound'];
+        const directions = Array.isArray(peer.directions) && peer.directions.length ? peer.directions : ['outbound'];
+        peer.directions = [...directions, 'inbound'];
       }
     }
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
