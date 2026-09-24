@@ -763,7 +763,7 @@ export default function AIProviders() {
     return (
       <ModelsSectionLayout activeTab="providers">
         <PageHeader icon={Bot} title="AI Providers" />
-        <ModelsTabsHeader activeTab="providers" desktop={false} />
+        <ModelsTabsHeader activeTab="providers" />
         <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4">
           <PageSkeleton header="none" label="Loading providers" layout="grid" cards={4} />
         </div>
@@ -823,7 +823,7 @@ export default function AIProviders() {
     <ModelsSectionLayout activeTab="providers">
       <PageHeader icon={Bot} title="AI Providers" actions={headerActions} />
 
-      <ModelsTabsHeader activeTab="providers" desktop={false} />
+      <ModelsTabsHeader activeTab="providers" />
       <div className="px-4 pt-3">
         <ProviderPageTabs activeTab={activeTab} />
       </div>
