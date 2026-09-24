@@ -265,10 +265,36 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
     if (reused.published) lastPublishedBody.set(app.repoPath, next);
     return reused;
   }
-  const result = await landSnapshotPr(app, {
-    body: next, count, defaultBranch, git, deps,
-    message: options.message, removeLegacy: options.removeLegacy === true,
-  });
+  let result;
+  try {
+    result = await landSnapshotPr(app, {
+      body: next, count, defaultBranch, git, deps,
+      message: options.message, removeLegacy: options.removeLegacy === true,
+    });
+  } catch (error) {
+    // Another install can advance the shared publish branch after our ref read.
+    // The lease must reject that push; rebuild from fresh refs exactly once.
+    if (options.leaseRetry || error?.qualitySnapshotStaleLease !== true) throw error;
+    await git.fetchOrigin(app.repoPath, { prune: true });
+    const freshDefaultBranch = await git.getDefaultBranch(app.repoPath);
+    if (!freshDefaultBranch) throw new Error('Quality snapshot lease retry: default branch unavailable');
+    const onDefault = await readGitSnapshot(
+      git, app.repoPath, `origin/${freshDefaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
+    );
+    if (REWRITE_BLOCKED.has(onDefault.status)) return untouched(app, onDefault.status);
+    if (sameSnapshot(onDefault, next)) {
+      lastPublishedBody.set(app.repoPath, next);
+      return skipped(app, 'no-changes');
+    }
+    const probe = deps.probePrForBranch || (await import('./prProbe.js')).probePrForBranch;
+    const pr = await probe(app.repoPath, QUALITY_SNAPSHOT_BRANCH);
+    if (!pr?.readable || (pr.prState && !['OPEN', 'MERGED', 'CLOSED'].includes(String(pr.prState).toUpperCase()))) {
+      throw new Error('Quality snapshot lease retry: publish PR state unavailable');
+    }
+    return landOrReuse(app, git, freshDefaultBranch, deps, next, count, {
+      ...options, leaseRetry: true,
+    });
+  }
   lastPublishedBody.set(app.repoPath, next);
   return result;
 }
@@ -340,7 +366,10 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     ).catch(err => git.unstageFiles(worktreePath, commitPaths)
       .catch(() => {}).then(() => Promise.reject(err)));
 
-    await pushSnapshotBranch(git, app.repoPath, worktreePath);
+    await pushSnapshotBranch(git, app.repoPath, worktreePath).catch(error => {
+      if (/stale info/i.test(error?.message || '')) error.qualitySnapshotStaleLease = true;
+      throw error;
+    });
     const pr = await openOrAdoptPr(git, worktreePath, defaultBranch, deps);
     if (!pr?.url) {
       throw new Error(pr?.error || 'quality snapshot pull request was not created');
