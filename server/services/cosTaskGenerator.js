@@ -2008,10 +2008,14 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // stealing the request means inheriting its card, because the on-demand drain
   // will never see that request again. See `finishPreflightDispatch`.
   let stolenCardId = null;
+  // A stolen request's run parameters (a quota-burn or maintenance step's
+  // `params`), forwarded exactly as the on-demand drain forwards them.
+  let stolenRunOverrides = null;
 
   if (appRequests.length > 0) {
     const request = appRequests[0];
     targetPullRequest = request.targetPullRequest ?? null;
+    stolenRunOverrides = request.burn?.overrides?.params ?? null;
     const { cardIdForRequest } = await import('./preflightTaskCard.js');
     stolenCardId = cardIdForRequest(request);
     await taskSchedule.clearOnDemandRequest(request.id);
@@ -2061,6 +2065,8 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
     targetPullRequest,
+    onDemand: selectionReason === 'on-demand',
+    runOverrides: stolenRunOverrides,
     // The deterministic pre-agent work (pr-reviewer's security preflight)
     // reports into the stolen Run's card as it runs, exactly as it does on the
     // on-demand drain — this is the whole reason the card is opened early.
@@ -2732,6 +2738,10 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
 export async function prepareManagedAppImprovementTask(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
+  // An on-demand request this call is serving (a user Run, a quota-burn or
+  // maintenance step), whichever lane picked it up. Exempts it from the
+  // scheduled lane's audit-applicability gate.
+  onDemand = false,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
@@ -2746,7 +2756,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   // Also protect requests queued before the target-scope gate was installed.
   if (requiresInstallWideTarget(taskType)) return null;
-
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end
@@ -2796,11 +2805,12 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // mobile audit of a pure API, an infrastructure audit of a repo with no
   // deployment config) is skipped with a logged reason instead of paying a
   // provider call to be told "not applicable"; execution is recorded so the
-  // cadence advances. The on-demand lane (`skipPreconditions`) is not gated
-  // here: a manual Run is an explicit choice, and the two automated on-demand
-  // callers — maintenance runs and quota-burn steps — gate before they queue.
-  // `runInapplicableAudit` is the user's recorded override from the schedule form.
-  if (!skipPreconditions && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
+  // cadence advances. An on-demand request is not gated here — whether the
+  // drain or idle review serves it: a manual Run is an explicit choice, and the
+  // automated on-demand callers (maintenance runs, quota-burn steps) gate in
+  // `resolveQuotaBurnStep` before they queue. `runInapplicableAudit` is the
+  // user's recorded override from the schedule form.
+  if (!skipPreconditions && !onDemand && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
     && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);

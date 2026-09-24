@@ -53,7 +53,7 @@ it('preserves run overrides when reopening the drawer for one category', async (
   expect(screen.getByLabelText('Mode')).toHaveValue('fix');
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledWith(
-    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security'] },
+    { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security'], explicitCheck: true },
     { silent: true }
   ));
 });
@@ -101,12 +101,6 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
 });
 
-it('opens on the configured default provider instead of a hardcoded one', async () => {
-  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
-  await waitFor(() => expect(useProviderModels).toHaveBeenCalled());
-  expect(useProviderModels.mock.calls[0][0]).toMatchObject({ preselectDefaults: true });
-});
-
 it('leaves audits that cannot apply to this repository out of batch runs, but runs one on request', async () => {
   const categories = [
     { id: 'security', label: 'Security', score: null, applicable: true },
@@ -117,12 +111,14 @@ it('leaves audits that cannot apply to this repository out of batch runs, but ru
   const missing = await findEnabledByRole('button', { name: 'Run now' });
   fireEvent.click(missing);
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['security'] }), { silent: true }));
+  // A batch selection is never an explicit override.
+  expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('explicitCheck');
   await findEnabledByLabelText('Checks');
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'all' } });
   expect(screen.getByRole('button', { name: 'Run now' })).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'accessibility' } });
   fireEvent.click(await findEnabledByRole('button', { name: 'Run now' }));
-  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'] }), { silent: true }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'], explicitCheck: true }), { silent: true }));
 });
 
 it('offers every enabled process provider regardless of subscription family, and hides disabled ones', async () => {

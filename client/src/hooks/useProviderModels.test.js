@@ -62,7 +62,7 @@ describe('useProviderModels — Antigravity base models', () => {
   it('opens a required picker on the configured default provider and its default model', async () => {
     const CLAUDE_TUI = { id: 'claude-code-tui', type: 'tui', enabled: true, defaultModel: 'example-model', models: ['example-model'] };
     api.getProviders.mockResolvedValue({ activeProvider: 'claude-code-tui', providers: [CODEX, CLAUDE_TUI] });
-    const { result } = renderHook(() => useProviderModels({ preselectDefaults: true }));
+    const { result } = renderHook(() => useProviderModels());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('claude-code-tui');
     expect(result.current.selectedModel).toBe('example-model');
@@ -71,7 +71,7 @@ describe('useProviderModels — Antigravity base models', () => {
   it('falls back to a TUI provider, not list order, when a required picker filters out the default', async () => {
     const TUI = { id: 'example-tui', type: 'tui', enabled: true, defaultModel: 'm', models: ['m'] };
     api.getProviders.mockResolvedValue({ activeProvider: 'example-api', providers: [CODEX, TUI] });
-    const { result } = renderHook(() => useProviderModels({ preselectDefaults: true }));
+    const { result } = renderHook(() => useProviderModels());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.selectedProviderId).toBe('example-tui');
   });

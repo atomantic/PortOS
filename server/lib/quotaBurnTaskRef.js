@@ -75,6 +75,12 @@ export const QUOTA_BURN_UNAVAILABLE = Object.freeze({
    * lives in CoS → Config, and every step reports it at once.
    */
   IMPROVEMENT_DISABLED: 'improvement-disabled',
+  /**
+   * A quality audit the target repository cannot have findings for (a UI audit
+   * of a repo with no UI) — see `resolveAuditApplicability`. A step carrying
+   * the user's `runInapplicableAudit` override is exempt.
+   */
+  NOT_APPLICABLE: 'not-applicable',
 });
 
 const MAX_REF_FIELD = 64;
