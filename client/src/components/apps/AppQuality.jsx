@@ -79,7 +79,7 @@ export default function AppQuality({ app, detail = false }) {
     : score == null ? unscoredLabel : `Quality: ${score}/100`;
   if (!detail) return (
     <Link to={`/apps/${app.id}/quality`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
-      {label}{score != null && ` · ${quality.ratedCategories}/${categoryCount} categories`}
+      {label}{score != null && ` · ${quality.ratedCategories} rated`}
     </Link>
   );
   const panelLink = (name, categoryId) => {

@@ -320,20 +320,22 @@ async function evaluate(id, { ignoreTaskId }) {
 
   const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
-  // Step id → why it did not apply. Persisted with every hold, not only on
-  // dispatch, so a later hold does not throw away skips this pass decided.
+  // Step id → why it did not apply. Persisted with a hold too, so a later hold
+  // does not throw away skips this pass decided — but only when the pass moved
+  // the ledger, so an unchanged hold still costs no write or broadcast.
   const skipped = { ...run.skipped };
+  const ledger = () => (Object.keys(completed).length !== Object.keys(run.completed || {}).length ? { completed, skipped } : null);
   for (const step of run.steps) {
     if (completed[step.id]) continue;
     const shape = sequenceStepShapeReason(step);
-    if (shape) return hold(shape, { completed, skipped });
+    if (shape) return hold(shape, ledger());
     if (step.drain) {
       const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
       if (probe.drained) {
         completed[step.id] = new Date().toISOString();
         continue;
       }
-      if (!probe.job) return hold(probe.reason, { completed, skipped });
+      if (!probe.job) return hold(probe.reason, ledger());
     }
     const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
     // An audit this repository cannot have findings for is COMPLETED as

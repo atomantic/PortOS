@@ -418,7 +418,10 @@ describe('built-in agent task invocation', () => {
     const refused = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true }), family: grok, candidate });
     expect(refused).toEqual({ dispatched: false, reason: expect.stringMatching(/does not apply to this app: no user interface/), code: 'not-applicable' });
     expect(state.triggered).toHaveLength(0);
-    const forced = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true, runInapplicableAudit: true }), family: grok, candidate });
+    const overridden = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true, runInapplicableAudit: true }), family: grok, candidate });
+    expect(overridden.dispatched).toBe(true);
+    // A forced ▶ on the step is the user choosing it, like a manual Run.
+    const forced = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true }), family: grok, candidate, force: true });
     expect(forced.dispatched).toBe(true);
     inapplicable.byType = {};
   });

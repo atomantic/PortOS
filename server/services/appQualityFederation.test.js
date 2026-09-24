@@ -1,6 +1,6 @@
 import { it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
-import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality } from './appQualityFederation.js';
+import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES } from './appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
@@ -41,13 +41,33 @@ it('combines newest categories in app view and UTC history without changing othe
   expect(apps[0].quality).toMatchObject({ score: 70, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
   expect(apps[0].quality.categories.find(c => c.id === 'security')).toMatchObject({ sourcePeerId: 'peer-a', agentId: null });
   expect(apps[1].quality.score).toBeNull();
-  expect(local.peerFetch.mock.calls[0]).toEqual(['http://192.0.2.1:5555/api/apps/quality-federation?days=30',
+  expect(local.peerFetch.mock.calls[0]).toEqual([expect.stringMatching(/^http:\/\/192\.0\.2\.1:5555\/api\/apps\/quality-federation\?days=30&categories=security%2C/),
     expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'error', maxBytes: 4194304 }), peer]);
   const history = await getAppQualityHistory({ id: 'portos-default' }, 30, local);
   expect(history.points.find(p => p.date === '2026-09-09').score).toBe(20);
   expect(history.points.at(-1)).toMatchObject({ score: 70, ratedCategories: 2 });
   expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(70);
   expect((await exportPortosQuality(peer.instanceId, 30, local)).measurements.map(m => m.report.score)).toEqual([20]);
+});
+
+// A peer on an older catalog validates the whole payload strictly: one row in a
+// category it does not know would make it drop every measurement from us.
+it('sends a requester only the categories it can parse, and the pre-expansion set to one that does not say', async () => {
+  const source = deps([row('security', 80), row('privacy', 60)]);
+  const legacy = await exportPortosQuality(peer.instanceId, 30, source);
+  expect(legacy.measurements.map(m => m.report.category)).toEqual(['security']);
+  const current = await exportPortosQuality(peer.instanceId, 30, source, undefined, ['security', 'privacy']);
+  expect(current.measurements.map(m => m.report.category).sort()).toEqual(['privacy', 'security']);
+  expect(FEDERATION_LEGACY_CATEGORIES).toHaveLength(25);
+});
+
+it('keeps a newer peer\'s known categories when it also sends one this install cannot parse', async () => {
+  const remote = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 80)]));
+  const withUnknown = { ...remote, measurements: [...remote.measurements,
+    { ...remote.measurements[0], measurementId: 'c'.repeat(64), report: { ...remote.measurements[0].report, category: 'example-future-lens' } }] };
+  const { records, federation } = await collectPortosQuality(30, { ...deps([]), peerFetch: async () => response(withUnknown) });
+  expect(records.map(record => record.category)).toEqual(['security']);
+  expect(federation).toMatchObject({ available: 1, unavailable: 0 });
 });
 
 it('reads stored lifecycle measurements under the renamed category', async () => {
@@ -67,12 +87,15 @@ it('keeps local scores on old, offline, malformed, oversize or mismatched peers 
     async () => { throw new Error('offline'); },
     async () => response({ ...payload, schemaVersion: 2 }),
     async () => response({ ...payload, repository: '0'.repeat(64) }),
-    async () => response({ ...payload, measurements: [{ ...payload.measurements[0], report: { ...payload.measurements[0].report, score: 101 } }] }),
     async () => new Response('too large', { headers: { 'content-length': '4194305' } }),
   ]) {
     const [app] = await enrichAppsWithQuality([{ id: 'portos-default' }], { ...local, peerFetch: fetch });
     expect(app.quality).toMatchObject({ score: 20, federation: { available: 0, unavailable: 1 } });
   }
+  // A malformed ROW costs that row, not the peer: the rest of its evidence counts.
+  const oneBad = { ...payload, measurements: [{ ...payload.measurements[0], report: { ...payload.measurements[0].report, score: 101 } }] };
+  const [partial] = await enrichAppsWithQuality([{ id: 'portos-default' }], { ...local, peerFetch: async () => response(oneBad) });
+  expect(partial.quality).toMatchObject({ score: 20, federation: { available: 1, unavailable: 0 } });
   const future = { ...payload, measurements: [{ ...payload.measurements[0], assessedAt: '2026-09-11T00:00:00Z' }] };
   expect((await collectPortosQuality(30, { ...local, peerFetch: async () => response(future) })).records).toEqual([]);
 });

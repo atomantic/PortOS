@@ -72,6 +72,9 @@ vi.mock('./quotaBurnAcceptance.js', () => ({
 // copy of the invocation logic (`quotaBurnInvoke.test.js` owns that).
 vi.mock('./quotaBurnInvoke.js', () => ({
   getQuotaBurnTaskCatalog: vi.fn(async () => { state.catalogReads += 1; return state.catalog; }),
+  // The sequence walker asks it whether a step still applies to its app.
+  resolveQuotaBurnStep: vi.fn(async (job) => (state.notApplicable?.includes(job.id)
+    ? { unavailable: { code: 'not-applicable', reason: 'does not apply' } } : {})),
   countQuotaBurnStepPending: vi.fn(async ({ step }) => state.invokePending[step.id] ?? { count: 0, detail: 'nothing' }),
   invokeQuotaBurnStep: vi.fn(async ({ step, family, candidate, context, force }) => {
     state.invoked.push({ stepId: step.id, familyId: family.id, charge: candidate.charge, force });

@@ -35,8 +35,8 @@ const router = Router();
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
-  const { days, repository } = validateRequest(appQualityFederationQuerySchema, req.query);
-  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository);
+  const { days, repository, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories);
   if (!payload) throw new ServerError('Quality sharing requires a registered enabled sync peer and a known repository', {
     status: 403,
     code: 'PEER_PULL_FORBIDDEN',

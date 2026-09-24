@@ -120,7 +120,10 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const assessedAt = record?.assessedAt;
     const stale = valid && !isFreshAssessment(assessedAt, now);
     const contributes = valid && !stale && report.data.coverage === 'broad' && report.data.confidence !== 'low' && report.data.score !== null;
-    const reportedNotApplicable = valid && !stale && report.data.coverage === 'not-applicable';
+    // Only this install's own ruling, as the dispatch gate reads it: a peer's
+    // or a release snapshot's describes a different checkout of the repository.
+    const local = !record?.sourcePeerId && !record?.sourcePeerName;
+    const reportedNotApplicable = valid && !stale && local && report.data.coverage === 'not-applicable';
     const detectedReason = Object.hasOwn(inapplicable, id) ? inapplicable[id] : null;
     const applicable = contributes || !(reportedNotApplicable || detectedReason);
     const inapplicableReason = applicable ? null
@@ -182,4 +185,8 @@ export function compareQualityRecords(a, b) {
 
 export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({
   repository: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  // The categories the requesting install can parse, comma-separated. Absent on
+  // a request from an install that predates it — see FEDERATION_LEGACY_CATEGORIES.
+  categories: z.string().max(4000).regex(/^[a-z0-9-]+(,[a-z0-9-]+)*$/).optional()
+    .transform(value => (value ? value.split(',') : undefined)),
 });
