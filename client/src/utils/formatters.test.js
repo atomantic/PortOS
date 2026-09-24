@@ -718,3 +718,9 @@ describe('formatCountdown', () => {
     expect(formatCountdown(undefined)).toBe('00:00');
   });
 });
+
+it('retains sub-cent token costs and fractional intelligence scores when precision is requested', () => {
+  expect(formatUsd(0.0045, { maximumFractionDigits: 4 })).toBe('$0.0045');
+  expect(formatUsd(0.0045)).toBe('$0.00');
+  expect(formatCount(37.26, { maximumFractionDigits: 1 })).toBe('37.3');
+});

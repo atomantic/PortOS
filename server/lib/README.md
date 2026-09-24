@@ -741,3 +741,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `markdownImages.js` | `markdownImages(content, limit)` — bounded, deduplicated safe markdown image previews for Brain cards and import archives. |
 
 | `chatgptText.js` | `stripChatgptCitations(text)` removes opaque ChatGPT citation tokens while preserving ordinary Markdown and asset links. |
+
+| `modelComparisonComposite.js` | `buildModelComparisonComposite(observations, inventory)` derives a stable sourced index with calibrated and effort estimates, route-specific price references and explicit research gaps. |

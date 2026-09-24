@@ -7,7 +7,7 @@ import migration from './409-portos-model-benchmarks.js';
 let rootDir;
 afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
 
-it('removes only retired public scores and offers new Codex models without replacing user choices', async () => {
+it('preserves researched public scores and offers new Codex models without replacing user choices', async () => {
   rootDir = await mkdtemp(join(tmpdir(), 'portos-benchmark-retirement-'));
   await mkdir(join(rootDir, 'data'));
   const seed = JSON.parse(await readFile(new URL('../../data.reference/model-comparison.json', import.meta.url), 'utf8'));
@@ -36,8 +36,8 @@ it('removes only retired public scores and offers new Codex models without repla
   const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
   const providers = JSON.parse(await readFile(providerPath, 'utf8')).providers;
 
-  expect(result.removed).toBe(2);
-  expect(catalog.observations).toEqual([keeper]);
+  expect(result.removed).toBe(0);
+  expect(catalog.observations).toEqual([keeper, artificialAnalysis, sweBench]);
   expect(providers.codex.models).toEqual(['gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna', 'custom-model']);
   expect(providers.codex.defaultModel).toBe('custom-model');
   expect(providers['codex-tui'].models).toEqual(['gpt-5.6-luna', 'gpt-6-sol', 'gpt-6-luna']);

@@ -724,3 +724,5 @@ export * from './catalogExtractionDraft.js';
 export * from './markdownImages.js';
 
 export * from './chatgptText.js';
+
+export * from './modelComparisonComposite.js';

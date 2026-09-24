@@ -2262,7 +2262,12 @@ export const modelComparisonObservationSchema = z.object({
   totalTasks: z.number().int().positive().max(1000).nullable().optional(),
   quota: z.object({ unitsPerTask: z.number().finite().nonnegative(), unit: z.string().min(1).max(80), source: comparisonSourceSchema }).strict().nullable(),
   notes: z.string().max(2000),
-}).strict();
+}).strict().superRefine((row, ctx) => {
+  if (row.benchmark === 'PortOS Research Index v1 (AA v4.3.2 scale)' && row.quality) {
+    if (row.quality.value > 100) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quality', 'value'], message: 'PortOS research index must be between 0 and 100' });
+    if (!row.quality.source.methodology.startsWith('PortOS estimate:')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quality', 'source', 'methodology'], message: 'Research estimates must disclose their derivation with PortOS estimate:' });
+  }
+});
 const modelComparisonCatalogBaseSchema = z.object({
   schemaVersion: z.literal(1),
   // Source imports can contain thousands of independently attributed rows and
