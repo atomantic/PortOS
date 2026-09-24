@@ -180,6 +180,18 @@ describe('peerHttpClient', () => {
     });
   });
 
+  it('sends the pair secret only to the push endpoint and refuses redirects', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const peer = { syncSecret: 'synthetic-pair-secret-32-characters-long' };
+    try {
+      await peerFetch('http://peer.example.com/api/peer-sync/push', { method: 'POST', body: '{}' }, peer);
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'error', headers: { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } });
+      await peerFetch('http://peer.example.com/api/instances/peers/announce', {}, peer);
+      expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-PortOS-Peer-Sync-Token');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   describe('peerFetch over HTTPS', () => {
     let fixture;
 

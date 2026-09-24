@@ -9,6 +9,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
+import { authorizeIncomingPush } from './peerPushAuthorization.js';
 import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -201,7 +202,7 @@ async function assertSchemaVersionGate({ kind, record, issues, linkedCollection,
  * The HTTP route in Stage 3 will be a thin wrapper around this — validate
  * the body shape, call this function, return the response.
  */
-export async function applyIncomingPush(payload) {
+export async function applyIncomingPush(payload, authorization) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
@@ -221,6 +222,8 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(record) || !isNonBlankStr(record.id)) {
     throw makeErr('record must be an object with a string id', ERR_VALIDATION);
   }
+
+  await authorizeIncomingPush(payload, authorization);
 
   const { senderSchemaVersions } = await assertSchemaVersionGate({
     kind, record, issues, linkedCollection, catalogBundle, linkedTrack, portosMeta, sourceInstanceId,

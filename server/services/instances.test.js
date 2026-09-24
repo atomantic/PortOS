@@ -362,12 +362,21 @@ describe('instances.js', () => {
     });
   });
 
+  it('pairing a legacy peer preserves its outbound relationship', async () => {
+    const peer = { id: 'legacy-peer', instanceId: 'peer-a', enabled: true, syncEnabled: false };
+    readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+    await updatePeer('legacy-peer', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(peer.directions).toEqual(['outbound', 'inbound']);
+    expect(peer.syncEnabled).toBe(false);
+  });
+
   describe('redactPeerForWire', () => {
     it('strips credentials and local media-routing state before a peer crosses the wire', () => {
       const peer = {
         id: 'peer-1',
         name: 'host',
         auth: { username: 'a', password: 'b' },
+        syncSecret: 'synthetic-pair-secret-32-characters-long',
         mediaProvider: { enabled: true, audioModels: [{ engine: 'example', modelId: 'example' }] },
         mediaProviderStatus: { state: 'ready' },
         status: 'online',
@@ -375,6 +384,9 @@ describe('instances.js', () => {
       const redacted = redactPeerForWire(peer);
 
       expect(redacted).not.toHaveProperty('auth');
+      expect(redacted).not.toHaveProperty('syncSecret');
+      expect(sanitizePeerForClient(peer)).not.toHaveProperty('syncSecret');
+      expect(sanitizePeerForClient(peer).hasSyncSecret).toBe(true);
       expect(redacted).not.toHaveProperty('mediaProvider');
       expect(redacted).not.toHaveProperty('mediaProviderStatus');
       expect(redacted).toMatchObject({ id: 'peer-1', name: 'host', status: 'online' });
@@ -1480,6 +1492,18 @@ describe('instances.js', () => {
   });
 
   describe('handleAnnounce', () => {
+    it('keeps an admitted peer identity, callback endpoint and consent unchanged after forged discovery', async () => {
+      const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        host: 'configured.example.com', directions: ['inbound'], syncSecret: 'synthetic-pair-secret-32-characters-long',
+        syncEnabled: false, syncCategories: { universe: false } };
+      const before = structuredClone(peer);
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+      await handleAnnounce({ instanceId: 'peer-forged', address: '192.0.2.10', port: 5555, host: 'attacker.example.com' });
+      expect(peer).toEqual(before);
+      await applyReciprocalSync('peer-a', { universe: true }, { fullSync: true });
+      expect(peer).toEqual(before);
+    });
+
     it('preserves the managed tailcat endpoint when the remote announces its own host and port', async () => {
       const existing = {
         id: 'tailcat-peer', address: '127.0.0.1', port: 15555, host: null,

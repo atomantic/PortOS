@@ -130,11 +130,12 @@ function sameAuth(a, b) {
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
   if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
-    && !('tcAddress' in peer)) {
+    && !('tcAddress' in peer) && !('syncSecret' in peer)) {
     return peer;
   }
   const {
     auth: _auth,
+    syncSecret: _syncSecret,
     mediaProvider: _mediaProvider,
     mediaProviderStatus: _mediaProviderStatus,
     tcAddress: _tcAddress,
@@ -164,8 +165,8 @@ export function sanitizePeerForClient(peer) {
   // separately, so masking here would hide the stored selection: every box on a
   // `syncEnabled: false` peer would read unchecked, and ticking one would
   // silently reactivate every other category still true underneath it.
-  const { tcAddress: _tcAddress, ...safePeer } = peer;
-  return { ...safePeer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
+  const { tcAddress: _tcAddress, syncSecret: _syncSecret, ...safePeer } = peer;
+  return { ...safePeer, auth, hasSyncSecret: Boolean(peer.syncSecret), syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
 }
 
 /**
@@ -518,6 +519,17 @@ export async function updatePeer(id, updates) {
   const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
+    if (updates.syncSecret !== undefined) {
+      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < 32 || updates.syncSecret.length > 256)) {
+        throw new Error('Peer sync secret must contain 32 to 256 characters');
+      }
+      peer.syncSecret = updates.syncSecret;
+      // Entering the pair secret is the local inbound-admission action.
+      if (peer.syncSecret && !peer.directions?.includes('inbound')) {
+        const directions = Array.isArray(peer.directions) && peer.directions.length ? peer.directions : ['outbound'];
+        peer.directions = [...directions, 'inbound'];
+      }
+    }
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
@@ -825,7 +837,7 @@ export async function probePeer(peer) {
     } else {
       delete entry.mediaProviderStatus;
     }
-    if (remoteInstanceId) entry.instanceId = remoteInstanceId;
+    if (remoteInstanceId && (!entry.syncSecret || !entry.instanceId)) entry.instanceId = remoteInstanceId;
     if (status === 'online') entry.version = remoteVersion;
     // Auto-update name from hostname if current name is just an IP address
     const remoteHostname = validName(lastHealth?.hostname, null);
@@ -913,6 +925,8 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     }
 
     const normalizedHost = validHost(host);
+
+    if (existing?.syncSecret) return { created: false, peer: existing };
 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
@@ -1070,6 +1084,8 @@ function sanitizeSyncCategories(input) {
  * but this keeps a misbehaving peer from churning our state).
  */
 export async function applyReciprocalSync(instanceId, categories, { fullSync } = {}) {
+  // The admitted peer's direction and categories are machine-local consent.
+  // Anonymous reciprocal callbacks must never broaden or revoke them.
   const sanitized = sanitizeSyncCategories(categories);
   // A fullSync-only signal (peer asking us to mirror everything) is valid even
   // if the category map didn't sanitize to anything actionable. An explicit
@@ -1084,7 +1100,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
   let changed = false;
   const peer = await withData(async (data) => {
     const entry = data.peers.find(p => p.instanceId === instanceId);
-    if (!entry) return null;
+    if (!entry || entry.syncSecret) return null;
     // Default the baseline so a partial stored map doesn't make absent-vs-false
     // diverge — otherwise sanitized adding `goals:false` to a `prev` missing
     // `goals` reads as a change (`false !== undefined`) and defeats the guard.
