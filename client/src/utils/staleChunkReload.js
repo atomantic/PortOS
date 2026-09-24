@@ -110,7 +110,6 @@ export const fetchServerBuildId = async () => {
 export const reloadOnceForStaleChunk = ({ forceCachePurge = false } = {}) => {
   const buildId = getCurrentBuildId();
   if (!buildId) return Promise.resolve(false);
-  if (safeReadSession(RELOAD_FLAG) === buildId) return Promise.resolve(false);
   if (reloadAttempts.has(buildId)) {
     const inFlight = reloadAttempts.get(buildId);
     if (!forceCachePurge) return inFlight;
@@ -122,6 +121,7 @@ export const reloadOnceForStaleChunk = ({ forceCachePurge = false } = {}) => {
       reloaded ? true : reloadOnceForStaleChunk({ forceCachePurge: true })
     ));
   }
+  if (safeReadSession(RELOAD_FLAG) === buildId) return Promise.resolve(false);
 
   const attempt = (async () => {
     // A rejected preload can be a transient network error, and a runtime export

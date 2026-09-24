@@ -245,6 +245,35 @@ describe('reloadOnceForStaleChunk', () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it('waits for an automatic cache purge already in flight before retrying', async () => {
+    stubSessionStorage();
+    stubFetch();
+    const reload = stubReload();
+    let resolveCacheKeys;
+    let cacheKeysStarted;
+    const cacheKeysStartedPromise = new Promise((resolve) => {
+      cacheKeysStarted = resolve;
+    });
+    vi.stubGlobal('caches', {
+      keys: vi.fn(() => {
+        cacheKeysStarted();
+        return new Promise((resolve) => {
+          resolveCacheKeys = resolve;
+        });
+      }),
+      delete: vi.fn().mockResolvedValue(true),
+    });
+
+    const automaticAttempt = reloadOnceForStaleChunk();
+    await cacheKeysStartedPromise;
+    const explicitRetry = reloadOnceForStaleChunk({ forceCachePurge: true });
+
+    expect(reload).not.toHaveBeenCalled();
+    resolveCacheKeys(['portos-shell-v1']);
+    await expect(Promise.all([automaticAttempt, explicitRetry])).resolves.toEqual([true, true]);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it('does not clear cached assets on an explicit retry when the browser is offline', async () => {
     stubSessionStorage();
     stubFetch(() =>
