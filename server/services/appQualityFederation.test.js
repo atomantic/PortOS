@@ -130,6 +130,23 @@ it('loads release evidence without peers and never re-exports it', async () => {
   expect(await readReleaseQuality({ ...local, readFile: async () => 'broken' })).toEqual([]);
 });
 
+
+const newerInstallSnapshot = (repository, assessedAt) => JSON.stringify({
+  schemaVersion: 2, repository, reportVersion: 1,
+  categories: ['security', 'example-future-lens'],
+  coverage: ['broad', 'partial', 'unavailable', 'not-applicable'], confidence: ['low', 'medium', 'high'],
+  measurements: [[assessedAt, 0, 76, 3, 0, 2, 10, 10], [assessedAt, 1, 50, 3, 0, 2, 10, 10]],
+});
+
+it('reads the known rows of a snapshot a newer install wrote with categories this one lacks', async () => {
+  const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+  const managed = { id: 'local-id', repoPath: '/repo/example-app' };
+  const { repository } = await buildQualitySnapshot(managed, 30, { ...deps([row('security', 76)]), getOriginInfo });
+  const body = newerInstallSnapshot(repository, '2026-09-10T10:00:00.000Z');
+  const records = await readReleaseQuality({ ...deps([]), getOriginInfo, getPeers: async () => [], readFile: async () => body }, managed);
+  expect(records.map(record => record.category)).toEqual(['security']);
+});
+
 it('reads a managed app\'s committed .quality.json as release evidence and rejects a foreign or broken one', async () => {
   const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
   const managed = { id: 'local-id', repoPath: '/repo/example-app' };

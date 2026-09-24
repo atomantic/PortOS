@@ -367,14 +367,19 @@ export async function applyQualitySchedulePlan(app, options = {}) {
   const scheduled = new Map(plan.slots.map(slot => [slot.taskType, slot]));
   const existing = await getAppTaskTypeOverrides(app.id);
 
+  const inapplicable = new Set(built.checks.filter(check => !check.applicable).map(check => check.taskType));
   const patches = {};
   for (const taskType of AUDIT_TASK_TYPE_LIST) {
     const slot = scheduled.get(taskType);
+    // A check the user selected although it was marked not applicable is an
+    // explicit override: record it so the scheduled lane's applicability gate
+    // runs it instead of skipping it. Cleared again once the check applies.
+    const { runInapplicableAudit: _previousOverride, ...storedMetadata } = existing[taskType]?.taskMetadata || {};
     patches[taskType] = slot
       // Merge rather than replace: the stored metadata may carry a provider
       // pin or reviewer choice the user set on the Schedule page, and the plan
       // only has an opinion about the delivery mode.
-      ? { enabled: true, interval: slot.cron, taskMetadata: { ...existing[taskType]?.taskMetadata, fileIssues: slot.fileIssues } }
+      ? { enabled: true, interval: slot.cron, taskMetadata: { ...storedMetadata, fileIssues: slot.fileIssues, ...(inapplicable.has(taskType) ? { runInapplicableAudit: true } : {}) } }
       // Clearing the interval alongside `enabled: false` keeps a stale cron
       // from reviving on the next manual enable.
       : { enabled: false, interval: null };

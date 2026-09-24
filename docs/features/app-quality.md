@@ -186,16 +186,20 @@ of evidence — a `git ls-files` that fails falls back to a two-level listing, w
 is explicitly not evidence of absence.
 
 **Dispatch-time bail-out.** The same verdict (`resolveAuditApplicability`) is
-checked again before any agent is spawned, on every lane: the scheduler, a
-manual Run, a maintenance run, and a quota-burn step. An inapplicable audit is
-skipped with a logged reason and no provider call — the scheduled lane records
-the execution so its cadence advances, a manual Run reports why nothing ran, a
-maintenance run completes the step as skipped (recorded in the run's `skipped`
-map) and moves on, and a quota-burn step is declined so the burn picks other
-work. Detection failures never block: the gate only removes work it has
-evidence against. The Quality tab's **Run checks** batch selections leave
-inapplicable categories out; picking one by name still offers it (and the
-server then explains the skip).
+checked again before an agent is spawned for automated work, with no provider
+call: the scheduled lane skips the audit and records the execution so its
+cadence advances, a maintenance run completes the step as skipped (recorded in
+the run's `skipped` map, and named in its completion reason) and moves on, and
+a quota-burn step is declined so the burn picks other work. Detection failures
+never block: the gate only removes work it has evidence against.
+
+An explicit choice always wins over the verdict. A manual **Run** of one task
+type is not gated. The Quality tab's **Run checks** batch selections leave
+inapplicable categories out, but picking a single category by name runs it
+(its step carries `runInapplicableAudit`). A check the user selects in the
+weekly schedule form despite its skip reason is saved with
+`runInapplicableAudit: true` in that app's task metadata, so the scheduled
+lane runs it; the flag is cleared when a later plan finds the check applies.
 
 **When.** The selection is spread across the week as evenly as it allows — the
 30 shipped checks become five slots a day, filled 5,5,4,4,4,4,4 so no day is

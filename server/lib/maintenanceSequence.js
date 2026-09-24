@@ -61,6 +61,10 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     throw new Error('Quality checks must name known audit categories');
   }
   // An explicit quality selection runs only those audits, without backlog drains.
+  // One named check is the user's explicit choice (the Quality tab's per-category
+  // Run) and runs even where the repository scan says it cannot apply; a batch
+  // selection is gated, so an inapplicable audit never rides along unnoticed.
+  const singleExplicitCheck = Array.isArray(taskTypes) && new Set(taskTypes).size === 1;
   const types = taskTypes ? [...new Set(taskTypes)] : mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : claimBetweenAudits ? MAINTENANCE_SEQUENCE_TYPES : MAINTENANCE_TASK_ORDER;
   return types.map((taskType, index) => ({
     id: `${idPrefix}-${index}`,
@@ -70,6 +74,6 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     jobType: null,
     runOnce: true,
     drain: taskType === MAINTENANCE_DRAIN_TASK,
-    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true } : {}) } : maintenanceStepParams(taskType, mode) },
+    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true } : {}), ...(singleExplicitCheck ? { runInapplicableAudit: true } : {}) } : maintenanceStepParams(taskType, mode) },
   }));
 }

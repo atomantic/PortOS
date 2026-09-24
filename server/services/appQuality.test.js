@@ -117,6 +117,21 @@ describe('scheduled audit measurement workflow', () => {
     expect(app.quality).toMatchObject({ unavailable: true, score: null });
     log.mockRestore();
   });
+
+  // The detail read feeds the repository scan into the summary; a failing scan
+  // must cost only the applicability, never the whole quality read.
+  it('folds the repository-scan verdicts into the summary, and ignores a scan that fails', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const [scanned] = await enrichAppsWithQuality([{ id: 'app' }], {
+      query, resolveApplicability: async () => ({ accessibility: 'no user interface found' }),
+    });
+    expect(scanned.quality.categories.find(c => c.id === 'accessibility')).toMatchObject({ applicable: false, inapplicableReason: 'no user interface found' });
+    expect(scanned.quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length - 1);
+    const [failed] = await enrichAppsWithQuality([{ id: 'app' }], {
+      query, resolveApplicability: async () => { throw new Error('git unavailable'); },
+    });
+    expect(failed.quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length);
+  });
 });
 
 it('retains historical scores without hindsight, expires old evidence and exposes changed coverage', () => {

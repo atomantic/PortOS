@@ -389,6 +389,18 @@ it('leaves a future, unrecognized, or unreadable snapshot in place', async () =>
   expect((await publishAppQualitySnapshot(app, unreadable)).reason).toBe('unsupported-format');
   expect(unreadable.writeFile).not.toHaveBeenCalled();
   expect(log).toHaveBeenCalledWith('📊 Quality snapshot left untouched for app example-id: future');
+
+  // Readable, but rewriting it canonically would drop the newer install's rows.
+  const newer = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({
+      schemaVersion: 2, repository: 'a'.repeat(64), reportVersion: 1,
+      categories: ['security', 'example-future-lens'],
+      coverage: ['broad', 'partial', 'unavailable', 'not-applicable'], confidence: ['low', 'medium', 'high'],
+      measurements: [['2026-09-20T00:00:00.000Z', 1, 50, 3, 0, 2, 10, 10]],
+    }) }) }),
+  });
+  expect((await publishAppQualitySnapshot(app, newer)).reason).toBe('unsupported-format');
+  expect(newer.writeFile).not.toHaveBeenCalled();
 });
 
 it('migrates a legacy file to v2 without inventing measurements or writing the live checkout', async () => {

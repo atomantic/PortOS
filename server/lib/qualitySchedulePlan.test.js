@@ -135,6 +135,19 @@ describe('planQualitySchedule', () => {
     const plan = planAll({ options: { checksPerDay: 1 } });
     expect(plan.checksPerDay).toBe(Math.ceil(AUDIT_TASK_TYPE_LIST.length / 7));
     expect(plan.warnings.join(' ')).toMatch(new RegExp(`1 a day was raised to ${Math.ceil(AUDIT_TASK_TYPE_LIST.length / 7)}`));
+    // Raised to the floor, it spreads like the default rather than packing and
+    // leaving a day empty.
+    expect(new Set(plan.slots.map(slot => slot.day)).size).toBe(7);
+  });
+
+  it('packs each day full when asked for more checks a day than the week needs', () => {
+    const perDay = Math.ceil(AUDIT_TASK_TYPE_LIST.length / 7) + 3;
+    const plan = planAll({ options: { checksPerDay: perDay } });
+    const days = new Set(plan.slots.map(slot => slot.day));
+    expect(days.size).toBe(Math.ceil(AUDIT_TASK_TYPE_LIST.length / perDay));
+    // Monday-first: the packed week starts on Monday and never reaches Sunday.
+    expect(days.has(1)).toBe(true);
+    expect(days.has(0)).toBe(false);
   });
 
   it('says so when an overnight window is collapsed rather than planning a window nobody chose', () => {
@@ -188,7 +201,7 @@ describe('planQualitySchedule', () => {
   });
 
   it('reports rather than silently drops checks when the week runs out of free hours', () => {
-    // Every hour but one occupied leaves 7 weekly cells for 26 checks.
+    // Every hour but one occupied leaves 7 weekly cells for the whole catalog.
     const busy = buildBusySlots([{ days: [0, 1, 2, 3, 4, 5, 6], hours: Array.from({ length: 23 }, (_, h) => h + 1) }], { padBeforeHours: 0, padAfterHours: 0 });
     const plan = planAll({ busy });
     expect(plan.checksPerDay).toBe(1);

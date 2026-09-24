@@ -288,7 +288,9 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
     return { checksPerDay: 0, slots: [], claim: null, warnings, options: settings };
   }
 
-  const cells = weeklyCells(ordered.length, auditHours.length, Number.isInteger(requested) && requested > 0);
+  // Pack only when the user asked for MORE per day than the week needs; a request
+  // at or below the floor was raised to it and spreads like the default.
+  const cells = weeklyCells(ordered.length, auditHours.length, Number.isInteger(requested) && requested > minimumPerDay);
   const slots = ordered.map((taskType, index) => {
     // Monday-first so the head of the suggested order (security, data safety)
     // opens the working week rather than landing on a Sunday.

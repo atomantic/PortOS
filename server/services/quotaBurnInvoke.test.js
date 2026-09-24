@@ -37,6 +37,13 @@ vi.mock('./taskScheduleStore.js', () => ({
   loadSchedule: vi.fn(async () => ({ tasks: state.schedule, onDemandRequests: state.onDemandRequests })),
 }));
 
+// Applicability comes from the repository scan (appQualitySchedule.test.js);
+// these cases only pin how a burn step reacts to the verdict.
+const inapplicable = vi.hoisted(() => ({ byType: {} }));
+vi.mock('./appQualitySchedule.js', () => ({
+  inapplicableAuditReason: vi.fn(async (_appId, taskType) => inapplicable.byType[taskType] || null),
+}));
+
 vi.mock('./apps.js', () => ({
   getActiveApps: vi.fn(async () => state.apps.map((app) => ({ ...app, taskTypeOverrides: state.appOverrides[app.id] || {} }))),
 }));
@@ -403,6 +410,17 @@ describe('refusal paths', () => {
 });
 
 describe('built-in agent task invocation', () => {
+  it('declines an audit that cannot apply to its app, unless the step carries the user override', async () => {
+    inapplicable.byType = { ux: 'no user interface found in this repository' };
+    const auditStep = (params) => step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, overrides: { params } });
+    const refused = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true }), family: grok, candidate });
+    expect(refused).toEqual({ dispatched: false, reason: expect.stringMatching(/does not apply to this app: no user interface/) });
+    expect(state.triggered).toHaveLength(0);
+    const forced = await invokeQuotaBurnStep({ step: auditStep({ fileIssues: true, runInapplicableAudit: true }), family: grok, candidate });
+    expect(forced.dispatched).toBe(true);
+    inapplicable.byType = {};
+  });
+
   const uxStep = () => step({
     taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' },
     overrides: { effort: 'high', params: { fileIssues: false } },

@@ -70,6 +70,12 @@ beforeEach(async () => {
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
+  it('runs a single explicitly chosen check even where it does not apply', async () => {
+    state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive'] });
+    expect(run.steps[0].overrides.params).toMatchObject({ runInapplicableAudit: true });
+    expect(dispatchedTypes()).toEqual(['mobile-responsive']);
+  });
   // The regression: a refused request would leave the step pending, so the run
   // re-dispatched an audit that could never apply on every evaluation.
   it('completes an inapplicable audit as skipped without dispatching it, then moves on', async () => {
