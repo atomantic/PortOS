@@ -147,8 +147,8 @@ const TUPLES = [
     id: 'claude-code', harnessId: 'claude', method: 'cli', service: 'claude-subscription',
     overrides: {
       name: 'Claude Code CLI',
-      models: ['claude-fable-5-1', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5'],
-      defaultModel: 'claude-opus-5', lightModel: 'claude-haiku-4-5', mediumModel: 'claude-sonnet-5', heavyModel: 'claude-opus-5', ultraModel: 'claude-fable-5-1',
+      models: ['claude-fable-5-1', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5'],
+      defaultModel: 'claude-opus-5-5', lightModel: 'claude-haiku-4-5', mediumModel: 'claude-sonnet-5', heavyModel: 'claude-opus-5-5', ultraModel: 'claude-fable-5-1',
       timeout: 900000, enabled: true,
     },
   },
@@ -182,8 +182,8 @@ const TUPLES = [
     id: 'claude-code-tui', harnessId: 'claude', method: 'tui', service: 'claude-subscription',
     overrides: {
       name: 'Claude Code TUI',
-      models: ['claude-fable-5-1', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5'],
-      defaultModel: 'claude-opus-5', lightModel: 'claude-haiku-4-5', mediumModel: 'claude-sonnet-5', heavyModel: 'claude-opus-5', ultraModel: 'claude-fable-5-1',
+      models: ['claude-fable-5-1', 'claude-haiku-4-5', 'claude-sonnet-5', 'claude-opus-5-5', 'claude-opus-5'],
+      defaultModel: 'claude-opus-5-5', lightModel: 'claude-haiku-4-5', mediumModel: 'claude-sonnet-5', heavyModel: 'claude-opus-5-5', ultraModel: 'claude-fable-5-1',
       timeout: 900000, enabled: true,
     },
   },
