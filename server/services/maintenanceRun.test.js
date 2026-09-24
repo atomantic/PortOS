@@ -80,7 +80,10 @@ describe('manual maintenance run', () => {
     expect(stored.completed[run.steps[0].id]).toBeTruthy();
     expect(stored.skipped).toEqual({ [run.steps[0].id]: 'no user interface found in this repository' });
     await __onMaintenanceAgentCompleted(agentFor(run, 1));
-    expect((await getMaintenanceRun(run.id)).status).toBe('completed');
+    expect(await getMaintenanceRun(run.id)).toMatchObject({
+      status: 'completed',
+      reason: 'maintenance sequence complete — skipped 1 check that does not apply to this repository',
+    });
   });
 
   it.each(['file-issues', 'fix'])('runs only selected quality checks in %s mode with pinned overrides', async (mode) => {
