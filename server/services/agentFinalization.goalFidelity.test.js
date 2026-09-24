@@ -221,6 +221,35 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(args.backend).toBe('ollama');
   });
 
+  it('passes task screenshots into the objective when a terse request depends on the pictured runtime error', async () => {
+    const screenshots = ['/api/screenshots/superclass-error.png'];
+    const task = {
+      id: 'screenshot-context-task',
+      taskType: 'internal',
+      description: 'Another instance with the latest code is seeing this',
+      metadata: { screenshots },
+    };
+    const diff = [
+      'diff --git a/client/vite.config.js b/client/vite.config.js',
+      '+// Keep generated chunks in strict execution order.',
+      'diff --git a/client/src/utils/staleChunkReload.js b/client/src/utils/staleChunkReload.js',
+      '+// Recover recognized superclass module-evaluation failures after lazy imports.',
+      '+if (error.message.includes("The superclass is not a constructor")) reloadStaleChunk();',
+      'diff --git a/client/src/utils/staleChunkReload.test.js b/client/src/utils/staleChunkReload.test.js',
+      '+it("recovers from the superclass module-evaluation error", ...)',
+    ].join('\n');
+    runWindowDiffMock.mockResolvedValue({ diff, base: 'abc', truncated: false, reason: null });
+
+    await finalize({ task });
+
+    const [review] = runLocalGoalFidelityReviewMock.mock.calls[0];
+    expect(review.objective).toContain('Another instance with the latest code is seeing this');
+    expect(review.objective).toContain('Task-provided screenshots are part of this objective');
+    expect(review.objectiveScreenshots).toEqual(screenshots);
+    expect(review.diff).toBe(diff);
+    expect(completion()).toMatchObject({ success: true });
+  });
+
   describe('dependency audit summary with work outside the diff (#7899)', () => {
     // Synthetic reconstruction: the deliverable is a completed inventory and
     // audit, with no warranted bump. The only committed change is its note.

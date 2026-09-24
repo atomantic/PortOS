@@ -20,6 +20,18 @@ describe('taskObjective', () => {
     })).toBe('Add a retry to the uploader\n\nRetry three times\nwith backoff\n\nqueued by hand');
   });
 
+  it('marks task screenshots as objective context without exposing their local reference', () => {
+    const objective = taskObjective({
+      description: 'Another instance with the latest code is seeing this',
+      metadata: { screenshots: ['/api/screenshots/superclass-error.png'] },
+    });
+
+    expect(objective).toContain('Another instance with the latest code is seeing this');
+    expect(objective).toContain('Task-provided screenshots are part of this objective');
+    expect(objective).toContain('visible application behavior and errors');
+    expect(objective).not.toContain('/api/screenshots/');
+  });
+
   it('returns null when the task states no objective, so the gate skips rather than judging against ""', () => {
     expect(taskObjective({ description: '   ', metadata: {} })).toBeNull();
     expect(taskObjective(null)).toBeNull();
