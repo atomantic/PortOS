@@ -1,4 +1,8 @@
 vi.mock('../services/apiMusic.js', () => ({ listMusicEngines: vi.fn(() => Promise.resolve({ engines: [] })) }));
+vi.mock('../services/apiTracks.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  listTracks: vi.fn().mockResolvedValue([]),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

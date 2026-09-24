@@ -92,7 +92,7 @@ describe('QuickImagePrompt — universe styling', () => {
     listUniverseStyles.mockResolvedValue(STYLES);
     await renderWidget();
 
-    fireEvent.change(screen.getByLabelText('Universe style'), { target: { value: 'u-1' } });
+    fireEvent.change(await screen.findByLabelText('Universe style'), { target: { value: 'u-1' } });
     fireEvent.change(screen.getByLabelText('Image prompt'), { target: { value: 'a quiet harbor' } });
     fireEvent.click(screen.getByTitle('Generate with these settings'));
 

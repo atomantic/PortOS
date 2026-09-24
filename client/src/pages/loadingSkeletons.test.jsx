@@ -22,8 +22,10 @@ function pendingModule(path) {
 
 vi.mock('../services/api', pendingModule('../services/api'));
 vi.mock('../services/apiCatalog.js', pendingModule('../services/apiCatalog.js'));
+vi.mock('../services/apiCatalogTypes.js', pendingModule('../services/apiCatalogTypes.js'));
 vi.mock('../services/apiCreativeDirector.js', pendingModule('../services/apiCreativeDirector.js'));
 vi.mock('../services/apiImageVideo.js', pendingModule('../services/apiImageVideo.js'));
+vi.mock('../services/apiLocalLlm.js', pendingModule('../services/apiLocalLlm.js'));
 vi.mock('../services/apiPipeline.js', pendingModule('../services/apiPipeline.js'));
 vi.mock('../services/apiPrompts', pendingModule('../services/apiPrompts'));
 vi.mock('../services/apiProviders', pendingModule('../services/apiProviders'));

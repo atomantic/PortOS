@@ -16,6 +16,11 @@ vi.mock('../../services/api', () => ({
   installAudioModel: vi.fn(),
   removeAudioModel: vi.fn(),
 }));
+// useMediaJobProgress reads the job endpoint directly; keep it on the same
+// fixture as the panel's API-barrel request.
+vi.mock('../../services/apiMediaJobs', () => ({
+  getMediaJob: (...args) => api.getMediaJob(...args),
+}));
 
 vi.mock('../ui/Toast', () => ({
   default: { error: vi.fn(), success: vi.fn(), info: vi.fn() },

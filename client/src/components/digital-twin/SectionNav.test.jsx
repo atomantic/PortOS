@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
+
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
+}));
 
 import SectionNav from './SectionNav';
 import { TABS, SECTION_GROUPS, groupSections, sectionGroupId } from './constants';
@@ -50,8 +55,9 @@ describe('digital-twin section taxonomy', () => {
 const groupTab = (name) => within(screen.getByRole('tablist', { name: 'Digital Twin groups' })).getByRole('tab', { name });
 
 describe('SectionNav', () => {
-  it('derives the active group from the section in the URL, with no local state', () => {
+  it('derives the active group from the section in the URL, with no local state', async () => {
     const { rerender } = render(<SectionNav activeSection="documents" onChange={() => {}} />);
+    await act(async () => {});
     expect(groupTab('Sources').getAttribute('aria-selected')).toBe('true');
     const sourcesRow = screen.getByRole('tablist', { name: 'Sources sections' });
     expect(within(sourcesRow).getByRole('tab', { name: /^Documents/ }).getAttribute('aria-selected')).toBe('true');
