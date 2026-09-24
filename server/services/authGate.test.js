@@ -628,6 +628,24 @@ describe('authGate HTTP Basic auth (peer federation)', () => {
   );
 });
 
+describe('host-control authority', () => {
+  it('accepts a real operator session and refuses peer Basic credentials even on loopback', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-password' });
+    const { authGate, requireHostControl } = await import('./authGate.js');
+    const gate = (req, res, next) => authGate(req, res, () => requireHostControl(req, res, next));
+    const req = { path: '/api/commands/execute', socket: { remoteAddress: '127.0.0.1' } };
+    const operator = await runGate(gate, { ...req, headers: { cookie: `portos_auth=${token}` } });
+    expect(operator.called).toBe(true);
+    const peer = await runGate(gate, { ...req, headers: {
+      authorization: `Basic ${Buffer.from(':example-password').toString('base64')}`,
+    } });
+    expect(peer.called).toBe(false);
+    expect(peer.res.statusCode).toBe(403);
+    expect(peer.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+  });
+});
+
 describe('socketAuthGate middleware', () => {
   it('is a no-op when auth is disabled', async () => {
     const { socketAuthGate } = await import('./authGate.js');
