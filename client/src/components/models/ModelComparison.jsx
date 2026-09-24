@@ -8,6 +8,31 @@ import ComparisonValueGuide from './ComparisonValueGuide';
 
 const STORAGE = 'portos-composite-comparison-v1';
 const COLORS = ['#2563eb', '#f97316', '#16a34a', '#9333ea', '#0891b2', '#db2777', '#ca8a04', '#dc2626'];
+const PROVIDER_COLORS = {
+  openai: '#10a37f',
+  anthropic: '#d97706',
+  google: '#2563eb',
+  meta: '#0891b2',
+  deepseek: '#4f46e5',
+  mistral: '#ea580c',
+  xai: '#9333ea',
+  spacexai: '#9333ea',
+  alibaba: '#7c3aed',
+  qwen: '#7c3aed',
+  amazon: '#d97706',
+  microsoft: '#0284c7',
+  nvidia: '#16a34a',
+};
+
+function getProviderColor(providerId, providerName, index = 0) {
+  const idKey = String(providerId || '').toLowerCase();
+  const nameKey = String(providerName || '').toLowerCase();
+  for (const [key, color] of Object.entries(PROVIDER_COLORS)) {
+    if (idKey.includes(key) || nameKey.includes(key)) return color;
+  }
+  return COLORS[index % COLORS.length];
+}
+
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unspecified', 'reasoning'];
 const PRICES = [
   ['costPerTask', 'Cost per benchmark task (recommended)', 'USD / Intelligence Index task'],
@@ -78,7 +103,7 @@ export default function ModelComparison() {
     };
   });
   const [query, setQuery] = useState('');
-  const [zoom, setZoom] = useState(false);
+  const [zoom, setZoom] = useState(true);
   const [researchOpen, setResearchOpen] = useState(false);
   const [showEstimates, setShowEstimates] = useState(true);
   const [evidenceLimit, setEvidenceLimit] = useState(100);
@@ -103,6 +128,22 @@ export default function ModelComparison() {
     return result;
   }), [catalog]);
   const providers = [...new Map(rows.map(row => [row.providerId, row.provider])).entries()];
+  const providerColorMap = useMemo(() => {
+    const map = new Map();
+    providers.forEach(([id, name], index) => {
+      map.set(id, getProviderColor(id, name, index));
+    });
+    return map;
+  }, [providers]);
+  const modelProvider = useMemo(() => {
+    const map = new Map();
+    for (const row of rows) {
+      if (row.model && !map.has(row.model)) {
+        map.set(row.model, { providerId: row.providerId, provider: row.provider });
+      }
+    }
+    return map;
+  }, [rows]);
   const scoped = rows.filter(row => !settings.provider || row.providerId === settings.provider);
   const models = [...new Set(scoped.map(row => row.model))].sort();
   const matches = models.filter(model => !query || query.toLowerCase().split(',').some(term => model.toLowerCase().includes(term.trim())));
@@ -148,21 +189,35 @@ export default function ModelComparison() {
       </div>
       <div className="flex flex-wrap items-center gap-2" aria-label="Effort toggles"><span className="text-sm">Effort</span><button className={buttonClass} onClick={() => update({ efforts: null })}>All efforts</button>{efforts.map(effort => <button key={effort} className={buttonClass} aria-pressed={settings.efforts === null || settings.efforts.includes(effort)} onClick={() => toggle('efforts', effort, efforts)}>{settings.efforts === null || settings.efforts.includes(effort) ? '✓ ' : ''}{effort}</button>)}</div>
       <div className="flex flex-wrap items-center gap-2"><label htmlFor="comparison-search" className="sr-only">Filter models</label><input id="comparison-search" className="min-w-0 w-72 max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" placeholder="Find models, e.g. luna or comma-separated names" value={query} onChange={event => setQuery(event.target.value)} /><button className={buttonClass} onClick={() => update({ models: matches })}>Compare matching</button><button className={buttonClass} onClick={() => update({ models: null })}>All models</button><button className={buttonClass} onClick={() => update({ models: [] })}>Clear models</button></div>
-      <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto" aria-label="Model toggles">{matches.map(model => <button key={model} className={`${buttonClass} max-w-full break-all text-left`} aria-pressed={settings.models === null || settings.models.includes(model)} onClick={() => toggle('models', model, models)}>{settings.models === null || settings.models.includes(model) ? '✓ ' : ''}{model}</button>)}</div>
+      <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto" aria-label="Model toggles">{matches.map(model => {
+        const info = modelProvider.get(model);
+        const color = info ? (providerColorMap.get(info.providerId) || getProviderColor(info.providerId, info.provider, 0)) : COLORS[models.indexOf(model) % COLORS.length];
+        const isSelected = settings.models === null || settings.models.includes(model);
+        return <button key={model} className={`${buttonClass} max-w-full break-all text-left inline-flex items-center gap-1.5`} aria-pressed={isSelected} onClick={() => toggle('models', model, models)}><span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} /><span>{isSelected ? '✓ ' : ''}{model}</span></button>;
+      })}</div>
       <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider points combined. ≈ identifies estimates. Zero prices remain visible on the linear scale.</p>
     </section>
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3" aria-label="Cost versus intelligence chart">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">PortOS intelligence index vs. {price[1].toLowerCase()}</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} aria-pressed={zoom} onClick={() => setZoom(value => !value)}>{zoom ? 'Reset axes' : 'Fit visible'}</button>{[420, 600, 720].map(height => <button key={height} className={buttonClass} aria-pressed={settings.height === height} onClick={() => update({ height })}>{height}px</button>)}</div></div>
       {plotted.length ? <div style={{ height: settings.height }} className="w-full min-w-0" role="img" aria-label="PortOS intelligence versus cost; lower cost and higher intelligence are preferred">
-        <ResponsiveContainer width="100%" height="100%"><ScatterChart margin={{ top: 35, right: 30, bottom: 35, left: 10 }}>
+        <ResponsiveContainer width="100%" height="100%"><ScatterChart margin={{ top: 35, right: 30, bottom: 35, left: 20 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--port-border))" />
           <XAxis tick={{ fill: 'rgb(var(--port-text-muted))' }} type="number" dataKey="x" scale={settings.log ? 'log' : 'auto'} domain={settings.log || zoom ? ['dataMin', 'dataMax'] : [0, 'auto']} tickFormatter={value => formatUsd(value, { maximumFractionDigits: 4 })} label={{ value: price[2], fill: 'rgb(var(--port-text-muted))', position: 'insideBottom', offset: -20 }} />
-          <YAxis tick={{ fill: 'rgb(var(--port-text-muted))' }} type="number" dataKey="y" domain={zoom ? ['dataMin - 2', 'dataMax + 2'] : [0, 'auto']} label={{ value: 'PortOS intelligence index', fill: 'rgb(var(--port-text-muted))', angle: -90, position: 'insideLeft' }} />
+          <YAxis tick={{ fill: 'rgb(var(--port-text-muted))' }} type="number" dataKey="y" domain={zoom ? [dataMin => Number.isFinite(dataMin) ? Math.max(0, Math.floor(dataMin - 2)) : 0, dataMax => Number.isFinite(dataMax) ? Math.ceil(dataMax + 2) : 'auto'] : [0, 'auto']} tickFormatter={value => formatCount(value, { maximumFractionDigits: 1 })} label={{ value: 'PortOS intelligence index', fill: 'rgb(var(--port-text-muted))', angle: -90, position: 'insideLeft' }} />
           <Tooltip content={<ComparisonTooltip priceId={price[0]} />} />
-          {groups.map(({ key, points }) => <Scatter isAnimationActive={false} key={key} name={key} data={points} fill={COLORS[models.indexOf(points[0].model) % COLORS.length]} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>)}
+          {groups.map(({ key, points }) => {
+            const firstPoint = points[0];
+            const providerId = firstPoint?.providerId;
+            const color = providerColorMap.get(providerId) || getProviderColor(providerId, firstPoint?.provider, models.indexOf(firstPoint?.model));
+            return <Scatter isAnimationActive={false} key={key} name={key} data={points} fill={color} line={points.length > 1 ? { strokeDasharray: '4 4', strokeWidth: 2 } : false}>{plotted.length <= 30 && <LabelList className="hidden @xl:block" dataKey="label" position="top" fontSize={11} fill="rgb(var(--port-text))" />}</Scatter>;
+          })}
         </ScatterChart></ResponsiveContainer>
       </div> : <p className="p-10 text-center text-sm text-port-text-muted">{loading ? 'Loading comparison…' : 'No points match these choices. Select models and efforts, change the cost axis, or research missing evidence.'}</p>}
-      <div className="flex flex-wrap gap-3 text-xs" aria-label="Chart legend">{[...new Set(plotted.map(row => row.model))].map(model => <span key={model} className="break-all" style={{ color: COLORS[models.indexOf(model) % COLORS.length] }}>● {model}</span>)}</div>
+      <div className="flex flex-wrap gap-3 text-xs" aria-label="Chart legend">{[...new Set(plotted.map(row => row.model))].map(model => {
+        const info = modelProvider.get(model);
+        const color = info ? (providerColorMap.get(info.providerId) || getProviderColor(info.providerId, info.provider, 0)) : COLORS[0];
+        return <span key={model} className="break-all inline-flex items-center gap-1" style={{ color }}>● {model}</span>;
+      })}</div>
       <p className="mt-3 text-xs text-port-text-muted">{price[0] === 'costPerTask'
         ? 'Task cost includes the token usage of each model and effort on the same benchmark. It is an API reference cost, not a quote for your workload or subscription. Missing task costs stay unplotted until researched; token rates are never substituted.'
         : 'Token price is the rate per token, not cost per task. Higher effort can use more reasoning tokens at the same rate, so vertical effort curves do not mean equal task cost. Choose Cost per benchmark task to compare reasoning expense.'}</p>
