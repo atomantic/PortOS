@@ -2274,8 +2274,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     const app = await getAppById(appId).catch(() => null);
     reason = app?.layeredIntelligence?.lastRunReason || null;
   }
-  if (outcome === 'idle' && request.taskType === 'pr-reviewer') {
-    reason = takePerpetualTransient('pr-reviewer', appId)?.reason ?? null;
+  if (outcome === 'idle' && (request.taskType === 'pr-reviewer' || isAuditTaskType(request.taskType))) {
+    reason = takePerpetualTransient(request.taskType, appId)?.reason ?? null;
   }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
@@ -2395,6 +2395,27 @@ function buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, app
   if (CLAIM_FLOW_TASK_TYPES.has(taskType)) metadata.claimFlow = true;
 
   return metadata;
+}
+
+/**
+ * The dispatch-side half of audit applicability (see `resolveAuditApplicability`).
+ * A detection failure never blocks work — the gate only removes what it has
+ * evidence against. The verdict is parked as a transient so a manual Run's
+ * "produced nothing" notice can say WHY (`emitOnDemandEmpty`).
+ *
+ * @returns {Promise<boolean>} true when the dispatch must be skipped
+ */
+async function skipInapplicableAudit(app, taskType, taskSchedule) {
+  const { resolveAuditApplicability } = await import('./appQualitySchedule.js');
+  const verdict = await resolveAuditApplicability(app, taskType).catch((err) => {
+    emitLog('warn', `Audit applicability check failed for ${taskType}/${app.name}: ${err.message}`, { appId: app.id, analysisType: taskType });
+    return { applicable: true, reason: null };
+  });
+  if (verdict.applicable) return false;
+  emitLog('info', `⏭️ Skipping ${taskType} for ${app.name}: not applicable — ${verdict.reason}`, { appId: app.id, analysisType: taskType });
+  recordPerpetualTransient(taskType, app.id, { reason: `Not applicable to this repository: ${verdict.reason}` });
+  await taskSchedule.recordExecution(taskType, app.id);
+  return true;
 }
 
 /**
@@ -2727,6 +2748,15 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   // Also protect requests queued before the target-scope gate was installed.
   if (requiresInstallWideTarget(taskType)) return null;
+
+  // Audit applicability bail-out — before metadata, preflights, or a spawn slot.
+  // A quality audit this repository cannot have findings for (a mobile audit of
+  // a pure API, an infrastructure audit of a repo with no deployment config) is
+  // skipped with a logged reason instead of paying a provider call to be told
+  // "not applicable". Covers every lane that reaches this generator: the clock,
+  // a manual Run, a maintenance run, and a quota-burn step. Execution is
+  // recorded so the cadence advances rather than retrying every tick.
+  if (isAuditTaskType(taskType) && await skipInapplicableAudit(app, taskType, taskSchedule)) return null;
 
   // NOTE: `updateAppActivity` + the "Generating improvement task" log are
   // intentionally deferred until AFTER every gate returns non-null (see end

@@ -93,6 +93,28 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `test-coverage`, which owns the GAPS. Files under `tests` plus the
   // `test-quality` metric label.
   'better-test-quality',
+  // Service and data-platform lenses — what a backend API, data platform, or
+  // infrastructure repository is judged on that the UI-shaped audits above
+  // do not own. `infrastructure` is gated on IaC/container/CI files; the rest
+  // apply to any service and report `not-applicable` when they do not.
+  // Deployment configuration: exposure, identity grants, secrets, pinning,
+  // resource limits and probes, CI supply chain. Distinct from `security`
+  // (application code) and `dependency-updates` (package bumps).
+  'infrastructure',
+  // Runtime data correctness: idempotent ingestion under redelivery, atomic
+  // multi-step writes, consistency, schema evolution of stored data. Distinct
+  // from `data-safety`, which owns upgrade/migration/destructive-default risk.
+  'data-integrity',
+  // System-level behavior under restart, overload and multi-instance runs.
+  // Distinct from `error-handling`, which owns per-call timeouts and retries.
+  'reliability',
+  // Personal and sensitive data: exposure through logs/exports/third parties,
+  // minimization, retention and erasure. Distinct from `security` (authz,
+  // injection) — honors the project's documented data-sharing model.
+  'privacy',
+  // Metered spend: paid API/model calls, unbounded cloud scans, storage tiers,
+  // over-provisioning. Distinct from `performance` (latency and throughput).
+  'cost-efficiency',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence

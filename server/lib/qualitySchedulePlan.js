@@ -182,6 +182,28 @@ export const PLANNED_CLAIM_CRON = /^0 \d{1,2}(?:,\d{1,2})* \* \* \*$/;
 export const isPlannedClaimCron = (interval) => typeof interval === 'string' && PLANNED_CLAIM_CRON.test(interval.trim());
 
 /**
+ * Which (weekday, daily-slot) cell each ordered check takes, day-major so a
+ * check never runs earlier in the week than one ordered before it.
+ *
+ * With no explicit checks-per-day the checks are spread as evenly as the week
+ * allows — 30 checks at 5 slots a day run 5,5,4,4,4,4,4, not 5×6 with an empty
+ * Sunday. An explicit per-day count packs each day full first, which is what
+ * asking for "N a day" means. More checks than cells wrap onto earlier cells
+ * (the planner warns about that).
+ */
+function weeklyCells(count, perDay, pack) {
+  if (pack || count > perDay * 7) {
+    return Array.from({ length: count }, (_, index) => ({ dayIndex: Math.floor(index / perDay) % 7, hourIndex: index % perDay }));
+  }
+  const cells = [];
+  for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+    const today = Math.floor(count / 7) + (dayIndex < count % 7 ? 1 : 0);
+    for (let hourIndex = 0; hourIndex < today; hourIndex += 1) cells.push({ dayIndex, hourIndex });
+  }
+  return cells;
+}
+
+/**
  * Plan the week.
  *
  * Audits are laid out as a fixed grid: the same `checksPerDay` hours on every
@@ -266,11 +288,12 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
     return { checksPerDay: 0, slots: [], claim: null, warnings, options: settings };
   }
 
+  const cells = weeklyCells(ordered.length, auditHours.length, Number.isInteger(requested) && requested > 0);
   const slots = ordered.map((taskType, index) => {
     // Monday-first so the head of the suggested order (security, data safety)
     // opens the working week rather than landing on a Sunday.
-    const day = (1 + Math.floor(index / auditHours.length)) % 7;
-    const hour = auditHours[index % auditHours.length];
+    const day = (1 + cells[index].dayIndex) % 7;
+    const hour = auditHours[cells[index].hourIndex];
     const fileIssues = typeof fileIssuesByType[taskType] === 'boolean'
       ? fileIssuesByType[taskType]
       : (typeof settings.fileIssues === 'boolean' ? settings.fileIssues : defaultFileIssuesFor(taskType));

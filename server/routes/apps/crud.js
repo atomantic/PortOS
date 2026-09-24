@@ -136,7 +136,13 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     hasSubmodules = gitmodules;
   }
 
-  const [enrichedApp] = includeQuality === 'true' ? await enrichAppsWithQuality([app]) : [app];
+  // The detail read alone scans the checkout for applicability (cached per repo),
+  // so the Quality tab's denominator and runner skip audits that cannot apply.
+  const [enrichedApp] = includeQuality === 'true'
+    ? await enrichAppsWithQuality([app], {
+      resolveApplicability: async (target) => (await import('../../services/appQualitySchedule.js')).inapplicableAuditReasons(target),
+    })
+    : [app];
   res.json({ ...enrichedApp, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
 }));
 

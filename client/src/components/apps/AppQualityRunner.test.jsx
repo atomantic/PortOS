@@ -101,6 +101,30 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
 });
 
+it('opens on the configured default provider instead of a hardcoded one', async () => {
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await waitFor(() => expect(useProviderModels).toHaveBeenCalled());
+  expect(useProviderModels.mock.calls[0][0]).toMatchObject({ preselectDefaults: true });
+});
+
+it('leaves audits that cannot apply to this repository out of batch runs, but runs one on request', async () => {
+  const categories = [
+    { id: 'security', label: 'Security', score: null, applicable: true },
+    { id: 'accessibility', label: 'Accessibility', score: null, applicable: false, inapplicableReason: 'no user interface found in this repository' },
+  ];
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'run-4', status: 'running', steps: [] } });
+  render(<MemoryRouter><AppQualityRunner app={{ ...app, quality: { categories } }} /></MemoryRouter>);
+  const missing = await findEnabledByRole('button', { name: 'Run now' });
+  fireEvent.click(missing);
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['security'] }), { silent: true }));
+  await findEnabledByLabelText('Checks');
+  fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'all' } });
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'accessibility' } });
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['accessibility'] }), { silent: true }));
+});
+
 it('offers every enabled process provider regardless of subscription family, and hides disabled ones', async () => {
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
   await waitFor(() => expect(useProviderModels).toHaveBeenCalled());

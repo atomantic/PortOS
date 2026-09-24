@@ -145,7 +145,8 @@ async function releasePayload(deps, app) {
   if (!repoPath) return null;
   const { readStoredQualitySnapshot } = await import('./appQualitySnapshotFile.js');
   const stored = await readStoredQualitySnapshot(repoPath, deps);
-  return stored.status === 'v1' || stored.status === 'v2' ? stored : null;
+  // 'future-categories': a newer install's snapshot — its known rows still count.
+  return ['v1', 'v2', 'future-categories'].includes(stored.status) ? stored : null;
 }
 
 /** Shipped evidence is read-only and never re-exported as a local audit. */

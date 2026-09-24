@@ -36,7 +36,8 @@ import {
   resolveQualityScheduleOptions,
 } from '../lib/qualitySchedulePlan.js';
 import { cronWeekdayHours } from '../lib/cronFields.js';
-import { getAppTaskTypeOverrides, updateAppTaskTypeOverrides } from './apps.js';
+import { AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
+import { getAppById, getAppTaskTypeOverrides, updateAppTaskTypeOverrides } from './apps.js';
 import { loadSchedule } from './taskScheduleStore.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression } from './taskScheduleConstants.js';
 import { INSTALL_WIDE_TASK_TYPES } from '../lib/taskTargetScope.js';
@@ -53,6 +54,15 @@ const CAPABILITY_PATTERNS = {
   tests: [/\.(test|spec)\.[cm]?[jt]sx?$/i, /(^|\/)tests?\//i, /(^|\/)__tests__\//i, /(^|\/)test_[^/]+\.py$/i, /[^/]+_test\.(py|go|rb)$/i, /Tests\.swift$/i],
   dependencies: [/(^|\/)package\.json$/i, /(^|\/)requirements[^/]*\.txt$/i, /(^|\/)pyproject\.toml$/i, /(^|\/)Cargo\.toml$/i, /(^|\/)go\.mod$/i, /(^|\/)Gemfile$/i, /(^|\/)composer\.json$/i, /(^|\/)Package\.swift$/i, /(^|\/)pubspec\.yaml$/i],
   api: [/(^|\/)(routes?|api|controllers|handlers|endpoints)\//i, /\.proto$/i, /(^|\/)openapi[^/]*\.(ya?ml|json)$/i, /(^|\/)swagger[^/]*\.(ya?ml|json)$/i, /(^|\/)urls\.py$/i],
+  // Deployment described in the repository: IaC, containers and orchestration,
+  // platform manifests, process managers, and CI pipelines (a CI workflow is a
+  // deployment surface with its own supply-chain risk).
+  infrastructure: [
+    /\.(tf|tfvars|bicep)$/i, /(^|\/)(terraform|pulumi|cdk|k8s|kubernetes|helm|charts|ansible|infra|infrastructure|deploy|deployment)\//i,
+    /(^|\/)(Dockerfile|Containerfile)[^/]*$/i, /(^|\/)(docker-)?compose[^/]*\.ya?ml$/i, /(^|\/)Chart\.yaml$/, /(^|\/)(Pulumi|serverless)[^/]*\.ya?ml$/i,
+    /(^|\/)(cdk|vercel|firebase)\.json$/i, /(^|\/)(fly|netlify|wrangler)\.toml$/i, /(^|\/)(Procfile|Jenkinsfile)$/, /(^|\/)ecosystem\.config\.[cm]?js$/i,
+    /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i, /(^|\/)\.gitlab-ci\.ya?ml$/i, /(^|\/)\.circleci\//i, /(^|\/)azure-pipelines\.ya?ml$/i, /(^|\/)cloudformation\//i,
+  ],
 };
 
 /**
@@ -138,20 +148,24 @@ async function scanRepoCapabilities(repoPath) {
 }
 
 /**
- * Categories a past audit of THIS app reported as not applicable. The auditing
+ * Categories a recent audit of THIS app reported as not applicable. The auditing
  * agent inspected the repository, so its ruling outranks the path heuristics
- * above. Read directly rather than through `enrichAppsWithQuality`, which also
- * fans out to sync peers — a peer's view of a different checkout is not
- * evidence about this one.
+ * above — but only while it is fresh: a repository that later gains a UI or a
+ * deployment manifest must get the audit back, so a ruling older than the
+ * quality freshness window (the same 30 days after which a score goes stale)
+ * no longer counts. Read directly rather than through `enrichAppsWithQuality`,
+ * which also fans out to sync peers — a peer's view of a different checkout is
+ * not evidence about this one.
  */
-async function loadNotApplicableCategories(appId) {
+async function loadNotApplicableCategories(appId, now = Date.now()) {
   const result = await query(
-    `SELECT DISTINCT ON (category) category, report FROM app_quality_measurements
+    `SELECT DISTINCT ON (category) category, assessed_at, report FROM app_quality_measurements
      WHERE app_id = $1 ORDER BY category, assessed_at DESC, agent_id DESC`,
     [appId]
   ).catch(() => null);
   if (!result) return new Set();
-  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable')
+  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable'
+    && now - Date.parse(row.assessed_at) <= AUDIT_FRESHNESS_MS)
     .map(row => normalizeAuditTaskType(row.category)));
 }
 
@@ -188,6 +202,61 @@ export async function resolveQualityChecks(app) {
     return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable, reason };
   });
   return { checks, capabilities, scanned, complete };
+}
+
+/**
+ * Whether ONE audit is worth dispatching for this app — the programmatic
+ * bail-out every dispatch lane consults before an agent is spawned, so a
+ * mobile-responsive audit of a repository with no client code costs a
+ * `git ls-files` (cached) instead of a provider call. Same verdict as the
+ * schedule form's, by construction: both read `resolveQualityChecks`.
+ *
+ * Non-audit task types and apps with no checkout always apply — the gate only
+ * ever REMOVES work it has evidence against.
+ *
+ * @param {object} app - The managed app record
+ * @param {string} taskType - Scheduled task type
+ * @returns {Promise<{ applicable: boolean, reason: string|null }>}
+ */
+export async function resolveAuditApplicability(app, taskType) {
+  const category = normalizeAuditTaskType(taskType);
+  if (!app?.id || !app.repoPath || !Object.hasOwn(AUDIT_DEFINITIONS, category)) return { applicable: true, reason: null };
+  const { checks } = await resolveQualityChecks(app);
+  const check = checks.find(entry => entry.taskType === category);
+  return { applicable: check?.applicable !== false, reason: check?.reason || null };
+}
+
+/**
+ * Every category this app's repository cannot have findings for, as
+ * `{ [category]: reason }` — the shape `summarizeAppQuality` takes, so the
+ * Quality tab's denominator and runner agree with the dispatch gate.
+ *
+ * @param {object} app - The managed app record
+ * @returns {Promise<Record<string, string>>}
+ */
+export async function inapplicableAuditReasons(app) {
+  const { checks } = await resolveQualityChecks(app);
+  return Object.fromEntries(checks.filter(check => !check.applicable).map(check => [check.taskType, check.reason]));
+}
+
+/**
+ * The same verdict keyed by app id, for the sequencing lanes (maintenance runs,
+ * quota-burn steps) that hold an id rather than a record. Returns WHY the audit
+ * does not apply, or null when it does — or when that cannot be determined, so
+ * an unreadable app or a failed detection never blocks work.
+ *
+ * @param {string|null} appId - Managed app id
+ * @param {string} taskType - Scheduled task type
+ * @returns {Promise<string|null>}
+ */
+export async function inapplicableAuditReason(appId, taskType) {
+  if (!appId || !Object.hasOwn(AUDIT_DEFINITIONS, normalizeAuditTaskType(taskType))) return null;
+  // `.then` rather than a direct call, so even a synchronous throw from the
+  // app lookup lands in the fail-open catch instead of the caller's lane.
+  const verdict = await Promise.resolve(appId).then(id => getAppById(id))
+    .then(app => (app ? resolveAuditApplicability(app, taskType) : null))
+    .catch(() => null);
+  return verdict && !verdict.applicable ? verdict.reason || 'not applicable to this repository' : null;
 }
 
 /**

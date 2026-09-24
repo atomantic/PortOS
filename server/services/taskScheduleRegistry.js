@@ -349,6 +349,14 @@ export const DEFAULT_TASK_INTERVALS = {
   'better-runtime-safety':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'better-dependency-freedom':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'better-test-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  // Service and data-platform lenses (see AUDIT_DEFINITIONS). File-issues by
+  // default — their findings usually touch production configuration — with
+  // open issues + PRs preloaded for dedup like the do:better lanes above.
+  'infrastructure':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'data-integrity':             { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'reliability':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'privacy':                    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'cost-efficiency':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },
@@ -551,6 +559,11 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
   'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',
+  'infrastructure': 'Infrastructure & deployment — IaC, containers, orchestration and CI: exposure, identity grants, secrets, pinning, limits; file issues (default) or implement fixes',
+  'data-integrity': 'Data integrity — idempotent ingestion, atomic writes, consistency, schema evolution of stored data; file issues (default) or implement fixes',
+  'reliability': 'Reliability — graceful shutdown, health/readiness, backpressure, job leasing, mixed-version deploys; file issues (default) or implement fixes',
+  'privacy': 'Privacy & data governance — personal data in logs/exports/third parties, minimization, retention and erasure; file issues (default) or implement fixes',
+  'cost-efficiency': 'Cost efficiency — metered API/model calls, unbounded scans, storage tiers, over-provisioning; file issues (default) or implement fixes',
   'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',

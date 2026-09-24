@@ -5,6 +5,7 @@ import {
   filterSelectableModels,
   isProviderHardwareCompatible,
   isProviderModelHardwareCompatible,
+  isTuiProvider,
   providerModelList,
   selectableModelsForProvider,
   withStaleAntigravityPin,
@@ -28,6 +29,13 @@ const sourceModels = (provider, withEffort) => {
   return withEffort ? selectableModelsForProvider(provider, models) : models;
 };
 
+/** The provider a `preselectDefaults` picker opens on (see that option). */
+export function preferredInitialProvider(providers, activeProviderId, { allowDefault = false } = {}) {
+  const active = providers.find(provider => provider.id === activeProviderId);
+  if (active || allowDefault) return active || null;
+  return providers.find(isTuiProvider) || providers[0] || null;
+}
+
 /**
  * Hook for loading AI providers and managing two-step provider > model selection.
  * @param {Object} options
@@ -40,7 +48,10 @@ const sourceModels = (provider, withEffort) => {
  *   `ProviderModelSelector`.
  * @param {boolean} [options.preselectDefaults] - Seed a session override with the
  *   active provider and its configured model. If the active provider is excluded
- *   by the picker policy, leave Auto selected rather than choosing another.
+ *   by the picker policy, leave Auto selected rather than choosing another —
+ *   unless `allowDefault` is false, where there is no Auto to leave: the picker
+ *   then prefers the first TUI provider (the shipped agent default) over list
+ *   order, so it never lands on whichever CLI happens to be listed first.
  * @param {boolean} [options.silent] - Suppress the default error toast when the
  *   provider fetch fails (the empty-list fallback still applies). Use when the
  *   picker is a secondary control whose failure shouldn't interrupt the page.
@@ -144,7 +155,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     if ((!allowDefault || preselectDefaults) && filtered.length > 0 && !hasSetInitialRef.current) {
       hasSetInitialRef.current = true;
       const initial = preselectDefaults
-        ? filtered.find(provider => provider.id === data.activeProvider)
+        ? preferredInitialProvider(filtered, data.activeProvider, { allowDefault })
         : filtered[0];
       if (initial) {
         setSelectedProviderId(initial.id);

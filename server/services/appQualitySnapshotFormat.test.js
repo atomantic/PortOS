@@ -200,3 +200,27 @@ it('keeps a full 30-day category window under the cap and materially smaller tha
     .toHaveLength(JSON.parse(serializeQualitySnapshot(repository, oneCategory)).measurements.length * categories.length);
   expect(JSON.parse(classifyQualitySnapshot(v2).canonical).measurements).toHaveLength(rows.length);
 });
+
+// A snapshot committed by an upgraded peer names categories this install's
+// catalog does not have yet. Before, that marked the whole file malformed, so
+// the older install lost every release score it COULD read.
+it('reads the known rows of a newer install’s snapshot and refuses to rewrite it', () => {
+  const stored = classifyQualitySnapshot(JSON.stringify({
+    schemaVersion: 2, repository, reportVersion: 1,
+    categories: ['security', 'example-future-lens'], coverage: [...QUALITY_COVERAGE_VALUES], confidence: [...QUALITY_CONFIDENCE_VALUES],
+    measurements: [
+      ['2026-09-20T00:00:00.000Z', 0, 82, 5, 0, 2, 120, 120],
+      ['2026-09-20T00:00:00.000Z', 1, 64, 3, 0, 2, 40, 40],
+    ],
+  }));
+  expect(stored.status).toBe('future-categories');
+  expect(stored.records.map(record => record.category)).toEqual(['security']);
+  // No canonical form: rewriting would drop the newer install's rows.
+  expect(stored.canonical).toBeNull();
+  const malformedName = classifyQualitySnapshot(JSON.stringify({
+    schemaVersion: 2, repository, reportVersion: 1,
+    categories: ['Not A Category!'], coverage: [...QUALITY_COVERAGE_VALUES], confidence: [...QUALITY_CONFIDENCE_VALUES],
+    measurements: [],
+  }));
+  expect(malformedName.status).toBe('malformed');
+});

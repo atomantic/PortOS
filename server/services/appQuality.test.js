@@ -73,9 +73,28 @@ describe('scheduled audit measurement workflow', () => {
       ['performance', 100, 'broad', 'low', now],
     ].map(([category, score, coverage, confidence, date]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(date).toISOString() }));
     const quality = summarizeAppQuality(records, now);
-    expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: 25 });
+    expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: Object.keys(AUDIT_DEFINITIONS).length });
     expect(quality.categories.find(c => c.id === 'ux')).toMatchObject({ score: 100, stale: true });
     expect(summarizeAppQuality().score).toBeNull();
+  });
+
+  // The regression: a backend API was reported as "2 of 30 categories" because
+  // seven UI audits it cannot have findings for sat in the denominator.
+  it('drops categories that cannot apply from the denominator, unless rated evidence says they do', () => {
+    const now = Date.now();
+    const records = [
+      ['code-quality', 80, 'broad', 'high'],
+      ['typing', null, 'not-applicable', 'low'],
+      ['mobile-responsive', 60, 'broad', 'high'],
+    ].map(([category, score, coverage, confidence]) => ({ category, report: report({ category, score, coverage, confidence }), assessedAt: new Date(now).toISOString() }));
+    const quality = summarizeAppQuality(records, now, { inapplicable: { accessibility: 'no user interface found', 'mobile-responsive': 'no user interface found' } });
+    const byId = Object.fromEntries(quality.categories.map(c => [c.id, c]));
+    expect(byId.accessibility).toMatchObject({ applicable: false, inapplicableReason: 'no user interface found' });
+    expect(byId.typing).toMatchObject({ applicable: false, inapplicableReason: expect.stringMatching(/not applicable/) });
+    // Detected as UI-less, but a fresh broad assessment exists: it counts.
+    expect(byId['mobile-responsive']).toMatchObject({ applicable: true, inapplicableReason: null });
+    expect(quality.applicableCategories).toBe(Object.keys(AUDIT_DEFINITIONS).length - 2);
+    expect(quality.score).toBe(70);
   });
 
   it('surfaces previously stored lifecycle scores under the renamed category', () => {

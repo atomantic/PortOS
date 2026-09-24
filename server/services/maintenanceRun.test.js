@@ -7,7 +7,10 @@ import { MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER } from '../lib/maint
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-maintenance-run-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 
-const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch: null, probe: null }));
+const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} }));
+// Applicability is decided by the repository scan (covered in
+// appQualitySchedule.test.js); here only the run's reaction to a verdict matters.
+vi.mock('./appQualitySchedule.js', () => ({ inapplicableAuditReason: vi.fn(async (_appId, taskType) => state.inapplicable[taskType] || null) }));
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
@@ -62,11 +65,24 @@ beforeEach(async () => {
   vi.clearAllMocks();
   __resetMaintenanceRunScheduler();
   await rm(join(tempRoot, 'cos', 'maintenance-runs.json'), { force: true });
-  Object.assign(state, { tasks: [], requests: [], invoked: [], dispatch: null, probe: null });
+  Object.assign(state, { tasks: [], requests: [], invoked: [], dispatch: null, probe: null, inapplicable: {} });
 });
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
+  // The regression: a refused request would leave the step pending, so the run
+  // re-dispatched an audit that could never apply on every evaluation.
+  it('completes an inapplicable audit as skipped without dispatching it, then moves on', async () => {
+    state.inapplicable = { 'mobile-responsive': 'no user interface found in this repository' };
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['mobile-responsive', 'security'] });
+    expect(dispatchedTypes()).toEqual(['security']);
+    const stored = await getMaintenanceRun(run.id);
+    expect(stored.completed[run.steps[0].id]).toBeTruthy();
+    expect(stored.skipped).toEqual({ [run.steps[0].id]: 'no user interface found in this repository' });
+    await __onMaintenanceAgentCompleted(agentFor(run, 1));
+    expect((await getMaintenanceRun(run.id)).status).toBe('completed');
+  });
+
   it.each(['file-issues', 'fix'])('runs only selected quality checks in %s mode with pinned overrides', async (mode) => {
     const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode, taskTypes: ['security', 'documentation'] });
     expect(run.steps.map(step => step.taskRef.taskType)).toEqual(['security', 'documentation']);

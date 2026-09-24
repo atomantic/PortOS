@@ -34,7 +34,9 @@ export const APP_QUALITY_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 export const QUALITY_SNAPSHOT_BRANCH = 'portos/quality-snapshot';
 
 const snapshotPath = (repoPath, filename = APP_QUALITY_SNAPSHOT_FILENAME) => join(repoPath, filename);
-const REWRITE_BLOCKED = new Set(['future', 'unrecognized', 'malformed', 'oversize', 'unreadable']);
+// 'future-categories' is readable (known rows are used) but was written by a
+// newer install whose categories this one would drop on rewrite.
+const REWRITE_BLOCKED = new Set(['future', 'future-categories', 'unrecognized', 'malformed', 'oversize', 'unreadable']);
 
 const QUALITY_PR_TITLE = 'chore: publish quality snapshot';
 const QUALITY_PR_BODY = `## Summary
