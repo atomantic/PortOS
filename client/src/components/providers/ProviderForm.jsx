@@ -50,6 +50,7 @@ const PROVIDER_FIELD_RANGES = {
 
 /** A space-separated argv input as the array the provider schema takes. */
 const argList = (text) => (text ? text.split(' ').filter(Boolean) : []);
+const modelListFromText = (text) => text.split(',').map(model => model.trim()).filter(Boolean);
 
 const rangeMessage = (label, { min, max }, unit = '') =>
   `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
@@ -63,6 +64,7 @@ const TIER_FIELDS = [
 ];
 
 export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
+  const [modelsText, setModelsText] = useState(() => providerModelCatalog(provider).join(', '));
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -398,6 +400,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
       ...formData,
+      models: modelListFromText(modelsText),
       args: argList(formData.args),
       headlessArgs: argList(formData.headlessArgs),
       contextWindow: parseOptionalIntField(formData.contextWindow),
@@ -1020,12 +1023,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   {formData.type === 'api' && <span className="text-xs text-gray-500 ml-2">(Use Refresh button after saving)</span>}
                 </>}>
                 <textarea
-                  value={(formData.models || []).join(', ')}
+                  value={modelsText}
                   onChange={(e) => {
-                    const models = e.target.value
-                      .split(',')
-                      .map(m => m.trim())
-                      .filter(Boolean);
+                    const text = e.target.value;
+                    setModelsText(text);
+                    const models = modelListFromText(text);
                     setFormData(prev => ({ ...prev, models }));
                   }}
                   placeholder="model-1, model-2, model-3"
