@@ -18,6 +18,16 @@ const hasPortosRunSource = row => [
 ].some(metric => typeof metric?.source?.url === 'string'
   && /^portos:\/\/model-comparison\/[0-9a-f-]{36}$/i.test(metric.source.url));
 
+// This shipped label was clarified without changing the benchmark's dataset or
+// scoring. Normalize the exact legacy name at read/import boundaries so upgrades
+// retain stable observation ids without relaxing semantic identity checks.
+const normalizeCatalog = catalog => ({
+  ...catalog,
+  observations: catalog.observations.map(row => row.benchmark === 'LiveCodeBench (generation, pass@1, 2023-05-08 to 2025-04-07)'
+    ? { ...row, benchmark: 'LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)' }
+    : row),
+});
+
 export async function getModelComparison() {
   const raw = await readFile(catalogPath(), 'utf8').catch(error => {
     if (error.code !== 'ENOENT') throw error;
@@ -25,14 +35,14 @@ export async function getModelComparison() {
   });
   // A malformed or future-version catalog must surface an error, never be
   // replaced with an empty store by the next import.
-  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  const catalog = normalizeCatalog(modelComparisonCatalogSchema.parse(JSON.parse(raw)));
   return catalog;
 }
 
 /** Public comparison data always comes from the shipped catalog, never local files. */
 export async function getShippedModelComparison() {
   const raw = await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8');
-  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  const catalog = normalizeCatalog(modelComparisonCatalogSchema.parse(JSON.parse(raw)));
   return {
     ...catalog,
     observations: catalog.observations.filter(row =>
@@ -72,7 +82,7 @@ async function mergeModelComparison(incoming) {
 }
 
 export function importModelComparison(input) {
-  const incoming = modelComparisonImportSchema.parse(input);
+  const incoming = normalizeCatalog(modelComparisonImportSchema.parse(input));
   if (incoming.observations.some(row => isPortosBenchmarkObservation(row) || hasPortosRunSource(row))) {
     throw new ServerError('PortOS benchmark observations can only be created by the explicit benchmark run.', { status: 400 });
   }

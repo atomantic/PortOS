@@ -100,3 +100,33 @@ it('requires explicit estimation provenance and protects run-only sources on eve
   const forged = { ...observation, id: 'forged-quota', quota: { unitsPerTask: 1, unit: 'task', source: { ...observation.quality.source, url: 'portos://model-comparison/00000000-0000-4000-8000-000000000001' } } };
   expect((await request(app).post('/comparison/import').send({ schemaVersion: 1, observations: [forged] })).status).toBe(400);
 });
+
+it('loads legacy benchmark labels after upgrade and preserves evidence through subsequent imports', async () => {
+  const shipped = seed.observations.filter(row => row.id.startsWith('lcb-generation-2023-05-08--2025-04-07-'));
+  expect(shipped.length).toBeGreaterThan(0);
+  const legacy = shipped.map(row => ({ ...row,
+    benchmark: 'LiveCodeBench (generation, pass@1, 2023-05-08 to 2025-04-07)',
+    inputPerMillion: null, outputPerMillion: null,
+  }));
+  const stored = JSON.stringify({ schemaVersion: 1, observations: legacy });
+  await writeFile(join(dir, 'model-comparison.json'), stored);
+  for (let reload = 0; reload < 2; reload++) {
+    const result = await request(app).get('/comparison');
+    expect(result.status).toBe(200);
+    expect(result.body.observations).toHaveLength(seed.observations.length);
+    for (const row of shipped) expect(result.body.observations.find(item => item.id === row.id)).toMatchObject({
+      benchmark: row.benchmark, quality: row.quality, inputPerMillion: row.inputPerMillion, outputPerMillion: row.outputPerMillion,
+    });
+  }
+  // Reload is read-only; persistence occurs only during an explicit import.
+  expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(stored);
+  expect((await request(app).post('/comparison/import').send({ schemaVersion: 1, observations: legacy })).status).toBe(200);
+  const saved = JSON.parse(await readFile(join(dir, 'model-comparison.json'), 'utf8'));
+  expect(saved.observations).toHaveLength(seed.observations.length);
+  for (const row of shipped) expect(saved.observations.find(item => item.id === row.id)).toMatchObject({
+    benchmark: row.benchmark, quality: row.quality, inputPerMillion: row.inputPerMillion, outputPerMillion: row.outputPerMillion,
+  });
+  const changed = { ...legacy[0], benchmark: 'LiveCodeBench (generation, pass@1, 2025-01-01 to 2025-04-07)' };
+  expect((await request(app).post('/comparison/import').send({ schemaVersion: 1, observations: [changed] })).status).toBe(409);
+  expect((await request(app).get('/comparison')).status).toBe(200);
+});
