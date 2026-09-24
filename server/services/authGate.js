@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
@@ -119,6 +120,21 @@ export const authGate = async (req, res, next) => {
   }
   sendErrorResponse(res, new ServerError('Authentication required', {
     status: 401, code: 'AUTH_REQUIRED',
+  }));
+};
+
+// Host execution needs operator authority, not merely a peer's Basic credential.
+// Mount after authGate: missing context fails closed. Password-free installs
+// permit only the actual loopback socket peer, never req.ip/forwarded headers or
+// the machine-local warning acknowledgement.
+export const requireHostControl = (req, res, next) => {
+  const auth = req.portosAuthContext;
+  const address = req.socket?.remoteAddress?.replace(/^::ffff:/i, '');
+  const loopback = address === '::1' || (isIP(address ?? '') === 4 && address.startsWith('127.'));
+  if ((auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
+    || (auth?.enabled === false && loopback)) return next();
+  sendErrorResponse(res, new ServerError('Host commands require an operator session, or a local connection when no password is set.', {
+    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));
 };
 
