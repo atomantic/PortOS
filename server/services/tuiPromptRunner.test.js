@@ -1231,8 +1231,23 @@ describe('executeTuiRun', () => {
       expect(pty.kill).not.toHaveBeenCalled();
       expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
 
-      pty.emitExit({ exitCode: 1, signal: 0 });
+      const taskPastes = () => pty.write.mock.calls.filter(([keys]) =>
+        String(keys).startsWith('\x1b[200~') && String(keys).includes('complete this task')).length;
+      expect(taskPastes()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(taskPastes()).toBe(2);
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(runnerMocks.finalizeRunRecord, 'an idle mode-command screen is not a completed response').not.toHaveBeenCalled();
+
+      pty.emitData("\n⏺ You've hit your session limit · resets 6:00 PM");
+      await flushAsync();
       await promise;
+      expect(pty.kill).toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-low-priority',
+        success: false,
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
     });
 
     it('falls back on Claude session-limit chrome when low-priority is not enabled', async () => {

@@ -834,25 +834,44 @@ export function detectClaudeSessionLimitBanner(text, { lineStartTrusted = true }
 export function createClaudeSessionLimitBannerDetector({ maxBuffer = 1024 } = {}) {
   let line = '';
   let lineStartTrusted = true;
+  let lineMatched = false;
   const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 1024;
 
   return (chunk) => {
     if (!chunk) return null;
     const text = `${line}${String(chunk)}`;
     const lines = text.split('\n');
+    let found = null;
     for (let i = 0; i < lines.length - 1; i += 1) {
-      const analysis = detectClaudeSessionLimitBanner(lines[i].replace(/\r$/, ''), { lineStartTrusted });
-      if (analysis) return analysis;
+      if (!lineMatched) {
+        const analysis = detectClaudeSessionLimitBanner(lines[i].replace(/\r$/, ''), { lineStartTrusted });
+        if (analysis) {
+          found ||= analysis;
+          lineMatched = true;
+        }
+      }
       lineStartTrusted = true;
+      lineMatched = false;
     }
     line = lines.at(-1);
     if (line.length > cap) {
       line = line.slice(-cap);
       lineStartTrusted = false;
     }
-    return detectClaudeSessionLimitBanner(line, { lineStartTrusted });
+    if (!lineMatched) {
+      const analysis = detectClaudeSessionLimitBanner(line, { lineStartTrusted });
+      if (analysis) {
+        found ||= analysis;
+        lineMatched = true;
+      }
+    }
+    return found;
   };
 }
+
+// A short pause lets Claude Code process its TUI mode command before the
+// rejected request is pasted again.
+export const CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS = 1500;
 
 // Undo JSON string escaping in a value lifted out of a raw error BODY. One pass,
 // so an escaped backslash can't be re-read as the start of the next escape

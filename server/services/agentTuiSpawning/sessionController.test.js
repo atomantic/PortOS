@@ -176,7 +176,7 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
   });
 
   it('sends Claude low-priority once after an opted-in session-limit banner', async () => {
-    const { controller, write } = makeController({
+    const { controller, write, paste, finalizeAgent } = makeController({
       provider: {
         id: 'claude-code-tui',
         name: 'Claude Code TUI',
@@ -201,11 +201,18 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
 
     expect(write).toHaveBeenCalledWith('session-abcdef12', '/low-priority\r');
     expect(write.mock.calls.filter(([, keys]) => keys === '/low-priority\r')).toHaveLength(1);
-    await controller.handleExit({ exitCode: 1, killed: false });
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(paste).toHaveBeenCalledWith('A sufficiently long prompt for this controller test', expect.objectContaining({
+      label: expect.stringContaining('Claude low-priority continuation'),
+    }));
+
+    await controller.handleData(banner);
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
   });
 
   it('does not send Claude low-priority without the provider opt-in', async () => {
-    const { controller, write } = makeController({
+    const { controller, write, finalizeAgent } = makeController({
       provider: { id: 'claude-code-tui', name: 'Claude Code TUI', type: 'tui', command: 'claude' },
       tuiConfig: { ...TUI_CONFIG, command: 'claude', spawnCommand: '/usr/local/bin/claude', promptDelayMs: 250 },
       prompt: 'A sufficiently long prompt for this controller test',
@@ -220,6 +227,6 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     await controller.handleData("\n⏺ You've hit your session limit · resets 6:00 PM");
 
     expect(write).not.toHaveBeenCalledWith('session-abcdef12', '/low-priority\r');
-    await controller.handleExit({ exitCode: 1, killed: false });
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
   });
 });

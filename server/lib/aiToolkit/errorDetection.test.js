@@ -508,6 +508,14 @@ describe('Error Detection', () => {
       expect(afterLongSession("\n⏺ You've hit your session limit · resets 6:00 PM"))
         .toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT, origin: 'provider' });
     });
+
+    it('emits once for a painted line and recognizes a later banner line', () => {
+      const detect = createClaudeSessionLimitBannerDetector();
+      const banner = "⏺ You've hit your session limit · resets 6:00 PM";
+      expect(detect(banner)).toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+      expect(detect(' repaint')).toBeNull();
+      expect(detect(`\n${banner}`)).toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+    });
   });
 
   describe('detectTerminalModelError', () => {

@@ -68,6 +68,7 @@ import {
   OUTPUT_BUFFER_HEADROOM,
   RAW_BUFFER_CAP,
   RAW_BUFFER_HEADROOM,
+  CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   buildTuiInvocation,
   createInputReadyTracker,
   detectMissingTuiBinary,
@@ -393,6 +394,7 @@ ${prompt}`;
     && provider.lowPriorityOnUsageLimit === true
     && isClaudeCommand(command);
   let lowPriorityCommandAttempted = false;
+  let lowPriorityPromptResubmitted = false;
   // One-shot-only: a terminal model-id rejection (Bedrock 400 / Anthropic 404)
   // leaves the TUI idle at an unanswered prompt, so without this the run idles to
   // a false success and the error screen is scraped as the "response". Scoped here
@@ -450,6 +452,7 @@ ${prompt}`;
   let idleWatchTimer = null;
   let responseFileWatchTimer = null;
   let hardTimeoutTimer = null;
+  let claudeLowPriorityResubmitTimer = null;
   // Holds the wait-it-out window for a provider signal carrying a `graceMs`
   // (agy's account-eligibility banner). Unlike the long-running agent path this
   // needs its OWN timer: `idleWatchTimer` is created lazily on the first
@@ -476,6 +479,7 @@ ${prompt}`;
     if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
     if (responseFileWatchTimer) { clearInterval(responseFileWatchTimer); responseFileWatchTimer = null; }
     if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
+    if (claudeLowPriorityResubmitTimer) { clearTimeout(claudeLowPriorityResubmitTimer); claudeLowPriorityResubmitTimer = null; }
     stopSelfClearingTimers();
   };
 
@@ -643,21 +647,55 @@ ${prompt}`;
         }
 
         const sessionLimit = isClaudeCommand(command) && promptSubmittedAt
-          && (!mayUseClaudeLowPriority || !lowPriorityCommandAttempted)
           ? detectClaudeSessionLimitBanner(stripped)
           : null;
-        let sentLowPriorityCommand = false;
-        if (sessionLimit && mayUseClaudeLowPriority && !lowPriorityCommandAttempted) {
-          lowPriorityCommandAttempted = true;
-          try {
-            ptyProcess.write(`/low-priority${SUBMIT_KEY}`);
-            sentLowPriorityCommand = true;
-            console.log(`⏳ TUI run ${runId} reached Claude's session limit; sent /low-priority from the provider opt-in`);
-          } catch (err) {
-            sessionLimit.message = `Claude Code session limit reached and /low-priority could not be sent: ${err?.message || err}`;
+        let waitingForLowPriorityResubmit = false;
+        if (sessionLimit && mayUseClaudeLowPriority) {
+          if (lowPriorityCommandAttempted && !lowPriorityPromptResubmitted) {
+            // Repaints of the initial rejection can arrive while Claude
+            // processes the mode command. Re-submit below, then treat a fresh
+            // limit banner as a failed continuation.
+            waitingForLowPriorityResubmit = true;
+          } else if (!lowPriorityCommandAttempted) {
+            lowPriorityCommandAttempted = true;
+            try {
+              ptyProcess.write(`/low-priority${SUBMIT_KEY}`);
+              waitingForLowPriorityResubmit = true;
+              console.log(`⏳ TUI run ${runId} reached Claude's session limit; sent /low-priority from the provider opt-in`);
+              claudeLowPriorityResubmitTimer = setTimeout(() => {
+                claudeLowPriorityResubmitTimer = null;
+                if (finalized) return;
+                promptSubmittedAt = Date.now();
+                let resubmitted = false;
+                try {
+                  if (submitEnterTimer) clearInterval(submitEnterTimer);
+                  submitEnterTimer = null;
+                  submitEnterTimer = pasteToSession(runId, wrappedPrompt, {
+                    label: `[tuiRun ${runId}] Claude low-priority continuation`,
+                  }) || null;
+                  resubmitted = !!submitEnterTimer;
+                } catch (err) {
+                  sessionLimit.message = `Claude Code low-priority mode was enabled, but the task could not be re-submitted: ${err?.message || err}`;
+                }
+                if (resubmitted) {
+                  lowPriorityPromptResubmitted = true;
+                  console.log(`🔁 TUI run ${runId} re-submitted its task after enabling Claude low-priority mode`);
+                  return;
+                }
+                finishWithFallbackSignal({
+                  ...sessionLimit,
+                  message: sessionLimit.message
+                    || 'Claude Code low-priority mode was enabled, but the task could not be re-submitted',
+                }).catch((err) => {
+                  console.error(`❌ TUI run ${runId} low-priority re-submit fallback failed: ${err?.message || err}`);
+                });
+              }, CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS);
+            } catch (err) {
+              sessionLimit.message = `Claude Code session limit reached and /low-priority could not be sent: ${err?.message || err}`;
+            }
           }
         }
-        const fallbackSignal = sentLowPriorityCommand ? null : (sessionLimit || detectImmediateFallbackSignal(stripped))
+        const fallbackSignal = waitingForLowPriorityResubmit ? null : (sessionLimit || detectImmediateFallbackSignal(stripped))
           || detectTerminalModelError(stripped)
           || detectTerminalRequestTimeout(stripped);
         // Branch on the SIGNAL's own grace window, never on gate state: the
@@ -723,6 +761,11 @@ ${prompt}`;
           // twice over: the gate closes on the first sign of generation, and its
           // own timer resolves the deadline regardless.
           if (selfClearingGate.armed) return;
+          // A low-priority continuation still owes a complete response file or
+          // process exit. Do not scrape an idle limit/command screen as success,
+          // either while the mode command is being processed or after the task
+          // has been re-submitted.
+          if (lowPriorityCommandAttempted) return;
           const idle = Date.now() - lastOutputAt;
           if (idle >= idleThresholdMs) {
             if (requiresResponseFileForIdleCompletion) return;

@@ -80,6 +80,7 @@ import {
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
   isPasteCommitted,
+  CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   SUBMIT_KEY,
   detectMissingTuiBinary,
 } from '../../lib/tuiHandshake.js';
@@ -522,6 +523,7 @@ export function createTuiSessionController({
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
   const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
+  let claudeLowPriorityPromptResubmitted = false;
   const mayUseClaudeLowPriority = provider?.type === 'tui'
     && provider?.lowPriorityOnUsageLimit === true
     && isClaudeCommand(tuiConfig.command);
@@ -659,6 +661,7 @@ export function createTuiSessionController({
   // silently equivalent to "nothing to stop".
   let promptTimer = null;
   let providerSignalTimer = null;
+  let claudeLowPriorityResubmitTimer = null;
   let doneSentinelWatcher = null;
 
   const streamingStrip = createStreamingAnsiStripper();
@@ -769,6 +772,7 @@ export function createTuiSessionController({
   const stopRunMachinery = () => {
     if (providerSignalTimer) { clearInterval(providerSignalTimer); providerSignalTimer = null; }
     if (promptTimer) { clearInterval(promptTimer); promptTimer = null; }
+    if (claudeLowPriorityResubmitTimer) { clearTimeout(claudeLowPriorityResubmitTimer); claudeLowPriorityResubmitTimer = null; }
     doneSentinelWatcher?.();
     doneSentinelWatcher = null;
     // Cancels the paste-attempt timers and releases the post-paste accumulator
@@ -1184,13 +1188,16 @@ export function createTuiSessionController({
       recordFirstOutput('tui-pty');
 
       // `/low-priority` is a hidden Claude Code TUI command, not a CLI startup
-      // argument or a supported --print/SDK prompt. Only type it after this
-      // session's submitted prompt produced the session-limit banner, and only
-      // for the provider's explicit opt-in. Latch before writing so a repaint
-      // of the same banner never toggles the command back off.
-      if (isClaudeCommand(tuiConfig.command) && promptSubmittedAt && !lowPriorityCommandAttempted) {
+      // argument or a supported --print/SDK prompt. On an opted-in session
+      // limit, enable the mode and then re-submit the rejected task. A later
+      // limit after that re-submit means the mode was unavailable or exhausted.
+      if (isClaudeCommand(tuiConfig.command) && promptSubmittedAt) {
         const sessionLimit = detectClaudeSessionLimitBanner(stripped);
         if (sessionLimit) {
+          if (lowPriorityCommandAttempted) {
+            if (claudeLowPriorityPromptResubmitted) await failOverToFallback(sessionLimit);
+            return;
+          }
           if (!mayUseClaudeLowPriority) {
             await failOverToFallback(sessionLimit);
             return;
@@ -1204,6 +1211,25 @@ export function createTuiSessionController({
           }
           if (submitted) {
             appendLine('⏳ Claude Code session limit reached — sent /low-priority from the provider opt-in');
+            claudeLowPriorityResubmitTimer = setTimeout(() => {
+              claudeLowPriorityResubmitTimer = null;
+              if (sessionPhase !== 'running') return;
+              let promptResubmitted = false;
+              try {
+                promptResubmitted = !!pasteController?.resubmit({ label: 'Claude low-priority continuation' });
+              } catch (err) {
+                emitLog('warn', `TUI agent ${agentId} could not re-submit after Claude low-priority: ${err?.message || err}`, { agentId });
+              }
+              if (promptResubmitted) {
+                claudeLowPriorityPromptResubmitted = true;
+                appendLine('🔁 Re-submitted the task after enabling Claude low-priority mode');
+                return;
+              }
+              failOverToFallback({
+                ...sessionLimit,
+                message: 'Claude Code low-priority mode was enabled, but the task could not be re-submitted',
+              }).catch((err) => emitLog('error', `TUI agent ${agentId} low-priority re-submit fallback failed: ${err?.message || err}`, { agentId }));
+            }, CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS);
           } else {
             await failOverToFallback({
               ...sessionLimit,
