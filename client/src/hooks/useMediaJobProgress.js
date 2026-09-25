@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
 import { usePreviousSync } from './usePrevious.js';
@@ -56,15 +56,21 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
   // Track mount so the initial fetch's setState doesn't fire after unmount
   // (the panel could be removed while the GET is in flight).
   const mountedRef = useMounted();
+  // Latest status for the reconnect re-hydrate below, read outside a setState
+  // updater so the fetch isn't a side effect inside one (#8426).
+  const statusRef = useRef(state.status);
+  statusRef.current = state.status;
 
   useEffect(() => {
     if (!jobId) return undefined;
 
     // Hydrate from the server. The job may already be completed (the user
     // reloaded after the render finished) — without this fetch the UI
-    // would never reflect that.
+    // would never reflect that. Re-run on every socket reconnect (#8426): a
+    // terminal event emitted while the socket was down is never replayed, so
+    // without it a render that finished during a blip stays "running".
     let canceled = false;
-    getMediaJob(jobId).then((job) => {
+    const hydrate = () => getMediaJob(jobId).then((job) => {
       if (canceled || !mountedRef.current) return;
       setState((prev) => ({
         ...prev,
@@ -88,6 +94,11 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       // MediaJobThumb's `fallbackFilename` path bypasses this fetch entirely
       // when the parent already has the completed render's filename.
     });
+    hydrate();
+    // A terminal job can't change, so a reconnect only re-fetches live ones.
+    const onReconnect = () => {
+      if (!['completed', 'failed', 'canceled'].includes(statusRef.current)) hydrate();
+    };
 
     const evtPrefix = kind === 'video' ? 'video-gen' : kind === 'audio' ? 'audio-gen' : 'image-gen';
     const onStarted = (data) => {
@@ -173,6 +184,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     socket.on(`${evtPrefix}:completed`, onCompleted);
     socket.on(`${evtPrefix}:failed`, onFailed);
     socket.on(`${evtPrefix}:canceled`, onCanceled);
+    socket.on('connect', onReconnect);
     return () => {
       canceled = true;
       socket.off(`${evtPrefix}:started`, onStarted);
@@ -180,6 +192,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
       socket.off(`${evtPrefix}:completed`, onCompleted);
       socket.off(`${evtPrefix}:failed`, onFailed);
       socket.off(`${evtPrefix}:canceled`, onCanceled);
+      socket.off('connect', onReconnect);
     };
   }, [jobId, kind]);
 

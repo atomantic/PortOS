@@ -131,3 +131,35 @@ describe('useMediaJobProgress — render ETA (#3801)', () => {
     expect(result.current.etaMs).toBeNull();
   });
 });
+
+describe('useMediaJobProgress — socket reconnect (#8426)', () => {
+  beforeEach(() => { handlers.clear(); getMediaJob.mockClear(); getMediaJob.mockResolvedValue({ status: 'running' }); });
+  afterEach(cleanup);
+
+  it('re-fetches on reconnect and settles a job that finished while disconnected', async () => {
+    const { result } = renderHook(() => useMediaJobProgress('job-1'));
+    await waitFor(() => expect(result.current.status).toBe('running'));
+    getMediaJob.mockResolvedValue({ status: 'completed', progress: 1, result: { filename: 'output.png' } });
+    fire('connect');
+    await waitFor(() => expect(result.current.status).toBe('completed'));
+    expect(result.current.filename).toBe('output.png');
+  });
+
+  it.each(['completed', 'failed', 'canceled'])('does not re-fetch a %s job on reconnect', async (status) => {
+    getMediaJob.mockResolvedValue({ status });
+    const { result } = renderHook(() => useMediaJobProgress('job-1'));
+    await waitFor(() => expect(result.current.status).toBe(status));
+    getMediaJob.mockClear();
+    fire('connect');
+    await settle();
+    expect(getMediaJob).not.toHaveBeenCalled();
+  });
+
+  it('removes the connect listener on unmount', async () => {
+    const { unmount } = renderHook(() => useMediaJobProgress('job-1'));
+    await settle();
+    expect(handlers.has('connect')).toBe(true);
+    unmount();
+    expect(handlers.has('connect')).toBe(false);
+  });
+});
