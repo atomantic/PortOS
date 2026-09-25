@@ -367,7 +367,7 @@ describe('AgentCard feedback', () => {
       { rating: 'positive', comment: undefined },
       { silent: true }
     );
-    await waitFor(() => expect(onFeedbackChange).toHaveBeenCalledWith(updatedAgent));
+    await waitFor(() => expect(onFeedbackChange).toHaveBeenCalledWith(updatedAgent, agent));
   });
 
   it('records a negative rating with the detail needed to improve future work', async () => {

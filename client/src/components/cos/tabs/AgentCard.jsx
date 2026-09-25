@@ -464,9 +464,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       setShowFeedbackComment(false);
       setFeedbackComment(result.agent?.feedback?.comment || '');
       toast.success(`Feedback recorded: ${rating}`);
-      onFeedbackChange?.(result.agent);
+      onFeedbackChange?.(result.agent, agent);
     }
-  }, [agent.id, feedbackComment, submittingFeedback, onFeedbackChange]);
+  }, [agent, feedbackComment, submittingFeedback, onFeedbackChange]);
 
   // Open the prompt modal — lazy-fetches prompt.txt the first time it opens.
   // Useful for iterating on the prompt itself (the user can see exactly what

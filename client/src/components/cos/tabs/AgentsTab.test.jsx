@@ -36,7 +36,7 @@ vi.mock('./AgentCard', () => ({
           onClick={() => onFeedbackChange?.({
             ...agent,
             feedback: { rating: 'positive', submittedAt: '2026-07-13T12:00:00.000Z' },
-          })}
+          }, agent)}
         >
           Rate {agent.metadata?.taskDescription}
         </button>
@@ -346,7 +346,7 @@ describe('AgentsTab feedback review queue', () => {
       expect(screen.queryByText('Archived task')).not.toBeInTheDocument();
       expect(screen.getByText('All loaded agent runs have feedback.')).toBeInTheDocument();
     });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 });
 
