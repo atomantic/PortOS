@@ -186,7 +186,8 @@ describe('LocalLlmPlayground', () => {
     await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
 
     expect(getLocalLlmCatalog).toHaveBeenCalledWith('ollama');
-    expect(screen.getByText('104B · 59 GB · ~71 GB RAM')).toBeTruthy();
+    // Catalog details land one await after the status that names the model.
+    expect(await screen.findByText('104B · 59 GB · ~71 GB RAM')).toBeTruthy();
     expect(screen.getByText('Tool use')).toBeTruthy();
     expect(screen.getByText('Multilingual')).toBeTruthy();
   });
