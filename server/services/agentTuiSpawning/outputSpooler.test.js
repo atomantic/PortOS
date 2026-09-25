@@ -21,7 +21,7 @@ vi.mock('../../lib/tuiHandshake.js', () => ({
 
 import { appendFile, writeFile } from 'fs/promises';
 import { appendAgentOutputLines, updateAgent } from '../cosAgentLifecycle.js';
-import { createOutputSpooler } from './outputSpooler.js';
+import { createOutputSpooler, createTranscriptWriteReporter } from './outputSpooler.js';
 
 const OUTPUT_FILE = '/tmp/agent/output.txt';
 const RAW_FILE = '/tmp/agent/raw.txt';
@@ -106,5 +106,129 @@ describe('createOutputSpooler', () => {
     await s.drainRaw();
     expect(appendFile).not.toHaveBeenCalled();
     expect(appendAgentOutputLines).not.toHaveBeenCalled();
+  });
+
+  it('reports output.txt write failures once per file', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = makeSpooler();
+    const err = new Error('ENOSPC: no space');
+    err.code = 'ENOSPC';
+    vi.mocked(appendFile).mockRejectedValueOnce(err);
+
+    s.appendLine('line 1');
+    await s.drainLines();
+
+    // First failure should be logged
+    const logs = errorSpy.mock.calls.filter(([msg]) => msg.includes('output.txt write failed'));
+    expect(logs).toHaveLength(1);
+    expect(logs[0][0]).toContain('ENOSPC');
+
+    // Metadata should be updated
+    const metaCalls = vi.mocked(updateAgent).mock.calls.filter(
+      ([, p]) => p?.metadata?.transcriptWriteFailed?.file === 'output.txt'
+    );
+    expect(metaCalls).toHaveLength(1);
+
+    errorSpy.mockRestore();
+  });
+
+  it('reports raw.txt write failures once per file', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = makeSpooler();
+    const err = new Error('EACCES: permission denied');
+    err.code = 'EACCES';
+    vi.mocked(appendFile).mockRejectedValueOnce(err);
+
+    s.pushRaw('chunk 1');
+    await s.drainRaw();
+
+    // First failure should be logged
+    const logs = errorSpy.mock.calls.filter(([msg]) => msg.includes('raw.txt write failed'));
+    expect(logs).toHaveLength(1);
+    expect(logs[0][0]).toContain('EACCES');
+
+    errorSpy.mockRestore();
+  });
+});
+
+describe('createTranscriptWriteReporter', () => {
+  let errorSpy;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it('logs the first failure for a file with error code and message', async () => {
+    const reporter = createTranscriptWriteReporter({ agentId: 'agent-1' });
+    const err = new Error('ENOSPC: no space left on device');
+    err.code = 'ENOSPC';
+
+    reporter.report('output.txt', err);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '❌ agent agent-1 output.txt write failed (ENOSPC): ENOSPC: no space left on device'
+    );
+    expect(vi.mocked(updateAgent)).toHaveBeenCalledWith('agent-1', {
+      metadata: { transcriptWriteFailed: { file: 'output.txt', code: 'ENOSPC' } },
+    });
+  });
+
+  it('logs fallback to error string when err.code is undefined', async () => {
+    const reporter = createTranscriptWriteReporter({ agentId: 'agent-1' });
+    const err = new Error('unknown failure');
+
+    reporter.report('output.txt', err);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '❌ agent agent-1 output.txt write failed (error): unknown failure'
+    );
+    expect(vi.mocked(updateAgent)).toHaveBeenCalledWith('agent-1', {
+      metadata: { transcriptWriteFailed: { file: 'output.txt', code: 'unknown' } },
+    });
+  });
+
+  it('logs only once per file — subsequent failures on the same file are silent', async () => {
+    const reporter = createTranscriptWriteReporter({ agentId: 'agent-1' });
+    const err = new Error('disk full');
+    err.code = 'ENOSPC';
+
+    reporter.report('output.txt', err);
+    reporter.report('output.txt', err);
+    reporter.report('output.txt', err);
+
+    const logs = errorSpy.mock.calls.filter(([msg]) => msg.includes('output.txt write failed'));
+    expect(logs).toHaveLength(1);
+    expect(vi.mocked(updateAgent)).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports different files independently', async () => {
+    const reporter = createTranscriptWriteReporter({ agentId: 'agent-1' });
+    const err = new Error('disk full');
+    err.code = 'ENOSPC';
+
+    reporter.report('output.txt', err);
+    reporter.report('raw.txt', err);
+    reporter.report('state', err);
+
+    const logs = errorSpy.mock.calls.filter(([msg]) => msg.includes('write failed'));
+    expect(logs).toHaveLength(3);
+    expect(vi.mocked(updateAgent)).toHaveBeenCalledTimes(3);
+  });
+
+  it('handles state append failures', async () => {
+    const reporter = createTranscriptWriteReporter({ agentId: 'agent-1' });
+    const err = new Error('state write failed');
+    err.code = 'EIO';
+
+    reporter.report('state', err);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      '❌ agent agent-1 state write failed (EIO): state write failed'
+    );
   });
 });

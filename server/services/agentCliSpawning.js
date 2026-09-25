@@ -38,6 +38,7 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
+import { createTranscriptWriteReporter } from './agentTuiSpawning/outputSpooler.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -403,6 +404,7 @@ export async function spawnDirectly({
   const isStreamJson = cliConfig.streamFormat === 'stream-json';
   const streamParser = isStreamJson ? createStreamJsonParser() : null;
   const codexStderrFormatter = provider.id === 'codex' ? createCodexStderrFormatter(prompt) : null;
+  const transcriptWriteReporter = createTranscriptWriteReporter({ agentId });
   // A headless CLI still colors its progress output: `opencode run` emits bare
   // `\x1B[0m` resets around its status line. Those bytes reached output.txt and
   // the live tail verbatim, and the browser drops only the ESC itself — so the
@@ -522,7 +524,7 @@ export async function spawnDirectly({
           const lines = streamParser.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
         } else {
           // Non-stream providers: emit stdout as-is once decolored. A chunk that
           // was purely terminal control has nothing left to show. Unlike stderr
@@ -530,7 +532,7 @@ export async function spawnDirectly({
           // formatting when it isn't wearing an `[stderr]` tag.
           if (!text) return;
           outputBuffer += text;
-          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
           outputBatcher.push(text);
         }
       });
@@ -552,7 +554,7 @@ export async function spawnDirectly({
           const lines = codexStderrFormatter.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
           return;
         }
         // A chunk that decolors down to whitespace was pure terminal control
@@ -561,7 +563,7 @@ export async function spawnDirectly({
         const trimmed = text.trim();
         if (!trimmed || isKnownCliStderrNoise(trimmed)) return;
         outputBuffer += `[stderr] ${text}`;
-        await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
+        await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
         outputBatcher.push(`[stderr] ${text}`);
       });
     } catch (err) {
@@ -724,7 +726,7 @@ export async function spawnDirectly({
     // below too, since output.txt is written next).
     await outputBatcher.flush();
 
-    await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
+    await writeFileGuarded(outputFile, outputBuffer).catch((err) => transcriptWriteReporter.report('output.txt', err));
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the
