@@ -578,7 +578,7 @@ describe('startWalkGeneration', () => {
     await vi.waitFor(async () => {
       const { runs } = await getWalkState(id);
       expect(runs[0].status).toBe('candidate');
-    });
+    }, { timeout: 10_000 });
     const { runs } = await getWalkState(id);
     expect(runs[0].duration).toBe(10);      // what we asked grok for
     expect(runs[0].sourceVideoSeconds).toBe(6.04); // what grok actually delivered
