@@ -309,7 +309,8 @@ export function normalizeFederatedMediaProviderConfig(settings) {
  * The provider is stricter than ordinary federation reads: it never inherits
  * authGate's auth-off bypass and never accepts a browser session. A verified
  * peer credential (the paired peer token, or legacy Basic) plus a registered,
- * enabled caller is required every time.
+ * enabled caller is required every time. The pair token is verified even on a
+ * password-free install, so pairing keeps working after the password is removed.
  * Status discovery is expected to encounter disabled or misconfigured peers,
  * so callers can mark those denials as warnings: the HTTP response still tells
  * the consumer exactly why discovery failed, but it stays off this provider's

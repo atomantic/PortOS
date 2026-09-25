@@ -679,6 +679,8 @@ describe('paired peer credential (#8356)', () => {
     app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.get('/api/federation/media/v1/status', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/providers/fleet-host/key', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
     return app;
   };
@@ -700,6 +702,9 @@ describe('paired peer credential (#8356)', () => {
     expect(read.status).toBe(200);
     expect(read.body.auth).toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
     expect((await withHeaders(request(app).post('/api/peer-sync/push').send({}), headers)).body.auth.method).toBe('peer');
+    // A peer's media and LLM services need only the token, not a stored password.
+    expect((await withHeaders(request(app).get('/api/federation/media/v1/status'), headers)).body.auth.method).toBe('peer');
+    expect((await withHeaders(request(app).post('/api/providers/fleet-host/key').send({}), headers)).body.auth.method).toBe('peer');
 
     const exec = await withHeaders(request(app).post('/api/commands/execute').send({}), headers);
     expect(exec.status).toBe(403);
@@ -746,6 +751,19 @@ describe('paired peer credential (#8356)', () => {
     expect(asset.status).toBe(403);
     expect(asset.text).toBe('Forbidden');
     expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
+  });
+
+  it('still identifies a paired peer on the federation surface after the instance password is removed', async () => {
+    writePeers([pairedPeer()]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+
+    const media = await withHeaders(request(app).get('/api/federation/media/v1/status'), headers);
+    expect(media.body.auth).toEqual({ enabled: false, authenticated: true, method: 'peer', peerId: 'peer-record' });
+    // Off the surface, and with a wrong secret, the caller stays anonymous.
+    expect((await withHeaders(request(app).get('/api/example'), headers)).body.auth.method).toBeNull();
+    const forged = await peerHeaders(PEER_ID, 'a-different-pair-secret-0123456789-xyz');
+    expect((await withHeaders(request(app).get('/api/federation/media/v1/status'), forged)).body.auth.method).toBeNull();
   });
 
   it('rejects a token for another instance, a wrong secret, a disabled peer, or an unpaired peer', async () => {
