@@ -11,7 +11,7 @@ import { getSelf } from '../services/instanceIdentity.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
 import { statfs } from 'fs/promises';
 
 vi.mock('../services/pm2.js', () => ({
@@ -96,7 +96,7 @@ const codeReviewMock = vi.hoisted(() => ({
 vi.mock('../services/codeReview.js', () => codeReviewMock);
 
 vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn().mockResolvedValue({}),
+  getSettingsWithStatus: vi.fn().mockResolvedValue({ corrupt: false, settings: {} }),
   updateSettings: vi.fn().mockResolvedValue({}),
   // PUT /health/thresholds was migrated to updateSettingsWith (a read-modify-write
   // that hands the mutator the current settings and returns its result). Mirror
@@ -335,7 +335,7 @@ describe('System Health Routes', () => {
     const health = { status: 'warning', configFaults: reviewerHealth };
     let settings = { codeReview: { reviewerHealth } };
     await codeReviewMock.getReviewerConfigHealth.withImplementation(async () => health, async () => {
-      await getSettings.withImplementation(async () => settings, async () => {
+      await getSettingsWithStatus.withImplementation(async () => ({ corrupt: false, settings }), async () => {
         await updateSettingsWith.withImplementation(async (mutate) => (settings = await mutate(settings)), async () => {
           const original = await request(app).get('/api/system/health/details');
           const warning = original.body.warnings.find((item) => item.type === 'code-review');
@@ -477,8 +477,9 @@ describe('System Health Routes', () => {
       // Force a disk-warn condition (95% used) so the 'disk' warning fires,
       // then supply a dismissal recorded against that exact message.
       vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 5, bsize: 1 });
-      getSettings.mockResolvedValueOnce({
-        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      getSettingsWithStatus.mockResolvedValueOnce({
+        corrupt: false,
+        settings: { health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } } }
       });
 
       const response = await request(app).get('/api/system/health/details');
@@ -490,8 +491,9 @@ describe('System Health Routes', () => {
       // 99% used crosses diskCritical (98), not diskWarn (90) — a different
       // message than the one that was dismissed.
       vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 1, bsize: 1 });
-      getSettings.mockResolvedValueOnce({
-        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      getSettingsWithStatus.mockResolvedValueOnce({
+        corrupt: false,
+        settings: { health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } } }
       });
 
       const response = await request(app).get('/api/system/health/details');
@@ -504,8 +506,9 @@ describe('System Health Routes', () => {
     it('prunes a stale dismissal once its condition no longer holds', async () => {
       // Default disk mock (50% used) never raises a 'disk' warning, so a
       // stored disk dismissal is now stale and should be dropped.
-      getSettings.mockResolvedValueOnce({
-        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      getSettingsWithStatus.mockResolvedValueOnce({
+        corrupt: false,
+        settings: { health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } } }
       });
       vi.mocked(updateSettingsWith).mockClear();
 
@@ -515,6 +518,126 @@ describe('System Health Routes', () => {
       const mutate = vi.mocked(updateSettingsWith).mock.calls[0][0];
       const next = await mutate({});
       expect(next.health.dismissedWarnings).toEqual({});
+    });
+
+    it('uses custom disk thresholds for health warnings', async () => {
+      vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 20, bsize: 1 });
+      getSettingsWithStatus.mockResolvedValueOnce({
+        corrupt: false,
+        settings: { health: { diskWarn: 70, diskCritical: 90 } }
+      });
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.thresholdsAvailable).toBe(true);
+      expect(body.thresholds).toMatchObject({ diskWarn: 70, diskCritical: 90 });
+      expect(body.warnings).toContainEqual({
+        type: 'disk', severity: 'warning', message: 'Disk usage at or above 70%'
+      });
+    });
+
+    it('reports corrupt settings, ignores their thresholds and dismissals, and blocks settings writes', async () => {
+      vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 5, bsize: 1 });
+      const healthSettingsWarning = 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.';
+      const corruptStatus = { corrupt: true, settings: {
+        health: {
+          diskWarn: 70,
+          diskCritical: 75,
+          dismissedWarnings: {
+            'health-settings': { message: healthSettingsWarning, dismissedAt: '2026-01-01T00:00:00.000Z' },
+            disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' }
+          }
+        }
+      } };
+      getSettingsWithStatus
+        .mockResolvedValueOnce(corruptStatus)
+        .mockResolvedValueOnce(corruptStatus)
+        .mockResolvedValueOnce(corruptStatus)
+        .mockResolvedValueOnce(corruptStatus);
+      vi.mocked(updateSettingsWith).mockClear();
+
+      const { body } = await request(app).get('/api/system/health/details');
+
+      expect(body.thresholdsAvailable).toBe(false);
+      expect(body.thresholds).toBeUndefined();
+      expect(body.warnings).toContainEqual(expect.objectContaining({
+        type: 'health-settings', severity: 'warning', message: healthSettingsWarning, dismissible: false
+      }));
+      expect(body.warnings).toContainEqual({
+        type: 'disk', severity: 'warning', message: 'Disk usage at or above 90%', dismissible: false
+      });
+      expect(updateSettingsWith).not.toHaveBeenCalled();
+
+      const saveThresholds = await request(app).put('/api/system/health/thresholds').send({
+        memoryWarn: 85, memoryCritical: 95, diskWarn: 70, diskCritical: 90
+      });
+      const dismissWarning = await request(app)
+        .post('/api/system/health/warnings/disk/dismiss')
+        .send({ message: 'Disk usage at or above 70%' });
+      const undismissWarning = await request(app).delete('/api/system/health/warnings/disk/dismiss');
+      const dismissSettingsWarning = await request(app)
+        .post('/api/system/health/warnings/health-settings/dismiss')
+        .send({ message: 'settings unavailable' });
+      const undismissSettingsWarning = await request(app).delete('/api/system/health/warnings/health-settings/dismiss');
+
+      expect(saveThresholds.status).toBe(503);
+      expect(dismissWarning.status).toBe(503);
+      expect(undismissWarning.status).toBe(503);
+      expect(dismissSettingsWarning.status).toBe(400);
+      expect(undismissSettingsWarning.status).toBe(400);
+      expect(updateSettingsWith).not.toHaveBeenCalled();
+    });
+
+    it('keeps a recurring warning visible and retries a failed stale-dismissal prune', async () => {
+      let persistedSettings = {
+        health: {
+          diskWarn: 70,
+          diskCritical: 90,
+          dismissedWarnings: {
+            disk: { message: 'Disk usage at or above 70%', dismissedAt: '2026-01-01T00:00:00.000Z' }
+          }
+        }
+      };
+      const staleSnapshot = () => ({ corrupt: false, settings: structuredClone(persistedSettings) });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.mocked(updateSettingsWith).mockClear();
+
+      try {
+        vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 50, bsize: 1 });
+        getSettingsWithStatus.mockResolvedValueOnce(staleSnapshot());
+        vi.mocked(updateSettingsWith).mockRejectedValueOnce(Object.assign(new Error('write failed'), { code: 'EIO' }));
+
+        const cleared = await request(app).get('/api/system/health/details');
+
+        expect(cleared.body.warnings.some((warning) => warning.type === 'disk')).toBe(false);
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('type=disk, error=EIO'));
+
+        vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 20, bsize: 1 });
+        getSettingsWithStatus.mockResolvedValueOnce(staleSnapshot());
+        vi.mocked(updateSettingsWith).mockImplementationOnce(async (mutate) => {
+          persistedSettings = await mutate(persistedSettings);
+          return persistedSettings;
+        });
+
+        const recurring = await request(app).get('/api/system/health/details');
+
+        expect(recurring.body.warnings).toContainEqual({
+          type: 'disk', severity: 'warning', message: 'Disk usage at or above 70%'
+        });
+        expect(persistedSettings.health.dismissedWarnings).toEqual({});
+
+        vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 20, bsize: 1 });
+        getSettingsWithStatus.mockResolvedValueOnce(staleSnapshot());
+
+        const afterRetry = await request(app).get('/api/system/health/details');
+
+        expect(afterRetry.body.warnings).toContainEqual({
+          type: 'disk', severity: 'warning', message: 'Disk usage at or above 70%'
+        });
+        expect(updateSettingsWith).toHaveBeenCalledTimes(2);
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
 
     describe('POST /health/warnings/:type/dismiss', () => {

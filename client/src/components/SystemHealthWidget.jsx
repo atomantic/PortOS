@@ -131,16 +131,18 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             >
               <AlertTriangle size={14} className="shrink-0" />
               <span className="flex-1">{warning.message}</span>
-              <button
-                type="button"
-                onClick={() => handleDismissWarning(warning)}
-                disabled={!refetchHealth || dismissingType === warning.type}
-                className="shrink-0 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
-                title="Dismiss as resolved"
-                aria-label={`Dismiss warning: ${warning.message}`}
-              >
-                <X size={13} aria-hidden="true" />
-              </button>
+              {warning.dismissible !== false && (
+                <button
+                  type="button"
+                  onClick={() => handleDismissWarning(warning)}
+                  disabled={!refetchHealth || dismissingType === warning.type}
+                  className="shrink-0 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Dismiss as resolved"
+                  aria-label={`Dismiss warning: ${warning.message}`}
+                >
+                  <X size={13} aria-hidden="true" />
+                </button>
+              )}
             </div>
           ))}
         </div>
