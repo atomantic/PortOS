@@ -14,9 +14,10 @@ import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 /**
  * Per-date write queue to serialize read-modify-write cycles.
  * Keyed by date string (YYYY-MM-DD) so different days fan out in parallel
- * while writes to the same day serialize.
+ * while writes to the same day serialize. Shared with the XML importer so a
+ * JSON ingest and an XML import can never interleave on the same day file.
  */
-const queueDayWrite = createKeyedFileWriteQueue();
+export const queueDayWrite = createKeyedFileWriteQueue();
 
 // === Pure Functions ===
 

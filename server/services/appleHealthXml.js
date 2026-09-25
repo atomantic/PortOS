@@ -8,9 +8,8 @@
 
 import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
-import { extractDateStr, readDayFile, writeDayFile, upsertPoints } from './appleHealthIngest.js';
+import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueDayWrite } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
-import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 // === Mapping Tables ===
 
@@ -205,13 +204,6 @@ function aggregateSleepAnalysis(points) {
 // === Main Export ===
 
 const FLUSH_INTERVAL = 200000; // Flush to disk every 200K records to stay under memory limits
-
-/**
- * Per-date write queue to serialize read-modify-write cycles.
- * Keyed by date string (YYYY-MM-DD) so different days fan out in parallel
- * while writes to the same day serialize.
- */
-const queueDayWrite = createKeyedFileWriteQueue();
 
 /**
  * Flush accumulated day buckets to disk: aggregate, merge with existing, write, clear.
