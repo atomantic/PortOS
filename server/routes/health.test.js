@@ -5,7 +5,7 @@ import { getMemoryStats } from '../lib/memoryStats.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
-import { listProcesses } from '../services/pm2.js';
+import { listProcesses, listProcessesStrict } from '../services/pm2.js';
 import { getStatus, getPendingTaskIds, getAgents } from '../services/cos.js';
 import { getSelf } from '../services/instanceIdentity.js';
 import { isAuthEnabled } from '../services/auth.js';
@@ -15,7 +15,8 @@ import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.
 import { statfs } from 'fs/promises';
 
 vi.mock('../services/pm2.js', () => ({
-  listProcesses: vi.fn().mockResolvedValue([])
+  listProcesses: vi.fn().mockResolvedValue([]),
+  listProcessesStrict: vi.fn().mockResolvedValue([])
 }));
 
 // Health assertions must not inherit the developer machine's disk or memory
@@ -239,7 +240,7 @@ describe('System Health Routes', () => {
   });
 
   it('does not warn on cumulative restart_time (developer-driven restarts)', async () => {
-    listProcesses.mockResolvedValueOnce([
+    listProcessesStrict.mockResolvedValueOnce([
       { name: 'portos', status: 'online', restarts: 97, unstableRestarts: 0, cpu: 0, memory: 0 }
     ]);
     const response = await request(app).get('/api/system/health/details');
@@ -248,7 +249,7 @@ describe('System Health Routes', () => {
   });
 
   it('warns when a process has unstable_restarts (real crash loop)', async () => {
-    listProcesses.mockResolvedValueOnce([
+    listProcessesStrict.mockResolvedValueOnce([
       { name: 'flaky-svc', status: 'online', restarts: 5, unstableRestarts: 3, cpu: 0, memory: 0 }
     ]);
     const response = await request(app).get('/api/system/health/details');
@@ -259,7 +260,7 @@ describe('System Health Routes', () => {
   });
 
   it('exposes thresholds and topProcesses (sorted by memory desc)', async () => {
-    listProcesses.mockResolvedValueOnce([
+    listProcessesStrict.mockResolvedValueOnce([
       { name: 'small', status: 'online', memory: 100, cpu: 1, restarts: 0, unstableRestarts: 0 },
       { name: 'big', status: 'online', memory: 5_000_000, cpu: 50, restarts: 0, unstableRestarts: 0 },
       { name: 'mid', status: 'online', memory: 2_000_000, cpu: 5, restarts: 0, unstableRestarts: 0 }
@@ -322,7 +323,7 @@ describe('System Health Routes', () => {
     });
 
     it('does not downgrade an already-critical verdict to warning', async () => {
-      listProcesses.mockResolvedValueOnce([
+      listProcessesStrict.mockResolvedValueOnce([
         { name: 'broken', status: 'errored', restarts: 1, unstableRestarts: 0, cpu: 0, memory: 0 }
       ]);
       checkGhHealth.mockResolvedValueOnce({
@@ -421,12 +422,12 @@ describe('System Health Routes', () => {
   describe('GET /health/details — desktop (GUI) process exemption', () => {
     beforeEach(() => {
       mock.desktopProcessNames = new Set();
-      vi.mocked(listProcesses).mockResolvedValue([]);
+      vi.mocked(listProcessesStrict).mockResolvedValue([]);
     });
 
     it('stays healthy when the only errored process is a quit game window', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      vi.mocked(listProcesses).mockResolvedValue([{ name: 'game', status: 'errored' }]);
+      vi.mocked(listProcessesStrict).mockResolvedValue([{ name: 'game', status: 'errored' }]);
 
       const { body } = await request(app).get('/api/system/health/details');
 
@@ -437,7 +438,7 @@ describe('System Health Routes', () => {
     });
 
     it('still goes critical for a genuinely errored web process', async () => {
-      vi.mocked(listProcesses).mockResolvedValue([{ name: 'web', status: 'errored' }]);
+      vi.mocked(listProcessesStrict).mockResolvedValue([{ name: 'web', status: 'errored' }]);
 
       const { body } = await request(app).get('/api/system/health/details');
 
@@ -447,7 +448,7 @@ describe('System Health Routes', () => {
 
     it('does not report a quit game as a crash loop', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      vi.mocked(listProcesses).mockResolvedValue([
+      vi.mocked(listProcessesStrict).mockResolvedValue([
         { name: 'game', status: 'errored', unstableRestarts: 5 }
       ]);
 
@@ -459,7 +460,7 @@ describe('System Health Routes', () => {
 
     it('counts a cleanly stopped desktop app as exited, not stopped', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      vi.mocked(listProcesses).mockResolvedValue([{ name: 'game', status: 'stopped' }]);
+      vi.mocked(listProcessesStrict).mockResolvedValue([{ name: 'game', status: 'stopped' }]);
 
       const { body } = await request(app).get('/api/system/health/details');
 
@@ -474,7 +475,7 @@ describe('System Health Routes', () => {
       // `online` too would render "1 of 2 running · all healthy" with both up,
       // and read identically whether the game is running or quit.
       mock.desktopProcessNames = new Set(['game']);
-      vi.mocked(listProcesses).mockResolvedValue([
+      vi.mocked(listProcessesStrict).mockResolvedValue([
         { name: 'game', status: 'online' },
         { name: 'web', status: 'online' }
       ]);
@@ -488,7 +489,7 @@ describe('System Health Routes', () => {
 
     it('keeps resource totals covering every process, exempt or not', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      vi.mocked(listProcesses).mockResolvedValue([
+      vi.mocked(listProcessesStrict).mockResolvedValue([
         { name: 'game', status: 'errored', memory: 100, cpu: 5, restarts: 2 },
         { name: 'web', status: 'online', memory: 50, cpu: 3, restarts: 1 }
       ]);

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import os from 'os';
 import { statfs } from 'fs/promises';
-import { listProcesses } from '../services/pm2.js';
+import { listProcesses, listProcessesStrict } from '../services/pm2.js';
 import { getAppStatusSummary, annotateExpectedExit } from '../services/appProcessStatus.js';
 import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instanceIdentity.js';
@@ -159,7 +159,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
 
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
-    listProcesses().catch(() => []),
+    listProcessesStrict().catch(() => null),
     getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch((error) => {
       console.error('Chief of Staff health probe failed', error);
@@ -216,23 +216,30 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // desktop app would sit in `total` and in no status bucket at all and the
   // dashboard would read "5/6 · all running" with all six up. Resource totals
   // likewise cover every process. See issue #2991.
-  const annotated = await annotateExpectedExit(pm2Processes);
-  const supervised = annotated.filter(p => !p.expectedExit);
-  const processStats = {
-    total: pm2Processes.length,
-    online: annotated.filter(p => p.status === 'online').length,
-    stopped: supervised.filter(p => p.status === 'stopped').length,
-    errored: supervised.filter(p => p.status === 'errored').length,
-    // A desktop app that exited (cleanly as `stopped`, or `errored` on a
-    // force-quit) — reported on its own rather than as a failure.
-    desktopExited: annotated.filter(
-      p => p.expectedExit && ['errored', 'stopped'].includes(p.status)
-    ).length,
-    totalMemory: pm2Processes.reduce((sum, p) => sum + (p.memory || 0), 0),
-    totalCpu: pm2Processes.reduce((sum, p) => sum + (p.cpu || 0), 0),
-    totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0),
-    unstableRestarts: supervised.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
-  };
+  // When PM2 read fails, pm2Processes is null and we set processStats to null
+  // to signal unavailable rather than zero.
+  let processStats = null;
+  let annotated = [];
+  let supervised = [];
+  if (pm2Processes !== null) {
+    annotated = await annotateExpectedExit(pm2Processes);
+    supervised = annotated.filter(p => !p.expectedExit);
+    processStats = {
+      total: pm2Processes.length,
+      online: annotated.filter(p => p.status === 'online').length,
+      stopped: supervised.filter(p => p.status === 'stopped').length,
+      errored: supervised.filter(p => p.status === 'errored').length,
+      // A desktop app that exited (cleanly as `stopped`, or `errored` on a
+      // force-quit) — reported on its own rather than as a failure.
+      desktopExited: annotated.filter(
+        p => p.expectedExit && ['errored', 'stopped'].includes(p.status)
+      ).length,
+      totalMemory: pm2Processes.reduce((sum, p) => sum + (p.memory || 0), 0),
+      totalCpu: pm2Processes.reduce((sum, p) => sum + (p.cpu || 0), 0),
+      totalRestarts: pm2Processes.reduce((sum, p) => sum + (p.restarts || 0), 0),
+      unstableRestarts: supervised.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
+    };
+  }
 
   // App status summary — PM2-managed apps only (Xcode/iOS-native projects
   // have no detectable runtime state, so they're tracked under `unmanaged`
@@ -263,6 +270,9 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   if (cosStatus === failedProbe) {
     rawWarnings.push({ type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false });
   }
+  if (pm2Processes === null) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'pm2', status: 'unavailable', severity: 'warning', message: 'Process manager (PM2) status unavailable', dismissible: false });
+  }
 
   if (disk) {
     if (disk.usagePercent >= thresholds.diskCritical) {
@@ -272,18 +282,20 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     }
   }
 
-  if (processStats.errored > 0) {
-    rawWarnings.push({ type: 'process', severity: 'critical', message: `${processStats.errored} process(es) errored` });
-  }
+  if (processStats) {
+    if (processStats.errored > 0) {
+      rawWarnings.push({ type: 'process', severity: 'critical', message: `${processStats.errored} process(es) errored` });
+    }
 
-  if (processStats.unstableRestarts > 0) {
-    const crashing = supervised.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
-    const plural = processStats.unstableRestarts === 1 ? '' : 's';
-    rawWarnings.push({
-      type: 'restarts',
-      severity: 'warning',
-      message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
-    });
+    if (processStats.unstableRestarts > 0) {
+      const crashing = supervised.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
+      const plural = processStats.unstableRestarts === 1 ? '' : 's';
+      rawWarnings.push({
+        type: 'restarts',
+        severity: 'warning',
+        message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
+      });
+    }
   }
 
   // A degraded app summary means PM2 couldn't be read for one or more homes, so
@@ -450,7 +462,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     codeReview: reviewerConfigHealth,
     thresholds: thresholdsAvailable ? thresholds : undefined,
     thresholdsAvailable,
-    topProcesses: [...pm2Processes]
+    topProcesses: pm2Processes === null ? null : [...pm2Processes]
       .sort((a, b) => (b.memory || 0) - (a.memory || 0))
       .slice(0, 10)
       .map(p => ({

@@ -1654,8 +1654,10 @@ export const databaseExportSchema = z.object({
 });
 
 // Dismissible system health warnings — see server/routes/systemHealth.js.
-// Probe failures are intentionally excluded: a missing measurement cannot be dismissed.
-export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review', 'health-settings'];
+// Probe failures ('probe-unavailable') are intentionally marked dismissible: false,
+// so they cannot be suppressed by the dismiss endpoint; 'probe-unavailable' is listed
+// here so it passes schema validation for requests that might include it.
+export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review', 'health-settings', 'probe-unavailable'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
 

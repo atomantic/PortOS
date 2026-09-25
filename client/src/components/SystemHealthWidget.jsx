@@ -50,7 +50,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
     const norm = (pct) => Math.max(0.18, Math.min(1, (pct ?? 0) / 100));
     cells[0] = norm(memPct);
     cells[1] = norm(cpuPct);
-    cells[2] = procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
+    cells[2] = processes && procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
     cells[3] = appTotal ? Math.max(0.25, appOnline / appTotal) : 0.25;
     cells[4] = norm(diskPct);
     for (let row = 1; row < 5; row++) {
@@ -60,7 +60,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
       }
     }
     return cells;
-  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal]);
+  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal, processes]);
 
   // Don't render if no data
   if (!health) {
@@ -70,6 +70,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   const { overallHealth, warnings, system, processes, apps, cos } = health;
   const diskProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk');
   const cosProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'cos');
+  const pm2ProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'pm2');
 
   const healthStyle = HEALTH_STYLE[overallHealth] || { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Activity };
   const HealthIcon = healthStyle.icon;
@@ -193,25 +194,32 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
         </div>
 
         {/* Processes */}
-        <div className="bg-port-bg/50 rounded-lg p-3">
-          <div className="flex min-w-0 items-center gap-2 mb-1">
-            <Activity size={14} className="hidden shrink-0 text-emerald-400 @2xs:block" />
-            <span className="truncate text-xs text-gray-500">Processes</span>
+        {processes ? (
+          <div className="bg-port-bg/50 rounded-lg p-3">
+            <div className="flex min-w-0 items-center gap-2 mb-1">
+              <Activity size={14} className="hidden shrink-0 text-emerald-400 @2xs:block" />
+              <span className="truncate text-xs text-gray-500">Processes</span>
+            </div>
+            <div className="text-lg @sm:text-xl font-bold text-white">
+              {processes.online}
+              <span className="text-sm font-normal text-gray-500">/{processes.total}</span>
+            </div>
+            <div className="flex items-center gap-1 text-xs text-gray-500">
+              {processes.errored > 0 ? (
+                <span className="text-port-error">{processes.errored} errored</span>
+              ) : processes.stopped > 0 ? (
+                <span>{processes.stopped} stopped</span>
+              ) : (
+                <span className="text-port-success">All running</span>
+              )}
+            </div>
           </div>
-          <div className="text-lg @sm:text-xl font-bold text-white">
-            {processes.online}
-            <span className="text-sm font-normal text-gray-500">/{processes.total}</span>
+        ) : pm2ProbeUnavailable ? (
+          <div className="rounded-lg bg-port-bg/50 p-3" aria-label="Process manager status unavailable">
+            <div className="text-xs text-gray-500">Processes</div>
+            <div className="text-lg font-bold text-port-warning">Unavailable</div>
           </div>
-          <div className="flex items-center gap-1 text-xs text-gray-500">
-            {processes.errored > 0 ? (
-              <span className="text-port-error">{processes.errored} errored</span>
-            ) : processes.stopped > 0 ? (
-              <span>{processes.stopped} stopped</span>
-            ) : (
-              <span className="text-port-success">All running</span>
-            )}
-          </div>
-        </div>
+        ) : null}
 
         {/* Services — PM2-managed apps; native (Xcode/iOS) projects shown as "+N native" */}
         <div

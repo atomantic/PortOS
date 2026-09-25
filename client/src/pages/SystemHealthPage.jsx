@@ -297,7 +297,11 @@ function SystemHealthOverview() {
             <Activity size={16} />
             Top processes by memory
           </h3>
-          {health.topProcesses && health.topProcesses.length > 0 ? (
+          {health.topProcesses === null ? (
+            <p role="status" className="text-gray-400 text-sm">
+              Process manager (PM2) status unavailable. <Link to="/system-resources/overview" className="text-port-accent hover:text-port-accent/80">Check health →</Link>
+            </p>
+          ) : health.topProcesses && health.topProcesses.length > 0 ? (
             <div className="space-y-1">
               {health.topProcesses.map((p) => (
                 <div key={p.name} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg/40 hover:bg-port-bg/60 text-sm">
