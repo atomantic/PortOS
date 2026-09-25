@@ -35,7 +35,7 @@
  */
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getSettings, settingsEvents } from './settings.js';
+import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { getSystemActivity } from './activeProcessing.js';
 import { startPortosSelfUpdate } from './portosSelfUpdate.js';
 import { runAppUpdate } from './appUpdateRunner.js';
@@ -50,9 +50,17 @@ const EVENT_ID = 'portos-auto-update';
 /** How often the scheduler looks for an idle window once it is armed. */
 const AUTO_UPDATE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
+// How long to wait before retrying a boot-time read that came back corrupt
+// (issue #8428) — mirrors backupScheduler's retry window.
+const CORRUPT_SETTINGS_RETRY_MS = 60_000;
+
 // Only confirmed enabled/disabled states are cached; the signature makes an
 // unrelated settings save free, exactly as backupScheduler's does.
 let registrationSignature = null;
+
+// Guards against stacking multiple boot-retry timers while settings.json
+// stays unreadable across several syncAutoUpdateSchedule() calls.
+let corruptRetryTimer = null;
 
 // The Socket.IO server, captured at boot so the scheduler's run emits the same
 // `portos:update:*` / `app:update:*` frames a click would — a user watching the
@@ -343,7 +351,25 @@ async function launchUpdateFor(channel, io) {
  * @returns {Promise<boolean>} whether the poll is registered afterwards.
  */
 export async function syncAutoUpdateSchedule(settings) {
-  const current = settings || await getSettings().catch(() => null);
+  if (!settings) {
+    // No explicit snapshot: boot path (or a corrupt-read retry). Read through
+    // the strict status so an unreadable/malformed settings.json is
+    // distinguishable from "auto-update genuinely off" (issue #8428).
+    // `settings:updated` always hands this a clean parsed snapshot, so the
+    // explicit-argument path below is unaffected.
+    const { corrupt, settings: read } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: {} }));
+    if (corrupt) {
+      console.error('❌ Automatic updates: settings unreadable — keeping current registration, will retry on next settings change');
+      const wasEnabled = registrationSignature !== null && JSON.parse(registrationSignature).enabled === true;
+      // Don't cache a signature for a failed read — the next sync
+      // (settings:invalidated, or the boot retry below) must re-evaluate.
+      registrationSignature = null;
+      scheduleCorruptRetry();
+      return wasEnabled;
+    }
+    return syncAutoUpdateSchedule(read);
+  }
+  const current = settings;
   const config = resolveAutoUpdateConfig(current?.autoUpdate);
   // Only the enabled flag shapes the REGISTRATION; the channel and the interval
   // are re-read inside the handler, so changing either takes effect on the next
@@ -373,12 +399,36 @@ export async function syncAutoUpdateSchedule(settings) {
   return true;
 }
 
+/**
+ * Arm a single one-shot retry after a corrupt boot/re-sync read (#8428), so a
+ * transient failure self-heals without waiting for a user-driven settings
+ * save. Runs outside the request lifecycle — the process-boundary try/catch
+ * convention applies, not the route error-bubbling one.
+ */
+function scheduleCorruptRetry() {
+  if (corruptRetryTimer) return;
+  corruptRetryTimer = setTimeout(() => {
+    corruptRetryTimer = null;
+    syncAutoUpdateSchedule().catch(err =>
+      console.error(`❌ Automatic updates: corrupt-settings retry failed: ${err.message}`));
+  }, CORRUPT_SETTINGS_RETRY_MS);
+  corruptRetryTimer.unref?.();
+}
+
 // Re-sync on every settings save rather than from the settings route — keeps
 // the HTTP handler decoupled from the update graph (mirrors backupScheduler).
 // The signature guard makes unrelated saves free.
 settingsEvents.on('settings:updated', (cleaned) => {
   syncAutoUpdateSchedule(cleaned).catch(err =>
     console.error(`❌ Auto-update schedule re-sync failed: ${err.message}`));
+});
+
+// A corrupt boot read invalidates the settings read cache (settings.js's
+// reloadSettings()); re-sync as soon as a later read clears, without waiting
+// for a settings:updated save (#8428).
+settingsEvents.on('settings:invalidated', () => {
+  syncAutoUpdateSchedule().catch(err =>
+    console.error(`❌ Auto-update schedule invalidation re-sync failed: ${err.message}`));
 });
 
 /**
@@ -397,4 +447,8 @@ export function __resetAutoUpdateSchedulerForTests() {
   lastLoggedSkip = null;
   ioRef = null;
   failingRuntimeWrites.clear();
+  if (corruptRetryTimer) {
+    clearTimeout(corruptRetryTimer);
+    corruptRetryTimer = null;
+  }
 }

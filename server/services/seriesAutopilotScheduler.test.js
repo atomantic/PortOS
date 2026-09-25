@@ -7,7 +7,7 @@
  *    the pinned run options to startSeriesAutopilot.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./eventScheduler.js', () => ({
   schedule: vi.fn(),
@@ -17,7 +17,15 @@ vi.mock('./eventScheduler.js', () => ({
 }));
 
 // settingsEvents only needs `.on` at module load (the re-sync subscription).
-vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
+vi.mock('./settings.js', () => {
+  // getSettingsWithStatus defaults to wrapping getSettings as a clean read
+  // (`corrupt: false`), matching production for every test that only sets up
+  // `getSettings.mockResolvedValue(...)`. Corrupt-read tests override
+  // getSettingsWithStatus directly.
+  const getSettings = vi.fn();
+  const getSettingsWithStatus = vi.fn(async () => ({ corrupt: false, settings: await getSettings() }));
+  return { getSettings, getSettingsWithStatus, settingsEvents: { on: vi.fn() } };
+});
 vi.mock('./pipeline/series.js', () => ({ getSeries: vi.fn() }));
 vi.mock('./pipeline/seriesAutopilot.js', () => ({ startSeriesAutopilot: vi.fn() }));
 vi.mock('./userTimezone.js', () => ({
@@ -25,7 +33,7 @@ vi.mock('./userTimezone.js', () => ({
 }));
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getSettings } from './settings.js';
+import { getSettings, getSettingsWithStatus } from './settings.js';
 import { getSeries } from './pipeline/series.js';
 import { startSeriesAutopilot } from './pipeline/seriesAutopilot.js';
 import {
@@ -211,5 +219,60 @@ describe('startSeriesAutopilotScheduler', () => {
     getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: true, cron: '0 3 * * *' }]));
     await startSeriesAutopilotScheduler();
     expect(schedule).toHaveBeenCalledWith(expect.objectContaining({ id: 'series-autopilot-s1' }));
+  });
+});
+
+/**
+ * #8428: a boot-time read of settings.json that is unreadable/malformed must
+ * not be treated as "no schedules configured". Before this, `getSettings()`
+ * collapsed that failure to `{}`, so `activeSchedules({})` was `[]` and the
+ * scheduler cached that as a confirmed signature — permanently, since nothing
+ * re-triggers a sync until the next successful settings save.
+ */
+describe('corrupt settings read at boot (#8428)', () => {
+  let consoleErrorSpy;
+
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs an error and registers nothing on a corrupt boot read, without logging "0 schedule(s)"', async () => {
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    const count = await startSeriesAutopilotScheduler();
+
+    expect(count).toBe(0);
+    expect(schedule).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('❌ Series Autopilot scheduler: settings unreadable'));
+  });
+
+  it('does not cancel an already-registered series cron when a later read is corrupt', async () => {
+    getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: true, cron: '0 3 * * *' }]));
+    await startSeriesAutopilotScheduler();
+    expect(schedule).toHaveBeenCalledTimes(1);
+
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await syncSeriesAutopilotSchedules();
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers once a later clean read succeeds, without a settings:updated save', async () => {
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await startSeriesAutopilotScheduler();
+    expect(schedule).not.toHaveBeenCalled();
+
+    getSettings.mockResolvedValue(withSchedules([{ seriesId: 's1', enabled: true, cron: '0 3 * * *' }]));
+    // Simulate the boot retry / settings:invalidated re-sync firing after a
+    // later clean read — the default mockImplementation resolves cleanly now.
+    const count = await syncSeriesAutopilotSchedules();
+
+    expect(count).toBe(1);
+    expect(schedule).toHaveBeenCalledTimes(1);
   });
 });
