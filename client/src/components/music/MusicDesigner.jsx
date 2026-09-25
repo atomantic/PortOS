@@ -8,8 +8,10 @@
  * AI provider of their choosing expands it into a rich, genre-dense musical
  * description, they optionally generate lyrics from that description plus their
  * own extra guidance, and the render step either hands it to an audio model
- * (`MusicGenPanel`) or asks the AI to DRAW the waveform itself (`WaveformPanel`,
- * `?engine=drawn`) and plays that drawing back in the browser. Every
+ * (`MusicGenPanel`), asks the AI to DRAW the waveform itself (`WaveformPanel`,
+ * `?engine=drawn`) and plays that drawing back in the browser, or asks it to
+ * write the piece as Strudel code (`CodePanel`, `?engine=code`) that a
+ * sandboxed player frame runs and records. Every
  * step's output lands in an editable textarea — **the AI drafts, the human owns
  * the text** — and every step stays revisitable from the step bar.
  *
@@ -28,8 +30,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  AudioLines, AudioWaveform, Brush, ChevronDown, ChevronUp, FileText, Lightbulb, Loader2, Mic2, Sparkles, Wand2,
+  AudioLines, AudioWaveform, Brush, ChevronDown, ChevronUp, Code2, FileText, Lightbulb, Loader2, Mic2, Sparkles, Wand2,
 } from 'lucide-react';
+import CodePanel from './CodePanel';
 import MusicGenPanel from './MusicGenPanel';
 import WaveformPanel from './WaveformPanel';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
@@ -51,12 +54,23 @@ const STEPS = [
 ];
 const STEP_IDS = STEPS.map((s) => s.id);
 // How the render step turns the description into sound: an on-device/remote
-// audio model, or a waveform the AI draws point by point. Rides in `?engine=`.
+// audio model, a waveform the AI draws point by point, or Strudel code the AI
+// writes. Rides in `?engine=` (absent = the audio model).
 const RENDER_ENGINES = [
   { id: 'model', label: 'Audio model', icon: AudioWaveform },
   { id: 'drawn', label: 'Drawn waveform', icon: Brush },
+  { id: 'code', label: 'Code', icon: Code2 },
 ];
-const DRAWN_ENGINE = 'drawn';
+const DEFAULT_ENGINE = 'model';
+const ENGINE_IDS = RENDER_ENGINES.map((e) => e.id);
+// The engines where the chosen AI provider writes the music itself. Both panels
+// take the same props; the audio model gets MusicGenPanel instead.
+const LLM_ENGINE_PANELS = { drawn: WaveformPanel, code: CodePanel };
+const PROMPT_HINTS = {
+  model: 'Required. This editable description is the prompt sent to the selected audio engine.',
+  drawn: 'Required. The AI draws the waveform from this editable description.',
+  code: 'Required. The AI writes the Strudel code from this editable description.',
+};
 const FIRST_STEP = STEP_IDS[0];
 const DRAFT_TITLE = 'Untitled music draft';
 const ACTIVE_DRAFT_KEY = 'portos.musicDesigner.activeDraft';
@@ -74,7 +88,8 @@ export default function MusicDesigner() {
   const [searchParams, setSearchParams] = useSearchParams();
   const mountedRef = useMounted();
   const requestedTrackId = searchParams.get('trackId') || '';
-  const renderEngine = searchParams.get('engine') === DRAWN_ENGINE ? DRAWN_ENGINE : 'model';
+  const renderEngine = ENGINE_IDS.includes(searchParams.get('engine')) ? searchParams.get('engine') : DEFAULT_ENGINE;
+  const LlmEnginePanel = LLM_ENGINE_PANELS[renderEngine];
   const storedDraftId = requestedTrackId || safeReadStorage(ACTIVE_DRAFT_KEY) || '';
 
   // Wizard text — lifted here so MusicGenPanel (which never writes back to
@@ -224,8 +239,8 @@ export default function MusicDesigner() {
   const setRenderEngine = (engineId) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (engineId === DRAWN_ENGINE) next.set('engine', DRAWN_ENGINE);
-      else next.delete('engine');
+      if (engineId === DEFAULT_ENGINE || !ENGINE_IDS.includes(engineId)) next.delete('engine');
+      else next.set('engine', engineId);
       return next;
     }, { replace: true });
   };
@@ -581,9 +596,7 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
             <span id="music-designer-render-prompt-hint" className="mt-1 block text-xs text-gray-500">
-              {renderEngine === DRAWN_ENGINE
-                ? 'Required. The AI draws the waveform from this editable description.'
-                : 'Required. This editable description is the prompt sent to the selected audio engine.'}
+              {PROMPT_HINTS[renderEngine]}
             </span>
           </label>
           <label htmlFor="music-designer-title" className="block">
@@ -604,8 +617,8 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
           </label>
-          {renderEngine === DRAWN_ENGINE ? (
-            <WaveformPanel
+          {LlmEnginePanel ? (
+            <LlmEnginePanel
               key={trackId}
               trackId={trackId}
               disabled={!draftReady || busy}

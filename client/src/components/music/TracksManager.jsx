@@ -354,6 +354,11 @@ export default function TracksManager() {
       navigate(`/music/generate/render?trackId=${encodeURIComponent(persisted.id)}&engine=drawn`);
       return;
     }
+    // Same for a code take: its Strudel code lives in the designer's code engine.
+    if (render.engine === 'code' && persisted) {
+      navigate(`/music/generate/render?trackId=${encodeURIComponent(persisted.id)}&engine=code`);
+      return;
+    }
     setGenMode('audio');
     setForm((f) => ({
       ...f,
