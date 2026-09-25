@@ -131,6 +131,17 @@ describe('<CodePanel>', () => {
     expect(form.get('title')).toBe('Night Drive');
   });
 
+  it('lets Stop cancel a recording that is waiting on the audio unlock', async () => {
+    window.localStorage.setItem('portos.musicDesigner.strudelCode', JSON.stringify({ trackId: 'track-1', code: CODE }));
+    await mountReady();
+    fireEvent.click(screen.getByRole('button', { name: /Save as take/ }));
+    await fromFrame({ type: 'state', state: 'blocked' });
+    expect(screen.getByText(/holding audio back/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/ }));
+    expect(posted).toHaveBeenLastCalledWith({ type: 'stop' }, '*');
+    expect(screen.getByRole('button', { name: /Save as take/ })).toBeEnabled();
+  });
+
   it('ends a failed recording without uploading', async () => {
     window.localStorage.setItem('portos.musicDesigner.strudelCode', JSON.stringify({ trackId: 'track-1', code: CODE }));
     await mountReady();

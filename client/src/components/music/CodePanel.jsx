@@ -128,7 +128,11 @@ export default function CodePanel({
     setFrameError('');
     post({ type: 'play', code });
   };
-  const stop = () => post({ type: 'stop' });
+  // Stop also cancels a recording (or one waiting on the audio unlock).
+  const stop = () => {
+    post({ type: 'stop' });
+    setSavePhase((phase) => (phase === 'recording' ? null : phase));
+  };
 
   const save = () => {
     if (!code.trim() || !trackId) return;
@@ -234,7 +238,7 @@ export default function CodePanel({
             <Play className="h-4 w-4" />
             <span>{playing ? 'Re-run' : 'Play'}</span>
           </button>
-          <button type="button" onClick={stop} disabled={!frameReady || !!savePhase || !playing} className={GHOST_BTN}>
+          <button type="button" onClick={stop} disabled={!frameReady || savePhase === 'uploading' || !(playing || frameState === 'blocked' || savePhase === 'recording')} className={GHOST_BTN}>
             <Square className="h-4 w-4" />
             <span>Stop</span>
           </button>
