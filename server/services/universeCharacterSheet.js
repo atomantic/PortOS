@@ -476,7 +476,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // Enqueue through mediaJobQueue so the render serializes through the right
   // backend lane alongside Image Gen / Universe Builder renders. The queue
   // dispatches by `params.mode` (codex → codex lane, local → GPU lane).
-  const queued = enqueueJob({ kind: 'image', params });
+  const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
   // Claim the latest-pending slot for this character + variant. onSheetComplete
   // checks it before stamping — guards against an older-but-slower render

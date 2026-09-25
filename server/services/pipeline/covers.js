@@ -164,7 +164,7 @@ async function enqueueComicCoverLike(issueId, target, options = {}) {
     ? composeComicCoverPrompt({ series, world, issue, coverScript: script, extraStyle })
     : composeComicBackCoverPrompt({ series, world, issue, backCoverScript: script, extraStyle });
   const logTarget = target === 'cover' ? 'cover' : 'back cover';
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, initImagePath, initImageStrength },
     owner: buildComicPagesOwner({ issueId, target, variant }),
@@ -360,7 +360,7 @@ async function enqueueVolumeCoverLike(seriesId, seasonId, target, options = {}) 
     ? composeVolumeCoverPrompt({ series, world, season, coverScript: script, extraStyle })
     : composeVolumeBackCoverPrompt({ series, world, season, backCoverScript: script, extraStyle });
   const logTarget = target === 'cover' ? 'cover' : 'back cover';
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, initImagePath, initImageStrength },
     owner: buildSeasonCoverOwner({ seriesId, seasonId, target, variant }),

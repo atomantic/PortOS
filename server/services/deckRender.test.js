@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const enqueueJob = vi.fn(() => ({ jobId: 'job-1', position: 1, status: 'queued' }));
+const enqueueJob = vi.fn(async () => ({ jobId: 'job-1', position: 1, status: 'queued' }));
 const getSettings = vi.fn();
 const getDeck = vi.fn();
 const markCardsRenderQueued = vi.fn(async () => ({}));

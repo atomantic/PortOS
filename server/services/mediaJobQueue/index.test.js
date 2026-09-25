@@ -56,8 +56,7 @@ vi.mock('../../lib/systemCapabilities.js', async (importOriginal) => ({
 // 'completed' or 'failed' for the worker to advance — we drive those events
 // directly from each test.
 const stubs = {
-  generateVideo: vi.fn(async () => ({
-tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
+  generateVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateVideoGrok: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -210,12 +209,12 @@ afterEach(async () => {
 });
 
 describe('mediaJobQueue', () => {
-  it('enqueueJob returns jobId + queued status + position', () => {
+  it('enqueueJob returns jobId + queued status + position', async () => {
     // Block the worker so the second enqueue lands behind the first in the
     // pipeline rather than entering an empty queue after the first ran.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    const r1 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'a' } });
-    const r2 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'b' } });
+    const r1 = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'a' } });
+    const r2 = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'b' } });
     expect(r1.status).toBe('queued');
     expect(r1.jobId).toMatch(/^[0-9a-f-]{36}$/);
     expect(r1.position).toBe(1);
@@ -229,8 +228,8 @@ describe('mediaJobQueue', () => {
     const upscaleParams = { historyId: 'src-1', sourceFilename: 'src-1.mp4', runtime: 'ltx25', seed: 7 };
 
     it('dispatches to the upscale service and takes the serialized GPU lane', async () => {
-      const render = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'a' } });
-      const upscale = mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
+      const render = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'a' } });
+      const upscale = await mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
       await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
       // The render holds the one GPU slot; the upscale waits behind it rather
@@ -246,7 +245,7 @@ describe('mediaJobQueue', () => {
     });
 
     it('settles on the videoGen event bus and cancels through the upscale service', async () => {
-      const { jobId } = mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
       await waitFor(() => stubs.runVideoUpscale.mock.calls.length === 1);
 
       await mediaJobQueue.cancelJob(jobId);
@@ -269,9 +268,9 @@ describe('mediaJobQueue', () => {
       // idle peers each read as busy while waiting on the other.
       stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
       stubs.generateAudioRemote.mockImplementation(() => new Promise(() => {}));
-      mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local' } });
-      mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
-      mediaJobQueue.enqueueJob({
+      await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local' } });
+      await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
+      await mediaJobQueue.enqueueJob({
         kind: 'audio',
         params: {
           prompt: '',
@@ -296,8 +295,8 @@ describe('mediaJobQueue', () => {
     it('runs local and Grok video renders in parallel lanes', async () => {
       stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
       stubs.generateVideoGrok.mockImplementation(() => new Promise(() => {}));
-      const local = mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'text', prompt: 'local' } });
-      const grok = mediaJobQueue.enqueueJob({
+      const local = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'text', prompt: 'local' } });
+      const grok = await mediaJobQueue.enqueueJob({
         kind: 'video',
         params: { mode: IMAGE_GEN_MODE.GROK, prompt: 'grok' },
       });
@@ -320,9 +319,9 @@ describe('mediaJobQueue', () => {
 
     it('counts queue depth per kind', async () => {
       stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-      mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-      mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-      mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+      await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+      await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+      await mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
       await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
       const { byKind } = mediaJobQueue.getQueueCapacity();
@@ -369,8 +368,8 @@ describe('mediaJobQueue', () => {
     });
   });
 
-  it('rejects unknown kinds', () => {
-    expect(() => mediaJobQueue.enqueueJob({ kind: 'bogus', params: {} })).toThrow(/invalid kind/);
+  it('rejects unknown kinds', async () => {
+    await expect(mediaJobQueue.enqueueJob({ kind: 'bogus', params: {} })).rejects.toThrow(/invalid kind/);
   });
 
   it('listJobs filters by kind / status / owner', async () => {
@@ -378,9 +377,9 @@ describe('mediaJobQueue', () => {
     // the assertions see the queue + running set we expect.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
     stubs.generateImage.mockImplementation(() => new Promise(() => {}));
-    mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'creative-director:cd-1' });
-    mediaJobQueue.enqueueJob({ kind: 'image', params: {}, owner: 'voice' });
-    mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'creative-director:cd-2' });
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'creative-director:cd-1' });
+    await mediaJobQueue.enqueueJob({ kind: 'image', params: {}, owner: 'voice' });
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'creative-director:cd-2' });
     expect(mediaJobQueue.listJobs({ kind: 'video' })).toHaveLength(2);
     expect(mediaJobQueue.listJobs({ kind: 'image' })).toHaveLength(1);
     expect(mediaJobQueue.listJobs({ owner: 'voice' })).toHaveLength(1);
@@ -405,8 +404,8 @@ describe('mediaJobQueue', () => {
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: archived }));
     await mediaJobQueue.initMediaJobQueue();
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    const first = mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
-    const second = mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
+    const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
+    const second = await mediaJobQueue.enqueueJob({ kind: 'video', params: {}, owner: 'example' });
     await flush();
 
     const all = mediaJobQueue.listQueueJobs();
@@ -429,10 +428,10 @@ describe('mediaJobQueue', () => {
     // Block the worker so subsequent enqueues stay queued.
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
-    const blocker = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    const a = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    const b = mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
-    const c = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const a = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const b = await mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+    const c = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
 
     await flush();
 
@@ -454,9 +453,9 @@ describe('mediaJobQueue', () => {
   it('cancelQueuedJobs respects a kind filter', async () => {
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
-    const blocker = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    const v = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    const i = mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const v = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const i = await mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
 
     await flush();
 
@@ -480,8 +479,8 @@ describe('mediaJobQueue', () => {
     // resolves, so subsequent enqueues stay queued for cancellation.
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
-    const blocker = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    const target = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const target = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
 
     await flush();
 
@@ -501,7 +500,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('worker drains a queued video job and marks it completed on the gen completed event', async () => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hi' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hi' } });
     // Wait until the worker invokes generateVideo. The stub records the call.
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     // The queue passed our jobId through so the gen module would write to
@@ -526,7 +525,7 @@ describe('mediaJobQueue', () => {
 
   it('progress/status events update the live job record for non-SSE readers', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress please' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'progress please' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     videoGenEvents.emit('status', { generationId: job.jobId, message: 'Loading pipeline' });
@@ -557,7 +556,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('retains the render ETA on the job record so a reload gets it back (#3801)', async () => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'how long' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'how long' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
 
@@ -578,7 +577,7 @@ describe('mediaJobQueue', () => {
     // SSE frames to plot a curve and key sample thumbnails by step. The
     // dispatcher must pass those structured fields through (additive — guarded
     // by presence so image/video frames that omit them are unaffected).
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'metrics' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'metrics' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
 
@@ -622,7 +621,7 @@ describe('mediaJobQueue', () => {
     // progress while it does. The phase id is the ONLY thing that lets the page
     // say what it is doing, so it has to survive the dispatcher on both frame
     // types. Presence-guarded: a frame that carries no phase must not stamp one.
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'what are you doing' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'what are you doing' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
     await waitFor(() => mediaJobQueue.getJob(job.jobId)?.status === 'running');
 
@@ -656,7 +655,7 @@ describe('mediaJobQueue', () => {
 
   it('debounce-persists live progress before a terminal transition', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'restart snapshot' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // Use a message synthesizeMessage() could NOT produce (it would emit
@@ -690,7 +689,7 @@ describe('mediaJobQueue', () => {
     // AGENTS.md forbids. We pin the coalescing by counting atomicWrite calls
     // under a burst of N progress events (must be ≪ N within one window).
     const file = join(tempDataDir, 'media-jobs.json');
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'burst' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'burst' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // Let the enqueue + 'running'-transition writes land first, then zero the
@@ -749,7 +748,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: {
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
       mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },
     } });
     await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
@@ -769,7 +768,7 @@ describe('mediaJobQueue', () => {
   });
 
   it.each([true, undefined])('preserves accepted or legacy cancellation results (%s)', async (accepted) => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'cancel render', videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'cancel render', videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } } });
     await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
     stubs.cancelVideo.mockImplementationOnce(() => {
       videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Stopped' });
@@ -783,7 +782,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('cancel during the terminal drain window is refused, not "canceling"', async () => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'finishing race' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'finishing race' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // Dirty the debounce so terminate() must actually drain (the widened
@@ -925,8 +924,8 @@ describe('mediaJobQueue', () => {
 
   it('persists state to media-jobs.json on enqueue / completion', async () => {
     const file = join(tempDataDir, 'media-jobs.json');
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
-    await waitFor(() => existsSync(file));
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    // Admission is durable (#8325): the acknowledged job is already on disk.
     const initial = JSON.parse(readFileSync(file, 'utf-8'));
     expect(initial.jobs.find((j) => j.id === job.jobId)).toBeTruthy();
 
@@ -942,7 +941,7 @@ describe('mediaJobQueue', () => {
   });
 
   it('failed gen events propagate to job status', async () => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'hi' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'hi' } });
     await waitFor(() => stubs.generateImage.mock.calls.length === 1);
     imageGenEvents.emit('failed', { generationId: job.jobId, error: 'OOM' });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
@@ -955,7 +954,7 @@ describe('mediaJobQueue', () => {
   it('pre-gen sanitizer nulls uploadedTempPath that resolves outside PATHS.uploads', async () => {
     // Any path that is not under the uploads root should be nulled out so the
     // gen module never sees it (defense-in-depth against corrupted job params).
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: 'x', uploadedTempPath: '/etc/passwd' },
     });
@@ -976,7 +975,7 @@ describe('mediaJobQueue', () => {
     // generateVideo hangs forever — never emits completed/failed.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
 
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'hang' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // The watchdog should fire within 50 ms and fail the job.
@@ -1002,7 +1001,7 @@ describe('mediaJobQueue', () => {
     mediaJobQueue.mediaJobEvents.on('failed', (j) => failedEmits.push(j.id));
     mediaJobQueue.mediaJobEvents.on('completed', (j) => completedEmits.push(j.id));
 
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'double-terminal' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'double-terminal' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // Let the watchdog fire and confirm the job lands as failed.
@@ -1127,7 +1126,7 @@ describe('mediaJobQueue', () => {
     await importFresh();
     stubs.generateVideo.mockImplementation(() => new Promise(() => {})); // hang forever
 
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'guard' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'guard' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
 
     // Wait a beat — long enough that a NaN-driven watchdog would have fired.
@@ -1140,7 +1139,7 @@ describe('mediaJobQueue', () => {
 
 describe('Audio kind (#1928)', () => {
   it('dispatches an audio job to audioGen/local.js#generateAudio and completes', async () => {
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'audio',
       params: { prompt: 'a moody synth bed', engine: 'musicgen' },
     });
@@ -1166,8 +1165,8 @@ describe('Audio kind (#1928)', () => {
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
     stubs.generateAudioRemote.mockImplementation(() => new Promise(() => {}));
 
-    const video = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local render' } });
-    const remote = mediaJobQueue.enqueueJob({
+    const video = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local render' } });
+    const remote = await mediaJobQueue.enqueueJob({
       kind: 'audio',
       params: {
         prompt: '',
@@ -1195,7 +1194,7 @@ describe('Audio kind (#1928)', () => {
     stubs.generateImageRemote.mockImplementation(() => new Promise(() => {}));
     // Deliberately hostile input: a caller that passed the local render fields
     // straight through, exactly as a forgotten normalization would.
-    const remote = mediaJobQueue.enqueueJob({
+    const remote = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: {
         prompt: 'a harbour',
@@ -1293,11 +1292,11 @@ describe('Audio kind (#1928)', () => {
     expect(params.remoteMedia.request.prompt).toBe('a harbour');
   });
 
-  it('leaves a training job carrying a stray marker on the local path', () => {
+  it('leaves a training job carrying a stray marker on the local path', async () => {
     // Bypass probe for the normalization above: `training` has no federated
     // contract, so a marker on one is corrupt state — blanking its params would
     // destroy a real local run.
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'training',
       params: { runId: 'run-1', runtime: 'mflux', modelId: 'dev', remoteMedia: remoteImageMediaParams() },
     });
@@ -1307,7 +1306,7 @@ describe('Audio kind (#1928)', () => {
 
   it('persists cancellation intent before signaling a running remote adapter', async () => {
     stubs.generateAudioRemote.mockImplementation(() => new Promise(() => {}));
-    const remote = mediaJobQueue.enqueueJob({
+    const remote = await mediaJobQueue.enqueueJob({
       kind: 'audio',
       params: {
         prompt: '',
@@ -1362,8 +1361,8 @@ describe('Audio kind (#1928)', () => {
 
     // A local image render occupies the single GPU slot; the federated one must
     // still start, because it renders on the peer's hardware.
-    const local = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'local render' } });
-    const remote = mediaJobQueue.enqueueJob({
+    const local = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'local render' } });
+    const remote = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: '', modelId: 'dev', remoteMedia: remoteImageMediaParams() },
     });
@@ -1387,8 +1386,8 @@ describe('Audio kind (#1928)', () => {
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
     stubs.generateVideoRemote.mockImplementation(() => new Promise(() => {}));
 
-    const local = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local render' } });
-    const remote = mediaJobQueue.enqueueJob({
+    const local = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'local render' } });
+    const remote = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: '', modelId: null, remoteMedia: remoteVideoMediaParams() },
     });
@@ -1450,7 +1449,7 @@ describe('Codex lane', () => {
     // Allow the codex job to resolve immediately so the worker can settle.
     stubs.generateImageCodex.mockResolvedValue({ jobId: 'whatever' });
 
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex test', mode: 'codex' },
     });
@@ -1471,8 +1470,8 @@ describe('Codex lane', () => {
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
     stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
 
-    const videoJob = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'video' } });
-    const codexJob = mediaJobQueue.enqueueJob({
+    const videoJob = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'video' } });
+    const codexJob = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex concurrent', mode: 'codex' },
     });
@@ -1502,10 +1501,10 @@ describe('Codex lane', () => {
     stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
 
     // Enqueue one GPU video job (occupies the GPU lane, should not affect Codex positions).
-    const videoJob = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'video blocker' } });
+    const videoJob = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'video blocker' } });
 
     // First Codex job: worker picks it up immediately (codexRunning slot).
-    const codex1 = mediaJobQueue.enqueueJob({
+    const codex1 = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex first', mode: 'codex' },
     });
@@ -1514,7 +1513,7 @@ describe('Codex lane', () => {
     await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
 
     // Second Codex job: lands in queue behind the running Codex job (position 2 in Codex lane).
-    const codex2 = mediaJobQueue.enqueueJob({
+    const codex2 = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex second', mode: 'codex' },
     });
@@ -1537,12 +1536,12 @@ describe('Codex lane', () => {
     mediaJobQueue.setCodexParallelLimit(1);
     stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
 
-    const codex1 = mediaJobQueue.enqueueJob({
+    const codex1 = await mediaJobQueue.enqueueJob({
       kind: 'image', params: { prompt: 'codex first', mode: 'codex' },
     });
     await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
 
-    const codex2 = mediaJobQueue.enqueueJob({
+    const codex2 = await mediaJobQueue.enqueueJob({
       kind: 'image', params: { prompt: 'codex second', mode: 'codex' },
     });
     expect(mediaJobQueue.getJob(codex2.jobId).status).toBe('queued');
@@ -1563,9 +1562,9 @@ describe('Codex lane', () => {
     // Block the GPU lane with one running job and queue a second so we have a
     // queued GPU job to attempt run-now on.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    const v1 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'first' } });
+    const v1 = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'first' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
-    const v2 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'second' } });
+    const v2 = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'second' } });
     expect(mediaJobQueue.getJob(v2.jobId).status).toBe('queued');
 
     const result = mediaJobQueue.runJobNow(v2.jobId);
@@ -1590,7 +1589,7 @@ describe('audioFilePath sanitization', () => {
   it('pre-gen sanitizer nulls audioFilePath that resolves outside PATHS.uploads', async () => {
     // audioFilePath must be treated identically to uploadedTempPath: if it
     // doesn't resolve under PATHS.uploads, the gen module must never see it.
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: 'x', audioFilePath: '/etc/shadow' },
     });
@@ -1605,7 +1604,7 @@ describe('audioFilePath sanitization', () => {
 
 describe('chunks dispatch', () => {
   it('video job with chunks > 1 calls generateChainedVideo instead of generateVideo', async () => {
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: 'chained', chunks: 3 },
     });
@@ -1622,7 +1621,7 @@ describe('chunks dispatch', () => {
   });
 
   it('video job with chunks === 1 calls generateVideo (not generateChainedVideo)', async () => {
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: 'single', chunks: 1 },
     });
@@ -1648,7 +1647,7 @@ describe('live pythonPath re-resolution', () => {
       join(tempDataDir, 'settings.json'),
       JSON.stringify({ imageGen: { local: { pythonPath: '/live/path/python3' } } }),
     );
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'video',
       params: { prompt: 'stale-snapshot', pythonPath: '/stale/anaconda/python3' },
     });
@@ -1663,7 +1662,7 @@ describe('live pythonPath re-resolution', () => {
       join(tempDataDir, 'settings.json'),
       JSON.stringify({ imageGen: { local: { pythonPath: '/live/path/python3' } } }),
     );
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex', mode: 'codex' },
     });
@@ -1679,7 +1678,7 @@ describe('cancelJob running-Codex branch', () => {
     // Codex job hangs indefinitely so it stays in 'running' for the cancel.
     stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
 
-    const job = mediaJobQueue.enqueueJob({
+    const job = await mediaJobQueue.enqueueJob({
       kind: 'image',
       params: { prompt: 'codex running cancel', mode: 'codex' },
     });
@@ -1742,7 +1741,7 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
 
     // …and so is every write the running queue would normally make.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after a bad boot' } });
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after a bad boot' } });
     await flush();
     expect(
       readFileSync(file, 'utf8'),
@@ -1757,7 +1756,7 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
     await mediaJobQueue.initMediaJobQueue();
 
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'good boot' } });
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'good boot' } });
     await flush();
     const written = JSON.parse(readFileSync(file, 'utf8'));
     expect(written.jobs.map((j) => j.id)).toContain(job.jobId);
@@ -1844,9 +1843,15 @@ describe('local video failure holds', () => {
     await vi.advanceTimersByTimeAsync(150);
     await flush();
   };
-  const submit = (modelId = 'example-mlx', extra = {}) => mediaJobQueue.enqueueJob({
+  const submit = async (modelId = 'example-mlx', extra = {}) => (await mediaJobQueue.enqueueJob({
     kind: 'video', owner: 'example-owner', params: { modelId, prompt: 'invented clip', ...extra },
-  }).jobId;
+  })).jobId;
+  // Admission is async (#8325); submit in order so queue positions stay FIFO.
+  const submitMany = async (count, make = () => submit()) => {
+    const ids = [];
+    for (let i = 0; i < count; i += 1) ids.push(await make());
+    return ids;
+  };
   const finish = async (id, error = 'RuntimeError: shader compilation failed') => {
     videoGenEvents.emit(error ? 'failed' : 'completed', { generationId: id, error });
     await flush();
@@ -1856,7 +1861,7 @@ describe('local video failure holds', () => {
     const upload = join(tempDataDir, 'uploads', 'example.png');
     mkdirSync(join(tempDataDir, 'uploads'));
     writeFileSync(upload, 'synthetic image');
-    const ids = Array.from({ length: 5 }, () => submit(modelId, { uploadedTempPath: upload, seed: 42 }));
+    const ids = await submitMany(5, () => submit(modelId, { uploadedTempPath: upload, seed: 42 }));
     for (const id of ids.slice(0, 3)) {
       await tick();
       expect(mediaJobQueue.getJob(id).status).toBe('running');
@@ -1893,16 +1898,16 @@ describe('local video failure holds', () => {
   });
 
   it('refills mixed lanes in FIFO order while skipping holds and oversubscribed cloud capacity', async () => {
-    const heldBatch = Array.from({ length: 4 }, () => submit());
+    const heldBatch = await submitMany(4);
     for (const id of heldBatch.slice(0, 3)) { await tick(); await finish(id); }
     mediaJobQueue.setCodexParallelLimit(1);
     stubs.generateImageCodex.mockResolvedValue({});
-    const cloudJob = () => mediaJobQueue.enqueueJob({
+    const cloudJob = async () => (await mediaJobQueue.enqueueJob({
       kind: 'image', params: { mode: 'codex', prompt: 'example cloud image' },
-    }).jobId;
+    })).jobId;
     const remoteJob = () => submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
-    const gpu = [submit('example-other')];
-    const cloud = [cloudJob()];
+    const gpu = [await submit('example-other')];
+    const cloud = [await cloudJob()];
     // Concurrent dynamic imports can bypass the module mock in this test runner;
     // without this adapter stub, 19 of 20 dispatches reach the real peer lookup.
     const { REMOTE_MEDIA_MODULES } = await import('./remoteMediaJob.js');
@@ -1910,17 +1915,17 @@ describe('local video failure holds', () => {
       generateVideo: stubs.generateVideoRemote,
     });
     const remoteLimit = mediaJobQueue.getQueueCapacity().lanes.remote.limit;
-    const remote = Array.from({ length: remoteLimit }, remoteJob);
+    const remote = await submitMany(remoteLimit, remoteJob);
     await tick();
-    cloud.push(cloudJob());
+    cloud.push(await cloudJob());
     expect(mediaJobQueue.runJobNow(cloud[1]).ok).toBe(true);
     await tick();
 
     // Interleave waiting jobs behind all three busy lanes and the held cohort.
     for (let i = 0; i < 2; i += 1) {
-      cloud.push(cloudJob());
-      gpu.push(submit('example-other'));
-      remote.push(remoteJob());
+      cloud.push(await cloudJob());
+      gpu.push(await submit('example-other'));
+      remote.push(await remoteJob());
     }
     await tick();
     const occupancy = () => {
@@ -1965,11 +1970,11 @@ describe('local video failure holds', () => {
   });
 
   it('lets other local models, image, audio, training, cloud and remote work pass a hold', async () => {
-    const ids = Array.from({ length: 4 }, () => submit());
+    const ids = await submitMany(4);
     for (const id of ids.slice(0, 3)) { await tick(); await finish(id); }
-    const cloud = submit('example-mlx', { mode: 'grok' });
-    const remote = submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
-    const other = submit('example-other');
+    const cloud = await submit('example-mlx', { mode: 'grok' });
+    const remote = await submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
+    const other = await submit('example-other');
     await tick();
     expect(stubs.generateVideoGrok).toHaveBeenCalledWith(expect.objectContaining({ jobId: cloud }));
     expect(stubs.generateVideoRemote).toHaveBeenCalledWith(expect.objectContaining({ jobId: remote }));
@@ -1977,7 +1982,7 @@ describe('local video failure holds', () => {
     await finish(other, null);
     for (const [kind, emitter] of [['image', imageGenEvents], ['audio', audioGenEvents], ['training', (await import('../loraTraining/events.js')).trainingEvents]]) {
       stubs.runTraining.mockResolvedValue({});
-      const { jobId } = mediaJobQueue.enqueueJob({ kind, params: {} });
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind, params: {} });
       await tick();
       expect(mediaJobQueue.getJob(jobId).status).toBe('running');
       emitter.emit('completed', { generationId: jobId });
@@ -1993,12 +1998,12 @@ describe('local video failure holds', () => {
       'RuntimeError: shader failed', 'RuntimeError: shader failed', 'Exit code 1',
       'RuntimeError: shape mismatch', 'RuntimeError: shader failed', 'RuntimeError: shader failed'];
     for (const error of errors) {
-      const id = submit(); await tick(); await finish(id, error);
+      const id = await submit(); await tick(); await finish(id, error);
     }
-    const canceled = submit(); await tick();
+    const canceled = await submit(); await tick();
     await mediaJobQueue.cancelJob(canceled);
     await finish(canceled, 'RuntimeError: unrelated cancellation');
-    const third = submit(); const retained = submit();
+    const third = await submit(); const retained = await submit();
     await tick(); await finish(third, 'RuntimeError: shader failed'); await tick();
     expect(mediaJobQueue.getJob(canceled).status).toBe('canceled');
     expect(mediaJobQueue.getJob(retained)).toMatchObject({ status: 'queued', hold: { cause: 'shader failed' } });
@@ -2006,13 +2011,13 @@ describe('local video failure holds', () => {
 
   it('counts pre-dispatch rejection once and resumes with a cleared streak', async () => {
     stubs.generateVideo.mockRejectedValue(Object.assign(new Error("Example runtime is not installed. Install or repair it from Video Gen's model setup panel."), { code: 'EXAMPLE_VENV_MISSING' }));
-    const ids = Array.from({ length: 4 }, () => submit());
+    const ids = await submitMany(4);
     for (let i = 0; i < 4; i += 1) await tick();
     expect(stubs.generateVideo).toHaveBeenCalledTimes(3);
     const held = mediaJobQueue.getJob(ids[3]);
     expect(held.status).toBe('queued');
     await mediaJobQueue.resumeVideoHold(held.hold.id);
-    const next = submit();
+    const next = await submit();
     await tick(); await tick();
     expect(stubs.generateVideo).toHaveBeenCalledTimes(5);
     expect(mediaJobQueue.getJob(next).status).toBe('failed');
@@ -2021,7 +2026,7 @@ describe('local video failure holds', () => {
   it('holds repeated quoted-only exceptions while keeping distinct keys separate', async () => {
     const errors = ["KeyError: 'Width'", "KeyError: 'width'", "KeyError: 'Width'",
       "KeyError: 'width'", "KeyError: 'width'", "KeyError: 'width'"];
-    const ids = Array.from({ length: errors.length + 1 }, () => submit());
+    const ids = await submitMany(errors.length + 1);
     for (const [i, error] of errors.entries()) {
       await tick();
       expect(mediaJobQueue.getJob(ids[i]).status).toBe('running');
@@ -2042,9 +2047,9 @@ describe('local video failure holds', () => {
     const { getDefaultVideoModelId } = await import('../../lib/mediaModels.js');
     getDefaultVideoModelId.mockImplementation((capabilities) => capabilities?.cuda?.maxVramGb === 8
       ? 'example-cuda' : 'example-large-cuda');
-    const ids = Array.from({ length: 4 }, () => mediaJobQueue.enqueueJob({
+    const ids = await submitMany(4, async () => (await mediaJobQueue.enqueueJob({
       kind: 'video', params: { prompt: 'invented clip' },
-    }).jobId);
+    })).jobId);
     for (const id of ids.slice(0, 3)) {
       await tick();
       expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: id, modelId: 'example-cuda' }));
@@ -2062,7 +2067,7 @@ describe('local video failure holds', () => {
 
   it('uses structured signal evidence and ignores advisory text when no cause was found', async () => {
     const { createVideoDiagnosticTail } = await import('../../lib/videoFailure.js');
-    const ids = Array.from({ length: 6 }, () => submit());
+    const ids = await submitMany(6);
     const causes = ['OutOfMemory', 'InnocentVictim', null, 'Timeout', 'Timeout'];
     for (const [i, cause] of causes.entries()) {
       await tick();
@@ -2083,7 +2088,7 @@ describe('local video failure holds', () => {
     await mediaJobQueue.initMediaJobQueue(); await tick();
     expect(mediaJobQueue.getJob('retained-legacy').status).toBe('running');
     await finish('retained-legacy');
-    const next = submit(); await tick();
+    const next = await submit(); await tick();
     expect(mediaJobQueue.getJob(next).status).toBe('running');
   });
 
@@ -2118,7 +2123,7 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.getJob('saved-image').status).toBe('running');
     imageGenEvents.emit('completed', { generationId: 'saved-image' });
     await flush();
-    const newlyQueued = submit('example-other');
+    const newlyQueued = await submit('example-other');
     await tick();
     const retainedIds = [...savedVideos, newlyQueued];
     for (const id of retainedIds) expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'queued', hold: { scope: 'local-video', heldJobCount: 3 } });
@@ -2135,5 +2140,90 @@ describe('local video failure holds', () => {
     for (const id of retainedIds) { await tick(); await finish(id, null); }
     expect(stubs.generateVideo.mock.calls.map(([params]) => params.jobId)).toEqual(retainedIds);
     expect(readFileSync(file, 'utf8')).toBe(snapshot);
+  });
+});
+
+// #8325: a job id handed to a caller must survive a crash, so admission waits
+// for the snapshot that contains the job — and a failed snapshot refuses it.
+describe('durable admission and shutdown flush', () => {
+  const jobsFile = () => join(tempDataDir, 'media-jobs.json');
+  const persistedIds = () => JSON.parse(readFileSync(jobsFile(), 'utf-8')).jobs.map((j) => j.id);
+  // Hold the NEXT snapshot write until the returned release() is called.
+  const holdNextWrite = () => {
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    atomicWriteSpy.mockImplementationOnce(async (...args) => {
+      await gate;
+      return realWrite(...args);
+    });
+    return () => release();
+  };
+
+  beforeEach(async () => {
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    // Boot starts the worker, so dispatch is live before the job is admitted.
+    await mediaJobQueue.initMediaJobQueue();
+    vi.useFakeTimers();
+  });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('acknowledges and dispatches a job only once its snapshot is written', async () => {
+    const release = holdNextWrite();
+    const settled = vi.fn();
+    const admission = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'slow disk' } });
+    admission.then(settled);
+    await vi.advanceTimersByTimeAsync(1000); // several worker passes
+    expect(settled).not.toHaveBeenCalled();
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+
+    release();
+    const { jobId, status } = await admission;
+    expect(status).toBe('queued');
+    expect(persistedIds()).toContain(jobId);
+    await vi.advanceTimersByTimeAsync(200);
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ jobId })));
+  });
+
+  it('refuses the submission and starts no provider work when the snapshot fails', async () => {
+    atomicWriteSpy.mockRejectedValueOnce(new Error('disk full'));
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'no room' } }))
+      .rejects.toMatchObject({ status: 503, code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+
+    // The next admission's snapshot must not resurrect the refused job.
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'retry' } });
+    expect(persistedIds()).toEqual([jobId]);
+  });
+
+  it('restores an admitted job exactly once after a crash', async () => {
+    stubs.generateVideo.mockClear();
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'running' } });
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
+    // Crash straight after the acknowledgement — nothing else gets to write.
+    vi.clearAllTimers();
+    mediaJobQueue.__resetForTests();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    const restored = mediaJobQueue.listJobs().filter((j) => j.id === jobId);
+    expect(restored).toHaveLength(1);
+    expect(restored[0].status).toBe('queued');
+    expect(persistedIds().filter((id) => id === jobId)).toHaveLength(1);
+    expect(persistedIds()).toContain(blocker.jobId);
+  });
+
+  it('flushes within its bound and reports a stalled or failed write', async () => {
+    const release = holdNextWrite();
+    const stalled = mediaJobQueue.flushMediaJobQueue({ timeoutMs: 500 });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(stalled).resolves.toMatchObject({ ok: false, timedOut: true });
+    release();
+
+    atomicWriteSpy.mockRejectedValueOnce(new Error('disk full'));
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: false, error: 'disk full' });
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
   });
 });

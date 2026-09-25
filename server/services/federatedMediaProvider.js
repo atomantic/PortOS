@@ -858,7 +858,7 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       idempotencyKey,
       requestHash,
     };
-    const queued = enqueueJob({
+    const queued = await enqueueJob({
       kind: input.kind,
       owner: jobOwner(callerId),
       params: buildQueueParams(input, capability, federatedMedia, inputAssetParams),

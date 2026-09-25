@@ -318,7 +318,7 @@ export async function generateDatasetImages(datasetId, options = {}) {
     const imageId = uuidv4();
     const file = `${imageId}.png`;
     const { prompt, negativePrompt } = buildDatasetImagePrompt(universe, subject, variation, entryKind);
-    const queued = enqueueJob({ kind: 'image', params: { ...base, prompt, negativePrompt } });
+    const queued = await enqueueJob({ kind: 'image', params: { ...base, prompt, negativePrompt } });
     const jobId = queued.jobId;
 
     const entry = {

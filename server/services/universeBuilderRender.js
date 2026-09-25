@@ -180,13 +180,13 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     // do for /api/image-gen/generate and pipeline renders.
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
     if (cloud) {
-      queued = enqueueJob({
+      queued = await enqueueJob({
         kind: 'image',
         params: { ...cloud.jobParams, cleanC2PA, denoise, ...params },
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
-      queued = enqueueJob({
+      queued = await enqueueJob({
         kind: 'image',
         params: {
           pythonPath: localModel.pythonPath,

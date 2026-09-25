@@ -219,7 +219,9 @@ export async function startTrainingRun({
   };
   await runsDb.createRun(run);
 
-  const queued = enqueueJob({
+  // The run row already exists, so a refused admission (#8325) must fail it
+  // rather than leave a 'queued' run no job will ever pick up.
+  const queued = await enqueueJob({
     kind: 'training',
     owner: 'lora-training',
     params: {
@@ -234,6 +236,9 @@ export async function startTrainingRun({
       rank: mergedParams.rank,
       pythonPath,
     },
+  }).catch(async (err) => {
+    await runsDb.updateRun(runId, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
+    throw err;
   });
   await runsDb.updateRun(runId, { jobId: queued.jobId });
   await stampDatasetTrainingStatus(run, queued.jobId);
@@ -312,7 +317,7 @@ export async function resumeTrainingRun(runId, { auto = false } = {}) {
     });
   }
 
-  const queued = enqueueJob({
+  const queued = await enqueueJob({
     kind: 'training',
     owner: 'lora-training',
     params: {

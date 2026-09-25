@@ -177,3 +177,22 @@ describe('shutdown handler — detached-group teardown (#7496)', () => {
     expect(code.indexOf('signalDetachedGroups(')).toBeLessThan(code.indexOf('closeServer('));
   });
 });
+
+// #8325. An admitted media job is acknowledged only once its snapshot is on
+// disk; shutdown must not exit while that write, a terminal transition, or the
+// final progress snapshot is still in the persist chain.
+describe('shutdown handler — media-job queue flush (#8325)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('flushes after admissions stop, before the DB close, and awaits it before exiting', () => {
+    const flushAt = code.indexOf('flushMediaJobQueue(');
+    expect(flushAt, 'flushMediaJobQueue() is not called in shutdown()').toBeGreaterThan(-1);
+    // Started only once the HTTP servers stop accepting requests, so no route
+    // can admit a job the flush misses.
+    expect(flushAt).toBeGreaterThan(code.indexOf("closeServer(httpServer"));
+    expect(flushAt).toBeLessThan(code.indexOf("import('../lib/db.js')"));
+    const awaitAt = code.indexOf('await mediaQueueFlushed');
+    expect(awaitAt).toBeGreaterThan(flushAt);
+    expect(awaitAt).toBeLessThan(code.indexOf('process.exit(0)'));
+  });
+});

@@ -224,7 +224,7 @@ const loadBibleContext = async (issueId) => {
   return { ...chain, settings };
 };
 
-const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLine, series = null, selectedModel = null }) => {
+const enqueueImageJob = async ({ prompt, world, settings, options, mode, owner, logLine, series = null, selectedModel = null }) => {
   // Merge user + world negatives — mirrors composeStyledPrompt's preset
   // negative handling so the world's global negative-prompt terms stay in
   // effect even when the caller supplies their own additions. Deduplicated
@@ -290,7 +290,7 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
       denoise,
       ...baseParams,
     };
-  const { jobId } = enqueueJob({ kind: 'image', params, owner });
+  const { jobId } = await enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return jobId;
 };

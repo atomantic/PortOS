@@ -304,7 +304,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     loraTriggerByKey: triggerByKey,
   });
 
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
     selectedModel,
@@ -486,7 +486,7 @@ export async function refineComicPageRender(issueId, options = {}) {
     ? Math.min(Math.max(options.initImageStrength, 0), 1)
     : REFINE_RENDER_DEFAULT_STRENGTH;
 
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt: refined, world, settings, mode, series,
     options: { ...options, initImagePath, initImageStrength },
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
@@ -554,7 +554,7 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     .join(', ');
   const prompt = triggerClause ? `${composedPrompt}\n\nFeaturing ${triggerClause}.` : composedPrompt;
 
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, ...loraRenderOptions(characterLoras) },
     selectedModel,

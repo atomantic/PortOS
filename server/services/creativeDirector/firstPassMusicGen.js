@@ -93,7 +93,7 @@ export async function enqueueFirstPassMusicBed(project, { engine } = {}) {
   if (!prompt) {
     return { mode: resolvedEngine, enqueued: false, reason: 'no-prompt' };
   }
-  const queued = enqueueJob({
+  const queued = await enqueueJob({
     kind: 'audio',
     params: {
       prompt,
