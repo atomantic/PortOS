@@ -589,6 +589,66 @@ export function createLocalRuntimeOomDetector({ maxBuffer = 512 } = {}) {
   };
 }
 
+// A TUI harness that cut the model's response off mid-generation. pi's TUI
+// halts the whole session on `Response was truncated before completion.` —
+// the turn is dead, but the session still holds the whole conversation, and a
+// human typing `continue` (Enter) resumes it every time. Unattended, nothing
+// ever types that word: the run sits at the halted screen until the generic
+// stall gate's ten-minute silence threshold, if it fires at all.
+//
+// The wording is vendor chrome, but it is English rather than a vendor error
+// constant, so the pattern spells the whole sentence with `\s+` joins — a TUI
+// hard-wraps at spaces, and the join lets a wrap survive where a literal
+// space would not. The residual false-positive surface (an agent QUOTING the
+// banner) is bounded by the consumer exactly as the OOM gate bounds its own:
+// the nudge fires only once the session has already gone quiet, and the run
+// fails over only after the truncations outlast every nudge
+// (createTruncationNudgeGate in ../tuiHandshake.js).
+//
+// Deliberately NOT an entry in IMMEDIATE_FALLBACK_SIGNALS, for the same reason
+// detectLocalRuntimeOom is not: that list arms the self-clearing gate in the
+// one-shot runner too, whose remedy (re-pasting the whole prompt) would restart
+// the task on top of work already done. The remedy here is a one-word
+// continuation, and only `agentTuiSpawning` consults this.
+//
+// `category` reuses the agent-analysis `output-length` vocabulary on purpose:
+// a truncated response is a response-ceiling failure, so it inherits that
+// category's entire downstream policy — the SCHEMA_TYPE fix tier with its
+// compaction hints, and no provider bench (a provider that truncates one
+// over-long response serves every other prompt fine; see
+// isRequestSpecificCategory in lib/providerCooldown.js).
+const TRUNCATED_RESPONSE_PATTERN = /response\s+was\s+truncated\s+before\s+completion/i;
+
+export function detectTruncatedResponse(text) {
+  if (!text) return null;
+  if (!TRUNCATED_RESPONSE_PATTERN.test(String(text))) return null;
+  return {
+    hasError: true,
+    category: 'output-length',
+    // A FIXED sentence, deliberately not the banner wording — the message
+    // becomes the run's error string, which a CoS task description can quote
+    // back through this very detector (same reasoning as detectLocalRuntimeOom).
+    message: 'Provider cut the response off before completion',
+    waitTime: null,
+    requiresFallback: true,
+    actionable: false,
+    graceMs: 0,
+    suggestedFix: 'The provider truncated the response mid-generation. A continue nudge resumes the session; if it keeps truncating, route the task to a fallback provider or reduce the requested response size.',
+    origin: 'provider',
+  };
+}
+
+export function createTruncatedResponseDetector({ maxBuffer = 512 } = {}) {
+  let buffer = '';
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 512;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    buffer = `${buffer}${String(chunk)}`.slice(-cap);
+    return detectTruncatedResponse(buffer);
+  };
+}
+
 // Claude Code's in-TUI retry banner, painted while it re-sends a failed request:
 // `API error · Retrying in 0s · attempt 1/10` (the prefix varies — `Request timed
 // out`, `Overloaded` — so only the retry suffix is matched). The whitespace is
