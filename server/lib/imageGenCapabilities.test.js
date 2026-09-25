@@ -14,16 +14,16 @@ import { pickAntigravityRelayModel } from './providerModels.js';
 // went out of sync exactly that way — see AGY_IMAGEGEN_DEFAULT_MODEL for the
 // incident this guard exists to make impossible to ship again.
 //
-// Provider pins are checked against data.reference/providers.json, while the
-// local image pin is checked against data.reference/media-models.json. Those
-// seeds are what fresh installs start with and must contain every code default.
+// Provider pins are checked against data.reference/providers.json (fresh installs
+// start with those), while the local image pin is checked against the runtime
+// DEFAULT_REGISTRY loaded by mediaModels.js (which serves fresh installs on
+// first boot via seedIfMissing()).
 //
 // Read as JSON instead of importing the toolkit's own catalog module — that
 // module pulls the whole provider subtree, and this is a two-value check (see
 // the server suite import budget in `importScoping.test.js`).
 describe('shipped image-gen defaults stay in the seeded catalogs', () => {
   const SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/providers.json');
-  const MEDIA_SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/media-models.json');
   const seeded = JSON.parse(readFileSync(SEED_PATH, 'utf8')).providers || {};
   const modelsFor = (id) => (Array.isArray(seeded[id]?.models) ? seeded[id].models : []);
 
@@ -48,9 +48,10 @@ describe('shipped image-gen defaults stay in the seeded catalogs', () => {
     expect(pickAntigravityRelayModel(modelsFor('antigravity-cli'))).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
   });
 
-  it('local image default remains in the seeded media catalog', () => {
-    const media = JSON.parse(readFileSync(MEDIA_SEED_PATH, 'utf8'));
-    expect(media.image.some((model) => model.id === LOCAL_IMAGEGEN_DEFAULT_MODEL)).toBe(true);
+  it('local image default remains in the loaded registry', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    expect(registry.image.some((model) => model.id === LOCAL_IMAGEGEN_DEFAULT_MODEL)).toBe(true);
     expect(LOCAL_IMAGEGEN_DEFAULT_MODEL).toBe('qwen-image-2.1');
   });
 });

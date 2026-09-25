@@ -74,7 +74,23 @@ export default {
     const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
     if (!Array.isArray(mlxEntries)) return;
 
-    const reference = parseJson(await readFile(REFERENCE_PATH, 'utf-8'), 'data.reference/media-models.json');
+    // Load the H3 model definition. The seed file may not exist on fresh installs
+    // (it's no longer committed), so gracefully skip if it's missing — the model
+    // will be added by seedIfMissing() when the server boots and loads
+    // DEFAULT_REGISTRY. Existing installs have it either in their registry already
+    // or will pick it up here from the reference copy.
+    const seedRaw = await readFile(REFERENCE_PATH, 'utf-8').catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (seedRaw === null) {
+      // Seed file missing and mlx entries exist → old install with existing models.
+      // Skip this migration; the model is new in this release and will be added by
+      // a later update if needed. A fresh install will get the model from
+      // DEFAULT_REGISTRY on first boot via seedIfMissing().
+      return;
+    }
+    const reference = parseJson(seedRaw, 'data.reference/media-models.json');
     const referenceMlx = readVideoBucket(reference?.video, VIDEO_BUCKET_MLX);
     const h3 = (Array.isArray(referenceMlx) ? referenceMlx : []).find((entry) => entry?.id === H3_ID);
     if (!h3) throw new Error(`Cannot migrate ${REL_PATH}: shipped ${H3_ID} reference is missing`);

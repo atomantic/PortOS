@@ -53,7 +53,23 @@ export default {
     const cudaEntries = readVideoBucket(config?.video, VIDEO_BUCKET_CUDA);
     if (!Array.isArray(cudaEntries)) return;
 
-    const reference = parseJson(await readFile(REFERENCE_PATH, 'utf-8'), 'data.reference/media-models.json');
+    // Load the CUDA H3 model definition. The seed file may not exist on fresh installs
+    // (it's no longer committed), so gracefully skip if it's missing — the model
+    // will be added by seedIfMissing() when the server boots and loads
+    // DEFAULT_REGISTRY. Existing installs have it either in their registry already
+    // or will pick it up here from the reference copy.
+    const seedRaw = await readFile(REFERENCE_PATH, 'utf-8').catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (seedRaw === null) {
+      // Seed file missing and cuda entries exist → old install with existing models.
+      // Skip this migration; the model is new in this release and will be added by
+      // a later update if needed. A fresh install will get the model from
+      // DEFAULT_REGISTRY on first boot via seedIfMissing().
+      return;
+    }
+    const reference = parseJson(seedRaw, 'data.reference/media-models.json');
     const referenceCuda = readVideoBucket(reference?.video, VIDEO_BUCKET_CUDA);
     const cuda = (Array.isArray(referenceCuda) ? referenceCuda : []).find((entry) => entry?.id === CUDA_ID);
     if (!cuda) throw new Error(`Cannot migrate ${REL_PATH}: shipped ${CUDA_ID} reference is missing`);

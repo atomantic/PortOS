@@ -23,16 +23,15 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// data.reference/media-models.json must mirror the in-code DEFAULT_REGISTRY so
-// `npm run setup:data` (which copies data.reference → data on fresh installs)
-// produces the same starting state as the runtime `seedIfMissing()` fallback.
-// Compares the seed file to a freshly-bootstrapped registry with
-// _shippedDefaults stripped (that's a runtime-only field).
-describe('data.reference seed file', () => {
-  it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', () => {
-    const seeded = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf8'));
-    expect(seeded.video.defaultMlx).toBe('fastmetal_5b_qad');
-    expect(seeded.video.mlx.some((entry) => entry.id === seeded.video.defaultMlx)).toBe(true);
+// Fresh installs bootstrap the registry from DEFAULT_REGISTRY, applied at the
+// first server boot via seedIfMissing(). This suite verifies that the runtime
+// registry matches the expected guarantees without depending on a committed file.
+describe('media model registry freshly loaded', () => {
+  it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    expect(registry.video.defaultMlx).toBe('fastmetal_5b_qad');
+    expect(registry.video.mlx.some((entry) => entry.id === registry.video.defaultMlx)).toBe(true);
   });
 
   it('appends new Apple video choices to an existing registry and preserves later removals', async () => {
@@ -68,12 +67,24 @@ describe('data.reference seed file', () => {
     expect(upgraded.image.find((m) => m.id === 'qwen-image')).toEqual(legacy);
   });
 
-  it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
-    const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
+  it('loads DEFAULT_REGISTRY correctly with expected defaults', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
-    const live = loadMediaModels();
-    const { _shippedDefaults: _omit, ...liveSeed } = live;
-    expect(sample).toEqual(liveSeed);
+    const registry = loadMediaModels();
+    // Verify the fresh-seeded registry has the key defaults that distinguish
+    // this release from older snapshots. This replaces the old equality test
+    // against a committed seed file.
+    expect(registry.video.defaultMlx).toBe('fastmetal_5b_qad');
+    expect(registry.video.mlx.some((entry) => entry.id === registry.video.defaultMlx)).toBe(true);
+    expect(registry.image.some((entry) => entry.id === registry.selectedTextEncoder)).toBe(false);
+    // Spot-check a few complex entries exist and have expected fields
+    const ltx23 = registry.video.mlx.find((m) => m.id === 'ltx23_unified');
+    expect(ltx23).toBeDefined();
+    expect(ltx23.disclosure).toBeDefined();
+    expect(ltx23.speedProfiles).toBeDefined();
+    // Fresh registries should have _shippedDefaults populated
+    expect(registry._shippedDefaults).toBeDefined();
+    expect(Array.isArray(registry._shippedDefaults.video.mlx)).toBe(true);
+    expect(Array.isArray(registry._shippedDefaults.video.cuda)).toBe(true);
   });
 });
 

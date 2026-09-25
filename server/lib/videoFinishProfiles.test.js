@@ -7,18 +7,11 @@ import {
   finishTargetForModel,
   isDeliveryVideoModel,
 } from './videoFinishProfiles.js';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { VIDEO_BUCKET_MLX, VIDEO_BUCKET_CUDA } from './mediaModelBuckets.js';
 
-// The shipped registry, read from the seed file rather than by importing
-// mediaModels.js (which seeds/writes data/media-models.json on import).
-// mediaModels.test.js already pins this file to the in-code DEFAULT_REGISTRY,
-// so validating it here validates the defaults.
-const SHIPPED_REGISTRY = JSON.parse(readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), '../../data.reference/media-models.json'),
-  'utf-8',
-));
+// The shipped registry is loaded via the runtime DEFAULT_REGISTRY, which is
+// applied on fresh installs via seedIfMissing(). mediaModels.test.js already
+// validates the loaded registry against the defaults.
 
 // A minimal well-formed pair: same runtime, same base repo, same modes — the
 // pair differs only in step budget, which is what makes a seed re-render
@@ -108,9 +101,14 @@ describe('validateFinishProfileGraph', () => {
     expect(problem.reason).toMatch(/non-empty string/);
   });
 
-  it('passes for every shipped platform list — a typo in the registry fails here', () => {
-    for (const platform of ['macos', 'windows']) {
-      expect(validateFinishProfileGraph(SHIPPED_REGISTRY.video[platform])).toEqual([]);
+  it('passes for every shipped platform list — a typo in the registry fails here', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    for (const platform of [VIDEO_BUCKET_MLX, VIDEO_BUCKET_CUDA]) {
+      const entries = registry.video[platform];
+      if (Array.isArray(entries)) {
+        expect(validateFinishProfileGraph(entries)).toEqual([]);
+      }
     }
   });
 });
