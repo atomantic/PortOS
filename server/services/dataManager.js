@@ -295,6 +295,7 @@ export async function getDataOverview({ strict = false } = {}) {
 
   return {
     totalSize: totalResult.size,
+    totalFileCount: totalResult.fileCount,
     categories,
     disk,
     dataDir: 'data'

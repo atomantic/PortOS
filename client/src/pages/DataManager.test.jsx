@@ -407,6 +407,18 @@ describe('DataManager treemap + selection panel', () => {
     expect(panel).toHaveTextContent('Reclaimable');
   });
 
+  // data/ holds settings/state JSON at its root — counted in totalSize but in no
+  // category. The map must give those bytes a tile rather than stretch the
+  // directories over the whole area.
+  it('gives files directly in data/ their own non-selectable tile', async () => {
+    getDataOverview.mockResolvedValue({ ...overview, totalSize: 4000, totalFileCount: 20 });
+    render(<DataManager />);
+    const loose = await screen.findByRole('button', { name: /^Loose files/ });
+    expect(loose).toBeDisabled();
+    expect(loose).toHaveAttribute('title', expect.stringContaining('Files directly in data/'));
+    expect(screen.getByText(/20 files · 2 categories/)).toBeInTheDocument();
+  });
+
   it('shortlists only whole-category reclaim and shows disk headroom', async () => {
     render(<DataManager />);
     const panel = await screen.findByRole('complementary', { name: 'Selection details' });

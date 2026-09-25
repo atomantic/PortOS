@@ -44,14 +44,26 @@ function NestedItems({ items, width, height }) {
   });
 }
 
-export default function DataTreemap({ categories, selectedKey, detail, onSelect }) {
+// Files sitting directly in data/ (settings, state JSON) count toward the
+// total but belong to no category directory. Without this tile the
+// directories would be scaled to fill the whole map and overstate their share.
+const LOOSE_KEY = '__loose-files';
+
+export default function DataTreemap({ categories, looseBytes = 0, selectedKey, detail, onSelect }) {
   const [ref, measured] = useContainerWidth();
   const width = measured || FALLBACK_WIDTH;
   const height = mapHeight(width);
 
   const tiles = useMemo(
-    () => squarifyTreemap(categories || [], width, height, (c) => c.size),
-    [categories, width, height],
+    () => squarifyTreemap(
+      looseBytes > 0
+        ? [...(categories || []), { key: LOOSE_KEY, label: 'Loose files', size: looseBytes, loose: true }]
+        : categories || [],
+      width,
+      height,
+      (c) => c.size,
+    ),
+    [categories, looseBytes, width, height],
   );
 
   // One wrapper for both states: useContainerWidth observes the element it
@@ -78,7 +90,10 @@ export default function DataTreemap({ categories, selectedKey, detail, onSelect 
             key={cat.key}
             type="button"
             onClick={() => onSelect(cat.key)}
-            title={`${cat.label} — ${formatBytes(cat.size)} · ${kind.label}`}
+            disabled={cat.loose}
+            title={cat.loose
+              ? `Files directly in data/ (settings and state) — ${formatBytes(cat.size)}`
+              : `${cat.label} — ${formatBytes(cat.size)} · ${kind.label}`}
             aria-pressed={selected}
             className={`absolute flex flex-col justify-start overflow-hidden rounded-md border-t-2 text-left transition-colors ${kind.tile} ${kind.edge} ${selected ? 'ring-2 ring-white/70 z-10' : ''}`}
             style={{ left: x, top: y, width: tileW, height: tileH, ...(kind.hatch ? HATCH_STYLE : null) }}

@@ -508,7 +508,12 @@ export default function DataManager() {
 
   const categories = overview?.categories || [];
   const maxSize = categories[0]?.size || 1;
-  const totalFiles = categories.reduce((sum, c) => sum + (c.fileCount || 0), 0);
+  const categoryBytes = categories.reduce((sum, c) => sum + (c.size || 0), 0);
+  const looseBytes = Math.max(0, (overview?.totalSize || 0) - categoryBytes);
+  // Older servers omit totalFileCount; the category sum then undercounts only
+  // the files sitting directly in data/.
+  const totalFiles = overview?.totalFileCount
+    ?? categories.reduce((sum, c) => sum + (c.fileCount || 0), 0);
   const presentKinds = DATA_KIND_ORDER.filter((k) => categories.some((c) => dataKindOf(c) === k));
   const selectedCat = categories.find((c) => c.key === expandedCat) || null;
 
@@ -567,6 +572,7 @@ export default function DataManager() {
             {/* Disk-usage map — click a tile to select it and nest its entries */}
             <DataTreemap
               categories={categories}
+              looseBytes={looseBytes}
               selectedKey={expandedCat}
               detail={detail}
               onSelect={handleExpand}
