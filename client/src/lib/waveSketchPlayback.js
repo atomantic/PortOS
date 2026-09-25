@@ -1,7 +1,8 @@
-// One-shot WebAudio preview for the Music Designer's LLM-drawn wave sketches
-// (#8376). The PCM comes from `synthesizeWaveSketch` in
-// server/lib/waveSketch.js — the same deterministic synth the server renders a
-// saved take with — so what plays here is exactly what gets saved.
+// One-shot WebAudio preview for the Music Designer's LLM-made wave sketches
+// (#8376): v1 drawings (mono) and v2 painted canvases (stereo, #8464). The PCM
+// comes from `synthesizeSketchChannels` in server/lib/waveSketch.js — the same
+// deterministic synth the server renders a saved take with — so what plays
+// here is exactly what gets saved.
 //
 // No React: `WaveformPanel` drives it, whichever host mounts the panel (the
 // Music Designer's drawn engine or the Tracks editor's "Drawn waveform" mode).
@@ -13,7 +14,8 @@ import { WAVE_SKETCH_SAMPLE_RATE } from '../../../server/lib/waveSketch.js';
 /**
  * A single-source player for synthesized sketch PCM.
  *
- * - `play(pcm)` → Promise<boolean>: stops any current playback, resumes the
+ * - `play(pcm)` → Promise<boolean>: `pcm` is one mono Float32Array or an array
+ *   of channels (`[left, right]`). Stops any current playback, resumes the
  *   shared context, and starts the buffer. Resolves false when a `stop()` (or
  *   a newer `play`) landed while the context was resuming, so a stale start
  *   never sounds. Rejects when the context cannot resume.
@@ -42,8 +44,9 @@ export function createWaveSketchPlayer({ onEnded } = {}) {
     const ctx = getAudioContext();
     await resumeAudioContext(ctx);
     if (token !== generation) return false;
-    const buffer = ctx.createBuffer(1, pcm.length, WAVE_SKETCH_SAMPLE_RATE);
-    buffer.getChannelData(0).set(pcm);
+    const channels = Array.isArray(pcm) ? pcm : [pcm];
+    const buffer = ctx.createBuffer(channels.length, channels[0].length, WAVE_SKETCH_SAMPLE_RATE);
+    channels.forEach((data, c) => buffer.getChannelData(c).set(data));
     const node = ctx.createBufferSource();
     node.buffer = buffer;
     node.connect(ctx.destination);

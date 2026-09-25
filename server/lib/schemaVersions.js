@@ -292,7 +292,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a <=v6 peer's sketch-unaware sanitizer would drop the drawing and LWW the
   // loss back. The accepted sender-behind direction is covered by the
   // absent-key carry in services/tracks/logic.js mergeTrackRecord.
-  tracks: 7,
+  // tracks v8 = `track.waveSketch` may hold a `version: 2` painted-spectrogram
+  // canvas (#8464, lib/paintedCanvas.js). A <=v7 peer runs every sketch through
+  // its v1-only normalizeWaveSketch, which strips a painting to null, and would
+  // LWW that loss back — so it must reject the record instead. Stored v1
+  // sketches still normalize and render unchanged; nothing to migrate.
+  tracks: 8,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

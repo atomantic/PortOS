@@ -3,7 +3,7 @@
  *
  * Hosts the Music Designer's `WaveformPanel` on a saved track so a drawn take
  * can be revised and re-rendered where the track lives: the panel opens on the
- * track's stored `waveSketch`, and draws from the editor's prompt/lyrics. The
+ * track's stored `waveSketch`, and paints from the editor's prompt/lyrics. The
  * designer owns its provider picker; this host supplies its own.
  */
 
