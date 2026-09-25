@@ -3266,11 +3266,11 @@ describe('peerSync', () => {
       expect(mergeOutlineFromSync).not.toHaveBeenCalled();
     });
 
-    it('skips mergeReviewFromSync and marks pending when the series id is malformed (security: #8355)', async () => {
+    it('skips mergeReviewFromSync without a retry flag when the series id is malformed (security: #8355)', async () => {
       // A series id containing `../` or not matching the required "ser-" prefix
       // must not trigger a merge that could write files outside the series directory.
       const manuscriptReview = { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] };
-      await applyIncomingPush({
+      const result = await applyIncomingPush({
         kind: 'series',
         record: { id: '../../../etc/passwd', name: 'S', deleted: false, deletedAt: null },
         issues: [],
@@ -3279,13 +3279,16 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-a',
       });
       expect(mergeReviewFromSync).not.toHaveBeenCalled();
+      // An invalid id can never become valid — a pending flag would make the
+      // sender withhold its hash and resend forever.
+      expect(result.reviewSyncPending).toBeUndefined();
     });
 
-    it('skips mergeOutlineFromSync and marks pending when the series id is malformed (security: #8355)', async () => {
+    it('skips mergeOutlineFromSync without a retry flag when the series id is malformed (security: #8355)', async () => {
       // A series id not matching the required "ser-" prefix pattern must not
       // trigger a merge that could write files outside the series directory.
       const reverseOutline = sampleOutline();
-      await applyIncomingPush({
+      const result = await applyIncomingPush({
         kind: 'series',
         record: { id: 'evil/../../etc/passwd', name: 'S', deleted: false, deletedAt: null },
         issues: [],
@@ -3294,6 +3297,7 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-a',
       });
       expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+      expect(result.outlineSyncPending).toBeUndefined();
     });
 
     it('refuses to merge linkedCollection when the incoming record is a tombstone', async () => {
