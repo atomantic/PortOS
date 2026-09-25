@@ -100,6 +100,21 @@ describe('SystemHealthWidget', () => {
     expect(screen.getByText('80%')).toHaveClass('text-port-accent');
   });
 
+  it('does not offer dismissal for an unavailable health-settings warning', () => {
+    const message = 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.';
+    renderWidget({
+      health: {
+        ...HEALTH,
+        thresholds: undefined,
+        warnings: [{ type: 'health-settings', severity: 'warning', message, dismissible: false }],
+      },
+      refetchHealth: vi.fn(),
+    });
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Dismiss warning: ${message}` })).not.toBeInTheDocument();
+  });
+
   it('dismisses a warning as resolved and refetches health', async () => {
     const user = userEvent.setup();
     const refetchHealth = vi.fn().mockResolvedValue(undefined);
