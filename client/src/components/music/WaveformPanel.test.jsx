@@ -94,6 +94,21 @@ describe('<WaveformPanel>', () => {
     expect(screen.getByText(/Nothing drawn yet/)).toBeTruthy();
   });
 
+  it('sends the typed length, clamped to the supported range', async () => {
+    renderPanel();
+    const length = screen.getByLabelText('Length (sec)');
+    fireEvent.change(length, { target: { value: '1' } });
+    fireEvent.change(length, { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
+    await waitFor(() => expect(api.drawWaveform).toHaveBeenCalledTimes(1));
+    expect(api.drawWaveform.mock.calls[0][0].durationSec).toBe(12);
+
+    fireEvent.change(length, { target: { value: '999' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Draw from scratch/ }));
+    await waitFor(() => expect(api.drawWaveform).toHaveBeenCalledTimes(2));
+    expect(api.drawWaveform.mock.calls[1][0].durationSec).toBe(60);
+  });
+
   it('revises by sending the current drawing back', async () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));

@@ -31,6 +31,7 @@ import {
 
 const SKETCH_KEY = 'portos.musicDesigner.waveSketch';
 const DEFAULT_LENGTH_SEC = 20;
+const MIN_LENGTH_SEC = 4;
 const PEAK_COLUMNS = 600;
 const LANE_HEIGHT = 14;
 // Theme tokens (RGB triplets), so the drawing follows the active PortOS theme.
@@ -151,7 +152,9 @@ export default function WaveformPanel({
   const mountedRef = useMounted();
   const [sketch, setSketch] = useState(() => readStoredSketch(trackId));
   const [guidance, setGuidance] = useState('');
-  const [lengthSec, setLengthSec] = useState(DEFAULT_LENGTH_SEC);
+  // Raw field text — clamped only when used, so typing "12" isn't snapped to
+  // the minimum after its first digit.
+  const [lengthInput, setLengthInput] = useState(String(DEFAULT_LENGTH_SEC));
   const [drawing, setDrawing] = useState(null); // 'fresh' | 'revise' | null
   const [saving, setSaving] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -228,7 +231,7 @@ export default function WaveformPanel({
       description: description.trim(),
       lyrics: lyrics.trim() || undefined,
       guidance: guidance.trim() || undefined,
-      durationSec: lengthSec,
+      durationSec: clamp(Number(lengthInput) || DEFAULT_LENGTH_SEC, MIN_LENGTH_SEC, WAVE_SKETCH_LIMITS.DURATION_MAX_SEC),
       ...(mode === 'revise' && sketch ? { current: sketch } : {}),
       providerId: providerId || undefined,
       model: model || undefined,
@@ -282,10 +285,10 @@ export default function WaveformPanel({
           <input
             id="music-waveform-length"
             type="number"
-            min={4}
+            min={MIN_LENGTH_SEC}
             max={WAVE_SKETCH_LIMITS.DURATION_MAX_SEC}
-            value={lengthSec}
-            onChange={(event) => setLengthSec(clamp(Number(event.target.value) || DEFAULT_LENGTH_SEC, 4, WAVE_SKETCH_LIMITS.DURATION_MAX_SEC))}
+            value={lengthInput}
+            onChange={(event) => setLengthInput(event.target.value)}
             disabled={disabled}
             className={`${FIELD_CLASS} sm:w-28`}
           />
