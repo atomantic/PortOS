@@ -39,6 +39,8 @@ vi.mock('../services/privacyBrokers.js', () => ({
   setBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled })),
   forceRecheckCase: vi.fn(async (id) => ({ id, state: 'found', nextRecheckAt: '2020-01-01T00:00:00.000Z' })),
   transitionCase: vi.fn(async (id, toState) => ({ id, state: toState })),
+  revealCaseEvidence: vi.fn(async (id) => ({ caseId: id, sealed: true, evidence: { search_url: 'https://b.example/s' } })),
+  clearCaseIdentityEvidence: vi.fn(async (id) => ({ id, state: 'found', identityEvidence: null })),
 }));
 
 vi.mock('../services/privacyRecheckScheduler.js', () => ({
@@ -537,6 +539,24 @@ describe('POST /api/privacy/broker-cases/:id/recheck (#2146)', () => {
 
   it('rejects a non-uuid id', async () => {
     expect((await request(makeApp()).post('/api/privacy/broker-cases/not-a-uuid/recheck')).status).toBe(400);
+  });
+});
+
+describe('/api/privacy/broker-cases/:id/evidence (#8333)', () => {
+  it('reveals the sealed identity evidence and erases it', async () => {
+    const shown = await request(makeApp()).get(`/api/privacy/broker-cases/${VALID_UUID}/evidence`);
+    expect(shown.status).toBe(200);
+    expect(shown.body.evidence.search_url).toBe('https://b.example/s');
+    expect(brokerService.revealCaseEvidence).toHaveBeenCalledWith(VALID_UUID);
+    const erased = await request(makeApp()).delete(`/api/privacy/broker-cases/${VALID_UUID}/evidence`);
+    expect(erased.status).toBe(200);
+    expect(erased.body.identityEvidence).toBe(null);
+    expect(brokerService.clearCaseIdentityEvidence).toHaveBeenCalledWith(VALID_UUID);
+  });
+
+  it('rejects a non-uuid id on both verbs', async () => {
+    expect((await request(makeApp()).get('/api/privacy/broker-cases/not-a-uuid/evidence')).status).toBe(400);
+    expect((await request(makeApp()).delete('/api/privacy/broker-cases/not-a-uuid/evidence')).status).toBe(400);
   });
 });
 

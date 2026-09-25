@@ -336,7 +336,7 @@ describe('getOptOutDigest', () => {
   it('aggregates human-task + blocked cases with playbook + reason', async () => {
     listBrokerCases.mockImplementation(async ({ state } = {}) => {
       if (state === 'human_task_queued') return [{ id: 'h1', brokerId: 'wp', brokerName: 'Whitepages', state, allowedTransitions: ['submitted', 'not_found', 'human_task_queued'], reason: 'auto_submit_disabled', evidence: { optout_url: 'https://wp/o', playbook: ['call back'] } }];
-      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', evidence: { search_url: 'https://rad/p/Jane/Doe/' } }];
+      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', evidence: { match_basis: 'antibot_wall' }, identity: { search_url: 'https://rad/p/Jane/Doe/' } }];
       return [];
     });
     const digest = await getOptOutDigest();
@@ -348,8 +348,12 @@ describe('getOptOutDigest', () => {
     // same as the drawer (issue #2417).
     expect(digest.items[0].allowedTransitions).toEqual(['submitted', 'not_found', 'human_task_queued']);
     expect(digest.items[1].allowedTransitions).toEqual(['found', 'not_found', 'human_task_queued']);
-    // Blocked items surface the filled search URL for a manual browser check.
+    // Blocked items surface the filled search URL for a manual browser check —
+    // decrypted from the case's sealed identity evidence, never read from the
+    // plain evidence projection (#8333).
     expect(digest.items[1].searchUrl).toBe('https://rad/p/Jane/Doe/');
+    expect(digest.items[0].searchUrl).toBe(null);
+    expect(listBrokerCases).toHaveBeenCalledWith(expect.objectContaining({ state: 'blocked', includeIdentity: true }));
   });
 });
 

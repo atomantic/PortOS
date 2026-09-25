@@ -176,9 +176,10 @@ export const privacyDdl = [
     // Per-broker exposure/opt-out case ledger with a service-enforced state
     // machine. `state` is validated app-side (privacyBrokers.js); every write
     // stamps `next_recheck_at` (state-dependent backoff). `evidence` holds
-    // listing URLs / match basis / screenshot refs — NOT plaintext PII (the
-    // engine records only least-disclosure identifiers). A broker delete
-    // cascades its cases.
+    // match basis / lane / playbook / screenshot refs in the clear; the
+    // identity-bearing fields (matched name + location, search/listing URLs)
+    // are sealed under `evidence.sealed_identity` with the vault key (#8333,
+    // privacyBrokers.js). A broker delete cascades its cases.
     `CREATE TABLE IF NOT EXISTS privacy_broker_cases (
       id UUID PRIMARY KEY,
       subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,

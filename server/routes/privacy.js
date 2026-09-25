@@ -85,6 +85,8 @@ import {
   setBrokerEnabled,
   forceRecheckCase,
   transitionCase,
+  revealCaseEvidence,
+  clearCaseIdentityEvidence,
 } from '../services/privacyBrokers.js';
 import { runScanPass } from '../services/privacyScan.js';
 import { runOptOutPass, runVerificationPass, getOptOutDigest } from '../services/privacyOptOut.js';
@@ -326,6 +328,19 @@ router.get('/broker-cases', asyncHandler(async (req, res) => {
 router.post('/broker-cases/:id/recheck', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacyCaseIdParamsSchema, req.params);
   res.json(await forceRecheckCase(id));
+}));
+
+// Sealed identity evidence (#8333): the case list projects only a summary; the
+// case drawer reveals the matched name/location + search/listing URLs through
+// this explicit action, and can erase them outright.
+router.get('/broker-cases/:id/evidence', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyCaseIdParamsSchema, req.params);
+  res.json(await revealCaseEvidence(id));
+}));
+
+router.delete('/broker-cases/:id/evidence', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacyCaseIdParamsSchema, req.params);
+  res.json(await clearCaseIdentityEvidence(id));
 }));
 
 // Manual case transition (digest done/dismiss, case-drawer controls, #2146).

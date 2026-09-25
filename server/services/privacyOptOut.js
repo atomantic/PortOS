@@ -513,7 +513,7 @@ export async function runOptOutPass({
     return { submitted: [], skipped: 0, verification: null, subjectId: resolvedSubjectId, reason: 'no_disclosure_identity' };
   }
 
-  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases({ subjectId: resolvedSubjectId })]);
+  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases({ subjectId: resolvedSubjectId, includeIdentity: true })]);
   const brokerById = new Map(brokers.map((b) => [b.id, b]));
   const casesWithBroker = cases
     .map((c) => ({ case: c, broker: brokerById.get(c.brokerId) }))
@@ -523,7 +523,8 @@ export async function runOptOutPass({
   const submitted = [];
   let skipped = 0;
   for (const { case: kase, broker } of submit) {
-    const listingUrls = Array.isArray(kase.evidence?.listing_urls) ? kase.evidence.listing_urls : [];
+    // Listing URLs live in the case's sealed identity evidence (#8333).
+    const listingUrls = Array.isArray(kase.identity?.listing_urls) ? kase.identity.listing_urls : [];
     const disclosedFields = computeDisclosedFields(broker, payload, { listingUrls });
     const lane = chooseLane(broker);
     if (lane === 'human') {
@@ -561,8 +562,8 @@ export async function runOptOutPass({
 export async function getOptOutDigest({ subjectId } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
   const [human, blocked] = await Promise.all([
-    listBrokerCases({ state: 'human_task_queued', subjectId: resolvedSubjectId }),
-    listBrokerCases({ state: 'blocked', subjectId: resolvedSubjectId }),
+    listBrokerCases({ state: 'human_task_queued', subjectId: resolvedSubjectId, includeIdentity: true }),
+    listBrokerCases({ state: 'blocked', subjectId: resolvedSubjectId, includeIdentity: true }),
   ]);
   const toItem = (c) => ({
     caseId: c.id,
@@ -578,7 +579,8 @@ export async function getOptOutDigest({ subjectId } = {}) {
     optoutUrl: c.evidence?.optout_url || null,
     // Filled broker-search URL for blocked cases — lets the digest offer
     // "check manually in your browser" (the sanctioned path past a bot wall).
-    searchUrl: c.evidence?.search_url || null,
+    // Decrypted from the sealed identity evidence (#8333); null once erased.
+    searchUrl: c.identity?.search_url || null,
     playbook: c.evidence?.playbook || [],
     nextRecheckAt: c.nextRecheckAt,
   });

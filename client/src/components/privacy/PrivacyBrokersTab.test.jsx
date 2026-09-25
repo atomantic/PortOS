@@ -16,7 +16,7 @@ const api = vi.hoisted(() => ({
     dueForRecheck: 1,
   },
   cases: [
-    { id: 'c1', brokerId: 'spokeo', brokerName: 'Spokeo', brokerTier: 1, state: 'found', evidence: { listing_urls: ['http://x/1'] }, nextRecheckAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-07-01T00:00:00.000Z' },
+    { id: 'c1', brokerId: 'spokeo', brokerName: 'Spokeo', brokerTier: 1, state: 'found', evidence: { match_basis: 'name+location' }, identityEvidence: { sealed: true, listingCount: 1 }, nextRecheckAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-07-01T00:00:00.000Z' },
     { id: 'c2', brokerId: 'wp', brokerName: 'WhitePages', state: 'confirmed_removed', evidence: {}, updatedAt: '2026-07-02T00:00:00.000Z' },
   ],
   brokers: [{ id: 'spokeo', name: 'Spokeo', tier: 1, source: 'curated', confidence: 'documented', enabled: true, clusterParent: null, optout: {} }],
@@ -45,6 +45,8 @@ vi.mock('../../services/api', () => ({
   refreshPrivacyBrokers: vi.fn(async () => ({ added: 0, fetched: 0 })),
   recheckPrivacyCase: vi.fn(async () => ({ id: 'c1' })),
   transitionPrivacyCase: vi.fn(async (id, toState) => ({ id, state: toState })),
+  getPrivacyCaseEvidence: vi.fn(async (id) => ({ caseId: id, sealed: true, evidence: { listing_urls: ['https://spokeo.example/p/example'] } })),
+  erasePrivacyCaseEvidence: vi.fn(async (id) => ({ id, state: 'found', identityEvidence: null })),
   setPrivacyBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled, tier: 1, source: 'curated', confidence: 'documented', clusterParent: null })),
 }));
 
@@ -71,6 +73,19 @@ describe('PrivacyBrokersTab', () => {
     fireEvent.change(screen.getByLabelText('State'), { target: { value: 'confirmed_removed' } });
     await waitFor(() => expect(screen.queryByText('Spokeo')).toBeNull());
     expect(screen.getByText('WhitePages')).toBeTruthy();
+  });
+
+  it('reveals the open case\'s sealed evidence in the drawer and erases it (#8333)', async () => {
+    render(<MemoryRouter initialEntries={['/privacy/brokers?case=c1']}><PrivacyBrokersTab /></MemoryRouter>);
+    // The list shows only the non-identifying listing count; the drawer
+    // decrypts the links for the one open case.
+    const link = await screen.findByRole('link', { name: /spokeo\.example\/p\/example/ });
+    expect(link.getAttribute('href')).toBe('https://spokeo.example/p/example');
+    expect(apiMod.getPrivacyCaseEvidence).toHaveBeenCalledWith('c1');
+    fireEvent.click(screen.getByRole('button', { name: /erase identity evidence/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^erase$/i }));
+    await waitFor(() => expect(apiMod.erasePrivacyCaseEvidence).toHaveBeenCalledWith('c1', expect.anything()));
+    await waitFor(() => expect(screen.queryByRole('link', { name: /spokeo\.example\/p\/example/ })).toBeNull());
   });
 
   it('actions a human-task digest item (done → submitted)', async () => {
