@@ -4,7 +4,7 @@
 export function createUnexpectedFetchGuard(testName) {
   const requests = new Map();
 
-  const fetch = (input) => {
+  const guardedFetch = (input) => {
     let path = '<invalid URL>';
     try {
       const target = typeof input === 'string' || input instanceof URL ? input : input?.url;
@@ -27,5 +27,5 @@ export function createUnexpectedFetchGuard(testName) {
     return new Error(`Unexpected test fetch; mock this request or use an owned fixture: ${first.join(', ')}${remaining ? `, and ${remaining} more` : ''}`);
   };
 
-  return { fetch, takeError };
+  return { fetch: guardedFetch, takeError };
 }
