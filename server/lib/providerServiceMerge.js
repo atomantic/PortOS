@@ -25,7 +25,7 @@ import { SERVICE_DEFINITIONS, serviceDefinitionById } from './serviceDefinitions
  *   - at least one protocol both declare, at the same base URL, and no protocol
  *     declared at two different ones. "Both named nothing" is never a match, so
  *     a transport-less subscription row never folds;
- *   - the same credential mode, no credential name holding two values, and
+ *   - the same enabled state and credential mode, no credential name holding two values, and
  *     never two different keys the instance would run under;
  *   - the same plan — two plans of one definition are two legitimate instances
  *     (D3). The one exception is a generic row whose plan the named definition
@@ -83,6 +83,8 @@ function mergeCatalogs(a, b) {
  */
 function foldInto(merged, candidate, definition) {
   if ((merged.credentialVia ?? 'stored') !== (candidate.credentialVia ?? 'stored')) return null;
+  // A service switched off is a choice a fold must not undo (or impose).
+  if ((merged.enabled !== false) !== (candidate.enabled !== false)) return null;
   const planForeign = candidate.definitionId !== merged.definitionId && !definition.plans.includes(candidate.plan);
   if (candidate.plan !== merged.plan && !planForeign) return null;
   const transports = mergeTransports(merged.transports || {}, candidate.transports || {});
@@ -96,7 +98,6 @@ function foldInto(merged, candidate, definition) {
     transports,
     credentials,
     catalog: mergeCatalogs(merged.catalog, candidate.catalog),
-    enabled: merged.enabled !== false || candidate.enabled !== false,
   };
 }
 

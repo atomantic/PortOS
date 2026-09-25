@@ -105,6 +105,7 @@ describe('planServiceInstanceMerges refusals', () => {
     ['a different endpoint', {}, { transports: { openai: { baseUrl: 'https://example.com/v1' } } }],
     ['two different keys', { credentials: { apiKey: 'key-one' } }, { credentials: { apiKey: 'key-two' } }],
     ['a different credential mode', {}, { credentialVia: 'env' }],
+    ['one of them switched off', {}, { enabled: false }],
   ])('keeps two rows apart on %s', (_label, a, b) => {
     expect(plan(twoRows(a, b), [])).toEqual([]);
   });
