@@ -10,7 +10,7 @@ function storedPasswordHint(peer) {
     return 'The saved instance password lets PortOS pair this peer. After it confirms the generated credential, remove the password here.';
   }
   if (peer.peerAuthAccepted) {
-    return 'This peer accepts the pair credential. Remove the stored password — it is no longer needed.';
+    return 'This peer accepts the pair credential. Remove the password saved on this card — sync, media, and LLM requests to this peer use the pair credential. Keep each machine’s own instance password.';
   }
   return 'The instance password stays in use until this peer confirms the generated credential.';
 }

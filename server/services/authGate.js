@@ -133,7 +133,17 @@ export const authGate = async (req, res, next) => {
     req.managedVisitorAuth = await authenticateManagedVisitorRequest(req);
     return next();
   }
-  if (!enabled) return next();
+  if (!enabled) {
+    // The pair token is independent of the instance password, so a paired peer
+    // stays identified after the password is removed: peer-provider routes
+    // (federated media) require a verified peer and never take the auth-off
+    // bypass. Only the federation surface is annotated; elsewhere the caller is
+    // as anonymous as any other request to a password-free install.
+    const peer = isPeerApiRequestAllowed(req.method, req.path.toLowerCase())
+      ? await verifyPeerToken(req.headers) : null;
+    if (peer) req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: peer.id };
+    return next();
+  }
   // CSRF guard runs FIRST, before isPublicPath — public endpoints like
   // /api/auth/logout still mutate state (clear the cookie + revoke the
   // session), so a same-tailnet attacker could force-logout a user

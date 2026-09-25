@@ -9,7 +9,8 @@ import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection
 import * as api from '../../services/api';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
 import { GOALS_LIST_PATH, goalDetailPath } from './goalConstants';
-import { applyOrganizationSuggestion } from './applyOrganization';
+import OrganizePanel from './OrganizePanel';
+import { useGoalOrganize, useGoalCreate } from '../../hooks/useGoalOrganize';
 import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -211,8 +212,8 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
   const [quickAdd, setQuickAdd] = useState('');
-  const [isCreating, setIsCreating] = useState(false);
-  const [organizing, setOrganizing] = useState(false);
+  const { isCreating, createGoal, quickAddGoal } = useGoalCreate(onRefresh);
+  const { organizing, orgSuggestion, applyingOrg, requestOrganize, applySuggestion, dismiss } = useGoalOrganize(onRefresh);
   const [draggedGoal, setDraggedGoal] = useState(null);
   const {
     providers, selectedProviderId, selectedModel, availableModels,
@@ -280,50 +281,17 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   };
 
   const handleCreateGoal = async () => {
-    if (!newGoal.title.trim() || isCreating) return;
-    setIsCreating(true);
-    try {
-      await api.createGoal(newGoal, { silent: true });
+    if (await createGoal(newGoal)) {
       setNewGoal({ ...DEFAULT_NEW_GOAL });
       setShowNewGoal(false);
-      onRefresh();
-    } catch {
-      toast.error('Failed to create goal');
-    } finally {
-      setIsCreating(false);
     }
   };
 
   const handleQuickAdd = async () => {
-    if (!quickAdd.trim() || isCreating) return;
-    setIsCreating(true);
-    try {
-      await api.createGoal({ ...DEFAULT_NEW_GOAL, title: quickAdd.trim() }, { silent: true });
-      setQuickAdd('');
-      onRefresh();
-    } catch {
-      toast.error('Failed to create goal');
-    } finally {
-      setIsCreating(false);
-    }
+    if (await quickAddGoal(quickAdd, DEFAULT_NEW_GOAL)) setQuickAdd('');
   };
 
-  const handleOrganize = async () => {
-    if (!selectedProviderId) { toast.error('No API provider available'); return; }
-    setOrganizing(true);
-    // `silent: true` — this handler owns the failure toast below; without it
-    // request() also toasts and the user sees two stacked errors.
-    const result = await api.organizeGoals({ providerId: selectedProviderId, model: selectedModel }, { silent: true }).catch(() => null);
-    setOrganizing(false);
-    if (!result) { toast.error('Failed to organize goals'); return; }
-    const applied = await applyOrganizationSuggestion(result);
-    // Refresh either way: a failed apply can still have created the apex or some
-    // sub-apex goals before aborting, and leaving the stale list on screen is the
-    // out-of-sync state this guard exists to prevent (issue #3516).
-    onRefresh();
-    if (!applied) { toast.error('Failed to apply goal hierarchy'); return; }
-    toast.success('Goal hierarchy applied');
-  };
+  const handleOrganize = () => requestOrganize({ providerId: selectedProviderId, model: selectedModel });
 
   const handleDragStart = useCallback((event) => {
     setDraggedGoal(event.active.data.current?.goal || null);
@@ -528,6 +496,14 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
             </div>
           </div>
         )}
+
+        <OrganizePanel
+          suggestion={orgSuggestion}
+          goals={data?.flat}
+          onApply={applySuggestion}
+          onClose={dismiss}
+          applying={applyingOrg}
+        />
 
         {/* Tree list with drag-and-drop */}
         <DndContext
