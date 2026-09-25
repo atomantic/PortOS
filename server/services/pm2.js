@@ -18,6 +18,9 @@ const jlistCache = new Map();
 const jlistInflight = new Map();
 const cacheKey = (pm2Home) => pm2Home || '_default';
 
+// Track PM2 read failures per home so we log only on state change or reason change
+const jlistFailureState = new Map(); // home -> { lastError: string }
+
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
  * @param {string|null} [pm2Home=null]
@@ -27,6 +30,40 @@ export function clearJlistCache(pm2Home = null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {
     jlistCache.clear();
+  }
+}
+
+/**
+ * Record a PM2 read failure and log it only on state change or reason change.
+ * @param {string|null} pm2Home The PM2 home being read
+ * @param {string} errorReason Formatted error description
+ * @private
+ */
+function logJlistFailure(pm2Home, errorReason) {
+  const key = cacheKey(pm2Home);
+  const state = jlistFailureState.get(key);
+  const homeDesc = pm2Home ? 'custom' : 'default';
+
+  // Log only if no prior state, or if the reason changed
+  if (!state || state.lastError !== errorReason) {
+    console.error(`❌ PM2 read failed (home=${homeDesc}): ${errorReason}`);
+    jlistFailureState.set(key, { lastError: errorReason });
+  }
+}
+
+/**
+ * Record recovery from a PM2 read failure.
+ * @param {string|null} pm2Home The PM2 home that recovered
+ * @private
+ */
+function logJlistRecovery(pm2Home) {
+  const key = cacheKey(pm2Home);
+  const state = jlistFailureState.get(key);
+
+  if (state) {
+    const homeDesc = pm2Home ? 'custom' : 'default';
+    console.log(`✅ PM2 read recovered (home=${homeDesc})`);
+    jlistFailureState.delete(key);
   }
 }
 
@@ -391,16 +428,24 @@ function fetchJlist(pm2Home = null) {
       pm2.connect((err) => {
         if (err) {
           jlistInflight.delete(key);
+          logJlistFailure(pm2Home, err.message || String(err));
           resolve(null);
           return;
         }
         pm2.list((err, list) => {
           pm2.disconnect();
           jlistInflight.delete(key);
-          if (err || !Array.isArray(list)) {
+          if (err) {
+            logJlistFailure(pm2Home, err.message || String(err));
             resolve(null);
             return;
           }
+          if (!Array.isArray(list)) {
+            logJlistFailure(pm2Home, 'Invalid response from pm2.list (not an array)');
+            resolve(null);
+            return;
+          }
+          logJlistRecovery(pm2Home);
           jlistCache.set(key, { data: list, ts: Date.now() });
           resolve(list);
         });
@@ -413,28 +458,39 @@ function fetchJlist(pm2Home = null) {
         env: buildEnv(pm2Home)
       });
       let stdout = '';
+      let stderr = '';
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
       });
 
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
       child.on('close', (code) => {
         jlistInflight.delete(key);
         if (code !== 0) {
+          const stderrTail = stderr.length > 200 ? stderr.slice(-200) : stderr;
+          const errMsg = stderrTail.trim() || `exit ${code}`;
+          logJlistFailure(pm2Home, errMsg);
           resolve(null);
           return;
         }
         const list = parseJlistStdout(stdout);
         if (list === null) {
+          logJlistFailure(pm2Home, 'Failed to parse pm2 jlist output (invalid JSON)');
           resolve(null);
           return;
         }
+        logJlistRecovery(pm2Home);
         jlistCache.set(key, { data: list, ts: Date.now() });
         resolve(list);
       });
 
-      child.on('error', () => {
+      child.on('error', (err) => {
         jlistInflight.delete(key);
+        logJlistFailure(pm2Home, err.message || String(err));
         resolve(null);
       });
     });
