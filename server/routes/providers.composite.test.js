@@ -68,8 +68,8 @@ beforeEach(() => {
   presetService.savesAsDerivedPreset.mockImplementation((candidate) => Boolean(candidate.harnessId && candidate.method && candidate.serviceId));
   presetService.materializeStoredPreset.mockImplementation(async (candidate) => ({ ...candidate, rederived: true }));
   // The real one-liner, over the doubles above, so the route's choice of path stays observable.
-  presetService.storableProviderRecord.mockImplementation((candidate, updates) =>
-    (presetService.savesAsDerivedPreset(candidate) ? presetService.materializeStoredPreset(candidate, { updates }) : Promise.resolve(updates)));
+  presetService.storableProviderRecord.mockImplementation((candidate, updates, previous) =>
+    (presetService.savesAsDerivedPreset(candidate) ? presetService.materializeStoredPreset(candidate, { updates, previous }) : Promise.resolve(updates)));
 });
 
 describe('PUT /api/providers/active', () => {
@@ -263,6 +263,28 @@ describe('PUT /api/providers/:id on a derived preset', () => {
     expect(updates).toMatchObject({ effort: 'low', envVars: { NVIDIA_API_KEY: 'nim-key' } });
     expect(providerService.updateProvider).toHaveBeenCalledWith('pi-tui-nvidia-nim-free', expect.objectContaining({ rederived: true, effort: 'low' }));
     expect(res.body).toMatchObject({ effort: 'low', presetKind: 'derived' });
+  });
+
+  it('passes the saved preset so stale service-owned fields are not treated as edits', async () => {
+    const previous = { ...DERIVED, command: 'old-pi-command' };
+    providerService.getProviderById.mockResolvedValue(previous);
+    presetService.materializeStoredPreset.mockImplementation(async (candidate) => ({
+      ...candidate,
+      command: 'pi',
+      rederived: true,
+    }));
+
+    const res = await request(app()).put('/api/providers/pi-tui-nvidia-nim-free')
+      .send({ command: 'old-pi-command', effort: 'low' });
+
+    expect(res.status).toBe(200);
+    const [, options] = presetService.materializeStoredPreset.mock.calls[0];
+    expect(options.previous).toEqual(previous);
+    expect(options.updates.command).toBe('old-pi-command');
+    expect(providerService.updateProvider).toHaveBeenCalledWith('pi-tui-nvidia-nim-free', expect.objectContaining({
+      command: 'pi',
+      effort: 'low',
+    }));
   });
 
   it('publishes a refused connection-owned edit as the service raised it, storing nothing', async () => {

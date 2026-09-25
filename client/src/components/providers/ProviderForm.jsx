@@ -555,14 +555,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               {isDerived && (
                 <Banner tone="info" icon={Link2}>
                   <p>
-                    Derived from service{' '}
-                    <Link to={`/ai/services/${encodeURIComponent(provider.serviceId)}`} className="font-mono text-port-accent hover:underline">
-                      {provider.serviceId}
-                    </Link>{' '}
-                    via <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
-                    credential, backend environment and model catalog come from that service and are refreshed on every
-                    save — edit them on the service, not here. Name, arguments, timeouts, model pins, effort and
-                    generation settings are this preset's own.
+                    Derived from service <code className="font-mono">{provider.serviceId}</code> via{' '}
+                    <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
+                    API key, backend environment and model catalog come from that service and are refreshed on every
+                    save. To edit this service's credentials, open{' '}
+                    <Link to={`/ai/services/${encodeURIComponent(provider.serviceId)}`} className="text-port-accent hover:underline">
+                      service settings for {provider.serviceId}
+                    </Link>. Name, arguments, timeouts, model pins, effort and generation settings are this preset's own.
                   </p>
                 </Banner>
               )}

@@ -115,9 +115,28 @@ describe('materializeStoredPreset', () => {
     expect(edited).toMatchObject({ effort: 'low', args: ['--print', '--verbose'], envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' } });
     expect(edited.catalogNarrowing).toBeNull();
 
-    await expect(presets.materializeStoredPreset({ ...stored, envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } }, { updates: { envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } } }))
+    await expect(presets.materializeStoredPreset({ ...stored, envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } }, {
+      updates: { envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } },
+      previous: stored,
+    }))
       .rejects.toMatchObject({ status: 400, code: 'PRESET_FIELD_DERIVED', context: { fields: ['envVars.ANTHROPIC_BASE_URL'], serviceId: 'ollama' } });
     await expect(presets.materializeStoredPreset({ ...stored, serviceId: 'nowhere' })).rejects.toMatchObject({ status: 400, code: 'service-unknown' });
+  });
+
+  it('accepts an ordinary preset save after its NVIDIA service key changes and stores the new service value', async () => {
+    const created = await presets.createPresetFromComposite({ compositeId: 'pi.tui@nvidia-nim-free' });
+    const previous = await providerService().getProviderById(created.id);
+    expect(previous.envVars.NVIDIA_API_KEY).toBe('nim-key');
+
+    graphState.current.connections.find((connection) => connection.slug === 'nvidia-nim-free').credentials.apiKey = 'new-test-key';
+    const updates = { ...previous, name: 'Pi on NVIDIA NIM' };
+    const edited = await presets.materializeStoredPreset({ ...previous, ...updates }, { updates, previous });
+
+    expect(edited).toMatchObject({
+      name: 'Pi on NVIDIA NIM',
+      serviceId: 'nvidia-nim-free',
+      envVars: { NVIDIA_API_KEY: 'new-test-key' },
+    });
   });
 });
 

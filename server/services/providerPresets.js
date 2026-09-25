@@ -58,10 +58,10 @@ async function presetInputs(record) {
  * preset's own choice.
  *
  * @param {object} candidate
- * @param {{updates?: object}} [options]
+ * @param {{updates?: object, previous?: object}} [options]
  * @returns {Promise<object>} the record to hand `createProvider` / `updateProvider`
  */
-export async function materializeStoredPreset(candidate, { updates = {} } = {}) {
+export async function materializeStoredPreset(candidate, { updates = {}, previous = null } = {}) {
   const record = { ...candidate, method: candidate.method ?? candidate.type };
   const { harness, connection, instance, bootstrap } = await presetInputs(record);
   const listed = listedModels(instance, connection.catalog);
@@ -74,7 +74,7 @@ export async function materializeStoredPreset(candidate, { updates = {} } = {}) 
     record, harness, instance, catalog: connection.catalog, bootstrap,
   });
   if (error) throw new ServerError(error.message, { status: 400, code: error.code });
-  const refused = refusedDerivedEdits(updates, derived, ownedEnvNames);
+  const refused = refusedDerivedEdits(updates, derived, ownedEnvNames, previous);
   if (refused.length > 0) {
     throw new ServerError(
       `${refused.join(', ')} ${refused.length === 1 ? 'is' : 'are'} derived from service "${record.serviceId}"; edit the service (PATCH /api/providers/services/${record.serviceId}) instead`,
@@ -172,5 +172,5 @@ export const savesAsDerivedPreset = (candidate) => isDerivedPreset(candidate) &&
  * derived preset, the caller's own body for a legacy one. `candidate` is the
  * record as it would be stored; `updates` the patch the client sent.
  */
-export const storableProviderRecord = (candidate, updates) =>
-  (savesAsDerivedPreset(candidate) ? materializeStoredPreset(candidate, { updates }) : Promise.resolve(updates));
+export const storableProviderRecord = (candidate, updates, previous = null) =>
+  (savesAsDerivedPreset(candidate) ? materializeStoredPreset(candidate, { updates, previous }) : Promise.resolve(updates));
