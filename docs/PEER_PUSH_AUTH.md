@@ -89,6 +89,25 @@ receive `403 PEER_SCOPE_FORBIDDEN`, and the receiver logs one `⛔ Peer … refu
 outside the federation surface` line per peer, method, and path. Adding a peer
 call site means adding its entry in the same change.
 
+### Using a peer's image, video, and LLM services
+
+Once a peer card reports **Peer confirmed the matching sync credential**, the
+password saved on that card is no longer needed for anything that peer serves
+you. Removing it does not affect federated image, video, and audio jobs
+(`/api/federation/media/v1/*`), fleet LLM host discovery and key retrieval
+(`/api/providers/fleet-host*`), or sync, because each request carries the peer
+token. Inference itself goes straight to the host's fleet LLM port with that
+host's API key, separate from PortOS authentication.
+
+"Remove the stored password" refers only to the copy of the **peer's** password
+saved on your peer card. Keep each machine's own instance password; it protects
+that machine's operator routes. **Rotate pair secret** needs the peer's password
+again, so save it back on the card when you rotate the secret.
+
+A media host with no instance password still verifies the pair token on the
+federation surface, so its provider keeps admitting paired peers. Automatic
+pairing requires that host to have an instance password when the pair is set up.
+
 Legacy HTTP Basic is the instance password itself, so it keeps operator reach
 (`method: 'basic'`, still refused host control). Its holder can already sign in
 at `/api/auth/login`, and the companion app uses it as a full session
