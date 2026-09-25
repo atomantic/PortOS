@@ -1370,8 +1370,9 @@ CREATE TABLE IF NOT EXISTS privacy_vault_records (
 );
 -- Type is the primary list filter (all addresses, all emails, ...).
 CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type);
--- Explicit consent audit rows (v1 subject is always 'self'); the broker
--- opt-out engine builds on this trail. Append-only.
+-- Explicit consent audit rows, one per (subject, purpose) grant. The scan and
+-- opt-out engines require an ACTIVE row of the exact purpose scope; revoking a
+-- broker purpose stamps revoked_at instead of deleting the row (#8332).
 CREATE TABLE IF NOT EXISTS privacy_consents (
   id UUID PRIMARY KEY,
   subject TEXT NOT NULL DEFAULT 'self',
@@ -1379,7 +1380,8 @@ CREATE TABLE IF NOT EXISTS privacy_consents (
   scope TEXT NOT NULL,
   method TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
-  granted_at TIMESTAMPTZ DEFAULT NOW()
+  granted_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
 );
 
 -- Privacy Center: Trusted Organizations registry (issue #2141, epic #2138).
@@ -1504,8 +1506,8 @@ CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_subject ON privacy_vault_re
 CREATE INDEX IF NOT EXISTS idx_privacy_orgs_subject ON privacy_orgs (subject_id);
 CREATE INDEX IF NOT EXISTS idx_privacy_change_events_subject ON privacy_change_events (subject_id);
 CREATE INDEX IF NOT EXISTS idx_privacy_consents_subject ON privacy_consents (subject_id);
--- `self` always consents — the install owner IS the self subject, so the
--- engine's no-consent-no-action guard must never refuse them (#3658).
+-- `self` always holds local-vault consent — the install owner IS the self
+-- subject (#3658). Broker purposes are never seeded, even for `self` (#8332).
 INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)
 SELECT gen_random_uuid(), '00000000-0000-4000-8000-000000000001', 'pii_vault', 'self',
        'seeded: the install owner is the self subject', NOW()

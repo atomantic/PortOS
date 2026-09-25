@@ -30,10 +30,28 @@ export const CONSENT_METHODS = [
   { id: 'other', label: 'Other' },
 ];
 
-// Mirrors PRIVACY_CONSENT_SCOPES.
+// Mirrors PRIVACY_CONSENT_SCOPES — each purpose is granted separately (#8332).
 export const CONSENT_SCOPES = [
-  { id: 'pii_vault', label: 'PII vault' },
-  { id: 'broker_optout', label: 'Broker opt-out' },
+  { id: 'pii_vault', label: 'PII vault (local only)' },
+  { id: 'broker_scan', label: 'Broker exposure scan' },
+  { id: 'broker_optout', label: 'Broker opt-out requests' },
+];
+
+// The revocable external-disclosure purposes (mirrors
+// PRIVACY_BROKER_CONSENT_SCOPES), with the disclosure each one makes — the
+// Household drawer states it next to the grant control so the person granting
+// knows exactly what leaves this machine and to whom.
+export const BROKER_CONSENT_PURPOSES = [
+  {
+    id: 'broker_scan',
+    label: 'Broker exposure scan',
+    disclosure: 'Searches each enabled data broker’s site using this person’s scan-eligible name and city/state, so those values are sent to the broker in its search URL. Read-only — nothing is submitted.',
+  },
+  {
+    id: 'broker_optout',
+    label: 'Broker opt-out requests',
+    disclosure: 'Sends removal requests (email or web form) to data brokers that list this person, disclosing their full name, email, phone, and city/state — plus date of birth when a broker requires it — and re-checks those brokers to verify removal.',
+  },
 ];
 
 export const VAULT_TYPES = [

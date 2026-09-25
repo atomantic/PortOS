@@ -47,13 +47,17 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     svc = await import('./privacyBrokers.js');
     scan = await import('./privacyScan.js');
     vault = await import('./privacyVault.js');
+    // The scan pass needs an explicit broker_scan grant (#8332) — the seeded
+    // `self` row holds only local-vault consent. Removed in afterAll.
+    const subjects = await import('./privacySubjects.js');
+    await subjects.recordConsent({ scope: 'broker_scan', method: 'self', note: 'privacyBrokers.db.test' });
   });
 
   afterAll(async () => {
     for (const id of createdVaultIds) {
       await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
     }
-    await query(`DELETE FROM privacy_consents WHERE scope = 'pii_vault' AND granted_at >= $1`, [testStart]).catch(() => {});
+    await query(`DELETE FROM privacy_consents WHERE scope IN ('pii_vault', 'broker_scan') AND granted_at >= $1`, [testStart]).catch(() => {});
     for (const id of autoBrokerIds) {
       await query(`DELETE FROM privacy_broker_cases WHERE broker_id = $1`, [id]).catch(() => {});
       await query(`DELETE FROM privacy_brokers WHERE id = $1`, [id]).catch(() => {});

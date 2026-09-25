@@ -97,7 +97,10 @@ describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
     expect(consents[0]).toMatchObject({
       subjectId: subject.id, scope: 'pii_vault', method: 'signed_form', note: 'form filed',
     });
-    expect(await subjects.hasActiveConsent(subject.id)).toBe(true);
+    expect(await subjects.hasActiveConsent(subject.id, 'pii_vault')).toBe(true);
+    // Creation grants local-vault use only — never a broker purpose (#8332).
+    expect(await subjects.hasActiveConsent(subject.id, 'broker_scan')).toBe(false);
+    expect(await subjects.hasActiveConsent(subject.id, 'broker_optout')).toBe(false);
   });
 
   it('reports consent and record counts on the list', async () => {
@@ -109,7 +112,7 @@ describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
     });
 
     const row = (await subjects.listSubjects()).find((s) => s.id === subject.id);
-    expect(row).toMatchObject({ consentCount: 1, recordCount: 1 });
+    expect(row).toMatchObject({ consentCount: 1, recordCount: 1, activeScopes: ['pii_vault'] });
   });
 
   it('renames without disturbing consent', async () => {
@@ -149,21 +152,37 @@ describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
     });
   });
 
-  it('refuses engine actions for a subject whose consent was revoked', async () => {
+  it('gates each broker purpose on its own grant and revokes without losing the subject (#8332)', async () => {
     const subject = track(await subjects.createSubject({
       displayName: 'Example Revoked', relationship: 'other', consentMethod: 'verbal',
     }));
-    // Consent granted → the engine guard lets the action through.
-    await expect(subjects.assertSubjectConsent(subject.id, { action: 'scan' }))
-      .resolves.toMatchObject({ id: subject.id });
-
-    await query(`DELETE FROM privacy_consents WHERE subject_id = $1`, [subject.id]);
-
-    expect(await subjects.hasActiveConsent(subject.id)).toBe(false);
-    await expect(subjects.assertSubjectConsent(subject.id, { action: 'scan' })).rejects.toMatchObject({
-      status: 403,
-      code: 'SUBJECT_CONSENT_REQUIRED',
+    await vault.createVaultRecord({
+      type: 'email', label: 'Their email', value: 'revoked@example.com', subjectId: subject.id,
     });
+    // Vault-only consent → both broker purposes refused.
+    await expect(subjects.assertSubjectConsent(subject.id, { scope: 'broker_scan', action: 'scan' }))
+      .rejects.toMatchObject({ status: 403, code: 'SUBJECT_CONSENT_REQUIRED' });
+
+    await subjects.recordConsent({ subjectId: subject.id, scope: 'broker_scan', method: 'written' });
+    await expect(subjects.assertSubjectConsent(subject.id, { scope: 'broker_scan', action: 'scan' }))
+      .resolves.toMatchObject({ id: subject.id });
+    // A scan grant does not unlock submissions.
+    await expect(subjects.assertSubjectConsent(subject.id, { scope: 'broker_optout', action: 'opt-out' }))
+      .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
+
+    const revoked = await subjects.revokeConsent({ subjectId: subject.id, scope: 'broker_scan' });
+    expect(revoked).toMatchObject({ revoked: 1 });
+    expect(revoked.revokedAt).toBeTruthy();
+    await expect(subjects.assertSubjectConsent(subject.id, { scope: 'broker_scan', action: 'scan' }))
+      .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
+
+    // The subject, their vault record, and the timestamped grant all survive.
+    await expect(subjects.getSubject(subject.id)).resolves.toMatchObject({ id: subject.id });
+    const row = (await subjects.listSubjects()).find((s) => s.id === subject.id);
+    expect(row).toMatchObject({ recordCount: 1, activeScopes: ['pii_vault'] });
+    const trail = await subjects.listSubjectConsents(subject.id);
+    expect(trail.find((c) => c.scope === 'broker_scan').revokedAt).toBeTruthy();
+    expect(trail.find((c) => c.scope === 'pii_vault').revokedAt).toBeNull();
   });
 
   it('deleting a subject cascades their consent rows', async () => {

@@ -41,6 +41,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   const brokerId = 'test-optout-broker';
   const emailBrokerId = 'test-optout-email';
   const createdVaultIds = [];
+  let optOutGrantId = null;
 
   const account = { id: 'acct-test', type: 'gmail' };
   const injectedAccounts = async () => [account];
@@ -52,6 +53,10 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
     svc = await import('./privacyOptOut.js');
     brokers = await import('./privacyBrokers.js');
     vault = await import('./privacyVault.js');
+    // The removal workflow needs an explicit broker_optout grant (#8332) — the
+    // seeded `self` row holds only local-vault consent. Removed in afterAll.
+    const subjects = await import('./privacySubjects.js');
+    optOutGrantId = (await subjects.recordConsent({ scope: 'broker_optout', method: 'self', note: 'privacyOptOut.db.test' })).id;
     // Clean slate for cases so cross-suite ordering can't leak state in.
     await query(`DELETE FROM privacy_broker_cases`).catch(() => {});
     // A web-form broker + an email broker, inserted directly (auto source so the
@@ -75,6 +80,7 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
 
   afterAll(async () => {
     for (const id of createdVaultIds) await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+    if (optOutGrantId) await query(`DELETE FROM privacy_consents WHERE id = $1`, [optOutGrantId]).catch(() => {});
     await query(`DELETE FROM privacy_broker_cases WHERE broker_id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
     await query(`DELETE FROM privacy_brokers WHERE id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
     await close();

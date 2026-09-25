@@ -81,11 +81,13 @@ export const privacyDdl = [
     )`,
     // Type is the primary list filter (all addresses, all emails, ...).
     `CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type)`,
-    // Explicit consent audit rows, one per subject; the broker opt-out engine
-    // builds on this trail and REFUSES to act for a subject with no row here
-    // (privacySubjects.assertSubjectConsent, #3658). Append-only. The legacy
-    // free-text `subject` column is kept for the historical audit trail —
-    // `subject_id` is the FK the engine and every query scope on.
+    // Explicit consent audit rows, one per (subject, purpose) grant; the scan
+    // and opt-out engines REFUSE to act for a subject without an ACTIVE row of
+    // the exact purpose scope (privacySubjects.assertSubjectConsent, #3658,
+    // #8332). Rows are never deleted while the subject exists: revoking a
+    // broker purpose stamps `revoked_at`, and a later re-grant appends a new
+    // row. The legacy free-text `subject` column is kept for the historical
+    // audit trail — `subject_id` is the FK the engine and every query scope on.
     `CREATE TABLE IF NOT EXISTS privacy_consents (
       id UUID PRIMARY KEY,
       subject TEXT NOT NULL DEFAULT 'self',
@@ -93,7 +95,8 @@ export const privacyDdl = [
       scope TEXT NOT NULL,
       method TEXT NOT NULL,
       note TEXT NOT NULL DEFAULT '',
-      granted_at TIMESTAMPTZ DEFAULT NOW()
+      granted_at TIMESTAMPTZ DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ
     )`,
 
     // ─── Privacy Center: Trusted Organizations registry (issue #2141, epic
@@ -229,9 +232,16 @@ export const privacyDdl = [
     // Free-text context for a consent row (who witnessed it, where the signed
     // form lives). Added with the table's subject scope (#3658).
     `ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS note TEXT NOT NULL DEFAULT ''`,
+    // Purpose revocation (#8332): NULL = active grant. Additive and nullable, so
+    // every pre-#8332 row reads as an unrevoked grant of its ORIGINAL scope — an
+    // existing `pii_vault` row stays local-only and is never widened to a broker
+    // purpose.
+    `ALTER TABLE privacy_consents ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`,
     ...subjectScopeUpgrades,
-    // `self` always consents — the install owner IS the self subject, so the
-    // engine guard must never refuse them. Written once (guarded by NOT EXISTS)
+    // `self` always holds local-vault consent — the install owner IS the self
+    // subject. Broker purposes (`broker_scan` / `broker_optout`) are NOT seeded,
+    // even for `self`: disclosing identity to external brokers is an explicit
+    // grant from the Household drawer (#8332). Written once (guarded by NOT EXISTS)
     // so an install that predates #3658 and never created a vault record still
     // has a consent row, and so re-running the DDL never appends duplicates.
     `INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)

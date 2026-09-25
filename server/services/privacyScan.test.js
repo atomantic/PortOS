@@ -212,9 +212,12 @@ describe('scanBroker — classify → record wiring', () => {
 // NO CONSENT, NO ACTION. The scan pass must refuse a subject with no consent row
 // BEFORE it decrypts a single vault value or fetches a single broker page — the
 // refusal lives in the service, not in the UI that hides the Scan button.
-describe('runScanPass consent gate — engine-enforced (#3658)', () => {
-  it('refuses a subject with no consent, before reading the vault', async () => {
-    assertSubjectConsentMock.mockImplementationOnce(async () => {
+describe('runScanPass consent gate — engine-enforced (#3658, #8332)', () => {
+  it('refuses a subject without broker_scan consent (e.g. pii_vault only), before reading the vault', async () => {
+    // Scope-aware stand-in for the real gate: this subject holds ONLY the
+    // local-vault grant, so any broker purpose is refused.
+    assertSubjectConsentMock.mockImplementationOnce(async (id, { scope }) => {
+      if (scope === 'pii_vault') return { id };
       const err = new Error('no consent');
       err.status = 403;
       err.code = 'SUBJECT_CONSENT_REQUIRED';
@@ -228,12 +231,31 @@ describe('runScanPass consent gate — engine-enforced (#3658)', () => {
     expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
   });
 
+  it('scanBroker refuses a direct single-broker call without broker_scan consent, before any fetch', async () => {
+    assertSubjectConsentMock.mockImplementationOnce(async () => {
+      const err = new Error('no consent');
+      err.status = 403;
+      err.code = 'SUBJECT_CONSENT_REQUIRED';
+      throw err;
+    });
+    const fetchImpl = vi.fn();
+    const browserFetch = vi.fn();
+    const broker = { id: 'b1', search: { url_template: 'https://broker.example.com/{firstName}-{lastName}' } };
+    await expect(scanBroker(broker, { names: [{ full: 'Jane Doe', firstName: 'Jane', lastName: 'Doe' }], locations: [] }, {
+      fetchImpl, browserFetch, urlSafe: async () => true, subjectId: 'subject-2',
+    })).rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
+    expect(assertSubjectConsentMock).toHaveBeenLastCalledWith('subject-2', expect.objectContaining({ scope: 'broker_scan' }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(browserFetch).not.toHaveBeenCalled();
+    expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
+  });
+
   it('checks consent for the resolved subject and scopes the vault read to it', async () => {
     const vault = await import('./privacyVault.js');
     vault.listScanEligibleValues.mockClear();
     vault.listScanEligibleValues.mockResolvedValue([]);
     const result = await runScanPass({ subjectId: 'subject-2' });
-    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { action: 'broker exposure scan' });
+    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { scope: 'broker_scan', action: 'broker exposure scan' });
     expect(vault.listScanEligibleValues).toHaveBeenCalledWith({ subjectId: 'subject-2' });
     // No name vector ⇒ the pass short-circuits without touching a broker.
     expect(result.reason).toBe('no_scan_vectors');

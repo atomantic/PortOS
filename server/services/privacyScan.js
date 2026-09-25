@@ -12,10 +12,12 @@
  * render static HTML), escalating to the SSRF-pinned real-Chrome fetch
  * (`fetchUrlMainText`) only when the page needs JS. Both lanes are SSRF-vetted.
  *
- * CONSENT: `runScanPass` refuses to probe ANY broker for a subject without a
- * recorded consent row (privacySubjects.assertSubjectConsent) — the guard lives
- * in the service, not the UI, so a scheduled recheck or a direct API call is
- * refused exactly like a hidden button would be (#3658).
+ * CONSENT: `runScanPass` / `scanBroker` refuse to probe ANY broker for a
+ * subject without an ACTIVE `broker_scan` grant (privacySubjects.
+ * assertSubjectConsent, #3658/#8332) — a local-only `pii_vault` grant does not
+ * count, because the scan puts identity values into external broker URLs. The
+ * guard lives in the service, not the UI, so a scheduled recheck or a direct API
+ * call is refused exactly like a hidden button would be.
  *
  * AI policy: this whole pass runs ONLY from a user-triggered endpoint or a
  * user-created cron (never at boot). LLM-assisted namesake disambiguation, if
@@ -309,7 +311,7 @@ export async function scanBroker(broker, vectors, {
   subjectId,
 } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: `broker exposure scan (${broker?.id})` });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_scan', action: `broker exposure scan (${broker?.id})` });
   const probed = await probeBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe });
   if (probed.skipped) return { skipped: true, reason: probed.reason };
   const kase = await recordScanVerdict(broker.id, probed.verdict, {
@@ -326,11 +328,12 @@ export async function scanBroker(broker, vectors, {
  * Returns a summary { scanned, verdicts: {<verdict>: n}, skipped, brokers }.
  */
 export async function runScanPass({ concurrency = 3, fetchImpl = fetch, browserFetch = fetchUrlMainText, urlSafe = isScanUrlSafe, now = new Date(), subjectId } = {}) {
-  // CONSENT GATE — BEFORE any vault read or broker fetch. A subject with no
-  // consent row on file is refused outright (403); the UI hiding the Scan button
-  // is not sufficient, since a cron/API/agent caller reaches this same function.
+  // CONSENT GATE — BEFORE any vault read or broker fetch. A subject without an
+  // active `broker_scan` grant is refused outright (403); the UI hiding the Scan
+  // button is not sufficient, since a cron/API/agent caller reaches this same
+  // function.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: 'broker exposure scan' });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_scan', action: 'broker exposure scan' });
   const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
   const vectors = buildSearchVectors(scanValues);
   if ((vectors.names || []).length === 0) {

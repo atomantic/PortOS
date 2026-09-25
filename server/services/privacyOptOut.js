@@ -21,8 +21,10 @@
  *
  * HARD GUARDRAILS (autonomy never overrides — mirrors unbroker):
  *   - NO CONSENT, NO ACTION. `runOptOutPass` / `runVerificationPass` refuse to
- *     act for a subject with no recorded consent row
- *     (privacySubjects.assertSubjectConsent, #3658). Like the disclosure
+ *     act for a subject without an ACTIVE `broker_optout` grant
+ *     (privacySubjects.assertSubjectConsent, #3658/#8332) — neither the
+ *     local-only `pii_vault` grant nor the read-only `broker_scan` grant
+ *     unlocks a submission or its verification probes. Like the disclosure
  *     allowlist below, the guard lives in the SERVICE — a scheduled recheck, a
  *     direct API call, or a future agent path is refused exactly like a hidden
  *     UI button would be.
@@ -411,10 +413,11 @@ export async function runVerificationPass({
   now = new Date(), messagesProvider = getMessages, removalProbe = probeBroker, probeDeps = {},
   subjectId, maxVerificationRechecks = DEFAULT_MAX_VERIFICATION_RECHECKS,
 } = {}) {
-  // CONSENT GATE — the verification pass re-probes brokers for the subject, so
-  // it is gated exactly like the submission pass.
+  // CONSENT GATE — the verification pass re-probes brokers for the subject as
+  // part of the removal workflow, so it is gated on `broker_optout` exactly
+  // like the submission pass.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: 'opt-out verification pass' });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'opt-out verification pass' });
   const cases = await listBrokerCases({ subjectId: resolvedSubjectId });
   const advanced = [];
   const confirmed = [];
@@ -494,10 +497,10 @@ export async function runOptOutPass({
   now = new Date(), settingsProvider = getSettings, deps = {}, runVerification = true, subjectId,
 } = {}) {
   // CONSENT GATE — BEFORE any vault read, broker fetch, or draft creation. NO
-  // CONSENT, NO ACTION: a subject without a recorded consent row is refused
-  // (403) here in the service, not merely in the UI.
+  // CONSENT, NO ACTION: a subject without an active `broker_optout` grant is
+  // refused (403) here in the service, not merely in the UI.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: 'broker opt-out pass' });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'broker opt-out pass' });
   const settings = await settingsProvider();
   const recheck = settings?.privacy?.recheck || {};
   const autoApprove = recheck.autoApproveOptOutEmails === true;

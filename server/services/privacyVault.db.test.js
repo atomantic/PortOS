@@ -83,7 +83,7 @@ describe.skipIf(!runDb)('privacy vault DB round-trip', () => {
   it('the seeded self subject always has consent, so a record adds no duplicate (#3658)', async () => {
     // The boot DDL seeds a consent row for `self`, so the install owner is never
     // refused by the engine guard and an ordinary create appends nothing.
-    expect(await subjects.hasActiveConsent(selfSubjectId)).toBe(true);
+    expect(await subjects.hasActiveConsent(selfSubjectId, 'pii_vault')).toBe(true);
     const before = await query(
       `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [selfSubjectId],
     );

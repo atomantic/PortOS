@@ -30,7 +30,7 @@ const scopedPost = (path, { subjectId, ...rest } = {}) => [path, {
 }];
 
 // ── Household subjects (#3658) ──────────────────────────────────────────────
-/** All subjects, `self` first, each with `consentCount` + `recordCount`. */
+/** All subjects, `self` first, each with `consentCount`, `recordCount`, and `activeScopes`. */
 export const getPrivacySubjects = (options) => request('/privacy/subjects', options);
 /** Create: { displayName, relationship?, consentMethod, consentNote? } — consent is mandatory. */
 export const createPrivacySubject = (data, options) => request('/privacy/subjects', {
@@ -43,9 +43,23 @@ export const deletePrivacySubject = (id, options) => request(`/privacy/subjects/
   method: 'DELETE',
   ...options,
 });
-/** Consent audit trail for one subject, newest first. */
+/** Consent audit trail for one subject, newest first (revoked grants carry `revokedAt`). */
 export const getPrivacySubjectConsents = (id, options) =>
   request(`/privacy/subjects/${id}/consents`, options);
+/** Grant one purpose: { scope, method, note? } (#8332). */
+export const grantPrivacySubjectConsent = (id, data, options) =>
+  request(`/privacy/subjects/${id}/consents`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    ...options,
+  });
+/** Revoke one broker purpose (`broker_scan` | `broker_optout`); the subject and records stay. */
+export const revokePrivacySubjectConsent = (id, scope, options) =>
+  request(`/privacy/subjects/${id}/consents/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ scope }),
+    ...options,
+  });
 
 // ── Status (doctor-style readout) ───────────────────────────────────────────
 export const getPrivacyStatus = (options) => request(...scoped('/privacy/status', options));

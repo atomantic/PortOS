@@ -56,7 +56,9 @@ export default function Privacy() {
   }, [updateParams]);
 
   const handleCreated = (subject) => {
-    setSubjects((prev) => [...prev, { ...subject, consentCount: 1, recordCount: 0 }]);
+    // Creation writes exactly one local-only `pii_vault` grant — broker
+    // purposes start ungranted (#8332).
+    setSubjects((prev) => [...prev, { ...subject, consentCount: 1, recordCount: 0, activeScopes: ['pii_vault'] }]);
     selectSubject(subject.id);
   };
 
@@ -65,6 +67,26 @@ export default function Privacy() {
     // Never strand the view on a subject that no longer exists.
     if (deletedId === subjectId) selectSubject(SELF_SUBJECT_ID);
   };
+
+  // A broker purpose was granted/revoked in the Household drawer — mirror it
+  // into the subject list so the drawer and the Brokers tab reflect it without
+  // a refetch. A grant also appends an audit row (revocation only stamps one).
+  const handleConsentChanged = (changedId, scope, granted) => {
+    setSubjects((prev) => prev.map((s) => {
+      if (s.id !== changedId) return s;
+      const scopes = new Set(s.activeScopes ?? []);
+      if (granted) scopes.add(scope); else scopes.delete(scope);
+      return {
+        ...s,
+        activeScopes: [...scopes].sort(),
+        ...(granted ? { consentCount: (s.consentCount ?? 0) + 1 } : {}),
+      };
+    }));
+  };
+
+  // `undefined` until the subject list loads — the Brokers tab only warns about
+  // missing broker consent once it actually knows the grants.
+  const activeSubject = subjects.find((s) => s.id === subjectId);
 
   // Carry the subject across tabs, but drop tab-local params (e.g. the brokers
   // tab's `?case=`) so switching tabs can't reopen a stale drawer.
@@ -75,7 +97,13 @@ export default function Privacy() {
       case 'vault': return <PrivacyVaultTab subjectId={subjectId} />;
       case 'organizations': return <PrivacyOrgsTab subjectId={subjectId} />;
       case 'changes': return <PrivacyChangesTab subjectId={subjectId} />;
-      case 'brokers': return <PrivacyBrokersTab subjectId={subjectId} />;
+      case 'brokers': return (
+        <PrivacyBrokersTab
+          subjectId={subjectId}
+          consentScopes={activeSubject?.activeScopes}
+          onManageConsent={() => setDrawerOpen(true)}
+        />
+      );
       case 'overview':
       default: return <PrivacyOverviewTab subjectId={subjectId} />;
     }
@@ -118,6 +146,7 @@ export default function Privacy() {
         onClose={() => setDrawerOpen(false)}
         onCreated={handleCreated}
         onDeleted={handleDeleted}
+        onConsentChanged={handleConsentChanged}
       />
     </div>
   );
