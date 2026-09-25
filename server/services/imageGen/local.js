@@ -1,7 +1,7 @@
 /**
- * Image Gen — Local provider (Apple Silicon mflux / Windows diffusers).
+ * Image Gen — Local provider (mflux, diffusers, and platform-specific runners).
  *
- * Spawns a Python child process to generate Flux images. HF model weights
+ * Spawns a Python child process to generate the selected local image model. HF model weights
  * stream into the user's standard HF cache (`~/.cache/huggingface/`) — PortOS
  * doesn't override HF_HOME. Generated images land in `data/images/<jobId>.png`
  * with a sidecar metadata JSON so the gallery and Remix flow can recover

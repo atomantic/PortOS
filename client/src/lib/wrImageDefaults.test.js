@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { buildSceneRenderPayload, WR_IMAGE_DEFAULTS } from './wrImageDefaults';
+import { buildSceneRenderPayload, readWrImageSettings, WR_IMAGE_DEFAULTS } from './wrImageDefaults';
+
+describe('readWrImageSettings', () => {
+  it('uses the install-wide local image model unless the Writers Room has its own choice', () => {
+    expect(readWrImageSettings({ imageGen: { local: { modelId: 'qwen-image-2.1' } } }).modelId)
+      .toBe('qwen-image-2.1');
+    expect(readWrImageSettings({
+      imageGen: { local: { modelId: 'qwen-image-2.1' } },
+      writersRoom: { imageGen: { modelId: 'scene-model' } },
+    }).modelId).toBe('scene-model');
+  });
+});
 
 describe('buildSceneRenderPayload', () => {
   it('folds prompt + imageCfg into the generate payload, dropping empty steps/seed', () => {

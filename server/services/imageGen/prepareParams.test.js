@@ -70,9 +70,17 @@ describe('selectLocalImageModel', () => {
     expect(selectLocalImageModel('custom', models).id).toBe('custom');
   });
 
-  it('falls back from an unavailable dev default to a compatible model', () => {
+  it('uses Qwen-Image 2.1 as the shipped default when it is available', () => {
     const models = [
-      { id: 'dev', hardwareCompatibility: { state: 'unavailable' } },
+      { id: 'other-model', hardwareCompatibility: { state: 'available' } },
+      { id: 'qwen-image-2.1', hardwareCompatibility: { state: 'available' } },
+    ];
+    expect(selectLocalImageModel(undefined, models).id).toBe('qwen-image-2.1');
+  });
+
+  it('falls back from an unavailable shipped default to a compatible model', () => {
+    const models = [
+      { id: 'qwen-image-2.1', hardwareCompatibility: { state: 'unavailable' } },
       { id: 'custom', hardwareCompatibility: { state: 'available' } },
     ];
     expect(selectLocalImageModel(undefined, models).id).toBe('custom');
@@ -81,7 +89,7 @@ describe('selectLocalImageModel', () => {
   // The install-wide pin (settings.imageGen.local.modelId, Settings → Media →
   // Local). Without this rung the setting is a control that silently does
   // nothing for any render whose body omits modelId.
-  it('prefers the install pin over the dev default when the caller omits a model', () => {
+  it('prefers the install pin when the caller omits a model', () => {
     const models = [
       { id: 'dev', hardwareCompatibility: { state: 'available' } },
       { id: 'klein', hardwareCompatibility: { state: 'available' } },

@@ -5,6 +5,7 @@ import { universeStylePreset } from '../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
   IMAGE_GEN_MODE,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudPromptRequired,
   deriveAvailableBackends,
   imageGenReadiness,
@@ -184,7 +185,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
 
   useEffect(() => {
     if (modelId || savedLocalModelId === null || !models.length) return;
-    setModelId(models.some((model) => model.id === savedLocalModelId) ? savedLocalModelId : models[0].id);
+    const preferredId = models.some((model) => model.id === savedLocalModelId)
+      ? savedLocalModelId
+      : LOCAL_IMAGEGEN_DEFAULT_MODEL;
+    setModelId(models.some((model) => model.id === preferredId) ? preferredId : models[0].id);
   }, [models, savedLocalModelId, modelId]);
 
   useEffect(() => {

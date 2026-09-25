@@ -1785,7 +1785,7 @@
         ]
       }
     ],
-    "defaultMlx": "ltx23_distilled_q4",
+    "defaultMlx": "fastmetal_5b_qad",
     "defaultCuda": "ltx_video"
   },
   "image": [

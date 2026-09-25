@@ -31,7 +31,7 @@ export const IMAGE_RENDER_KNOB_DEFAULTS = Object.freeze({
 
 export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
   mode: IMAGE_GEN_MODE.LOCAL,
-  modelId: 'flux2-klein-4b',
+  modelId: LOCAL_IMAGEGEN_DEFAULT_MODEL,
   ...IMAGE_RENDER_KNOB_DEFAULTS,
 });
 
@@ -100,7 +100,7 @@ export function readPipelineImageSettings(settings) {
       : agyEnabled ? IMAGE_GEN_MODE.AGY : PIPELINE_IMAGE_DEFAULTS.mode;
   return {
     mode: stored.mode || defaultMode,
-    modelId: stored.modelId || PIPELINE_IMAGE_DEFAULTS.modelId,
+    modelId: stored.modelId || installLocalModelId(settings),
     width: Number.isFinite(stored.width) ? stored.width : PIPELINE_IMAGE_DEFAULTS.width,
     height: Number.isFinite(stored.height) ? stored.height : PIPELINE_IMAGE_DEFAULTS.height,
     steps: stored.steps != null && stored.steps !== '' ? String(stored.steps) : '',

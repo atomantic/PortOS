@@ -84,12 +84,14 @@ export async function validateVideoRetryParams(params = {}) {
     || requirements?.minCudaComputeCapability != null;
   let capabilities = captureSystemCapabilities();
   const modelWasOmitted = params.modelId === undefined || params.modelId === '';
-  let modelId = modelWasOmitted ? defaultVideoModelId(capabilities) : params.modelId;
+  const settings = modelWasOmitted ? await getSettings() : null;
+  const preferredId = settings?.videoGen?.defaultModelId;
+  let modelId = modelWasOmitted ? defaultVideoModelId(capabilities, preferredId) : params.modelId;
   const knownModels = listVideoModels();
   let model = knownModels.find((entry) => entry.id === modelId);
   if (needsCuda(model?.hardwareRequirements)) {
     capabilities = await detectSystemCapabilities();
-    if (modelWasOmitted) modelId = defaultVideoModelId(capabilities);
+    if (modelWasOmitted) modelId = defaultVideoModelId(capabilities, preferredId);
     model = knownModels.find((entry) => entry.id === modelId);
   }
   model = model && withHardwareCompatibility(model, capabilities, model.hardwareRequirements);
@@ -298,12 +300,13 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // remain unknown so a legacy local dispatcher cannot render a remote job
   // locally.
   const modelWasOmitted = body.modelId === undefined || body.modelId === '';
-  let effectiveModelId = modelWasOmitted ? defaultVideoModelId(capabilities) : body.modelId;
+  const preferredId = settings?.videoGen?.defaultModelId;
+  let effectiveModelId = modelWasOmitted ? defaultVideoModelId(capabilities, preferredId) : body.modelId;
   let effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
   if (needsCuda(effectiveModel?.hardwareRequirements)) {
     capabilities = await detectSystemCapabilities();
     if (modelWasOmitted) {
-      effectiveModelId = defaultVideoModelId(capabilities);
+      effectiveModelId = defaultVideoModelId(capabilities, preferredId);
       effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
     }
   }
