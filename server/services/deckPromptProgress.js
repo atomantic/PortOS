@@ -6,14 +6,13 @@
  * "Writing prompts…" until the whole POST settled. This module carries the
  * per-chunk frames for that work.
  *
- * This is the subscribe-first sibling of the pipeline text-stage channel
- * (`services/pipeline/textStageProgress.js`): same `sseUtils` wire primitives
- * (`broadcastSse` / `attachSseClient`), same lifecycle —
+ * This shares the pipeline text-stage channel's SSE primitives. A GET or POST
+ * creates the channel, and late subscribers replay its latest frame —
  *   1. The client opens `GET /decks/:id/generate-prompts/progress`.
- *      `attachClient` OPENS the channel when it doesn't exist yet, so the
- *      subscriber never 404s on a run it is about to trigger.
+ *      `attachClient` opens the channel when needed; the POST also reserves
+ *      it before work starts, so neither request order loses progress frames.
  *   2. The client POSTs `…/generate-prompts`. The route pushes frames through
- *      `emitPromptProgress`, which is a NO-OP when nobody subscribed.
+ *      `emitPromptProgress`, which retains the latest frame for late clients.
  *   3. `finishPromptProgress` broadcasts the terminal frame and lets the
  *      channel linger for `SSE_CLEANUP_DELAY_MS` so a late attach replays it.
  *
@@ -51,16 +50,10 @@ const dropChannel = (key, channel) => {
   if (channels.get(key) === channel) channels.delete(key);
 };
 
-/**
- * Attach an SSE client, opening the channel when this is the first subscriber.
- * Always succeeds — the subscribe-then-trigger ordering depends on it.
- */
-export function attachClient(deckId, res) {
-  const key = String(deckId);
+const ensureChannel = (key, deckId) => {
   let channel = channels.get(key);
-  // A finished channel still inside its replay window belongs to the PREVIOUS
-  // run — a new subscriber is here for the next one, so replace it outright
-  // rather than binding them to a stream that will never emit again.
+  // A finished channel still inside its replay window belongs to the previous
+  // run. A new subscriber or POST starts a fresh channel for the next run.
   if (channel?.finished) {
     dropChannel(key, channel);
     channel = null;
@@ -76,6 +69,27 @@ export function attachClient(deckId, res) {
     }, CHANNEL_IDLE_MS);
     channel.timer.unref?.();
   }
+  return channel;
+};
+
+/** Reserve a channel when generation begins, even if GET has not arrived. */
+export function beginPromptProgress(deckId) {
+  const key = String(deckId);
+  const channel = ensureChannel(key, deckId);
+  if (!channel.started) {
+    channel.started = true;
+    clearTimer(channel);
+  }
+  return true;
+}
+
+/**
+ * Attach an SSE client, opening the channel when this is the first subscriber.
+ * Always succeeds — the subscribe-then-trigger ordering depends on it.
+ */
+export function attachClient(deckId, res) {
+  const key = String(deckId);
+  const channel = ensureChannel(key, deckId);
   attachSseClient(channels, key, res);
   // A subscriber that disconnects before any generation started leaves nothing
   // to stream — close the reservation instead of waiting out the idle timer.
@@ -90,8 +104,8 @@ export function attachClient(deckId, res) {
 export const isChannelOpen = (deckId) => channels.has(String(deckId));
 
 /**
- * Broadcast one progress frame. No-op when nothing is subscribed — this is
- * the whole reason generation never depends on the channel.
+ * Broadcast one progress frame. Keep its latest payload for replay even when
+ * no client has connected yet.
  */
 export function emitPromptProgress(deckId, payload) {
   const channel = channels.get(String(deckId));

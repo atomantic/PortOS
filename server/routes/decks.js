@@ -22,7 +22,7 @@ import {
 } from '../lib/deckValidation.js';
 import { resolveGalleryImageOrThrow } from './universeBuilder/shared.js';
 import { resolveLlmRoutePin } from '../lib/llmRoutePin.js';
-import { attachClient as attachPromptProgressClient, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
+import { attachClient as attachPromptProgressClient, beginPromptProgress, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
 
 // Services load on first request, not at route-module import: the deck graph
 // reaches the DB, the prompt runner and the media queue, none of which a
@@ -126,16 +126,16 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
   }
 
   // Live progress for this run (see services/deckPromptProgress.js).
-  // Subscribe-then-trigger: the client's GET opens the channel, so it can
-  // connect before (or concurrently with) this POST without racing it — and
-  // every emit below is an advisory no-op when nobody is listening. The
-  // terminal frame ships on both the success and the error path.
+  // The GET may arrive before or after this POST. Reserve the channel here so
+  // every emitted frame is retained for a late subscriber; generation is still
+  // advisory and never waits on an SSE client.
   const emit = (payload) => emitPromptProgress(deck.id, payload);
   const finish = (payload) => finishPromptProgress(deck.id, payload);
 
   let universe = null;
   let cast = null;
   try {
+    beginPromptProgress(deck.id);
     if (deck.universeId) {
       const { getUniverse } = await import('../services/universeBuilder.js');
       universe = await getUniverse(deck.universeId).catch(() => null);

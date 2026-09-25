@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   attachClient,
+  beginPromptProgress,
   emitPromptProgress,
   finishPromptProgress,
   isChannelOpen,
@@ -52,6 +53,19 @@ describe('deck prompt progress channel', () => {
 
     emitPromptProgress('deck-1', { type: 'chunk', written: 12, requested: 79 });
     expect(framesOf(res)).toEqual([{ type: 'chunk', written: 12, requested: 79 }]);
+  });
+
+  it('replays the latest frame when POST reserves the channel before the subscriber connects', () => {
+    beginPromptProgress('deck-1');
+    emitPromptProgress('deck-1', { type: 'start', requested: 79, chunks: 7 });
+    emitPromptProgress('deck-1', { type: 'chunk', written: 12, requested: 79, chunk: 1, chunks: 7 });
+
+    const res = fakeRes();
+    attachClient('deck-1', res);
+    expect(framesOf(res)).toEqual([{ type: 'chunk', written: 12, requested: 79, chunk: 1, chunks: 7 }]);
+
+    emitPromptProgress('deck-1', { type: 'chunk', written: 24, requested: 79, chunk: 2, chunks: 7 });
+    expect(framesOf(res).at(-1)).toEqual({ type: 'chunk', written: 24, requested: 79, chunk: 2, chunks: 7 });
   });
 
   it('keeps channels separate per deck', () => {

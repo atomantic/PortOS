@@ -66,13 +66,12 @@ function DeckEditor({ id }) {
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [savingCard, setSavingCard] = useState(false);
-  // Live prompt-writing progress. The URL is set for the duration of one
-  // generate call and subscribes CONCURRENTLY with the POST (setting state
-  // commits after the POST leaves) — the server opens the channel on attach,
-  // so no frame is lost to the race, and with no EventSource the page falls
-  // back to the spinner. Frames survive the teardown; the status line below
-  // only reads them while `generating` is true.
   const [promptProgressUrl, setPromptProgressUrl] = useState(null);
+  const lastChunkSeen = useRef(0);
+  // Live prompt-writing progress. The URL is set for the duration of one
+  // generate call. The server reserves the channel on POST arrival and retains
+  // each frame until attach, so starting the POST before React's EventSource
+  // effect runs cannot drop progress.
   const { frames: promptFrames } = useSseProgress(promptProgressUrl, { enabled: !!promptProgressUrl });
   const loadSeqRef = useRef(0);
   // Resolved once for the page: the render bar names these options, the grid's
@@ -178,8 +177,9 @@ function DeckEditor({ id }) {
 
   const generatePrompts = async ({ overwrite }) => {
     setGenerating(true);
-    // Subscribe to the progress stream first. Purely advisory — an
-    // environment without EventSource just falls back to the spinner.
+    lastChunkSeen.current = 0;
+    // Start the advisory progress stream alongside the POST. The server
+    // reserves the channel at POST arrival and replays late frames.
     setPromptProgressUrl(null);
     if (typeof EventSource !== 'undefined') setPromptProgressUrl(deckPromptsProgressUrl(id));
     const result = await generateDeckPrompts(id, { overwrite }, { silent: true }).catch((err) => {
@@ -187,8 +187,8 @@ function DeckEditor({ id }) {
       return null;
     });
     if (!mountedRef.current) return;
-    // Close the stream once the POST has settled — the terminal frame has
-    // already landed, and the frames stay rendered until the next run.
+    // Close the stream once the POST has settled — frames stay rendered until
+    // the next run, when the chunk counter is reset above.
     setPromptProgressUrl(null);
     setGenerating(false);
     if (!result) return;
@@ -200,7 +200,6 @@ function DeckEditor({ id }) {
   // in the grid while the run is still going — not just when the POST
   // settles. The server persists every chunk before emitting its frame, so a
   // refetch on that frame always has something new to show.
-  const lastChunkSeen = useRef(0);
   useEffect(() => {
     if (!generating || !promptFrames.length) return undefined;
     const latest = promptFrames[promptFrames.length - 1];

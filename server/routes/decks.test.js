@@ -27,6 +27,7 @@ vi.mock('../services/deckPrompts.js', () => ({
 vi.mock('../services/deckRender.js', () => ({ renderDeckCards: vi.fn() }));
 vi.mock('../services/deckPromptProgress.js', () => ({
   attachClient: vi.fn(() => true),
+  beginPromptProgress: vi.fn(() => true),
   emitPromptProgress: vi.fn(),
   finishPromptProgress: vi.fn(),
 }));
@@ -38,7 +39,7 @@ vi.mock('./universeBuilder/shared.js', () => ({
 import * as svc from '../services/decks.js';
 import { analyzeDeckSample } from '../services/deckStyleAnalysis.js';
 import { castDeckFromUniverse, generateDeckCardPrompts } from '../services/deckPrompts.js';
-import { attachClient, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
+import { attachClient, beginPromptProgress, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
 import { renderDeckCards } from '../services/deckRender.js';
 import { getUniverse } from '../services/universeBuilder.js';
 import deckRoutes from './decks.js';
@@ -150,6 +151,8 @@ describe('deck routes', () => {
   it('generate-prompts streams start/chunk/complete progress frames', async () => {
     const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({});
     expect(res.status).toBe(200);
+    expect(beginPromptProgress).toHaveBeenCalledWith(D1);
+    expect(beginPromptProgress.mock.invocationCallOrder[0]).toBeLessThan(emitPromptProgress.mock.invocationCallOrder[0]);
     expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({ type: 'start', requested: 2 }));
     expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
       type: 'chunk', chunk: 1, written: 1, requested: 2, keys: [C0],
