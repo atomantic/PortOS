@@ -9,6 +9,7 @@ export * from './canonPrompt.js';
 export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
 export * from './decks.js';
+export * from './loraDatasetReadiness.js';
 export * from './personaTraitBlend.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
