@@ -101,24 +101,26 @@ const STATE = { agents: {}, stats: {}, config: {} };
 // The two real adapters, reproduced from the engines they belong to. Each test
 // runs the shared loop through BOTH, so a behavior that only holds for one is a
 // failure rather than an untested corner.
-function generatorAdapter({ availableSlots = 5 } = {}) {
+function generatorAdapter({ availableSlots = 5, projectCapacityExhausted = () => false } = {}) {
   const tasksToSpawn = [];
   return {
     spawned: tasksToSpawn,
     adapter: {
       capacityExhausted: () => tasksToSpawn.length >= availableSlots,
+      projectCapacityExhausted,
       canSpawn: () => true,
       emitSpawn: (task) => tasksToSpawn.push(task),
     },
   };
 }
 
-function dequeueAdapter({ availableSlots = 5, ignoreTaskId = 'completing-task' } = {}) {
+function dequeueAdapter({ availableSlots = 5, ignoreTaskId = 'completing-task', projectCapacityExhausted = () => false } = {}) {
   const spawned = [];
   return {
     spawned,
     adapter: {
       capacityExhausted: () => spawned.length >= availableSlots,
+      projectCapacityExhausted,
       canSpawn: () => true,
       emitSpawn: (task) => spawned.push(task),
       addTaskOptions: { ignoreTaskId },
@@ -262,6 +264,43 @@ describe.each(ENGINES)('%s — empty-result feedback', (_name, makeAdapter) => {
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(mocks.applyOnDemandRunResets).toHaveBeenCalledWith(expect.objectContaining({ id: 'req-1' }), 'acme');
+  });
+});
+
+describe.each(ENGINES)('%s — per-project capacity defers before preparation', (_name, makeAdapter) => {
+  it('keeps a full app request queued and its visible card open', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { spawned, adapter } = makeAdapter({ projectCapacityExhausted: appId => appId === 'acme' });
+
+    await drainOnDemandRequests({ state: STATE }, adapter);
+
+    expect(mocks.startPreflightCard).toHaveBeenCalledTimes(1);
+    expect(mocks.clearOnDemandRequest).not.toHaveBeenCalled();
+    expect(mocks.prepareManagedAppImprovementTask).not.toHaveBeenCalled();
+    expect(mocks.finishPreflightDispatch).not.toHaveBeenCalled();
+    expect(spawned).toEqual([]);
+  });
+
+  it('continues to other apps while retaining the full app request', async () => {
+    const otherApp = { id: 'other', name: 'Other App' };
+    mocks.getOnDemandRequests.mockResolvedValue([
+      appRequest({ id: 'req-full' }),
+      appRequest({ id: 'req-ready', appId: otherApp.id }),
+    ]);
+    mocks.getActiveApps.mockResolvedValue([APP, otherApp]);
+    mocks.prepareManagedAppImprovementTask.mockImplementation(async (_type, app) => ({
+      task: { id: `gen-${app.id}`, priority: 'HIGH', metadata: { app: app.id } },
+      pendingPerpetualDispatch: null,
+    }));
+    const { spawned, adapter } = makeAdapter({ projectCapacityExhausted: appId => appId === 'acme' });
+
+    await drainOnDemandRequests({ state: STATE }, adapter);
+
+    expect(mocks.clearOnDemandRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.clearOnDemandRequest).toHaveBeenCalledWith('req-ready');
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledTimes(1);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0].id).toBe(`gen-${otherApp.id}`);
   });
 });
 

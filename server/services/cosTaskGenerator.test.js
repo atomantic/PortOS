@@ -288,14 +288,17 @@ describe('dry-run hook wiring matches the shared execute path', () => {
 // re-inlines a loop into either engine is the regression, and no behavioral test
 // of the shared module can see it.
 describe('both on-demand engines delegate to the shared drain', () => {
-  for (const [engine, src] of [
-    ['cosTaskGenerator.spawnPriority0OnDemand', () => GEN_SRC],
-    ['cos.spawnDequeuePriority0OnDemand', () => COS_SRC],
+  for (const [engine, src, projectCounts, projectLimit] of [
+    ['cosTaskGenerator.spawnPriority0OnDemand', () => GEN_SRC, 'spawnProjectCounts', 'perProjectLimit'],
+    ['cos.spawnDequeuePriority0OnDemand', () => COS_SRC, 'capacity.spawnProjectCounts', 'capacity.perProjectLimit'],
   ]) {
     it(`${engine} calls drainOnDemandRequests and owns no request loop of its own`, () => {
       const text = src();
       expect(text).toMatch(/import \{ drainOnDemandRequests \} from '\.\/onDemandDrain\.js'/);
       expect(text).toContain('drainOnDemandRequests({ state }, {');
+      expect(text, `${engine} must defer app-scoped requests when their project cap is full`).toContain(
+        `projectCapacityExhausted: (appId) =>\n      (${projectCounts}[appId || '_self'] || 0) >= ${projectLimit},`
+      );
       expect(
         text,
         `${engine} must not re-inline the on-demand loop — it belongs to onDemandDrain.js`
@@ -311,6 +314,8 @@ describe('both on-demand engines delegate to the shared drain', () => {
     expect(DRAIN_SRC).toMatch(/const apps = onDemandRequests\.length > 0 \? await getActiveApps\(\)\.catch\(\(\) => null\) : \[\];/);
     expect(DRAIN_SRC, 'a [] fallback is the #6618 defect — it clears the request as unknown-app')
       .not.toMatch(/getActiveApps\(\)\.catch\(\(\) => \[\]\)/);
+    expect(DRAIN_SRC, 'a full project must leave its request queued before preparation')
+      .toMatch(/projectCapacityExhausted\(targetApp\?\.id \?\? request\.appId \?\? null\)[\s\S]*?continue;/);
     const readIdx = DRAIN_SRC.indexOf('await getActiveApps()');
     const loopIdx = DRAIN_SRC.indexOf('for (const request of onDemandRequests)');
     expect(readIdx).toBeGreaterThan(-1);

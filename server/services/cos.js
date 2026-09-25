@@ -1051,6 +1051,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
 
   const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    projectCapacityExhausted: (appId) =>
+      (capacity.spawnProjectCounts[appId || '_self'] || 0) >= capacity.perProjectLimit,
     // Priority 0 is a COMMITTED tier — the request is cleared and the app-review
     // marker bound before this runs, and nothing persists the task on a denial,
     // so it opts out of the local-endpoint cap (#4834).
