@@ -11,7 +11,7 @@
  * destPath after boot must register the cron without a restart.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./eventScheduler.js', () => ({
   // The real schedule() returns the registered event; the scheduler treats a
@@ -34,10 +34,15 @@ const { settingsEvents } = vi.hoisted(() => {
     }
   };
 });
-vi.mock('./settings.js', () => ({
-  getSettings: vi.fn(),
-  settingsEvents
-}));
+vi.mock('./settings.js', () => {
+  // getSettingsWithStatus defaults to wrapping getSettings as a clean read
+  // (`corrupt: false`), matching production for every test that only sets up
+  // `getSettings.mockResolvedValue(...)`. Corrupt-read tests override
+  // getSettingsWithStatus directly.
+  const getSettings = vi.fn();
+  const getSettingsWithStatus = vi.fn(async () => ({ corrupt: false, settings: await getSettings() }));
+  return { getSettings, getSettingsWithStatus, settingsEvents };
+});
 
 vi.mock('./backup.js', () => ({
   runBackup: vi.fn().mockResolvedValue({ success: true })
@@ -48,7 +53,7 @@ vi.mock('./userTimezone.js', () => ({
 }));
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getSettings } from './settings.js';
+import { getSettings, getSettingsWithStatus } from './settings.js';
 import { runBackup } from './backup.js';
 import { startBackupScheduler, stopBackupScheduler, syncBackupSchedule } from './backupScheduler.js';
 
@@ -326,5 +331,60 @@ describe('confirmed backup schedule lifecycle', () => {
     })).toBe(false);
     expect(await syncBackupSchedule(original)).toBe(true);
     expect(schedule).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * #8428: a boot-time read of settings.json that is unreadable/malformed must
+ * not be treated as "backup disabled". Before this, `getSettings()` collapsed
+ * that failure to `{}`, so `registrationInputs({})` was `null` and the
+ * scheduler cached a confirmed `disabled` state — permanently, since nothing
+ * re-triggers a sync until the next successful settings save.
+ */
+describe('corrupt settings read at boot (#8428)', () => {
+  let consoleErrorSpy;
+
+  beforeEach(() => {
+    stopBackupScheduler();
+    vi.clearAllMocks();
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs an error and registers nothing new on a corrupt boot read, without logging "disabled"', async () => {
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await startBackupScheduler();
+
+    expect(schedule).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('❌ Backup scheduler: settings unreadable'));
+  });
+
+  it('does not cancel an already-registered cron when a later read is corrupt', async () => {
+    getSettings.mockResolvedValue({ backup: { enabled: true, destPath: '/dest' } });
+    await startBackupScheduler();
+    expect(schedule).toHaveBeenCalledTimes(1);
+
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    expect(await syncBackupSchedule()).toBe(true);
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers once a later clean read succeeds, via settings:invalidated rather than a save', async () => {
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await startBackupScheduler();
+    expect(schedule).not.toHaveBeenCalled();
+
+    getSettings.mockResolvedValue({ backup: { enabled: true, destPath: '/dest', cronExpression: '0 3 * * *' } });
+    settingsEvents.emit('settings:invalidated');
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(schedule.mock.calls[0][0]).toMatchObject({ cron: '0 3 * * *' });
   });
 });

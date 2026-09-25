@@ -9,16 +9,26 @@
  */
 
 import { schedule, cancel } from './eventScheduler.js';
-import { getSettings, settingsEvents } from './settings.js';
+import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { runBackup } from './backup.js';
 import { getUserTimezone } from './userTimezone.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const EVENT_ID = 'backup-daily';
 
+// How long to wait before retrying a boot-time read that came back corrupt
+// (issue #8428) — long enough to skip past a transient EIO/iCloud-dataless
+// blip without spamming retries, short enough that the schedule self-heals
+// well inside a normal session.
+const CORRUPT_SETTINGS_RETRY_MS = 60_000;
+
 // Only confirmed disabled or runnable configurations are cached.
 // null means stopped or failed, so identical inputs can retry.
 let reconciliationState = null;
+
+// Guards against stacking multiple boot-retry timers while settings.json
+// stays unreadable across several syncBackupSchedule() calls.
+let corruptRetryTimer = null;
 
 /**
  * The registration-affecting slice of settings: `null` when backup scheduling
@@ -39,7 +49,26 @@ function registrationInputs(settings) {
  * @returns {Promise<boolean>} whether a cron is registered after the sync
  */
 export async function syncBackupSchedule(settings) {
-  const current = settings || await getSettings().catch(() => null);
+  if (!settings) {
+    // No explicit snapshot: this is the boot path (or a corrupt-read retry),
+    // so read through the strict status so an unreadable/malformed
+    // settings.json is distinguishable from "backup genuinely disabled"
+    // (issue #8428). `settings:updated` always hands syncBackupSchedule a
+    // clean parsed snapshot, so the explicit-argument path is unaffected.
+    const { corrupt, settings: read } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: {} }));
+    if (corrupt) {
+      console.error('❌ Backup scheduler: settings unreadable — keeping current registration, will retry on next settings change');
+      const wasScheduled = reconciliationState?.kind === 'scheduled';
+      // Don't cache a signature/state for a failed read — the next sync
+      // (settings:invalidated, or the boot retry below) must re-evaluate
+      // rather than treating this as a confirmed disabled state.
+      reconciliationState = null;
+      scheduleCorruptRetry();
+      return wasScheduled;
+    }
+    return syncBackupSchedule(read);
+  }
+  const current = settings;
   const inputs = registrationInputs(current);
   const timezone = await getUserTimezone().catch(() => 'UTC');
 
@@ -115,12 +144,36 @@ function attemptRegistration(inputs, timezone, signature) {
   return { kind: 'scheduled', signature };
 }
 
+/**
+ * Arm a single one-shot retry after a corrupt boot/re-sync read (#8428), so a
+ * transient failure self-heals without waiting for a user-driven settings
+ * save. Runs outside the request lifecycle — the process-boundary try/catch
+ * convention applies, not the route error-bubbling one.
+ */
+function scheduleCorruptRetry() {
+  if (corruptRetryTimer) return;
+  corruptRetryTimer = setTimeout(() => {
+    corruptRetryTimer = null;
+    syncBackupSchedule().catch(err =>
+      console.error(`❌ Backup scheduler: corrupt-settings retry failed: ${err.message}`));
+  }, CORRUPT_SETTINGS_RETRY_MS);
+  corruptRetryTimer.unref?.();
+}
+
 // Re-sync on every settings save rather than from the settings route — keeps
 // the HTTP handler decoupled from the backup graph (mirrors
 // seriesAutopilotScheduler.js). The signature guard makes unrelated saves free.
 settingsEvents.on('settings:updated', (cleaned) => {
   syncBackupSchedule(cleaned).catch(err =>
     console.error(`❌ Backup schedule re-sync failed: ${err.message}`));
+});
+
+// A corrupt boot read invalidates the settings read cache (settings.js's
+// reloadSettings()); re-sync as soon as a later read clears, without waiting
+// for a settings:updated save (#8428).
+settingsEvents.on('settings:invalidated', () => {
+  syncBackupSchedule().catch(err =>
+    console.error(`❌ Backup schedule invalidation re-sync failed: ${err.message}`));
 });
 
 /**
@@ -138,5 +191,9 @@ export async function startBackupScheduler() {
 export function stopBackupScheduler() {
   cancel(EVENT_ID);
   reconciliationState = null;
+  if (corruptRetryTimer) {
+    clearTimeout(corruptRetryTimer);
+    corruptRetryTimer = null;
+  }
   console.log('💾 Backup scheduler: stopped');
 }

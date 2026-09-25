@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deps = vi.hoisted(() => ({
   settings: vi.fn(),
+  settingsWithStatus: vi.fn(),
   processing: vi.fn(),
   selfUpdate: vi.fn(),
   appUpdate: vi.fn(),
@@ -18,6 +19,7 @@ const deps = vi.hoisted(() => ({
 vi.mock('./eventScheduler.js', () => ({ schedule: deps.schedule, cancel: deps.cancel }));
 vi.mock('./settings.js', () => ({
   getSettings: deps.settings,
+  getSettingsWithStatus: deps.settingsWithStatus,
   settingsEvents: { on: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('./activeProcessing.js', () => ({ getSystemActivity: deps.processing }));
@@ -47,6 +49,9 @@ beforeEach(() => {
   Object.values(deps).forEach((mock) => mock.mockReset());
   __resetAutoUpdateSchedulerForTests();
   deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'release', minIntervalHours: 6 } });
+  // getSettingsWithStatus defaults to wrapping getSettings as a clean read
+  // (`corrupt: false`) — corrupt-read tests override it directly.
+  deps.settingsWithStatus.mockImplementation(async () => ({ corrupt: false, settings: await deps.settings() }));
   deps.gateState.mockResolvedValue({
     runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
     lastUpdateResult: null,
@@ -417,6 +422,56 @@ describe('poll registration', () => {
     // Channel/interval are re-read inside the handler, so changing one must not
     // churn the registration.
     await syncAutoUpdateSchedule({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 12 } });
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * #8428: a boot-time read of settings.json that is unreadable/malformed must
+ * not be treated as "auto-update off". Before this, `getSettings()` collapsed
+ * that failure to `{}`, so `resolveAutoUpdateConfig({})` resolved `disabled`
+ * and the scheduler cached that as a confirmed signature — permanently, since
+ * nothing re-triggers a sync until the next successful settings save.
+ */
+describe('poll registration: corrupt settings read at boot (#8428)', () => {
+  let consoleErrorSpy;
+
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs an error and registers nothing on a corrupt boot read, without logging "off"', async () => {
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(false);
+
+    expect(deps.schedule).not.toHaveBeenCalled();
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('❌ Automatic updates: settings unreadable'));
+  });
+
+  it('does not cancel an already-registered poll when a later read is corrupt', async () => {
+    await expect(syncAutoUpdateSchedule({ autoUpdate: { enabled: true } })).resolves.toBe(true);
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(true);
+
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers once a later clean read succeeds, without a settings:updated save', async () => {
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(false);
+    expect(deps.schedule).not.toHaveBeenCalled();
+
+    // Simulate the boot retry / settings:invalidated re-sync firing after a
+    // later clean read — the default mockImplementation resolves cleanly now.
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(true);
     expect(deps.schedule).toHaveBeenCalledTimes(1);
   });
 });

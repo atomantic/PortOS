@@ -26,13 +26,17 @@
  */
 
 import { schedule, cancel, isValidCron } from './eventScheduler.js';
-import { getSettings, settingsEvents } from './settings.js';
+import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { getSeries } from './pipeline/series.js';
 import { startSeriesAutopilot } from './pipeline/seriesAutopilot.js';
 import { getUserTimezone } from './userTimezone.js';
 
 // eventScheduler id namespace for a per-series cron. One event per seriesId.
 const eventId = (seriesId) => `series-autopilot-${seriesId}`;
+
+// How long to wait before retrying a boot-time read that came back corrupt
+// (issue #8428) — mirrors backupScheduler's retry window.
+const CORRUPT_SETTINGS_RETRY_MS = 60_000;
 
 // seriesIds we currently hold a registered cron for — so a re-sync can cancel
 // events whose schedule was removed or disabled since the last registration.
@@ -44,6 +48,10 @@ const registered = new Set();
 // re-computing next-run for — every series cron. provider/model/effort are excluded
 // deliberately: they don't affect registration (the handler re-reads them per run).
 let lastSignature = null;
+
+// Guards against stacking multiple boot-retry timers while settings.json
+// stays unreadable across several syncSeriesAutopilotSchedules() calls.
+let corruptRetryTimer = null;
 
 /**
  * Pure extractor: the enabled, cron-valid schedules from a settings snapshot.
@@ -165,7 +173,24 @@ function signatureOf(active, fallbackTz) {
  * @param {object} [settings] - a settings snapshot; re-read when omitted
  */
 export async function syncSeriesAutopilotSchedules(settings) {
-  const current = settings || await getSettings().catch(() => null);
+  if (!settings) {
+    // No explicit snapshot: boot path (or a corrupt-read retry). Read through
+    // the strict status so an unreadable/malformed settings.json is
+    // distinguishable from "no schedules configured" (issue #8428).
+    // `settings:updated` always hands this a clean parsed snapshot, so the
+    // explicit-argument path below is unaffected.
+    const { corrupt, settings: read } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: {} }));
+    if (corrupt) {
+      console.error('❌ Series Autopilot scheduler: settings unreadable — keeping current registration, will retry on next settings change');
+      // Don't cache a signature for a failed read — the next sync
+      // (settings:invalidated, or the boot retry below) must re-evaluate.
+      lastSignature = null;
+      scheduleCorruptRetry();
+      return registered.size;
+    }
+    return syncSeriesAutopilotSchedules(read);
+  }
+  const current = settings;
   const active = activeSchedules(current);
   const timezone = await getUserTimezone().catch(() => 'UTC');
 
@@ -199,6 +224,30 @@ settingsEvents.on('settings:updated', (cleaned) => {
 });
 
 /**
+ * Arm a single one-shot retry after a corrupt boot/re-sync read (#8428), so a
+ * transient failure self-heals without waiting for a user-driven settings
+ * save. Runs outside the request lifecycle — the process-boundary try/catch
+ * convention applies, not the route error-bubbling one.
+ */
+function scheduleCorruptRetry() {
+  if (corruptRetryTimer) return;
+  corruptRetryTimer = setTimeout(() => {
+    corruptRetryTimer = null;
+    syncSeriesAutopilotSchedules().catch((err) =>
+      console.error(`❌ Series Autopilot scheduler: corrupt-settings retry failed: ${err.message}`));
+  }, CORRUPT_SETTINGS_RETRY_MS);
+  corruptRetryTimer.unref?.();
+}
+
+// A corrupt boot read invalidates the settings read cache (settings.js's
+// reloadSettings()); re-sync as soon as a later read clears, without waiting
+// for a settings:updated save (#8428).
+settingsEvents.on('settings:invalidated', () => {
+  syncSeriesAutopilotSchedules().catch((err) =>
+    console.error(`❌ Series Autopilot schedule invalidation re-sync failed: ${err.message}`));
+});
+
+/**
  * Boot entry point — registers the configured schedules once at startup.
  * No-ops cleanly when nothing is configured (no cold LLM calls: registering a
  * timer fires nothing until its cron elapses, and even then only if enabled +
@@ -217,4 +266,8 @@ export function stopSeriesAutopilotScheduler() {
     registered.delete(seriesId);
   }
   lastSignature = null;
+  if (corruptRetryTimer) {
+    clearTimeout(corruptRetryTimer);
+    corruptRetryTimer = null;
+  }
 }
