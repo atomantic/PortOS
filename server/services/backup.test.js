@@ -2953,7 +2953,7 @@ describe('runBackup lifecycle', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Retention pruning (#8334) — after a successful run, the oldest COMPLETED
+  // Retention pruning (#8334) — after a dump-successful run, the oldest COMPLETED
   // snapshots on THIS machine beyond retentionCount are deleted. Failed,
   // in-progress, and other-source snapshots must never be touched, and
   // retentionCount null/undefined must never prune anything (an existing
@@ -2981,12 +2981,20 @@ describe('runBackup lifecycle', () => {
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
       const io = { emit: vi.fn() };
-      const proc = fakeProc();
-      spawn.mockReturnValue(proc);
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
       const pending = runBackup(destRoot, io, { retentionCount: 2 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
-      proc.emit('close', 0);
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
+      await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
+      pgDump.emit('close', 0);
       const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
 
       // Keeps the newest 2 completed snapshots on this machine: the run just
       // created and old3. old1 and old2 are pruned.
@@ -3000,6 +3008,46 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(incomplete)).resolves.toBeDefined();
       await expect(fsp.stat(failed)).resolves.toBeDefined();
       await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('preserves older snapshots and reports zero pruned when the database dump fails', async () => {
+      const fsp = await actualFs();
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
+      const { errorEvents } = await import('../lib/errorHandler.js');
+      errorEvents.once('error', () => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      pgDump.emit('close', 1);
+
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'degraded', pgBackup: { status: 'failed' }, prunedSnapshots: 0 });
+      await expect(fsp.stat(old1)).resolves.toBeDefined();
+      await expect(fsp.stat(old2)).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^⚠️ Backup retention skipped: DB dump dump_error — keeping older snapshots$/));
+    });
+
+    it('still prunes when the explicit file-backend dump is skipped', async () => {
+      const fsp = await actualFs();
+      const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'skipped' }, prunedSnapshots: 1 });
+      await expect(fsp.stat(old)).rejects.toThrow();
     });
 
     it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {
