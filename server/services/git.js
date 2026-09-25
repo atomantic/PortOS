@@ -1665,7 +1665,12 @@ export async function deleteMergedBranches(dir, { excludeBranches, activeAgentId
     records.set(name, result);
 
     if (hasLocal) {
-      const r = await execGitSafe(['branch', '-d', name], dir, opts);
+      // `mergedLocalNames` was computed against the default branch above. Git's
+      // `branch -d` checks the current checkout (or the branch's upstream), which
+      // can differ when the app repo is currently on another branch; that would
+      // reject a branch this cleanup has already proved merged. Force-delete is
+      // safe here because worktree/current/agent-held names were filtered out.
+      const r = await execGitSafe(['branch', '-D', name], dir, opts);
       result.local = r.exitCode === 0 ? 'deleted' : 'failed';
       if (r.exitCode !== 0) skipped.push(`${name} (local: ${r.stderr?.trim()})`);
     }
@@ -1708,4 +1713,3 @@ export async function getGitInfo(dir) {
     hasChangelog: hasChangelogDir(dir)
   };
 }
-
