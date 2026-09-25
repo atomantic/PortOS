@@ -24,16 +24,19 @@ function Shell({ children }) {
 
 export default function BrainScanReport() {
   const { id } = useParams();
+  return <ScanReportForLink key={id} id={id} />;
+}
+
+function ScanReportForLink({ id }) {
   const fetchReport = useCallback(async () => {
     const [link, report] = await Promise.all([
       api.getBrainLink(id, { silent: true }),
       api.getBrainScanReport(id, { silent: true })
     ]);
-    return { link, report };
+    return { id, link, report };
   }, [id]);
   const { data, loading, refetch } = useAutoRefetch(fetchReport, 30_000);
-
-  if (loading) {
+  if (loading || (data && data.id !== id)) {
     return (
       <Shell>
         <PageSkeleton

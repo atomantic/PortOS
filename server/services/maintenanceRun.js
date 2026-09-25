@@ -293,16 +293,12 @@ export const evaluateMaintenanceRun = (id, { ignoreTaskId = null, completeStepId
   return evaluate(id, { ignoreTaskId });
 });
 
-async function evaluate(id, { ignoreTaskId }) {
-  const run = await getMaintenanceRun(id);
-  if (!run) return { skipped: 'unknown run' };
-  if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return { skipped: run.status };
+async function holdRun(id, run, reason, patch = null) {
+  if (patch || run.reason !== reason) await patchRun(id, { ...patch, reason });
+  return { dispatched: false, reason };
+}
 
-  const hold = async (reason, patch = null) => {
-    if (patch || run.reason !== reason) await patchRun(id, { ...patch, reason });
-    return { dispatched: false, reason };
-  };
-
+async function holdForOutstandingWork(id, run, ignoreTaskId) {
   const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
   const { user, cos } = await getAllTasks();
   const ownTask = [...(user?.tasks || []), ...(cos?.tasks || [])].find((task) => task.id !== ignoreTaskId
@@ -311,54 +307,57 @@ async function evaluate(id, { ignoreTaskId }) {
     const { loadState } = await import('./cosState.js');
     const state = await loadState();
     const agent = Object.values(state.agents || {}).find(entry => entry.taskId === ownTask.id && entry.status === 'running');
-    return hold(`waiting for ${ownTask.status.replace('_', ' ')} task ${ownTask.id}`, {
+    return holdRun(id, run, `waiting for ${ownTask.status.replace('_', ' ')} task ${ownTask.id}`, {
       active: { ...run.active, taskId: ownTask.id, agentId: agent?.id || run.active?.agentId || null, status: ownTask.status },
     });
   }
   const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
-  if (queued) return hold(`waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
+  if (queued) return holdRun(id, run, `waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
+  return null;
+}
 
-  const catalog = await getQuotaBurnTaskCatalog({ manual: true });
-  const completed = { ...run.completed };
-  // Step id → why it did not apply. Persisted with a hold too, so a later hold
-  // does not throw away skips this pass decided — but only when the pass moved
-  // the ledger, so an unchanged hold still costs no write or broadcast.
-  const skipped = { ...run.skipped };
-  const ledger = () => (Object.keys(completed).length !== Object.keys(run.completed || {}).length ? { completed, skipped } : null);
-  for (const step of run.steps) {
-    if (completed[step.id]) continue;
-    const shape = sequenceStepShapeReason(step);
-    if (shape) return hold(shape, ledger());
-    if (step.drain) {
-      const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
-      if (probe.drained) {
-        completed[step.id] = new Date().toISOString();
-        continue;
-      }
-      if (!probe.job) return hold(probe.reason, ledger());
-    }
-    const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
-    // An audit this repository cannot have findings for is COMPLETED as
-    // skipped: holding on it would leave the step pending forever, since the
-    // verdict will not change on the next evaluation.
-    if (result.code === QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE) {
+/** Advance a step already completed in the ledger, or a drain proven empty. */
+async function advanceCompletedOrDrainedStep(step, { completed, catalog, ignoreTaskId }) {
+  if (completed[step.id]) return { advanced: true };
+  const shape = sequenceStepShapeReason(step);
+  if (shape) return { hold: true, reason: shape };
+  if (step.drain) {
+    const probe = await probeSequenceDrain(step, { catalog, ignoreTaskId });
+    if (probe.drained) {
       completed[step.id] = new Date().toISOString();
-      skipped[step.id] = result.reason;
-      console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — ${result.reason}`);
-      continue;
+      return { advanced: true };
     }
-    if (!result.dispatched) return hold(result.reason, { completed, skipped });
-    const taskType = step.taskRef.taskType;
-    await patchRun(id, {
-      completed,
-      skipped,
-      steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
-      reason: null,
-      active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
-    });
-    console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
-    return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
+    if (!probe.job) return { hold: true, reason: probe.reason };
   }
+  return { advanced: false };
+}
+
+/** Dispatch one applicable step, recording skips or the queued active step. */
+async function dispatchApplicableStep(id, run, step, { completed, skipped, catalog }) {
+  const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
+  // An audit this repository cannot have findings for is COMPLETED as
+  // skipped: holding on it would leave the step pending forever, since the
+  // verdict will not change on the next evaluation.
+  if (result.code === QUOTA_BURN_UNAVAILABLE.NOT_APPLICABLE) {
+    completed[step.id] = new Date().toISOString();
+    skipped[step.id] = result.reason;
+    console.log(`⏭️ Maintenance run ${id}: skipped ${step.taskRef.taskType} (${step.id}) — ${result.reason}`);
+    return { skipped: true };
+  }
+  if (!result.dispatched) return holdRun(id, run, result.reason, { completed, skipped });
+  const taskType = step.taskRef.taskType;
+  await patchRun(id, {
+    completed,
+    skipped,
+    steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
+    reason: null,
+    active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
+  });
+  console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
+  return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
+}
+
+async function finishExhaustedSequence(id, run, { completed, skipped }) {
   // Name the skips in the reason the run view shows: a run whose only selected
   // check did not apply would otherwise finish as a bare "complete" with no
   // explanation of why nothing ran.
@@ -372,6 +371,31 @@ async function evaluate(id, { ignoreTaskId }) {
   });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
   return { dispatched: false, completed: true, reason };
+}
+
+async function evaluate(id, { ignoreTaskId }) {
+  const run = await getMaintenanceRun(id);
+  if (!run) return { skipped: 'unknown run' };
+  if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return { skipped: run.status };
+
+  const outstanding = await holdForOutstandingWork(id, run, ignoreTaskId);
+  if (outstanding) return outstanding;
+
+  const catalog = await getQuotaBurnTaskCatalog({ manual: true });
+  const completed = { ...run.completed };
+  // Persist advances already made in this pass if a later step holds, while
+  // an unchanged hold costs no write or broadcast.
+  const skipped = { ...run.skipped };
+  const ledger = () => (Object.keys(completed).length !== Object.keys(run.completed || {}).length ? { completed, skipped } : null);
+  for (const step of run.steps) {
+    const advance = await advanceCompletedOrDrainedStep(step, { completed, catalog, ignoreTaskId });
+    if (advance.advanced) continue;
+    if (advance.hold) return holdRun(id, run, advance.reason, ledger());
+    const result = await dispatchApplicableStep(id, run, step, { completed, skipped, catalog });
+    if (result.skipped) continue;
+    return result;
+  }
+  return finishExhaustedSequence(id, run, { completed, skipped });
 }
 
 /**

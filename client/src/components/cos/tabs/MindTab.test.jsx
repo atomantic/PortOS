@@ -215,6 +215,15 @@ describe('MindTab', () => {
     expect(within(screen.getByTestId('mind-chat')).getByLabelText('Message')).toBeInTheDocument();
   });
 
+  it('keeps a stale event link open with a clear unavailable detail', async () => {
+    renderTab('/cos/mind?event=mind-message%3Aexpired');
+
+    await screen.findByText('Review the next bounded slice.');
+    const details = screen.getByRole('dialog', { name: 'Event details' });
+    expect(within(details).getByText('This event is no longer available in the retained conversation history.')).toBeInTheDocument();
+    expect(within(details).queryByRole('button', { name: 'Promote to memory' })).not.toBeInTheDocument();
+  });
+
   it('fills remaining desktop height and auto-grows the composer', async () => {
     renderTab();
     await screen.findByText('Review the next bounded slice.');
