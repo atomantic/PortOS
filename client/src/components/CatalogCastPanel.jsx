@@ -34,6 +34,8 @@ function snippet(payload) {
 export default function CatalogCastPanel({ refKind, refId, refLabel }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busyId, setBusyId] = useState(null);
 
@@ -41,6 +43,7 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
     if (!refId) return undefined;
     let cancelled = false;
     setLoading(true);
+    setLoadError(false);
     listCatalogIngredientsForRef(refKind, refId, { silent: true })
       .then((data) => {
         if (cancelled) return;
@@ -50,10 +53,11 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
         if (cancelled) return;
         toast.error(err.message || 'Failed to load catalog cast');
         setRows([]);
+        setLoadError(true);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [refKind, refId]);
+  }, [refKind, refId, reloadKey]);
 
   const handlePicked = async (picked) => {
     const ingredient = Array.isArray(picked) ? picked[0] : picked;
@@ -117,6 +121,17 @@ export default function CatalogCastPanel({ refKind, refId, refLabel }) {
         <div className="flex items-center gap-2 text-xs text-gray-500">
           <Loader2 size={12} className="animate-spin" aria-hidden="true" />
           Loading cast…
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-port-error">
+          <span>Couldn't load linked catalog ingredients.</span>
+          <button
+            type="button"
+            onClick={() => setReloadKey((current) => current + 1)}
+            className="min-h-[44px] px-2 rounded underline underline-offset-2"
+          >
+            Retry
+          </button>
         </div>
       ) : rows.length === 0 ? (
         <p className="text-xs text-gray-500 italic">
