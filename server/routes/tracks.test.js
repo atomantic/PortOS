@@ -1,6 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { readdir, rm } from 'fs/promises';
 import { request } from '../lib/testHelper.js';
+
+// Code-engine takes land in the shared music library; point it at a temp dir
+// and keep the WAV (no ffmpeg in tests).
+const { musicDir } = await vi.hoisted(async () => {
+  const { mkdtemp } = await import('fs/promises');
+  const { tmpdir } = await import('os');
+  const { join } = await import('path');
+  return { musicDir: await mkdtemp(join(tmpdir(), 'tracks-code-take-')) };
+});
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, music: musicDir } };
+});
+vi.mock('../lib/ffmpeg.js', () => ({
+  findFfmpeg: vi.fn().mockResolvedValue(null),
+  runFfmpegProcess: vi.fn(),
+}));
 
 vi.mock('../services/tracks/index.js', () => ({
   TITLE_MAX: 200,
@@ -29,6 +47,7 @@ vi.mock('../services/tracks/index.js', () => ({
     const r = (track.renders || []).find((x) => x.id === renderId);
     return r ? { audioFilename: r.audioFilename, engine: r.engine, modelId: r.modelId, durationSec: r.durationSec } : null;
   }),
+  appendActiveTake: vi.fn(async (id, take, patch) => ({ id, ...take, ...patch })),
   deleteRenderPatch: vi.fn((track, renderId) => {
     const renders = track.renders || [];
     if (!renders.some((x) => x.id === renderId)) return null;
@@ -342,5 +361,59 @@ describe('tracks routes', () => {
     const r = await request(app).delete('/api/tracks/track-1/renders/missing');
     expect(r.status).toBe(404);
     expect(r.body.code).toBe('TRACK_RENDER_NOT_FOUND');
+  });
+
+  describe('POST /:id/code/render (code-engine take, #8375)', () => {
+    afterAll(async () => { await rm(musicDir, { recursive: true, force: true }); });
+
+    // A 2-second 16-bit stereo 8 kHz PCM WAV.
+    const wav = (() => {
+      const dataBytes = 8000 * 4 * 2;
+      const buf = Buffer.alloc(44 + dataBytes);
+      buf.write('RIFF', 0); buf.writeUInt32LE(36 + dataBytes, 4); buf.write('WAVE', 8);
+      buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(2, 22);
+      buf.writeUInt32LE(8000, 24); buf.writeUInt32LE(8000 * 4, 28); buf.writeUInt16LE(4, 32); buf.writeUInt16LE(16, 34);
+      buf.write('data', 36); buf.writeUInt32LE(dataBytes, 40);
+      return buf;
+    })();
+    const boundary = '----portoscodetake';
+    const multipart = (fileBytes, fields = {}) => Buffer.concat([
+      ...Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="track"; filename="code-take.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+      fileBytes,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const post = (body) => request(app).post('/api/tracks/track-1/code/render')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`).send(body);
+
+    it('lands the recorded WAV in the library and appends it as the active code take', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', prompt: 'saved prompt', renders: [] });
+      const r = await post(multipart(wav, { prompt: 'neon synthwave', title: 'Night Drive' }));
+      expect(r.status).toBe(200);
+      expect(r.body.durationSec).toBe(2);
+      expect(r.body.filename).toMatch(/^music-.+\.wav$/);
+      expect(await readdir(musicDir)).toContain(r.body.filename);
+      expect(tracks.appendActiveTake).toHaveBeenCalledWith('track-1', {
+        audioFilename: r.body.filename, prompt: 'neon synthwave', engine: 'code', durationSec: 2,
+      }, { title: 'Night Drive' });
+    });
+
+    it('rejects an upload that is not a PCM WAV, or no upload at all', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+      const notWav = await post(multipart(Buffer.from('OggS not a wav at all')));
+      expect(notWav.status).toBe(400);
+      expect(notWav.body.code).toBe('MUSIC_CODE_TAKE_NOT_WAV');
+      const noFile = await request(app).post('/api/tracks/track-1/code/render')
+        .set('content-type', `multipart/form-data; boundary=${boundary}`)
+        .send(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="prompt"\r\n\r\nx\r\n--${boundary}--\r\n`));
+      expect(noFile.status).toBe(400);
+      expect(tracks.appendActiveTake).not.toHaveBeenCalled();
+    });
+
+    it('404s for an unknown track', async () => {
+      tracks.getTrack.mockResolvedValue(null);
+      const r = await post(multipart(wav));
+      expect(r.status).toBe(404);
+    });
   });
 });

@@ -24,6 +24,12 @@ vi.mock('./MusicGenPanel', () => ({
   ),
 }));
 
+vi.mock('./CodePanel', () => ({
+  default: ({ trackId, description }) => (
+    <div data-testid="code-panel" data-track={trackId} data-description={description} />
+  ),
+}));
+
 vi.mock('./WaveformPanel', () => ({
   default: ({ trackId, description, providerId }) => (
     <div data-testid="waveform-panel" data-track={trackId} data-description={description} data-provider={providerId} />
@@ -55,7 +61,7 @@ vi.mock('../../hooks/useProviderModels', () => ({
 
 function LocationDisplay() {
   const location = useLocation();
-  return <div data-testid="location">{location.pathname}</div>;
+  return <div data-testid="location">{location.pathname}{location.search}</div>;
 }
 
 const renderAt = (path) => render(
@@ -205,6 +211,22 @@ describe('<MusicDesigner>', () => {
       fireEvent.click(screen.getByRole('tab', { name: /^lyrics$/i }));
       fireEvent.click(await screen.findByRole('tab', { name: /^render$/i }));
       expect(await screen.findByTestId('waveform-panel')).toBeInTheDocument();
+    });
+
+    it('opens the code engine from ?engine=code and drops the param when switching back', async () => {
+      api.getTrack.mockResolvedValue({
+        id: 'track-saved', title: 'Named Track', concept: 'x', prompt: 'Neon synthwave.', lyrics: '',
+      });
+      renderAt('/music/generate/render?trackId=track-saved&engine=code');
+      await findEnabledByLabelText(/prompt for this render/i);
+      const panel = await screen.findByTestId('code-panel');
+      expect(panel).toHaveAttribute('data-track', 'track-saved');
+      expect(panel).toHaveAttribute('data-description', 'Neon synthwave.');
+      expect(screen.getByText(/writes the Strudel code/i)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('tab', { name: /audio model/i }));
+      expect(await screen.findByTestId('gen-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('location')).not.toHaveTextContent('engine=');
     });
   });
 

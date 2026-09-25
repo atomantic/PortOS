@@ -163,7 +163,17 @@ vi.mock('../services/musicDesigner.js', () => ({
   writeLyrics: vi.fn(),
 }));
 
+// The code engine (#8375) runs its one LLM call through the shared runner.
+// Stub the runner (not the service) so the route test covers the service's
+// prompt, fence stripping, and size check too.
+vi.mock('../services/promptRunner.js', async () => ({
+  ...(await vi.importActual('../services/promptRunner.js')),
+  resolveProviderAndModel: vi.fn(),
+  runPromptThroughProvider: vi.fn(),
+}));
+
 import * as tracks from '../services/tracks/index.js';
+import * as promptRunner from '../services/promptRunner.js';
 import * as albums from '../services/albums/index.js';
 import * as designer from '../services/musicDesigner.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -305,6 +315,63 @@ describe('music routes', () => {
       const r = await request(app).post('/api/music/lyrics').send({ description: 'warm rhodes soul' });
       expect(r.status).toBe(502);
       expect(r.body.code).toBe('LLM_EMPTY');
+    });
+  });
+
+  describe('POST /code', () => {
+    beforeEach(() => {
+      promptRunner.resolveProviderAndModel.mockReset().mockResolvedValue({ provider: { id: 'fake-provider', type: 'api' }, selectedModel: 'fake-model' });
+      promptRunner.runPromptThroughProvider.mockReset();
+    });
+
+    it('returns the fence-stripped Strudel code with attribution', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValue({
+        text: 'Here is your track:\n\n```javascript\nsetcps(0.5)\nnote("c3 e3 g3").s("sawtooth")\n```\nEnjoy!',
+        model: 'fake-model',
+      });
+      const r = await request(app).post('/api/music/code').send({
+        description: 'neon synthwave drive', guidance: '124 BPM', providerId: 'fake-provider', effort: 'high',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({
+        language: 'strudel',
+        code: 'setcps(0.5)\nnote("c3 e3 g3").s("sawtooth")',
+        llm: { provider: 'fake-provider', model: 'fake-model' },
+      });
+      const args = promptRunner.runPromptThroughProvider.mock.calls[0][0];
+      expect(args).toMatchObject({ source: 'music-code', model: 'fake-model', effort: 'high' });
+      expect(args.prompt).toContain('neon synthwave drive');
+      expect(args.prompt).toContain('124 BPM');
+    });
+
+    it('sends the editor code back as the revision target', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'note("c3").s("sine")' });
+      const r = await request(app).post('/api/music/code').send({
+        description: 'ambient', current: 'note("a2 e3").s("triangle")',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.code).toBe('note("c3").s("sine")');
+      expect(promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt).toContain('note("a2 e3").s("triangle")');
+    });
+
+    it('rejects a missing description, oversize editor code, or an unknown language', async () => {
+      const missing = await request(app).post('/api/music/code').send({});
+      const oversize = await request(app).post('/api/music/code').send({ description: 'x', current: 'x'.repeat(20001) });
+      const language = await request(app).post('/api/music/code').send({ description: 'x', language: 'python' });
+      expect([missing.status, oversize.status, language.status]).toEqual([400, 400, 400]);
+      expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
+    });
+
+    it('refuses an empty or oversize LLM reply with a 502', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: '```js\n\n```' });
+      const empty = await request(app).post('/api/music/code').send({ description: 'x' });
+      expect(empty.status).toBe(502);
+      expect(empty.body.code).toBe('MUSIC_CODE_EMPTY');
+
+      promptRunner.runPromptThroughProvider.mockResolvedValueOnce({ text: 'x'.repeat(20001) });
+      const long = await request(app).post('/api/music/code').send({ description: 'x' });
+      expect(long.status).toBe(502);
+      expect(long.body.code).toBe('MUSIC_CODE_TOO_LONG');
     });
   });
 

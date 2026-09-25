@@ -16,6 +16,7 @@
  *   POST   /api/tracks/:id/audio/attach → Track      (attach a library filename)
  *   DELETE /api/tracks/:id/audio        → Track      (clear the audio pointer)
  *   POST   /api/tracks/:id/waveform/render → { track, filename, durationSec } (drawn-waveform take)
+ *   POST   /api/tracks/:id/code/render → { track, filename, durationSec } (multipart 'track' WAV recorded from code)
  *
  * Tracks store only a pointer (`audioFilename`) into the shared music library
  * (services/pipeline/musicLibrary.js, `data/music/`); the bytes are uploaded /
@@ -29,6 +30,7 @@
  */
 
 import { Router } from 'express';
+import { readFile, unlink } from 'fs/promises';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
@@ -45,6 +47,7 @@ import {
 import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 import { renderWaveSketchToTrack } from '../services/musicWaveform.js';
+import { saveCodeTakeToTrack } from '../services/musicCode.js';
 
 const router = Router();
 
@@ -300,6 +303,22 @@ const waveformRenderSchema = z.object({
 router.post('/:id/waveform/render', asyncHandler(async (req, res) => {
   const body = validateRequest(waveformRenderSchema, req.body ?? {});
   res.json(await renderWaveSketchToTrack({ trackId: req.params.id, ...body }));
+}));
+
+// --- Code takes: the Music Designer's code engine runs LLM-written Strudel in
+// a sandboxed browser frame and records it there. The server stores the
+// recorded WAV and never runs the code.
+const codeRenderSchema = z.object({
+  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
+  title: z.string().trim().max(200).optional(),
+});
+
+router.post('/:id/code/render', musicUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No recorded take uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
+  // Read the temp upload before validating so a rejected body can't strand it.
+  const wav = await readFile(req.file.path).finally(() => unlink(req.file.path).catch(() => {}));
+  const body = validateRequest(codeRenderSchema, req.body ?? {});
+  res.json(await saveCodeTakeToTrack({ trackId: req.params.id, wav, ...body }));
 }));
 
 // Make a past render the active one (re-point the player + gen-metadata badges

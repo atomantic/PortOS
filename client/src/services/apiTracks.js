@@ -113,6 +113,15 @@ export const renderTrackWaveform = (id, body, requestOptions = {}) => request(`/
   ...requestOptions,
 });
 
+// Save a take recorded from the code engine's sandboxed player. `formData`
+// carries the WAV as a `track` file plus optional `prompt`/`title` fields.
+// → { track, filename, durationSec }.
+export const renderTrackCode = (id, formData, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/code/render`, {
+  method: 'POST',
+  body: formData,
+  ...requestOptions,
+});
+
 // Mirror server caps in server/services/tracks/logic.js — bump both sides.
 export const TRACK_TITLE_MAX = 200;
 export const TRACK_LYRICS_MAX = 20000;
