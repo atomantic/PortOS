@@ -23,7 +23,6 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
@@ -57,7 +56,7 @@ import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
-import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion } from './taskTypeHooks.js';
+import { canRunTaskOutputHookWithoutPayload, getTaskOutputPayloadPredicate, isProgrammaticIoTaskType, resolveTaskHookType, declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { extractSimplifySummaries } from './agentSummaryExtraction.js';
 import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from '../lib/spawnCwd.js';
@@ -185,6 +184,19 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // so the same type still gets its commit criterion on a `plan`-tracker app
   // where it legitimately commits PLAN.md items (#3273).
   if (declaresNoCommitCriterion(task)) return null;
+  // A CLAIM flow (plan-task / claim-issue / claim-issue-gitlab / claim-issue-jira /
+  // claim-work) commits in the claim/<item> worktree the AGENT cuts, not in this
+  // workspace — the app's live checkout on the common path, since CoS keeps
+  // `useWorktree` false so it never provisions a nested worktree. The run-window
+  // probe is workspace-scoped, so it sees nothing and the declared false OVERRIDES
+  // the exit code in task-learning, scoring every successful claim run a failure
+  // and pinning the type's bucket at ~0% — the #2696 artifact by a new route.
+  // The goal-fidelity gate still judges the run against the claimed issue's
+  // requirements, so the exit code (not the probe) is the honest criterion here.
+  // Not folded into declaresNoCommitCriterion: that predicate also gates the
+  // goal-fidelity gate's no-diff bail, which claim flows must NOT take — their
+  // claim-worktree diff is exactly what the fidelity review reads.
+  if (isClaimFlowDispatch(task)) return null;
   // No usable run window means no way to attribute a commit to THIS run — the
   // sentinel, not a false verdict (#3637).
   if (!Number.isFinite(startedAt)) return null;
@@ -776,8 +788,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   const reviewLoopLeaveOpen = reviewLoopFollowUp
     && (task.metadata?.reviewLoopLeaveOpen === true || task.metadata?.reviewLoopLeaveOpen === 'true');
   if (declaresNoCommitCriterion(task) && !reviewLoopLeaveOpen) return noFidelityVerdict();
-  const claimFlow = task.metadata?.claimFlow === true || task.metadata?.claimFlow === 'true'
-    || CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
+  const claimFlow = isClaimFlowDispatch(task);
   const claimed = claimFlow
     ? await claimedIssueObjective(workspacePath).catch(() => null)
     : null;

@@ -20,7 +20,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
-import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
+import { isClaimFlowDispatch } from './taskTypeHooks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSections/constants.js';
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
@@ -113,8 +113,15 @@ export function isUiAuditTask(task) {
 }
 
 export function isClaimFlowTask(task, isTruthyMetaFn = (value) => value === true || value === 'true') {
+  // Delegates to isClaimFlowDispatch (taskTypeHooks.js) so the prompt-side
+  // claim posture and the finalization/learning-side exemption resolve the
+  // SAME task shapes — that predicate reads the marker plus the full
+  // analysisType → taskAnalysisType → taskType chain, covering an archived
+  // projection or a bare taskType this narrower chain used to miss (the #6613
+  // writer/reader split, one shape over). The isTruthyMetaFn seam stays for
+  // the suites that inject it.
   return isTruthyMetaFn(task?.metadata?.claimFlow)
-    || CLAIM_FLOW_TASK_TYPES.has(task?.metadata?.analysisType);
+    || isClaimFlowDispatch(task);
 }
 
 /**

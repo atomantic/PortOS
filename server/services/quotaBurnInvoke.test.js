@@ -438,6 +438,25 @@ describe('built-in agent task invocation', () => {
     expect(state.triggered[1].options.burn).not.toHaveProperty('maintenanceRunId');
   });
 
+  // Attribution: this shared path serves both the quota-burn loop and MANUAL
+  // maintenance runs. An unconditional 🔥 line makes a maintenance dispatch read
+  // as quota-burn activity on an install where quota burn is disabled — the
+  // operator cannot tell a feature they turned off from the ladder they clicked.
+  it('attributes a dispatch log line to the maintenance run, not quota burn, when one is present', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🧹 Maintenance run maint-1 requested scheduled task ux \(/));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/🔥/));
+
+      log.mockClear();
+      await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^🔥 Quota-burn requested scheduled task ux for grok \(/));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('routes through the schedule\'s on-demand lane with quota-burn provenance', async () => {
     const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
     expect(result.dispatched).toBe(true);
@@ -535,6 +554,28 @@ describe('custom app job invocation', () => {
     state.addResult = { id: 'sys-9', duplicate: true, status: 'blocked' };
     const result = await invokeQuotaBurnStep({ step: jobStep(), family: grok, candidate });
     expect(result).toEqual({ dispatched: false, reason: expect.stringContaining('already blocked') });
+  });
+
+  // Same attribution contract as the built-in lane: a maintenance run's custom-job
+  // dispatch must not wear quota-burn wording — in the log line OR on the queued
+  // task's context, which is what the task card shows.
+  it('attributes a maintenance custom-job dispatch to the run, in the log and the task context', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await invokeQuotaBurnStep({ step: jobStep(), family: grok, candidate, maintenanceRunId: 'maint-7' });
+      expect(log).toHaveBeenCalledWith('🧹 Maintenance run maint-7 queued custom job job-a as task sys-1');
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/🔥/));
+      const [{ task }] = state.added;
+      expect(task.context).toBe('Maintenance run maint-7: Nightly sweep');
+
+      log.mockClear();
+      state.added = [];
+      await invokeQuotaBurnStep({ step: jobStep(), family: grok, candidate });
+      expect(log).toHaveBeenCalledWith('🔥 Quota-burn queued custom job job-a as task sys-1 for grok');
+      expect(state.added[0].task.context).toBe('Quota burn (grok): Nightly sweep');
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 

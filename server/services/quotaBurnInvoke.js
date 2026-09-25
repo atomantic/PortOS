@@ -509,7 +509,15 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   });
   if (request?.error) return declined(request.error);
 
-  console.log(`🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${burnLabel(family)} (${request.id})`);
+  // Attribution, not decoration: this shared path serves BOTH the quota-burn
+  // loop and MANUAL maintenance runs (`maintenanceRunId` is set only by
+  // maintenanceRun.js). An unconditional 🔥 line makes a maintenance dispatch
+  // read as quota-burn activity on an install where quota burn is disabled —
+  // the operator cannot tell a feature they turned off from the maintenance
+  // ladder they clicked. Key the wording on the provenance, and name the run.
+  console.log(maintenanceRunId
+    ? `🧹 Maintenance run ${maintenanceRunId} requested scheduled task ${resolved.ref.taskType} (${request.id})`
+    : `🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${burnLabel(family)} (${request.id})`);
   return {
     dispatched: true,
     // The ONLY lane whose acceptance is asynchronous: the request is recorded
@@ -562,7 +570,11 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
     // other. Everything below OVERRIDES it — that is where the two legitimately
     // differ.
     ...generatedJobTaskFields(generated),
-    context: `Quota burn (${burnLabel(family)}): ${resolved.job.name}`,
+    // The queued task's context names who asked for it — a maintenance run's
+    // dispatch must not read as a quota-burn spend on the task card.
+    context: maintenanceRunId
+      ? `Maintenance run ${maintenanceRunId}: ${resolved.job.name}`
+      : `Quota burn (${burnLabel(family)}): ${resolved.job.name}`,
     approvalRequired: !generated.autoApprove,
     // The step's overrides win over the job's saved pins (see effectiveSettings),
     // and an unpinned step still lands on THIS family's provider.
@@ -587,7 +599,11 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
   // retry, and an unattended burn has no such intent to express.
   if (persisted.duplicate) return declined(`an identical "${resolved.job.name}" task is already ${persisted.status}`);
 
-  console.log(`🔥 Quota-burn queued custom job ${resolved.job.id} as task ${persisted.id} for ${burnLabel(family)}`);
+  // Same attribution rule as the built-in lane above: a maintenance run's
+  // custom-job dispatch must not wear the 🔥 quota-burn wording.
+  console.log(maintenanceRunId
+    ? `🧹 Maintenance run ${maintenanceRunId} queued custom job ${resolved.job.id} as task ${persisted.id}`
+    : `🔥 Quota-burn queued custom job ${resolved.job.id} as task ${persisted.id} for ${burnLabel(family)}`);
   return {
     dispatched: true,
     summary: `Queued "${resolved.job.name}" via ${picked.provider.id}`,
