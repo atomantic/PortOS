@@ -615,7 +615,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
-| `apiAccessPolicy.js` | Shared always-public path and gated non-`/api` prefix policy consumed by both `authGate` and API discovery. |
+| `apiAccessPolicy.js` | Shared always-public path, gated non-`/api` prefix, and peer-credential federation surface (`PEER_API_SURFACE`, `isPeerApiRequestAllowed`) policy consumed by `authGate` and API discovery. |
 | `apiCatalog.js` | Searchable projection of the Express route inventory (`getApiRouteCatalog()` from `apiRouteGraph.js`): domain, access, side-effect, contract coverage, summaries, and Express-to-OpenAPI path conversion. |
 | `apiRouteGraph.js` | Static scan of the mounted HTTP route graph — `server/index.js` `app.use('/api/…', router)` mounts → route-module imports → `router.use(prefix, child)` → `router.<method>('<path>')`, including aliased mounts, local subrouters, factory returns and composed `toolkit.routes.<x>` routers. `buildApiRouteCatalog({ repoRoot? })` → `{ derivedFrom, mounts, routes: [{ method, path, mountPath, sources }], stats }`; `getApiRouteCatalog()` derives it on first use and caches it for the process (read by the API Explorer, the internal OpenAPI document and `apiRouteParity.test.js`); `scanRouteGraph()` adds `declarationKeys` / `duplicateDeclarationKeys` (`routeDeclarationKey`) for the coverage guard in `apiRouteGraph.test.js`. Never committed — see "Generated manifests" in `server/AGENTS.md`. |
 | `socketEventCatalog.js` | Searchable projection of the cached Socket.IO inventory: direction, domain, and runtime-schema coverage. |
