@@ -474,6 +474,8 @@ export * from './chiptuneScore.js';
 export * from './pitchMath.js';
 export * from './wavAudioFile.js';
 export * from './waveSketch.js';
+export * from './paintedCanvas.js';
+export * from './spectrogramImage.js';
 export * from './civitai.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';

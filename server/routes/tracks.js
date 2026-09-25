@@ -48,7 +48,7 @@ import {
 import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 import { drawWaveSketchForTrack, renderWaveSketchToTrack } from '../services/musicWaveform.js';
-import { WAVE_SKETCH_LIMITS } from '../lib/waveSketch.js';
+import { PAINTED_CANVAS_LIMITS } from '../lib/paintedCanvas.js';
 import { saveCodeTakeToTrack } from '../services/musicCode.js';
 
 const router = Router();
@@ -292,19 +292,21 @@ router.post('/:id/chiptune/publish', asyncHandler(async (req, res) => {
   res.json(await publishChiptuneTrack({ trackId: req.params.id, ...body }));
 }));
 
-// --- Drawn waveform takes — the Music Designer's LLM-drawn sketch
-// (server/lib/waveSketch.js). `draw` persists the sketch on the track
-// (`waveSketch`/`waveSketchPrompt`, #8376); `render` renders that STORED sketch
-// with the same deterministic synth the browser previewed. Drawing is one
-// explicit user action per call (AI Provider Usage Policy).
+// --- Drawn waveform takes — the Music Designer's LLM-painted spectrogram
+// canvas (server/lib/paintedCanvas.js, #8464). `draw` persists the painting on
+// the track (`waveSketch`/`waveSketchPrompt`, #8376); `render` renders that
+// STORED sketch with the same deterministic synth the browser previewed.
+// Painting is one explicit user action per call (AI Provider Usage Policy).
 const optionalPick = (max) => z.string().max(max).optional().transform((v) => v?.trim() || undefined);
 const waveformDrawSchema = z.object({
   description: z.string().trim().min(1, 'description is required').max(tracks.PROMPT_MAX),
   lyrics: z.string().trim().max(tracks.LYRICS_MAX).optional(),
   guidance: z.string().trim().max(4000).optional(),
-  durationSec: z.number().min(WAVE_SKETCH_LIMITS.DURATION_MIN_SEC).max(WAVE_SKETCH_LIMITS.DURATION_MAX_SEC).optional(),
-  // true = revise the track's stored drawing instead of drawing from scratch.
+  durationSec: z.number().min(PAINTED_CANVAS_LIMITS.DURATION_MIN_SEC).max(PAINTED_CANVAS_LIMITS.DURATION_MAX_SEC).optional(),
+  // true = revise the track's stored painting instead of painting from scratch.
   revise: z.boolean().optional(),
+  // true = show the model a spectrogram of each passage for one repaint pass.
+  review: z.boolean().optional(),
   providerId: optionalPick(128),
   model: optionalPick(256),
   effort: optionalPick(64),

@@ -424,20 +424,17 @@ describe('tracks routes', () => {
     });
   });
 
-  describe('drawn waveform (#8376)', () => {
-    const sketch = {
-      version: 1, title: 'Glass Tide', durationSec: 2,
-      shapes: { glass: [0, 0.8, 1, 0.3, 0, -0.5, -1, -0.2] },
-      voices: [{ name: 'lead', shape: 'glass', notes: [{ t: 0, d: 1, pitch: 'A4' }] }],
-    };
+  describe('drawn waveform (#8376, painted canvas #8464)', () => {
+    // One passage's reply: a single tonal stroke.
+    const sketch = { title: 'Glass Tide', strokes: [{ path: [{ t: 0, hz: 440, a: 0.5 }, { t: 1, hz: 440, a: 0.5 }] }] };
 
-    it('POST /:id/waveform/draw persists the drawing on the track', async () => {
+    it('POST /:id/waveform/draw persists the painting on the track', async () => {
       tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
       promptRunner.runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(sketch) });
       const r = await request(app).post('/api/tracks/track-1/waveform/draw')
-        .send({ description: 'glassy tidal ambient', durationSec: 12, revise: true, providerId: '' });
+        .send({ description: 'glassy tidal ambient', durationSec: 12, revise: true, review: false, providerId: '' });
       expect(r.status).toBe(200);
-      expect(r.body.sketch).toMatchObject({ title: 'Glass Tide' });
+      expect(r.body.sketch).toMatchObject({ version: 2, title: 'Glass Tide', durationSec: 12 });
       expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({
         waveSketch: expect.objectContaining({ title: 'Glass Tide' }), waveSketchPrompt: 'glassy tidal ambient',
       }));
@@ -450,7 +447,7 @@ describe('tracks routes', () => {
       expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
     });
 
-    it('POST /:id/waveform/render renders the stored drawing, never a client-supplied one', async () => {
+    it('POST /:id/waveform/render renders the stored painting, never a client-supplied one', async () => {
       tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [], waveSketch: null });
       const r = await request(app).post('/api/tracks/track-1/waveform/render').send({ sketch });
       expect(r.status).toBe(400);

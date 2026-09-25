@@ -1,7 +1,9 @@
+import { createHash } from 'crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  WAVE_SKETCH_LIMITS, WAVE_SKETCH_SAMPLE_RATE, normalizeWaveSketch, pcmPeaks, synthesizeWaveSketch,
+  WAVE_SKETCH_LIMITS, WAVE_SKETCH_SAMPLE_RATE, normalizeWaveSketch, pcmPeaks, synthesizeSketchChannels, synthesizeWaveSketch,
 } from './waveSketch.js';
+import { pcmToWavBuffer } from './chiptuneRender.js';
 
 // One drawn sine cycle — 16 points, the example the LLM prompt teaches.
 const SINE = [0, 0.38, 0.71, 0.92, 1, 0.92, 0.71, 0.38, 0, -0.38, -0.71, -0.92, -1, -0.92, -0.71, -0.38];
@@ -126,6 +128,33 @@ describe('synthesizeWaveSketch', () => {
 
     const faded = synthesizeWaveSketch(normalizeWaveSketch(sketchOf(loud.slice(0, 1), { contour: [1, 0] })));
     expect(Math.abs(faded.at(-1))).toBeLessThan(0.001);
+  });
+});
+
+describe('stored v1 sketches after the v2 painted canvas (#8464)', () => {
+  it('still render byte-identically, to the same mono WAV', () => {
+    // A stored v1 sketch exercising glide, envelope, morph, both noise modes
+    // and the contour. The hash was taken from the pre-#8464 renderer.
+    const stored = {
+      version: 1, title: '', durationSec: 2,
+      shapes: { sine: SINE, saw: [-1, -0.5, 0, 0.5, 1] },
+      voices: [
+        { name: 'voice1', shape: 'sine', gain: 0.7, notes: [
+          { t: 0, d: 1, hz: 220, v: 0.8, pitch: 'A3', toHz: 329.628, env: [0, 1, 0.6, 0] },
+          { t: 1, d: 1, hz: 261.626, v: 0.8, pitch: 'C4', morphTo: 'saw' },
+        ] },
+        { name: 'voice2', shape: 'noise', gain: 0.6, notes: [{ t: 0.25, d: 0.1, hz: null, v: 0.8 }, { t: 0.75, d: 0.05, hz: 9000, v: 0.8 }] },
+      ],
+      contour: [0.4, 1, 0.7],
+    };
+    const sketch = normalizeWaveSketch(stored);
+    expect(sketch).toEqual(stored);
+    const channels = synthesizeSketchChannels(sketch);
+    expect(channels).toHaveLength(1);
+    expect(createHash('sha256').update(Buffer.from(channels[0].buffer)).digest('hex'))
+      .toBe('0ee008359a28d35f4698bd77101989bce0fc54931f7a3814fc94f83e1d0dd736');
+    expect(pcmToWavBuffer(channels, { sampleRate: WAVE_SKETCH_SAMPLE_RATE }))
+      .toEqual(pcmToWavBuffer(channels[0], { sampleRate: WAVE_SKETCH_SAMPLE_RATE }));
   });
 });
 

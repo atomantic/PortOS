@@ -117,9 +117,16 @@ export function renderScoreToPcm(score, { sampleRate = CHIPTUNE_SAMPLE_RATE } = 
   return out;
 }
 
-/** Encode mono Float32 PCM as a 16-bit little-endian WAV file buffer. */
+/**
+ * Encode Float32 PCM as a 16-bit little-endian WAV file buffer. `pcm` is one
+ * mono Float32Array, or an array of equal-length channels (interleaved, e.g.
+ * `[left, right]` for stereo).
+ */
 export function pcmToWavBuffer(pcm, { sampleRate = CHIPTUNE_SAMPLE_RATE } = {}) {
-  const dataBytes = pcm.length * 2;
+  const channels = Array.isArray(pcm) ? pcm : [pcm];
+  const frames = channels[0].length;
+  const blockAlign = channels.length * 2;
+  const dataBytes = frames * blockAlign;
   const buf = Buffer.alloc(44 + dataBytes);
   buf.write('RIFF', 0);
   buf.writeUInt32LE(36 + dataBytes, 4);
@@ -127,15 +134,17 @@ export function pcmToWavBuffer(pcm, { sampleRate = CHIPTUNE_SAMPLE_RATE } = {}) 
   buf.write('fmt ', 12);
   buf.writeUInt32LE(16, 16);          // fmt chunk size
   buf.writeUInt16LE(1, 20);           // PCM
-  buf.writeUInt16LE(1, 22);           // mono
+  buf.writeUInt16LE(channels.length, 22);
   buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(sampleRate * 2, 28); // byte rate
-  buf.writeUInt16LE(2, 32);           // block align
+  buf.writeUInt32LE(sampleRate * blockAlign, 28); // byte rate
+  buf.writeUInt16LE(blockAlign, 32);
   buf.writeUInt16LE(16, 34);          // bits per sample
   buf.write('data', 36);
   buf.writeUInt32LE(dataBytes, 40);
-  for (let i = 0; i < pcm.length; i += 1) {
-    buf.writeInt16LE(Math.round(pcm[i] * 32767), 44 + i * 2);
+  for (let i = 0; i < frames; i += 1) {
+    for (let c = 0; c < channels.length; c += 1) {
+      buf.writeInt16LE(Math.round(channels[c][i] * 32767), 44 + i * blockAlign + c * 2);
+    }
   }
   return buf;
 }
