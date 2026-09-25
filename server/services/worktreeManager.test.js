@@ -161,18 +161,20 @@ describe('Worktree dependency preparation', () => {
   });
 
   it('removes only symlinks that point to the source checkout', async () => {
+    const sourceDependencyPath = join('/repo', 'node_modules');
+    const worktreeDependencyPath = join('/worktree', 'node_modules');
     lstat.mockImplementation((path) => {
       const normalized = path.replaceAll('\\', '/');
       if (normalized === '/worktree/node_modules') return Promise.resolve({ isSymbolicLink: () => true });
       if (normalized === '/worktree/client/node_modules') return Promise.resolve({ isSymbolicLink: () => false });
       return Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
     });
-    readlink.mockResolvedValue('/repo/node_modules');
+    readlink.mockResolvedValue(sourceDependencyPath);
 
     await unlinkWorktreeDependencies('/repo', '/worktree');
 
     expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink).toHaveBeenCalledWith('/worktree/node_modules');
+    expect(unlink).toHaveBeenCalledWith(worktreeDependencyPath);
   });
 });
 
