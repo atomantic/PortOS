@@ -7,12 +7,13 @@ import { findEnabledByRole } from '../../test/enabledBarrier.js';
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
 const listQueueMediaJobs = vi.fn();
+const cancelMediaJob = vi.fn();
 const retryMediaJob = vi.fn();
 const resumeMediaVideoHold = vi.fn();
 const listMediaVideoHolds = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
   listQueueMediaJobs: (...a) => listQueueMediaJobs(...a),
-  cancelMediaJob: vi.fn(),
+  cancelMediaJob: (...a) => cancelMediaJob(...a),
   cancelQueuedMediaJobs: vi.fn(),
   deleteMediaJob: vi.fn(),
   retryMediaJob: (...a) => retryMediaJob(...a),
@@ -56,6 +57,7 @@ const trainingJob = {
 
 beforeEach(() => {
   listQueueMediaJobs.mockReset();
+  cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
   listMediaVideoHolds.mockReset().mockResolvedValue([]);
   resumeMediaVideoHold.mockReset();
   listLoraTrainingCheckpoints.mockReset();
@@ -110,6 +112,44 @@ describe('MediaJobsQueue — unavailable state', () => {
 
     expect(await screen.findByText('Queue status unavailable.')).toBeInTheDocument();
     expect(screen.queryByText('No image renders queued.')).not.toBeInTheDocument();
+  });
+});
+
+describe('MediaJobsQueue — cancellation state', () => {
+  it('keeps a running cancellation through refresh and clears it on terminal status', async () => {
+    const user = userEvent.setup();
+    const runningJob = {
+      id: 'canceljob12345678',
+      kind: 'image',
+      status: 'running',
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'an invented cancellation prompt', modelId: 'example-model' },
+    };
+    let queueSnapshot = [runningJob];
+    listQueueMediaJobs.mockImplementation(() => Promise.resolve(queueSnapshot));
+
+    render(<MediaJobsQueue kind="image" />);
+
+    await screen.findByText(/an invented cancellation prompt/);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(cancelMediaJob).toHaveBeenCalledWith('canceljob12345678', { silent: true });
+    expect(await screen.findByText('cancelling…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+
+    queueSnapshot = [{ ...runningJob, cancelRequested: true }];
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(screen.getByText('cancelling…')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    });
+
+    queueSnapshot = [{ ...runningJob, status: 'canceled', cancelRequested: false, error: 'Canceled' }];
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await user.click(await screen.findByText(/Show failed \/ canceled/));
+
+    expect(await screen.findByText('canceled')).toBeInTheDocument();
+    expect(screen.queryByText('cancelling…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
   });
 });
 
