@@ -622,10 +622,15 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // before this point takes the `fail()` path below and never reaches
     // here, so a failed or in-progress snapshot is never a prune candidate.
     // Retention failures must not fail an otherwise-successful backup.
-    const pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
-      console.error(`❌ Backup retention prune failed: ${err.message}`);
-      return { pruned: 0 };
-    });
+    let pruned = { pruned: 0 };
+    if (pgResult.status === 'failed') {
+      console.warn(`⚠️ Backup retention skipped: DB dump ${pgResult.reason} — keeping older snapshots`);
+    } else {
+      pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
+        console.error(`❌ Backup retention prune failed: ${err.message}`);
+        return { pruned: 0 };
+      });
+    }
 
     return { ...result, prunedSnapshots: pruned.pruned };
   } catch (err) {
