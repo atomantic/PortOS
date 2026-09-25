@@ -28,7 +28,14 @@ import TrainingPanel from '../components/loraTraining/TrainingPanel';
 import CaptionModelPicker from '../components/loraTraining/CaptionModelPicker';
 import ImportGalleryDialog from '../components/loraTraining/ImportGalleryDialog';
 import UniverseCharacterPicker from '../components/loraTraining/UniverseCharacterPicker';
-import { escapeRegExp } from '../lib/textUtils.js';
+import {
+  MIN_TRAINING_IMAGES,
+  RECOMMENDED_TRAINING_IMAGES,
+  TRAINING_IMAGE_SWEET_SPOT_MAX,
+  isValidTriggerWord,
+  computeDatasetReadiness,
+  analyzeCaptionInvariants,
+} from '../lib/loraDatasetReadiness.js';
 import {
   getLoraDataset,
   getLoraDatasetVariationAxes,
@@ -40,94 +47,8 @@ import {
   getUniverse,
 } from '../services/api';
 
-const TRIGGER_RE = /^[a-z0-9_]{2,64}$/;
 const SUBJECT_TYPE_LABEL = { characters: 'Character', objects: 'Object', places: 'Place' };
 const subjectKind = (dataset) => dataset?.character?.entryKind || 'characters';
-// Mirror of server/lib/loraDataset.js MIN_TRAINING_IMAGES + the token-boundary
-// caption match. Kept page-local (UX-advisory only — the server re-validates
-// authoritatively via validateDatasetReady at train time) so the readiness
-// summary + Train gate update the instant a caption is edited or an image
-// deleted, instead of waiting on a server round-trip. Port logic changes here
-// when the server helper changes.
-const MIN_TRAINING_IMAGES = 10;
-const RECOMMENDED_TRAINING_IMAGES = 20;
-const TRAINING_IMAGE_SWEET_SPOT_MAX = 30;
-const qualityTier = (captioned) => {
-  if (captioned < MIN_TRAINING_IMAGES) return 'insufficient';
-  if (captioned < RECOMMENDED_TRAINING_IMAGES) return 'minimum';
-  return 'good';
-};
-const captionHasTriggerWord = (caption, triggerWord) => {
-  const word = (triggerWord || '').trim();
-  const text = (caption || '').trim();
-  if (!text) return false;
-  if (!word) return true;
-  const escaped = escapeRegExp(word);
-  return new RegExp(`(?:^|[^a-z0-9_])${escaped}(?:[^a-z0-9_]|$)`, 'i').test(text);
-};
-// Mirror of server/lib/loraDataset.js analyzeCaptionInvariants — flags the
-// identity fragments repeated across most captions (which bind the character to
-// the caption phrases instead of the trigger token, issue #1320). Page-local so
-// the advisory updates the instant a caption is edited, without a refetch; the
-// authoritative strip recomputes server-side. Port logic changes here when the
-// server helper changes.
-const INVARIANT_SHARE_THRESHOLD = 0.8;
-const MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS = 4;
-const captionBody = (caption, triggerWord) => {
-  const word = (triggerWord || '').trim();
-  let body = (caption || '').trim();
-  if (word) {
-    const escaped = escapeRegExp(word);
-    body = body.replace(new RegExp(`^${escaped}(?=[\\s,]|$)\\s*,?\\s*`, 'i'), '');
-  }
-  return body;
-};
-const splitCaptionFragments = (caption, triggerWord) => captionBody(caption, triggerWord)
-  .split(',').map((f) => f.trim()).filter(Boolean);
-const normalizeFragment = (f) => (f || '').trim().toLowerCase().replace(/\s+/g, ' ');
-const analyzeCaptionInvariants = (images, triggerWord) => {
-  const list = Array.isArray(images) ? images : [];
-  const word = (triggerWord || '').trim();
-  const captioned = list.filter((img) => img?.status === 'ready' && captionHasTriggerWord(img.caption, word));
-  const total = captioned.length;
-  if (total < MIN_CAPTIONS_FOR_INVARIANT_ANALYSIS) return { analyzable: false, total, sharedFragments: [] };
-  const counts = new Map();
-  for (const img of captioned) {
-    const seen = new Set();
-    for (const frag of splitCaptionFragments(img.caption, word)) {
-      const norm = normalizeFragment(frag);
-      if (!norm || seen.has(norm)) continue;
-      seen.add(norm);
-      const cur = counts.get(norm) || { fragment: frag, count: 0 };
-      cur.count += 1;
-      counts.set(norm, cur);
-    }
-  }
-  const sharedFragments = [...counts.entries()]
-    .filter(([, v]) => v.count >= 2 && v.count / total >= INVARIANT_SHARE_THRESHOLD)
-    .map(([normalized, v]) => ({ fragment: v.fragment, normalized, count: v.count, ratio: v.count / total }))
-    .sort((a, b) => b.count - a.count || a.fragment.localeCompare(b.fragment));
-  return { analyzable: true, total, sharedFragments };
-};
-const deriveReadiness = (images, triggerWord) => {
-  const list = Array.isArray(images) ? images : [];
-  const word = (triggerWord || '').trim();
-  const ready = list.filter((img) => img.status === 'ready');
-  const captioned = ready.filter((img) => captionHasTriggerWord(img.caption, word));
-  const trainable = !!word && captioned.length >= MIN_TRAINING_IMAGES;
-  return {
-    total: list.length,
-    ready: ready.length,
-    captioned: captioned.length,
-    rendering: list.filter((img) => img.status === 'rendering').length,
-    required: MIN_TRAINING_IMAGES,
-    recommended: RECOMMENDED_TRAINING_IMAGES,
-    trainable,
-    // Mirror of computeDatasetReadiness: gate the tier on trainability so a
-    // record with enough images but no trigger word never shows green.
-    quality: trainable ? qualityTier(captioned.length) : 'insufficient',
-  };
-};
 
 function SliceDialog({ dataset, onClose, onSliced }) {
   const [cols, setCols] = useState(3);
@@ -346,7 +267,7 @@ export default function LoraDatasetDetail({ recordId }) {
   // on `dataset.readiness`) so manual caption edits / deletes reflect in the
   // counts + Train gate immediately, without a refetch per keystroke.
   const readiness = useMemo(
-    () => deriveReadiness(dataset?.images, dataset?.triggerWord),
+    () => computeDatasetReadiness(dataset),
     [dataset?.images, dataset?.triggerWord],
   );
 
@@ -420,7 +341,7 @@ export default function LoraDatasetDetail({ recordId }) {
 
   const saveTriggerWord = async () => {
     if (triggerDraft === null || triggerDraft === dataset.triggerWord) { setTriggerDraft(null); return; }
-    if (!TRIGGER_RE.test(triggerDraft)) {
+    if (!isValidTriggerWord(triggerDraft)) {
       toast.error('Trigger word must be 2-64 chars of a-z, 0-9, _');
       return;
     }
