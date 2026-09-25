@@ -110,7 +110,7 @@ describe('configured provider reviewers', () => {
     const result = await runLocalCodeReview({ backend, model: task.reviewerModels[backend], effort: task.reviewerEfforts[backend], diff: 'example diff' });
     expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS', effort: 'high' });
     const args = runCliProviderPrompt.mock.calls[0][0];
-    expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', safetyProfile: null });
+    expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', safetyProfile: 'public-review-gate' });
     await expect(access(args.cwd)).rejects.toThrow();
     expect(callProviderAISimple).not.toHaveBeenCalled();
 
@@ -146,7 +146,7 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       provider: expect.objectContaining({ credentialBootstrap: cli.credentialBootstrap }),
       bootstrapEnv: {},
-      safetyProfile: null,
+      safetyProfile: 'public-review-gate',
     }));
 
     cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
@@ -154,7 +154,7 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
-      safetyProfile: null,
+      safetyProfile: 'public-review-gate',
     }));
 
     // A credential command that FAILS is still a failed review, not a silent
@@ -174,14 +174,18 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it('runs Antigravity and custom harnesses in the requested checkout without demanding tool-free support', async () => {
+  // #6338: a reviewer is a feedback agent, never a writer. Antigravity's only
+  // maintained public-review posture may apply edits (`accept-edits`), so it
+  // has no enforced no-tool recipe — every CLI review, tool-free or ordinary,
+  // must refuse it (and any other unrecognized harness) rather than fall back
+  // to that vendor's normal unrestricted argv, which for several CLIs is a
+  // blanket `--dangerously-skip-permissions`-class flag.
+  it('refuses Antigravity and custom harnesses that have no enforced no-tool review posture, in an ordinary review too', async () => {
     for (const command of ['agy', 'custom-agent']) {
       getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
       runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
-      expect(await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
-      expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({ cwd: process.cwd(), model: 'pinned-coder', safetyProfile: null });
-      expect(runCliProviderPrompt.mock.lastCall[0].prompt).toContain('inspect surrounding source');
-      await expect(access(process.cwd())).resolves.toBeUndefined();
+      expect(await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
+      expect(runCliProviderPrompt).not.toHaveBeenCalled();
     }
   });
 
@@ -218,7 +222,11 @@ describe('configured provider reviewers', () => {
   });
 
   describe('getProviderReviewUnsupported', () => {
-    it('names missing CLI commands without rejecting unfamiliar harnesses', async () => {
+    // #6338: every CLI reviewer now needs a maintained no-tool posture, so a
+    // harness this install doesn't recognize (no `supportsPublicReviewProvider`
+    // recipe) is reported unsupported too — it would otherwise fall back to
+    // that vendor's unrestricted argv.
+    it('names missing CLI commands and unfamiliar harnesses with no enforced no-tool posture', async () => {
       listProviders.mockResolvedValue([
         provider,
         { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' },
@@ -228,7 +236,10 @@ describe('configured provider reviewers', () => {
       const unsupported = await getProviderReviewUnsupported();
       // The capable provider is ABSENT rather than false, so "nobody fetched
       // this map" and "nothing is wrong here" read the same to a picker.
-      expect(unsupported).toEqual({ 'provider:no-command': 'REVIEWER_UNSUPPORTED' });
+      expect(unsupported).toEqual({
+        'provider:no-command': 'REVIEWER_UNSUPPORTED',
+        'provider:hosted-harness': 'REVIEWER_UNSUPPORTED',
+      });
       expect(unsupported['provider:example-gpu']).toBeUndefined();
       // A disabled provider is already badged `disabled` by the picker's own
       // provider-record check; reporting it here would badge one fact twice.
