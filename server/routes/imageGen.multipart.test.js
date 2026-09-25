@@ -73,6 +73,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: vi.fn(() => ({ jobId: 'multipart-job', position: 1, status: 'queued' })),
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(),

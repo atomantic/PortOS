@@ -50,6 +50,17 @@ import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '..
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
+import {
+  MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
+} from './admission.js';
+
+// The admission contract lives in ./admission.js so producers that cannot
+// import the queue can still recognize a refusal; re-exported where callers
+// have always found the queue's API.
+export {
+  MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, MEDIA_QUEUE_FULL, isMediaAdmissionRefusal,
+  partialBatchAdmissionError,
+} from './admission.js';
 
 // Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) share one parallel lane —
 // each render
@@ -347,8 +358,10 @@ export function laneConcurrencyFor(job) {
  * are answered here for the same reason `isRemoteMediaJob` has one definition.
  *
  * `limit` is the lane's configured concurrency, NOT a queue bound: work over
- * the limit waits rather than being rejected. The federated-provider admission
- * bound is a separate setting (see federatedMediaProvider.js).
+ * the limit waits rather than being rejected. Waiting work is bounded once,
+ * across all lanes, by MAX_PENDING_MEDIA_JOBS (see assertMediaQueueRoom). The
+ * federated-provider admission bound is a separate setting (see
+ * federatedMediaProvider.js).
  *
  * @returns {{lanes: Record<'gpu'|'cloud'|'remote', {running: number, queued: number, limit: number}>,
  *   byKind: Record<string, {running: number, queued: number}>,
@@ -1234,9 +1247,22 @@ async function runJob(job) {
   dispatcher.detach();
 }
 
-// Error code of a refused admission. The job was withdrawn before any dispatch,
-// so a caller may treat the submission as definitively not made.
-export const MEDIA_QUEUE_PERSIST_FAILED = 'MEDIA_QUEUE_PERSIST_FAILED';
+/**
+ * Refuse up front when `count` more jobs would not fit under the pending-job
+ * ceiling (#8326). enqueueJob calls it with 1; a batch producer calls it with
+ * its size before creating records, so an oversized batch is refused whole
+ * instead of landing half-queued. Advisory for batches — other producers can
+ * still fill the queue before the batch finishes enqueueing, which each
+ * enqueueJob call re-checks.
+ *
+ * `queue` holds exactly the waiting jobs (including ones mid-admission):
+ * running jobs sit in the lane slots, so the ceiling never counts them.
+ */
+export function assertMediaQueueRoom(count = 1) {
+  if (queue.length + count <= MAX_PENDING_MEDIA_JOBS) return;
+  console.warn(`⚠️ media queue full — refused ${count} job(s) with ${queue.length} waiting (limit ${MAX_PENDING_MEDIA_JOBS})`);
+  throw mediaQueueFullError({ pending: queue.length, requested: count });
+}
 
 // Admission is durable (#8325): the job is acknowledged — and made eligible for
 // dispatch — only after a snapshot containing it has been written. Until then it
@@ -1247,10 +1273,16 @@ export const MEDIA_QUEUE_PERSIST_FAILED = 'MEDIA_QUEUE_PERSIST_FAILED';
 // Exception: under the #4115 latch (an unreadable snapshot preserved for repair)
 // nothing is written by design and the queue deliberately keeps working in
 // memory, so admission succeeds without durability; boot already reported it.
+//
+// Bounded (#8326): at MAX_PENDING_MEDIA_JOBS waiting jobs the submission is
+// refused (429 MEDIA_QUEUE_FULL) before ANY state changes — no id, no queue
+// entry, no SSE entry, no snapshot write. The check and the push below run in
+// one synchronous stretch, so concurrent submissions cannot overshoot it.
 export async function enqueueJob({ kind, params, owner = null }) {
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
+  assertMediaQueueRoom(1);
   const id = randomUUID();
   // Every routed job is normalized HERE rather than at each caller (#4683): the
   // downgrade contract only holds if it is unbypassable, and a future enqueue

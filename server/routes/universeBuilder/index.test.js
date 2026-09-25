@@ -198,8 +198,10 @@ vi.mock('../../services/settings.js', () => ({
   saveSettings: vi.fn(),
 }));
 
-vi.mock('../../services/mediaJobQueue/index.js', () => ({
-  enqueueJob: vi.fn(({ params }) => ({ jobId: `job-${++uuidCounter}`, position: 1, status: 'queued', params })),
+vi.mock('../../services/mediaJobQueue/index.js', async () => ({
+  assertMediaQueueRoom: vi.fn(),
+  partialBatchAdmissionError: (await import('../../services/mediaJobQueue/admission.js')).partialBatchAdmissionError,
+  enqueueJob: vi.fn(async ({ params }) => ({ jobId: `job-${++uuidCounter}`, position: 1, status: 'queued', params })),
 }));
 
 // Tiny in-memory store so repeat-render tests can verify the new

@@ -31,6 +31,7 @@ vi.mock('./dataset.js', () => ({ validateDatasetReady: (...a) => validateDataset
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../loraDatasets.js', () => ({ updateDataset: vi.fn(async () => {}) }));
 vi.mock('../mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: (...a) => enqueueJobMock(...a),
   getJob: vi.fn(),
   mediaJobEvents: { emit: vi.fn(), on: vi.fn() },

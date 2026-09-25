@@ -26,6 +26,7 @@ vi.mock('../../lib/pythonSetup.js', () => ({
   resolveFlux2Python: vi.fn(() => '/venv/python'),
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: vi.fn(),
   getJob: vi.fn(),
   mediaJobEvents: { emit: vi.fn(), on: vi.fn() },

@@ -11,11 +11,11 @@
 
 import { randomUUID } from 'crypto';
 import * as svc from './universeBuilder.js';
-import { enqueueJob } from './mediaJobQueue/index.js';
+import { assertMediaQueueRoom, enqueueJob, partialBatchAdmissionError } from './mediaJobQueue/index.js';
 import { getSettings } from './settings.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
-import { registerUniverseBuilderRun } from './universeBuilderCollectionHook.js';
+import { registerUniverseBuilderRun, shrinkUniverseBuilderRun } from './universeBuilderCollectionHook.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
 import { resolveLocalImageModel } from './imageGen/prepareParams.js';
@@ -94,6 +94,10 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     });
   }
 
+  // Refuse a batch the media queue cannot hold (#8326) whole — before the
+  // collection is provisioned or any render lands — rather than half-queue it.
+  assertMediaQueueRoom(compiled.length);
+
   // Provision the collection up front so renders can be tagged as they
   // complete. The completion hook (universeBuilderCollectionHook) will add
   // each finished image's filename to this collection. Resolution is
@@ -148,6 +152,14 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // emitRecordUpdated calls. `compiled.length` is the authoritative expected
   // count (each compiled item produces exactly one job below).
   registerUniverseBuilderRun({ runId, universeId: universe.id, jobCount: compiled.length });
+  const recordRun = () => svc.recordRun({
+    id: runId,
+    universeId: universe.id,
+    collectionId: collection.id,
+    jobIds,
+    promptCount: compiled.length,
+    createdAt: new Date().toISOString(),
+  });
   for (const item of compiled) {
     const params = {
       ...baseParams,
@@ -172,43 +184,30 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
         entryRef: item.entryRef,
       }),
     };
-    let queued;
     // The queue dispatches directly to imageGen/{codex,local}.generateImage,
     // bypassing imageGen/index.js's dispatcher that resolves cleaners for
     // direct callers. Resolve here so the per-mode cleanC2PA + denoise
     // settings apply to Universe Builder batch renders the same way they
     // do for /api/image-gen/generate and pipeline renders.
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-    if (cloud) {
-      queued = await enqueueJob({
-        kind: 'image',
-        params: { ...cloud.jobParams, cleanC2PA, denoise, ...params },
-      });
-    } else {
+    const jobParams = cloud
+      ? { ...cloud.jobParams, cleanC2PA, denoise, ...params }
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
-      queued = await enqueueJob({
-        kind: 'image',
-        params: {
-          pythonPath: localModel.pythonPath,
-          modelId: localModel.selectedModel.id,
-          cleanC2PA,
-          denoise,
-          ...params,
-        },
-      });
-    }
+      : { pythonPath: localModel.pythonPath, modelId: localModel.selectedModel.id, cleanC2PA, denoise, ...params };
+    const queued = await enqueueJob({ kind: 'image', params: jobParams }).catch(async (err) => {
+      // Refused part-way (another producer filled the queue after the
+      // preflight): the rest will never be enqueued, so release them from the
+      // run's pending count, keep a run record for the renders that DID land,
+      // and say how many that was.
+      shrinkUniverseBuilderRun(runId, compiled.length - jobIds.length);
+      if (jobIds.length) await recordRun();
+      throw partialBatchAdmissionError(err, { admitted: jobIds.length, total: compiled.length, noun: 'renders' });
+    });
     jobIds.push(queued.jobId);
     if (item.entryRef) entryJobs.push({ jobId: queued.jobId, entryRef: item.entryRef });
   }
 
-  const run = await svc.recordRun({
-    id: runId,
-    universeId: universe.id,
-    collectionId: collection.id,
-    jobIds,
-    promptCount: compiled.length,
-    createdAt: new Date().toISOString(),
-  });
+  const run = await recordRun();
 
   console.log(`🌍 Universe Builder render — universe=${universe.name} prompts=${compiled.length} mode=${mode} runId=${runId.slice(0, 8)}`);
 
