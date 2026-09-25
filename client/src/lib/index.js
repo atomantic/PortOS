@@ -237,3 +237,4 @@ export * from './eidoverseFrame.js';
 export * from './songBookDraft.js';
 export * from './layoutRoutes.js';
 export * from './navPresentation.js';
+export * from './squarifyTreemap.js';

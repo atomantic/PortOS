@@ -12,6 +12,9 @@ import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import useMounted from '../hooks/useMounted';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import DataTreemap from '../components/dataManager/DataTreemap';
+import DataSelectionPanel from '../components/dataManager/DataSelectionPanel';
+import { DATA_KINDS, DATA_KIND_ORDER, HATCH_STYLE, dataKindOf } from '../components/dataManager/dataKinds';
 
 // Plural labels for tombstone record kinds — shared between the in-page
 // TombstoneGcSection toast and `scripts/gc-tombstones-now.js` (the CLI
@@ -110,13 +113,15 @@ function TombstoneGcSection() {
     : 'Prune tombstones acked by every subscribed peer (skips the 24h grace).';
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2 text-sm text-gray-300">
-        <Trash2 size={14} className="text-gray-500" />
-        <span className="text-gray-400 uppercase tracking-wider text-xs font-medium">Tombstone GC</span>
-        <span className="text-gray-500 text-xs">
+    <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+      <div>
+        <div className="flex items-center gap-2">
+          <Trash2 size={14} className="text-gray-500" />
+          <h2 className="text-gray-400 uppercase tracking-wider text-[11px] font-medium">Tombstone GC</h2>
+        </div>
+        <p className="mt-1 text-gray-500 text-xs">
           Run on demand instead of waiting for the 24h orchestrator sweep.
-        </span>
+        </p>
       </div>
       <button
         onClick={runSweep}
@@ -131,9 +136,8 @@ function TombstoneGcSection() {
   );
 }
 
-function SizeBar({ size, maxSize }) {
+function SizeBar({ size, maxSize, color }) {
   const pct = maxSize > 0 ? Math.max(1, (size / maxSize) * 100) : 0;
-  const color = pct > 60 ? 'bg-port-warning' : pct > 30 ? 'bg-port-accent' : 'bg-port-success';
   return (
     <div className="w-full h-1.5 bg-port-border/50 rounded-full overflow-hidden">
       <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${Math.min(pct, 100)}%` }} />
@@ -146,7 +150,9 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
   // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
   // the row reads as a deliberate safety stance, not a broken row (#3285).
   // Older servers omit `classified`; treat only an explicit false as unknown.
-  const unclassified = cat.classified === false;
+  const kindKey = dataKindOf(cat);
+  const kind = DATA_KINDS[kindKey];
+  const unclassified = kindKey === 'unclassified';
   // `purgeScope: 'items'` categories hold the only copy of each file, so the
   // whole-directory Purge button is replaced by a per-row delete in the detail
   // table (#3327). Older servers omit `purgeScope` entirely — treat that as the
@@ -165,7 +171,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
     || 'A job is using this directory right now — purge once it finishes.';
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
-    <div className="border border-port-border rounded-lg overflow-hidden">
+    <div id={`data-category-${cat.key}`} className={`border rounded-lg overflow-hidden scroll-mt-4 ${expanded ? 'border-port-accent/60' : 'border-port-border'}`}>
       <button
         onClick={() => onExpand(cat.key)}
         className="w-full flex items-center gap-3 p-3 hover:bg-port-card/50 transition-colors text-left"
@@ -173,11 +179,12 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
         {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-sm shrink-0 ${kind.swatch}`} title={kind.label} />
             <span className="text-sm font-medium text-white">{cat.label}</span>
             <span className={`text-xs ${unclassified ? 'text-port-warning' : 'text-gray-500'}`}>{cat.description}</span>
           </div>
           <div className="mt-1">
-            <SizeBar size={cat.size} maxSize={maxSize} />
+            <SizeBar size={cat.size} maxSize={maxSize} color={kind.swatch} />
           </div>
         </div>
         <div className="text-right shrink-0 ml-2">
@@ -429,6 +436,17 @@ export default function DataManager() {
     await loadDetail(key);
   };
 
+  // The shortlist and panel select without toggling — re-picking the open
+  // category keeps it open rather than collapsing it like a row click does.
+  const selectCategory = (key) => {
+    if (expandedCatRef.current !== key) handleExpand(key);
+  };
+
+  const showSelectedActions = () => {
+    document.getElementById(`data-category-${expandedCatRef.current}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const refreshAfterAction = async (key) => {
     fetchOverview();
     if (expandedCatRef.current === key) await loadDetail(key);
@@ -488,7 +506,11 @@ export default function DataManager() {
     );
   }
 
-  const maxSize = overview?.categories?.[0]?.size || 1;
+  const categories = overview?.categories || [];
+  const maxSize = categories[0]?.size || 1;
+  const totalFiles = categories.reduce((sum, c) => sum + (c.fileCount || 0), 0);
+  const presentKinds = DATA_KIND_ORDER.filter((k) => categories.some((c) => dataKindOf(c) === k));
+  const selectedCat = categories.find((c) => c.key === expandedCat) || null;
 
   // `/data` is an `isFullWidthRoute` (Layout.jsx), so `<main>` is a bare
   // `relative overflow-hidden` and this shell owns the only scroll region.
@@ -506,7 +528,7 @@ export default function DataManager() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <div className="text-right">
+          <div className="hidden sm:block text-right">
             <div className="text-lg font-mono font-bold text-white">{formatBytes(overview?.totalSize || 0)}</div>
             <div className="text-xs text-gray-500">total in <code className="text-gray-400">{overview?.dataDir}/</code></div>
           </div>
@@ -522,61 +544,77 @@ export default function DataManager() {
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-auto p-4">
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          <div className="bg-port-card rounded-lg p-3 border border-port-border">
-            <div className="text-xs text-gray-500 mb-1">Categories</div>
-            <div className="text-lg font-bold text-white">{overview?.categories?.length || 0}</div>
-          </div>
-          <div className="bg-port-card rounded-lg p-3 border border-port-border">
-            <div className="text-xs text-gray-500 mb-1">Total Size</div>
-            <div className="text-lg font-bold text-white">{formatBytes(overview?.totalSize || 0)}</div>
-          </div>
-          <div className="bg-port-card rounded-lg p-3 border border-port-border">
-            <div className="text-xs text-gray-500 mb-1">Largest</div>
-            <div className="text-lg font-bold text-white">{overview?.categories?.[0]?.label || '—'}</div>
-            <div className="text-xs text-gray-500">{formatBytes(overview?.categories?.[0]?.size || 0)}</div>
-          </div>
-          <div className="bg-port-card rounded-lg p-3 border border-port-border">
-            <div className="text-xs text-gray-500 mb-1">Backups</div>
-            <div className="text-lg font-bold text-white">{backups.length}</div>
-          </div>
-        </div>
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] items-start">
+          <div className="min-w-0 space-y-3">
+            {/* Totals + kind legend */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+              <span className="text-gray-300">
+                <span className="font-mono text-white">{formatBytes(overview?.totalSize || 0)}</span>
+                {' · '}{formatCount(totalFiles, { fallback: '0' })} files
+                {' · '}{formatCount(categories.length, { fallback: '0' })} categories
+                {' · '}{formatCount(backups.length, { fallback: '0' })} backups
+              </span>
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
+                {presentKinds.map((k) => (
+                  <span key={k} className="flex items-center gap-1.5 text-gray-400" title={DATA_KINDS[k].hint}>
+                    <span className={`w-2.5 h-2.5 rounded-sm ${DATA_KINDS[k].swatch}`} style={DATA_KINDS[k].hatch ? HATCH_STYLE : undefined} />
+                    {DATA_KINDS[k].label}
+                  </span>
+                ))}
+              </span>
+            </div>
 
-        {/* Tombstone GC */}
-        <div className="mb-4">
-          <TombstoneGcSection />
-        </div>
-
-        {/* Category list */}
-        <div className="space-y-2">
-          {overview?.categories?.map(cat => (
-            <CategoryRow
-              key={cat.key}
-              cat={cat}
-              maxSize={maxSize}
-              expanded={expandedCat === cat.key}
-              detail={expandedCat === cat.key ? detail : null}
-              onExpand={handleExpand}
-              onArchive={handleArchive}
-              onPurge={setConfirmPurge}
-              onConfirmPurge={executePurge}
-              onCancelPurge={() => setConfirmPurge(null)}
-              onDeleteItem={handleDeleteItem}
-              deletingItem={expandedCat === cat.key ? deletingItem : null}
-              confirmingPurge={confirmPurge === cat.key}
-              archiving={archiving === cat.key}
-              purging={purging === cat.key}
+            {/* Disk-usage map — click a tile to select it and nest its entries */}
+            <DataTreemap
+              categories={categories}
+              selectedKey={expandedCat}
+              detail={detail}
+              onSelect={handleExpand}
             />
-          ))}
-        </div>
 
-        {/* Backups section */}
-        <BackupsSection
-          backups={backups}
-          loading={loading}
-          onDelete={handleDeleteBackup}
-        />
+            {/* Category list — the action surface for the selection */}
+            <div className="space-y-2">
+              {categories.map(cat => (
+                <CategoryRow
+                  key={cat.key}
+                  cat={cat}
+                  maxSize={maxSize}
+                  expanded={expandedCat === cat.key}
+                  detail={expandedCat === cat.key ? detail : null}
+                  onExpand={handleExpand}
+                  onArchive={handleArchive}
+                  onPurge={setConfirmPurge}
+                  onConfirmPurge={executePurge}
+                  onCancelPurge={() => setConfirmPurge(null)}
+                  onDeleteItem={handleDeleteItem}
+                  deletingItem={expandedCat === cat.key ? deletingItem : null}
+                  confirmingPurge={confirmPurge === cat.key}
+                  archiving={archiving === cat.key}
+                  purging={purging === cat.key}
+                />
+              ))}
+            </div>
+
+            {/* Backups section */}
+            <BackupsSection
+              backups={backups}
+              loading={loading}
+              onDelete={handleDeleteBackup}
+            />
+          </div>
+
+          <div className="min-w-0 space-y-4 lg:sticky lg:top-0">
+            <DataSelectionPanel
+              overview={overview}
+              totalFiles={totalFiles}
+              selected={selectedCat}
+              detail={detail}
+              onSelect={selectCategory}
+              onShowActions={showSelectedActions}
+            />
+            <TombstoneGcSection />
+          </div>
+        </div>
       </div>
     </div>
   );
