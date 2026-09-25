@@ -46,6 +46,17 @@ export const generateLyrics = (body, requestOptions = {}) => request('/music/lyr
   ...requestOptions,
 });
 
+// Have the LLM DRAW the music as a wave sketch (server/lib/waveSketch.js):
+// single-cycle waveforms + timed strokes the browser synthesizes directly.
+// body: { description, lyrics?, guidance?, durationSec?, current? (sketch to
+// revise), providerId?, model?, effort? }
+// → { sketch, llm: { provider, model } }
+export const drawWaveform = (body, requestOptions = {}) => request('/music/waveform', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
 // De-register a user-installed model (id is the HF repo id) → { removed }.
 export const removeAudioModel = (engine, id, requestOptions = {}) =>
   request(`/music/models/${encodeURIComponent(engine)}/${id.split('/').map(encodeURIComponent).join('/')}`, {

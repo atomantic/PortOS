@@ -260,6 +260,16 @@ describe('<TracksManager> generative workflow hand-off', () => {
     await waitFor(() => expect(musicGenProps.current?.remix?.nonce).toBe(2));
     expect(musicGenProps.current.remix).not.toHaveProperty('instrumentalOnly');
   });
+
+  it('remixes a drawn-waveform take in the designer\'s drawn engine', async () => {
+    listTracks.mockResolvedValue([{
+      ...TRACK,
+      renders: [{ id: 'render-drawn', audioFilename: 'drawn.wav', engine: 'waveform', prompt: 'Glassy', createdAt: '2026-01-02T00:00:00Z' }],
+    }]);
+    renderAt('track-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remix render-drawn' }));
+    expect(await screen.findByTestId('location')).toHaveTextContent('/music/generate/render?trackId=track-1&engine=drawn');
+  });
 });
 
 describe('<TracksManager> Audio-to-Video hand-off', () => {

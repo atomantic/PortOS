@@ -15,6 +15,7 @@
  *   POST   /api/tracks/:id/audio/upload → Track      (multipart 'track' file)
  *   POST   /api/tracks/:id/audio/attach → Track      (attach a library filename)
  *   DELETE /api/tracks/:id/audio        → Track      (clear the audio pointer)
+ *   POST   /api/tracks/:id/waveform/render → { track, filename, durationSec } (drawn-waveform take)
  *
  * Tracks store only a pointer (`audioFilename`) into the shared music library
  * (services/pipeline/musicLibrary.js, `data/music/`); the bytes are uploaded /
@@ -43,6 +44,7 @@ import {
 } from '../services/trackYoutubeImport.js';
 import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
+import { renderWaveSketchToTrack } from '../services/musicWaveform.js';
 
 const router = Router();
 
@@ -283,6 +285,21 @@ router.post('/:id/chiptune/publish', asyncHandler(async (req, res) => {
   await requireTrack(req.params.id);
   const body = validateRequest(chiptunePublishSchema, req.body ?? {});
   res.json(await publishChiptuneTrack({ trackId: req.params.id, ...body }));
+}));
+
+// --- Drawn waveform takes — the Music Designer's LLM-drawn sketch
+// (server/lib/waveSketch.js), rendered with the same deterministic synth the
+// browser previewed. The sketch travels in the body; it is not stored on the
+// track.
+const waveformRenderSchema = z.object({
+  sketch: z.record(z.string(), z.unknown()),
+  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
+  title: z.string().trim().max(200).optional(),
+});
+
+router.post('/:id/waveform/render', asyncHandler(async (req, res) => {
+  const body = validateRequest(waveformRenderSchema, req.body ?? {});
+  res.json(await renderWaveSketchToTrack({ trackId: req.params.id, ...body }));
 }));
 
 // Make a past render the active one (re-point the player + gen-metadata badges

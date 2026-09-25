@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { pitchToMidi, midiToFreq } from './pitchMath.js';
 import {
-  chiptuneScoreSchema, sanitizeChiptuneScore, pitchToMidi, midiToFreq,
+  chiptuneScoreSchema, sanitizeChiptuneScore,
   buildScoreEvents, scoreDurationSec, scoreTotalSteps, CHIPTUNE_LIMITS,
 } from './chiptuneScore.js';
 

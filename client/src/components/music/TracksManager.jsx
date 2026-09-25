@@ -348,6 +348,12 @@ export default function TracksManager() {
       setChiptuneRemix({ prompt: render.prompt || '', nonce: remixNonceRef.current });
       return;
     }
+    // A drawn-waveform take has no audio-model engine to seed — reopen it in the
+    // Music Designer's drawn engine on this track, where its drawing lives.
+    if (render.engine === 'waveform' && persisted) {
+      navigate(`/music/generate/render?trackId=${encodeURIComponent(persisted.id)}&engine=drawn`);
+      return;
+    }
     setGenMode('audio');
     setForm((f) => ({
       ...f,

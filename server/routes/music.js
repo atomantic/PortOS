@@ -4,12 +4,15 @@
  *   GET  /api/music/engines              → { engines, defaultEngine }
  *   POST /api/music/describe             → { description, llm }
  *   POST /api/music/lyrics               → { lyrics, llm }
+ *   POST /api/music/waveform             → { sketch, llm }
  *   POST /api/music/generate             → { jobId, position, status }
  *
  * `describe`/`lyrics` are the Generate tab's stepped designer (#4305): an LLM
  * expands a short reference/vibe into a rich conditioning prompt, then writes
  * lyrics from it. Both are one-shot, user-triggered calls — the studio never
- * fires them on its own (AI Provider Usage Policy).
+ * fires them on its own (AI Provider Usage Policy). `waveform` is the same
+ * designer's "Drawn waveform" engine: the LLM draws single-cycle waveforms and
+ * timed strokes (server/lib/waveSketch.js) that the browser plays directly.
  *
  * Generation runs the engine-agnostic `generateMusic` (server/services/pipeline/
  * musicGen.js) through the unified audio media-job lane. The completion hook
@@ -36,6 +39,8 @@ import {
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
+import { drawWaveSketch } from '../services/musicWaveform.js';
+import { WAVE_SKETCH_LIMITS } from '../lib/waveSketch.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -347,6 +352,24 @@ router.post('/lyrics', asyncHandler(async (req, res) => {
     effort: body.effort,
   });
   res.json({ lyrics, llm });
+}));
+
+const waveformSchema = z.object({
+  description: z.string().trim().min(1, 'description is required').max(8000),
+  lyrics: z.string().trim().max(20000).optional(),
+  durationSec: z.number().min(WAVE_SKETCH_LIMITS.DURATION_MIN_SEC).max(WAVE_SKETCH_LIMITS.DURATION_MAX_SEC).optional(),
+  // The drawing to revise — normalized (and size-bounded) by the service.
+  current: z.record(z.string(), z.unknown()).optional(),
+  // The drawing contract is fixed (no meta-prompt override like describe/lyrics).
+  ...designerPickerShape,
+}).omit({ template: true });
+
+// POST /api/music/waveform — have the LLM DRAW the music: single-cycle
+// waveforms plus timed strokes, previewed and rendered by lib/waveSketch.js.
+// One explicit user action per call.
+router.post('/waveform', asyncHandler(async (req, res) => {
+  const body = validateRequest(waveformSchema, req.body ?? {});
+  res.json(await drawWaveSketch(body));
 }));
 
 const generateSchema = z.object({
