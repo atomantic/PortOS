@@ -41,6 +41,26 @@ let appendedSinceCompaction = true;
 // file, whether or not it dropped lines). A repeat call with an unchanged
 // floor and nothing appended since can only reproduce the same result.
 let lastCompactionFloor = null;
+// Operation identity (see opKey) of every entry in the log. Lets a relay append
+// skip an operation the log already carries, so a peer delta retried after a
+// crash — or re-pulled because its append failed — relays exactly once (#8316).
+let loggedOps = new Set();
+
+/**
+ * Identity of the state a log entry publishes: the record, its LWW clock, and
+ * whether it is a delete. Two entries with the same key are interchangeable to
+ * a pulling peer, so the second is redundant. Null for an unkeyable entry.
+ */
+function opKey(entry) {
+  const updatedAt = entry?.record?.updatedAt;
+  if (!entry?.type || !entry?.id || updatedAt == null) return null;
+  return `${entry.type}/${entry.id}@${updatedAt}${entry.op === 'delete' ? '#delete' : ''}`;
+}
+
+function trackLoggedOp(entry) {
+  const key = opKey(entry);
+  if (key) loggedOps.add(key);
+}
 
 async function ensureBrainDir() {
   await ensureDir(DATA_DIR);
@@ -78,6 +98,7 @@ async function* streamLines(path, start = 0) {
  */
 async function loadIndex() {
   offsets = [];
+  loggedOps = new Set();
   fileSize = 0;
   currentSeq = 0;
   pendingNewline = false;
@@ -94,6 +115,7 @@ async function loadIndex() {
     const entry = safeJSONParse(text, null);
     if (typeof entry?.seq !== 'number') continue;
     offsets.push({ seq: entry.seq, offset });
+    trackLoggedOp(entry);
     currentSeq = entry.seq;
   }
   // Real byte size, not the offset past the last complete line: an unterminated
@@ -129,8 +151,9 @@ async function writeIndexedLines(lines) {
     fileSize += 1;
     pendingNewline = false;
   }
-  for (const { seq, text } of lines) {
+  for (const { seq, text, entry } of lines) {
     offsets.push({ seq, offset: fileSize });
+    trackLoggedOp(entry);
     fileSize += Buffer.byteLength(text, 'utf8') + 1;
   }
 }
@@ -156,6 +179,9 @@ function firstIndexAfter(sinceSeq) {
 export async function initSyncLog() {
   await ensureBrainDir();
   indexLoaded = false;
+  // A fresh process holds no queued retries; a re-init (tests) drops any
+  // left from a previous one, the same way a restart would.
+  pendingAppends = [];
   await loadIndex();
   console.log(`🔄 Sync log initialized at seq ${currentSeq} (${offsets.length} entries)`);
 }
@@ -184,15 +210,21 @@ export async function appendChange(op, type, id, record, originInstanceId) {
       originInstanceId,
       ts: new Date().toISOString()
     };
-    await writeIndexedLines([{ seq: entry.seq, text: JSON.stringify(entry) }]);
+    await writeIndexedLines([{ seq: entry.seq, text: JSON.stringify(entry), entry }]);
     return entry;
   });
 }
 
 /**
  * Append multiple change entries in a single mutex-guarded batch (reduces lock contention)
+ *
+ * `skipLogged` makes the append idempotent for relays: an entry whose operation
+ * (record + updatedAt + delete-ness) the log already carries is dropped, as is
+ * a repeat within the batch. The check and the write share one lock hold, so a
+ * retried relay can never mint a second entry for the same operation (#8316).
+ * Returns only the entries actually written.
  */
-export async function appendChanges(entries) {
+export async function appendChanges(entries, { skipLogged = false } = {}) {
   if (!entries?.length) return [];
   return withLock(async () => {
     await ensureBrainDir();
@@ -200,18 +232,90 @@ export async function appendChanges(entries) {
     const startSeq = currentSeq;
     const results = [];
     const lines = [];
+    const batchKeys = new Set();
     let nextSeq = startSeq;
     for (const { op, type, id, record, originInstanceId } of entries) {
+      if (skipLogged) {
+        const key = opKey({ op, type, id, record });
+        if (key && (loggedOps.has(key) || batchKeys.has(key))) continue;
+        if (key) batchKeys.add(key);
+      }
       nextSeq++;
       const entry = { seq: nextSeq, op, type, id, record, originInstanceId, ts: new Date().toISOString() };
-      lines.push({ seq: nextSeq, text: JSON.stringify(entry) });
+      lines.push({ seq: nextSeq, text: JSON.stringify(entry), entry });
       results.push(entry);
     }
     // Reserve sequence numbers before write to avoid reuse on partial failure
     // (matches appendChange semantics where currentSeq advances pre-write)
+    if (lines.length === 0) return results;
     currentSeq = nextSeq;
     await writeIndexedLines(lines);
     return results;
+  });
+}
+
+// Local-write relays whose append failed (#8351). A local brain write must
+// succeed for the user even when the log append rejects, so the entry waits
+// here and is retried — deduplicated, so an append that landed bytes before
+// throwing never mints a second entry — before the next local append and on
+// every sync-orchestrator cycle. In memory only: a restart loses the list, and
+// the boot sweep (brainReconcile.relayUnloggedRecords) recovers those ops from
+// the stored records instead. The cap bounds memory while the disk stays
+// broken; the sweep also covers anything dropped past it.
+const MAX_PENDING_APPENDS = 1000;
+let pendingAppends = [];
+
+// Oldest first. A retried batch goes back in FRONT of anything queued while it
+// was in flight (it is older); a fresh local write joins at the back.
+function queuePendingAppends(entries, { retried = false } = {}) {
+  pendingAppends = retried ? [...entries, ...pendingAppends] : [...pendingAppends, ...entries];
+  const overflow = pendingAppends.length - MAX_PENDING_APPENDS;
+  if (overflow > 0) {
+    pendingAppends = pendingAppends.slice(overflow);
+    console.warn(`⚠️ Brain sync log retry queue full: dropped ${overflow} oldest entries (the boot sweep relays them)`);
+  }
+}
+
+/**
+ * Retry the local-write relays a failed append left behind. Never rejects: a
+ * batch that fails again goes back on the queue for the next attempt.
+ * Resolves to the number of entries written.
+ */
+export async function retryPendingAppends() {
+  if (pendingAppends.length === 0) return 0;
+  const batch = pendingAppends;
+  pendingAppends = [];
+  return appendChanges(batch, { skipLogged: true }).then(
+    (written) => {
+      console.log(`🔄 Brain sync log retry relayed ${written.length} of ${batch.length} queued entries`);
+      return written.length;
+    },
+    (err) => {
+      queuePendingAppends(batch, { retried: true });
+      console.error(`❌ Brain sync log retry failed (${batch.length} entries queued): ${err.message}`);
+      return 0;
+    },
+  );
+}
+
+/**
+ * Append the relay entries of a LOCAL brain write. Never rejects — the record
+ * is already saved, so a failed append is queued for retry instead of failing
+ * the user's write. Earlier failures are retried first so local ops mostly keep
+ * their order in the log; while those still fail, the new entries queue behind
+ * them. Order is not load-bearing — peers and compaction resolve by the LWW
+ * clock, never by log position — so concurrent writers are not serialized here.
+ */
+export async function appendLocalChanges(entries) {
+  if (!entries?.length) return;
+  if (pendingAppends.length > 0) await retryPendingAppends();
+  if (pendingAppends.length > 0) {
+    queuePendingAppends(entries);
+    return;
+  }
+  await appendChanges(entries).catch((err) => {
+    queuePendingAppends(entries);
+    console.error(`❌ Brain sync log append failed (${entries.length} entries queued for retry): ${err.message}`);
   });
 }
 
@@ -417,10 +521,12 @@ export async function compactLog(minSeq = 0, { force = false } = {}) {
 
       // Rebuild index offsets from what was written
       offsets = [];
+      loggedOps = new Set();
       let offset = 0;
-      for (const { rawLine, seq } of kept) {
+      for (const { rawLine, seq, entry } of kept) {
         if (typeof seq === 'number') {
           offsets.push({ seq, offset });
+          trackLoggedOp(entry);
         }
         offset += Buffer.byteLength(rawLine, 'utf8') + 1;
       }

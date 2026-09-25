@@ -13,6 +13,10 @@ const api = vi.hoisted(() => ({
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
+  ...await importOriginal(),
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 import CustomTasksSection, { emptyForm, formFromJob, toPayload } from './CustomTasksSection';

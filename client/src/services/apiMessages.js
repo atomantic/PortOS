@@ -7,16 +7,17 @@ export const updateMessageAccount = (id, data, options = {}) => request(`/messag
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
 export const evaluateMessages = (data = {}, options = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data), ...options });
-export const getMessageInbox = (params = {}) => {
+export const getMessageInbox = (params = {}, options = {}) => {
   const qs = new URLSearchParams();
   if (params.accountId) qs.set('accountId', params.accountId);
   if (params.search) qs.set('search', params.search);
   if (params.limit) qs.set('limit', params.limit);
   if (params.offset) qs.set('offset', params.offset);
+  if (params.summary) qs.set('summary', 'true');
   const str = qs.toString();
-  return request(`/messages/inbox${str ? `?${str}` : ''}`);
+  return request(`/messages/inbox${str ? `?${str}` : ''}`, options);
 };
-export const getMessageDetail = (accountId, messageId) => request(`/messages/${accountId}/${messageId}`);
+export const getMessageDetail = (accountId, messageId, options = {}) => request(`/messages/${accountId}/${messageId}`, options);
 export const getMessageThread = (accountId, threadId) => request(`/messages/thread/${accountId}/${threadId}`);
 export const getMessageDrafts = (params = {}) => {
   const qs = new URLSearchParams();

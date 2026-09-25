@@ -73,6 +73,19 @@ describe('SystemHealthWidget', () => {
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 
+  it('keeps failed disk and CoS probes visible without offering dismissal', () => {
+    const warnings = [
+      { type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false },
+      { type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false },
+    ];
+    renderWidget({ health: { ...HEALTH, warnings, system: { ...HEALTH.system, disk: null }, cos: null }, refetchHealth: vi.fn() });
+
+    expect(screen.getByLabelText('Disk status unavailable')).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Chief of Staff').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByRole('button', { name: /Dismiss warning:/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+  });
+
   it('keeps memory neutral while honoring configured disk thresholds', () => {
     const health = {
       ...HEALTH,
@@ -98,6 +111,21 @@ describe('SystemHealthWidget', () => {
     renderWidget({ health, refetchHealth: vi.fn() });
 
     expect(screen.getByText('80%')).toHaveClass('text-port-accent');
+  });
+
+  it('does not offer dismissal for an unavailable health-settings warning', () => {
+    const message = 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.';
+    renderWidget({
+      health: {
+        ...HEALTH,
+        thresholds: undefined,
+        warnings: [{ type: 'health-settings', severity: 'warning', message, dismissible: false }],
+      },
+      refetchHealth: vi.fn(),
+    });
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Dismiss warning: ${message}` })).not.toBeInTheDocument();
   });
 
   it('dismisses a warning as resolved and refetches health', async () => {

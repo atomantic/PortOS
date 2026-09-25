@@ -8,16 +8,23 @@ vi.mock('../services/api', () => ({
   getPrivacySubjects: vi.fn().mockResolvedValue([
     {
       id: '00000000-0000-4000-8000-000000000001', displayName: 'Me', relationship: 'self',
-      isSelf: true, consentCount: 1, recordCount: 2,
+      isSelf: true, consentCount: 1, recordCount: 2, activeScopes: ['pii_vault'],
     },
     {
       id: 'sub-2', displayName: 'Alex', relationship: 'partner',
-      isSelf: false, consentCount: 1, recordCount: 1,
+      isSelf: false, consentCount: 1, recordCount: 1, activeScopes: ['pii_vault'],
     },
   ]),
   createPrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn().mockResolvedValue([]),
+  grantPrivacySubjectConsent: vi.fn().mockResolvedValue({ id: 'c-9', scope: 'broker_scan' }),
+  revokePrivacySubjectConsent: vi.fn(),
+  // Brokers tab (#8332 consent banner).
+  getPrivacyBrokerCases: vi.fn().mockResolvedValue([]),
+  getPrivacyBrokers: vi.fn().mockResolvedValue([]),
+  getPrivacyOptOutDigest: vi.fn().mockResolvedValue({ total: 0, humanTasks: 0, blocked: 0, items: [] }),
+  getPrivacyOptOutSchedule: vi.fn().mockResolvedValue(null),
   getPrivacyStatus: vi.fn().mockResolvedValue({
     keyConfigured: true,
     recordCounts: { address: 1, email: 1 },
@@ -201,6 +208,16 @@ describe('Privacy Center', () => {
     it('flags an unresolvable subject rather than treating it as self', async () => {
       renderAt('/privacy/vault?subject=deleted-subject');
       await waitFor(() => expect(screen.getByText(/not your own/i)).toBeInTheDocument());
+    });
+
+    it('a broker grant made in the Household drawer clears that purpose from the Brokers warning (#8332)', async () => {
+      renderAt('/privacy/brokers');
+      await screen.findByText(/No active consent for broker exposure scan or broker opt-out requests/);
+      fireEvent.click(screen.getByRole('button', { name: 'Manage consent' }));
+      fireEvent.click(await screen.findByLabelText('Grant broker exposure scan for Me'));
+      fireEvent.click(screen.getByRole('button', { name: 'Grant' }));
+      await screen.findByText(/No active consent for broker opt-out requests for this person/);
+      expect(screen.getByLabelText('Revoke broker exposure scan for Me')).toBeInTheDocument();
     });
 
     it('keeps a stale ?subject deep link labeled rather than blank', async () => {

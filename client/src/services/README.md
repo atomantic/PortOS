@@ -52,7 +52,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiLogs.js` | PM2 system logs: fetch a process's recent log tail (process list comes from `apiCommands.getProcessesList`). |
 | `apiPorts.js` | Port scan/detect wrappers (no current UI callers; module kept for the catalog). |
 | `apiHarnesses.js` | Coding-agent harness (CLI/TUI) inventory for Models → Harnesses: installed vs latest version, the providers riding on each, and the model-catalog refresh. Install/update/remove is an SSE stream driven by `RuntimeInstallModal`, not a call here. |
-| `apiModelComparison.js` | Read the comparison dataset shipped with this PortOS release. |
+| `apiModelComparison.js` | Read selectable inventory, the PortOS composite and merged shipped/researched model evidence. |
 | `apiModelPerformance.js` | Explicit model discovery and PortOS task benchmarks shown on Models → Performance. |
 | `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. `getProviderCatalog` (`GET /providers/catalog`, #7566) is the composition surface `useProviderCatalog` fetches; `createProviderPreset` (`POST /providers/presets`) is the compose popover's "Save as preset". The AI Providers page's three axes (#7567): `setProviderHarnessEnabled` (per-harness enablement; the read rides `getProviderCatalog`), `getProviderBootstraps` / `saveProviderBootstraps` (credential-bootstrap apps), and the service-instance calls (`getProviderServiceDefinitions`, `getProviderServices`, `createProviderService`, `updateProviderService`, `deleteProviderService`, `refreshProviderServiceCatalog`) — every response credential-free, and only the explicit catalog refresh contacts a provider. The dedicated-host calls are `getFleetLlmHost` / `getFleetLlmHostUsage` (who is using this machine's GPU right now, and what each caller has spent) / `stopFleetLlmHost` (close the queue, clear the enable marker, drop the Windows login task, remove the container) / `revealFleetLlmHostKey`, plus the peer-side `getFleetPeerHosts` and `revealFleetPeerHostKey`. |
 | `apiPrompts.js` | Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses `apiProviders.getProviders`). |
@@ -106,7 +106,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
 | `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
-| `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation, single/batch card renders. |
+| `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation (plus its SSE progress URL), single/batch card renders. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |
@@ -123,9 +123,9 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiAuthors.js` | Author personas (name, writing style, bio, headshot description/style). |
 | `apiArtists.js` | Music artist personas (name, genre, bio, musical style, portrait description/style). |
 | `apiAlbums.js` | Music albums (title, artist FK + name, description, genre, release year, cover art, ordered track ids). |
-| `apiTracks.js` | Music tracks (title, album/artist FKs, lyrics, prompt, gen metadata, audio-library pointer) + shared music-library list + audio upload/attach. |
+| `apiTracks.js` | Music tracks (title, album/artist FKs, lyrics, prompt, gen metadata, audio-library pointer) + shared music-library list + audio upload/attach + saving drawn-waveform and code-engine takes. |
 | `apiVideoDownload.js` | Dev Tools video downloader (#1946): start/cancel a YouTube/x.com full-video download via yt-dlp (SSE progress), list + delete downloaded clips, plus `getYtDlpStatus`/`updateYtDlp` for the in-place yt-dlp update the page offers when a download fails on a stale binary. |
-| `apiMusic.js` | On-device music generation (MusicGen / AudioLDM2 / ACE-Step): list engines (+ readiness), the stepped designer's AI describe/lyrics steps, and generate a track from a prompt/lyrics. |
+| `apiMusic.js` | On-device music generation (MusicGen / AudioLDM2 / ACE-Step): list engines (+ readiness), the stepped designer's AI describe/lyrics steps, the drawn-waveform and Strudel-code engines' LLM calls, and generate a track from a prompt/lyrics. |
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image attach). |
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiRounds.js` | Rounds workbench CRUD (a cappella round writing + arranging voice layers + learning tracking). |

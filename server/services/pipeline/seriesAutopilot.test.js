@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../lib/seriesAutopilotDefaults.js';
 
 // ---- File-backed store (like autoRunner.test.js) so the REAL series/issues
 // services run against an in-memory map instead of Postgres. ------------------
@@ -534,6 +535,29 @@ describe('resolveNextStep (pure)', () => {
       { maxArcVerifyRounds: 2.5 },
       { pipelineEditorialChecks: { maxArcVerifyRounds: 'x' } },
     ).maxArcVerifyRounds).toBe(MAX_ARC_VERIFY_ROUNDS);
+  });
+
+  it('uses the shared defaults when run options and saved settings are absent', () => {
+    const defaults = SERIES_AUTOPILOT_DEFAULTS;
+    expect(autopilot.resolveAutopilotRounds({}, {})).toEqual({
+      maxArcVerifyRounds: defaults.maxArcVerifyRounds,
+      maxEditorialRounds: defaults.maxEditorialRounds,
+      maxBeatContinuityRounds: defaults.maxBeatContinuityRounds,
+      maxFoundationRounds: defaults.maxFoundationRounds,
+    });
+    expect(autopilot.resolveAutopilotFoundationGate({}, {})).toBe(defaults.foundationGate);
+    expect(autopilot.resolveAutopilotCheckPauseThreshold({}, {})).toBe(defaults.checkFindingsPauseThreshold);
+    expect(autopilot.resolveAutopilotNotifyOnPause({}, {})).toBe(defaults.notifyOnPause);
+    expect(autopilot.resolveAutopilotRevision({}, {})).toEqual({
+      revisionEnabled: defaults.revisionEnabled,
+      revisionMinCycles: defaults.revisionMinCycles,
+      revisionMaxCycles: defaults.revisionMaxCycles,
+      revisionPlateauDelta: defaults.revisionPlateauDelta,
+    });
+    expect(autopilot.resolveAutopilotSelfImprove({}, {})).toBe(defaults.selfImprove);
+    expect(autopilot.resolveAutopilotObserver({}, {})).toBe(defaults.observer);
+    expect(autopilot.resolveAutopilotAutoSelectModels({}, {})).toBe(defaults.autoSelectModels);
+    expect(autopilot.resolveAutopilotOverrideStagePins({}, {})).toBe(defaults.overrideStagePins);
   });
 
   it('resolveAutopilotReadinessGate: per-run option wins, else setting, else null (#1580)', () => {

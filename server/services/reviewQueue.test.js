@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock every producer service the aggregator pulls from, so the test exercises
 // only the normalization / sort / bounded-read / snapshot / degrade-on-failure logic.
-const apps = { getAllApps: vi.fn() };
+const apps = { getAllApps: vi.fn(), getAppById: vi.fn() };
 vi.mock('./apps.js', () => apps);
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
@@ -77,6 +77,7 @@ const {
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
   apps.getAllApps.mockResolvedValue([]);
+  apps.getAppById.mockResolvedValue(null);
   cosTaskStore.getTaskById.mockResolvedValue(null);
   brain.getInboxLog.mockResolvedValue([]);
   brainStorage.getThreads.mockResolvedValue([]);
@@ -381,6 +382,57 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items.find((item) => item.id === 'threads:thread-local').meta)
       .not.toHaveProperty('externalState');
     expect(queue.items.some((item) => item.id === 'threads:thread-done')).toBe(false);
+  });
+
+  it('shows the live blocker, managed app, task state, and PR link on a blocked follow-up commitment', async () => {
+    brainStorage.getThreads.mockResolvedValue([{
+      id: 'pr-follow-up',
+      title: 'PR follow-up needs attention',
+      status: 'open',
+      source: 'cos',
+      refs: [{ kind: 'cos.task', id: 'sys-follow-up' }],
+      nextAction: 'Fix the blocker or merge the PR manually.',
+    }]);
+    cosTaskStore.getTaskById.mockResolvedValue({
+      id: 'sys-follow-up',
+      status: 'blocked',
+      metadata: {
+        app: 'app-id',
+        blockedCategory: 'app-unresolved',
+        blockedReason: 'Repository path is unavailable.',
+        reviewLoopPRUrl: 'https://github.com/example-org/example-repo/pull/9',
+      },
+    });
+    apps.getAppById.mockResolvedValue({ id: 'app-id', name: 'Example Repo' });
+
+    const queue = await buildQueue();
+
+    expect(queue.items.find((item) => item.id === 'threads:pr-follow-up')).toMatchObject({
+      summary: 'Fix the blocker or merge the PR manually. Still blocked: Repository path is unavailable.',
+      meta: {
+        localStatus: 'open',
+        taskStatus: 'blocked',
+        blockedCategory: 'app-unresolved',
+        appLabel: 'Example Repo',
+        reviewLoopPRUrl: 'https://github.com/example-org/example-repo/pull/9',
+      },
+    });
+    expect(apps.getAppById).toHaveBeenCalledWith('app-id');
+  });
+
+  it('hides a task-owned commitment as soon as its CoS task is completed', async () => {
+    brainStorage.getThreads.mockResolvedValue([{
+      id: 'resolved-follow-up',
+      title: 'PR follow-up needs attention',
+      status: 'open',
+      source: 'cos',
+      refs: [{ kind: 'cos.task', id: 'sys-completed' }],
+    }]);
+    cosTaskStore.getTaskById.mockResolvedValue({ id: 'sys-completed', status: 'completed', metadata: {} });
+
+    const queue = await buildQueue();
+
+    expect(queue.items.some((item) => item.id === 'threads:resolved-follow-up')).toBe(false);
   });
 
   it('keeps waiting and someday commitments out of Today unless their follow-up is due', async () => {

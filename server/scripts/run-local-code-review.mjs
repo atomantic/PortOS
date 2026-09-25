@@ -8,6 +8,7 @@ import { getCodeReviewDefaults, reportReviewerFailure, reportReviewerSuccess, ru
 
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
+import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { stopCodexAppServer } from '../services/codexAppServer.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
@@ -26,11 +27,7 @@ try {
   const review = request.kind === 'claim-comments'
     ? runLocalClaimCommentReview
     : runLocalCodeReview;
-  const requestedTimeoutMs = request.timeoutMs;
-  const reviewRequest = { ...request };
-  delete reviewRequest.timeoutMs;
-  if (Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0) reviewRequest.timeoutMs = requestedTimeoutMs;
-  const result = await review({ ...reviewRequest, model, effort, cwd: process.cwd() });
+  const result = await review({ ...localReviewBridgeRequest(request, process.cwd()), model, effort });
   process.stdout.write(`${JSON.stringify(result)}\n`);
   const recordOutcome = result.ok
     ? reportReviewerSuccess(request.backend)

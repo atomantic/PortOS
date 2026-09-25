@@ -63,6 +63,7 @@ import {
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
+import { updateSettingsWith } from './settings.js'
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
@@ -306,12 +307,14 @@ describe('codeReview helpers', () => {
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({
         ollama: { code: 'NO_MODEL', lastFailureAt: 100 },
       })
+      expect(vi.mocked(updateSettingsWith).mock.lastCall[1]).toEqual({ skipUserAction: true })
       expect(await getReviewerConfigHealth()).toMatchObject({
         status: 'warning',
         configFaults: { ollama: { code: 'NO_MODEL' } },
       })
 
       await reportReviewerSuccess('ollama', 200)
+      expect(vi.mocked(updateSettingsWith).mock.lastCall[1]).toEqual({ skipUserAction: true })
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
       expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
     })

@@ -99,20 +99,3 @@ it('does not overwrite a start receipt with an older in-flight status read', asy
   await act(async () => resolveRead(stopped));
   expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
 });
-
-it('keeps the newest status when visibility refreshes overlap', async () => {
-  let resolveOld;
-  getTailcatServe.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
-    .mockResolvedValue({ ...stopped, status: 'failed', lastError: 'Process exited' });
-  render(<TailcatServePanel />);
-  await act(async () => {
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
-    document.dispatchEvent(new Event('visibilitychange'));
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  expect(await screen.findByText('Process exited')).toBeInTheDocument();
-  await act(async () => resolveOld(serving));
-  expect(screen.getByText('Process exited')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
-});

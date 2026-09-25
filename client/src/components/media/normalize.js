@@ -101,6 +101,9 @@ export function normalizeImage(i) {
     // MUST survive normalization (same contract as `regenerated` above).
     watermarkRemoved: i.watermarkRemoved === true,
     provenance: i.provenance || null,
+    // A compact gallery row (#8292) holds only a prompt preview; see
+    // mediaDetail.js for the hydration every prompt consumer goes through.
+    compact: i.compact === true,
     raw: i,
   };
 }
@@ -135,6 +138,7 @@ export function normalizeVideo(v) {
     renderMs: Number.isFinite(v.renderMs) ? v.renderMs : null,
     hidden: !!v.hidden,
     provenance: v.provenance || null,
+    compact: v.compact === true,
     raw: v,
   };
 }

@@ -612,7 +612,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       // read settings and would otherwise fall back to its own default.
       : { mode, pythonPath: settings.imageGen?.local?.pythonPath || null, ...(effectiveModel ? { modelId: effectiveModel } : {}), ...baseParams };
 
-  const { jobId } = enqueueJob({ kind: 'image', params, owner: 'sprites' });
+  const { jobId } = await enqueueJob({ kind: 'image', params, owner: 'sprites' });
   console.log(`🧍 sprite reference render queued ${recordId}/${anchorId} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return { jobId, mode, target, anchorId };
 }

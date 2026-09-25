@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import BrokerCaseDrawer from './BrokerCaseDrawer.jsx';
 
 // Pins the blocked-case contract: an explainer with a manual-check link built
-// from evidence.search_url, an "I'm listed" (→ found) action, and NO
+// from the revealed identity evidence's search_url (#8333), an "I'm listed" (→ found) action, and NO
 // "Mark done" (blocked → submitted is not a legal server transition).
 
 const broker = { id: 'rad', name: 'Radaris', tier: 2, optout: { url: 'https://rad/optout', playbook: ['step one'] } };
@@ -19,11 +19,13 @@ const renderDrawer = (caseData, props = {}) => {
 describe('BrokerCaseDrawer — blocked case', () => {
   const blockedCase = {
     id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked',
-    evidence: { match_basis: 'antibot_wall', search_url: 'https://rad/p/Jane/Doe/' },
+    evidence: { match_basis: 'antibot_wall' },
+    identityEvidence: { sealed: true, listingCount: 0 },
   };
+  const identity = { search_url: 'https://rad/p/Jane/Doe/' };
 
   it('shows the manual-check explainer with the filled search URL', () => {
-    renderDrawer(blockedCase);
+    renderDrawer(blockedCase, { identity });
     expect(screen.getByText(/blocks automated checks/i)).toBeTruthy();
     const link = screen.getByRole('link', { name: /check manually in your browser/i });
     expect(link.getAttribute('href')).toBe('https://rad/p/Jane/Doe/');
@@ -36,10 +38,37 @@ describe('BrokerCaseDrawer — blocked case', () => {
     expect(onTransition).toHaveBeenCalledWith(blockedCase, 'found');
   });
 
-  it('omits the manual-check link for a pre-existing case without search_url evidence', () => {
-    renderDrawer({ ...blockedCase, evidence: { match_basis: 'antibot_wall' } });
+  it('omits the manual-check link while no identity evidence is revealed', () => {
+    renderDrawer(blockedCase);
     expect(screen.getByText(/blocks automated checks/i)).toBeTruthy();
     expect(screen.queryByRole('link', { name: /check manually in your browser/i })).toBeNull();
+  });
+});
+
+describe('BrokerCaseDrawer — sealed identity evidence (#8333)', () => {
+  const foundCase = {
+    id: 'f1', brokerId: 'rad', brokerName: 'Radaris', state: 'found',
+    evidence: { match_basis: 'name+location' },
+    identityEvidence: { sealed: true, listingCount: 1 },
+  };
+
+  it('renders revealed listing links and erases only after the inline confirm', () => {
+    const onEraseEvidence = vi.fn();
+    renderDrawer(foundCase, {
+      identity: { matched_name: 'Example Person', listing_urls: ['https://rad/p/example'] },
+      onEraseEvidence,
+    });
+    expect(screen.getByRole('link', { name: /rad\/p\/example/ }).getAttribute('href')).toBe('https://rad/p/example');
+    fireEvent.click(screen.getByRole('button', { name: /erase identity evidence/i }));
+    expect(onEraseEvidence).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^erase$/i }));
+    expect(onEraseEvidence).toHaveBeenCalledWith(foundCase);
+  });
+
+  it('offers no erase control once the evidence is gone', () => {
+    renderDrawer({ ...foundCase, identityEvidence: null }, { onEraseEvidence: vi.fn() });
+    expect(screen.queryByRole('button', { name: /erase identity evidence/i })).toBeNull();
+    expect(screen.getByText(/no listing urls recorded/i)).toBeTruthy();
   });
 });
 

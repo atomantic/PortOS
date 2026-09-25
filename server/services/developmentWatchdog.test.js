@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
+const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), addTask: async task => { if (m.duplicate) return { id: 'existing', duplicate: true }; const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
+vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), updateTask: async (id, updates, type, options) => {
+  m.updates.push({ id, updates, type, options });
+  const task = m.tasks.find(item => item.id === id);
+  if (!task) return { error: 'Task not found' };
+  if (options?.expectedStatus && task.status !== options.expectedStatus) return { statusChanged: true, task };
+  Object.assign(task, updates, { metadata: { ...task.metadata, ...updates.metadata } });
+  return task;
+}, addTask: async task => { if (m.duplicate) return { id: 'existing', duplicate: true }; const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
 vi.mock('./instances.js', () => ({ getPeers: async () => m.peers }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: 'atomantic/example', repoSpec: 'github.com/atomantic/example', apiHost: 'github.com' } }) }));
 vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => ({ pullRequests: ++m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false }) }));
@@ -23,7 +30,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   if (args[0] === m.execGhFailureOn) throw new Error('forge unavailable');
   if (args[0] === m.invalidGhJsonOn) return 'not json';
   return JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] });
-} }));
+}, getPullRequestState: async number => m.prStates[String(number)] || { status: 'unavailable', state: null } }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: async () => ({ isTrusted: async () => true }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: m.branch }) }));
@@ -41,7 +48,7 @@ import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanc
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
   m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
@@ -108,6 +115,93 @@ it('queues abandoned claim PRs through review-then-merge and withholds changed h
   expect(m.adds[0]).toMatchObject({ prCompletion: 'review-then-merge', dispatch: 'queue', reviewers: ['codex'] });
   m.adds = []; m.state.developmentWatchdog = null; m.prReads = 0; m.nextPrs = [{ ...orphan, headSha: 'changed' }];
   expect((await runDevelopmentWatchdog({ force: true })).decisions[0].reason).toBe('evidence-changed'); expect(m.adds).toEqual([]);
+});
+
+it('retires a pending review follow-up when the forge confirms its PR is already merged', async () => {
+  const task = {
+    id: 'sys-rl-merged', status: 'pending',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '5', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/5',
+    },
+  };
+  m.tasks = [task];
+  m.prStates['5'] = { status: 'known', state: 'MERGED' };
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(m.updates).toEqual([expect.objectContaining({
+    id: task.id,
+    updates: { status: 'completed', metadata: { reviewLoopRetiredReason: 'pull-request-merged-before-follow-up' } },
+    type: 'internal', options: { expectedStatus: 'pending', suppressDequeue: true },
+  })]);
+  expect(task.status).toBe('completed');
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([{
+    taskId: task.id, prNumber: 5, prState: 'MERGED', reason: 'pull-request-merged-before-follow-up',
+  }]);
+});
+
+it('retires a blocked review follow-up when the forge confirms its PR is already terminal', async () => {
+  const task = {
+    id: 'sys-rl-blocked', status: 'blocked',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '7', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/7',
+    },
+  };
+  m.tasks = [task];
+  m.prStates['7'] = { status: 'known', state: 'MERGED' };
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(m.updates).toEqual([expect.objectContaining({
+    id: task.id,
+    updates: { status: 'completed', metadata: { reviewLoopRetiredReason: 'pull-request-merged-before-follow-up' } },
+    type: 'internal', options: { expectedStatus: 'blocked', suppressDequeue: true },
+  })]);
+  expect(task.status).toBe('completed');
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([{
+    taskId: task.id, prNumber: 7, prState: 'MERGED', reason: 'pull-request-merged-before-follow-up',
+  }]);
+});
+
+it('keeps a blocked follow-up when its PR is still open', async () => {
+  const task = {
+    id: 'sys-rl-still-open', status: 'blocked',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '8', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/8',
+    },
+  };
+  m.tasks = [task];
+  m.prStates['8'] = { status: 'known', state: 'OPEN' };
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(task.status).toBe('blocked');
+  expect(m.updates).toEqual([]);
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([]);
+});
+
+it('keeps a pending review follow-up when the PR state is unavailable', async () => {
+  const task = {
+    id: 'sys-rl-unavailable', status: 'pending',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: 6, reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/6',
+    },
+  };
+  m.tasks = [task];
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(task.status).toBe('pending');
+  expect(m.updates).toEqual([]);
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([]);
 });
 it('keeps explicit live claim and open dependency evidence out of dispatch', async () => {
   m.prs = [orphan]; m.dependencyOpen = true;

@@ -53,7 +53,7 @@ export const ERR_VALIDATION = 'PIPELINE_SERIES_VALIDATION';
 export const ERR_DUPLICATE = 'PIPELINE_SERIES_DUPLICATE';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-const SERIES_ID_RE = /^ser-[A-Za-z0-9-]+$/;
+export const SERIES_ID_RE = /^ser-[A-Za-z0-9-]+$/;
 
 export const NAME_MAX = 200;
 export { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX };

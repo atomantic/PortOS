@@ -148,7 +148,7 @@ export const resolveVideoModel = (modelId) =>
 
 export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
-export const defaultVideoModelId = (capabilities) => getDefaultVideoModelId(capabilities);
+export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
 
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];

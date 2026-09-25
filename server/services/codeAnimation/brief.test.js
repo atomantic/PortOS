@@ -26,7 +26,7 @@ describe('buildCodeAnimationBriefPrompt', () => {
       format: FORMAT,
       current: { title: 'The Brass Wick', concept: '', onScreenText: '', styleNotes: '' },
     });
-    expect(prompt).toContain('20-second 16:9 animated film');
+    expect(prompt).toContain('20-second 16:9 animated short');
     expect(prompt).toContain('a chase that ends in silence');
     expect(prompt).toContain('The film is set in the universe "Example Universe"');
     expect(prompt).toContain('Logline: A drowned city keeps its lamps lit');
@@ -35,7 +35,22 @@ describe('buildCodeAnimationBriefPrompt', () => {
     expect(prompt).toContain('  - The Brass Wick (the last lamp that never gutters)');
     expect(prompt).toContain('Mood board: "Dusk"');
     expect(prompt).toContain('Title: The Brass Wick');
-    expect(prompt).toContain('"title": "..."');
+    expect(prompt).toContain('"cast": "..."');
+  });
+
+  it('asks for a director\'s plan: a timed beat sheet and a rig-ready character bible', () => {
+    const prompt = buildCodeAnimationBriefPrompt({ seedIdea: 'a robot realizes its world is generated', format: FORMAT });
+    expect(prompt).toContain('HOW TO DIRECT IT');
+    expect(prompt).toContain('each led by its time range covering the full 20 seconds');
+    expect(prompt).toContain('identity lock');
+  });
+
+  it('shows the writer the character bible the artist already drafted', () => {
+    const prompt = buildCodeAnimationBriefPrompt({
+      format: FORMAT,
+      current: { title: '', concept: '', cast: 'Wick — a paper lantern with a drooping wire handle', onScreenText: '', styleNotes: '' },
+    });
+    expect(prompt).toContain('Characters: Wick — a paper lantern with a drooping wire handle');
   });
 
   it('tells the model to invent a cast when the universe has no canon yet', () => {
@@ -81,11 +96,13 @@ describe('extractBriefIdea', () => {
     expect(extractBriefIdea(response({
       title: 'The Brass Wick',
       concept: 'Mira climbs the flooded arcade…',
+      cast: 'Mira — tall, oil-stained coat',
       onScreenText: '',
       styleNotes: 'colder blues at the climax',
     }))).toEqual({
       title: 'The Brass Wick',
       concept: 'Mira climbs the flooded arcade…',
+      cast: 'Mira — tall, oil-stained coat',
       onScreenText: '',
       styleNotes: 'colder blues at the climax',
     });
@@ -95,11 +112,13 @@ describe('extractBriefIdea', () => {
     const parsed = extractBriefIdea(response({
       title: 'T'.repeat(500),
       concept: 'C'.repeat(CODE_ANIMATION_LIMITS.conceptMax + 100),
+      cast: 'K'.repeat(CODE_ANIMATION_LIMITS.castMax + 100),
       onScreenText: 'O'.repeat(CODE_ANIMATION_LIMITS.textMax + 100),
       styleNotes: 'S'.repeat(CODE_ANIMATION_LIMITS.styleNotesMax + 100),
     }));
     expect(parsed.title.length).toBe(CODE_ANIMATION_LIMITS.titleMax);
     expect(parsed.concept.length).toBe(CODE_ANIMATION_LIMITS.conceptMax);
+    expect(parsed.cast.length).toBe(CODE_ANIMATION_LIMITS.castMax);
     expect(parsed.onScreenText.length).toBe(CODE_ANIMATION_LIMITS.textMax);
     expect(parsed.styleNotes.length).toBe(CODE_ANIMATION_LIMITS.styleNotesMax);
   });

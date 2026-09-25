@@ -140,7 +140,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
   }
   const negativePrompt = options.negativePrompt || 'text, watermark, blur, motion blur, low quality';
 
-  const { jobId } = enqueueJob({
+  const { jobId } = await enqueueJob({
     kind: 'video',
     params: {
       pythonPath,
@@ -229,7 +229,7 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
     characterAppearances: scene.characterAppearances,
   });
 
-  const jobId = enqueueImageJob({
+  const jobId = await enqueueImageJob({
     prompt, world, settings, options, mode, series,
     owner: buildStoryboardsShotOwner({
       issueId, sceneIndex: sIdx, shotIndex: tIdx,

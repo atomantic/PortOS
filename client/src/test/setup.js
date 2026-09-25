@@ -5,6 +5,7 @@ import { installTestStorage } from './storagePolyfill.js';
 import { installFormValidityFix } from './formValidityPolyfill.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from './timeouts.js';
 import { actWarningEntry, formatActWarningError } from './actWarnings.js';
+import { createUnexpectedFetchGuard } from './networkGuard.js';
 
 // The suite-wide Testing Library async budget. The value, and why the per-test
 // and hook budgets in vitest.config.js are derived from it rather than written
@@ -18,6 +19,11 @@ installTestStorage();
 // Make constraint validation match a browser so implicit form submission isn't
 // swallowed by a float-modulo step check. See formValidityPolyfill.js / #6144.
 installFormValidityFix();
+
+// A missing transport mock must never fall through to happy-dom's localhost:3000
+// server. Explicit integration fixtures can replace fetch for their own tests.
+const networkGuard = createUnexpectedFetchGuard(() => expect.getState().currentTestName);
+globalThis.fetch = networkGuard.fetch;
 
 // The test DOM doesn't implement Element.prototype.scrollIntoView; components call it
 // (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
@@ -95,13 +101,16 @@ console.error = (...args) => {
 
 afterEach(() => {
   cleanup();
+  const networkError = networkGuard.takeError();
   // Reset storage between tests so a file that forgets its own `clear()` can't leak
   // state into the next — reinforces the isolation the polyfill restores.
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
-  if (actWarnings.length > 0) {
-    const message = formatActWarningError(actWarnings, expect.getState().currentTestName);
-    actWarnings.length = 0;
-    throw new Error(message);
+  const actError = actWarnings.length > 0
+    ? formatActWarningError(actWarnings, expect.getState().currentTestName)
+    : null;
+  actWarnings.length = 0;
+  if (networkError || actError) {
+    throw new Error([networkError?.message, actError].filter(Boolean).join('\n'));
   }
 });

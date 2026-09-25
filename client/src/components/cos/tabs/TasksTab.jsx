@@ -2,7 +2,7 @@ import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { Play, ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   DndContext,
@@ -227,24 +227,8 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
     <div className="space-y-6">
       {/* User Tasks */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3">
           <h3 className="text-lg font-semibold text-white">Task queue</h3>
-          <button
-            onClick={async () => {
-              // Only toast success after the evaluate request resolves.
-              try {
-                await api.forceCosEvaluate({ silent: true });
-                toast.success('Evaluation triggered');
-              } catch (err) {
-                toast.error(err.message);
-              }
-            }}
-            className="flex items-center gap-1 text-sm bg-port-success/20 hover:bg-port-success/30 text-port-success px-3 py-1.5 rounded-lg transition-colors"
-            aria-label="Run tasks now"
-          >
-            <Play size={16} aria-hidden="true" />
-            Run Now
-          </button>
         </div>
 
         <p className="mb-3 text-sm text-gray-400" aria-label="Queue status">

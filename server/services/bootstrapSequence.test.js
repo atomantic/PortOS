@@ -28,7 +28,8 @@ import {
   warmMandatoryStores,
   runDatabasePhase,
   runPostRouteSequence,
-  runPostListenSequence
+  runPostListenSequence,
+  gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -102,6 +103,22 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       'initAutoFixer',
       'initTaskLearning',
       'startSpawner'
+    ]);
+  });
+
+  it('under the boot smoke (#8343), migrates and builds the toolkit but starts no local LLM, auto-fixer, or spawner', async () => {
+    const recorder = createRecorder();
+    const { spawnerReady } = await runPreRouteSequence(gateStepsForSmokeBoot(buildDeps(recorder), 'preRoute', true));
+    await spawnerReady;
+    expect(recorder.calls).toEqual([
+      'applyDataMigrations',
+      'loadUsage',
+      'verifyCollections',
+      'createToolkit',
+      'registerToolkitShims',
+      'warmProviders',
+      'registerRunners',
+      'initTaskLearning'
     ]);
   });
 
@@ -535,6 +552,28 @@ describe('runPostRouteSequence — post-route boot order', () => {
     expect(deps.onFatal).not.toHaveBeenCalled();
   });
 
+  it('under the boot smoke (#8343), arms no background services and replays no recovery, but still listens', async () => {
+    const recorder = createRecorder();
+    const deps = buildDeps(recorder);
+    await runPostRouteSequence(gateStepsForSmokeBoot(deps, 'postRoute', true));
+    expect(recorder.calls).toEqual([
+      'ensureSelf',
+      'initSyncLog',
+      'initMediaJobQueue',
+      'initMediaJobDependentHooks',
+      'runDatabasePhase',
+      'loadSeriesCoverBackfill',
+      'backfillSeriesCoverImages',
+      'startListening'
+    ]);
+    expect(deps.onFatal).not.toHaveBeenCalled();
+  });
+
+  it('leaves every step in place outside the boot smoke', () => {
+    const deps = buildDeps(createRecorder());
+    expect(gateStepsForSmokeBoot(deps, 'postRoute', false)).toBe(deps);
+  });
+
   it('arms the background services synchronously, before the chain awaits anything', () => {
     const recorder = createRecorder();
     const promise = runPostRouteSequence(buildDeps(recorder));
@@ -688,6 +727,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       announceListening: step('announceListening'),
       setupProcessErrorHandlers: step('setupProcessErrorHandlers'),
       backfillOriginInstanceId: step('backfillOriginInstanceId', () => Promise.resolve()),
+      relayUnloggedBrainRecords: step('relayUnloggedBrainRecords', () => Promise.resolve(0)),
       startPolling: step('startPolling'),
       initSyncOrchestrator: step('initSyncOrchestrator'),
       ...overrides
@@ -701,9 +741,16 @@ describe('runPostListenSequence — inside the listen callback', () => {
       'announceListening',
       'setupProcessErrorHandlers',
       'backfillOriginInstanceId',
+      'relayUnloggedBrainRecords',
       'startPolling',
       'initSyncOrchestrator'
     ]);
+  });
+
+  it('under the boot smoke (#8343), never starts peer polling or sync', async () => {
+    const recorder = createRecorder();
+    await runPostListenSequence(gateStepsForSmokeBoot(buildDeps(recorder), 'postListen', true));
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'backfillOriginInstanceId']);
   });
 
   it('does not start peer polling until origin tags are backfilled', async () => {
@@ -718,6 +765,16 @@ describe('runPostListenSequence — inside the listen callback', () => {
     gate.resolve();
     await done;
     expect(recorder.calls).toContain('startPolling');
+  });
+
+  it('starts peer sync even when the brain relay sweep fails', async () => {
+    const recorder = createRecorder();
+    await runPostListenSequence(buildDeps(recorder, {
+      relayUnloggedBrainRecords: recorder.step('relayUnloggedBrainRecords', () => Promise.reject(new Error('sweep boom')))
+    }));
+    await flush();
+    expect(recorder.calls).toContain('initSyncOrchestrator');
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Brain relay sweep failed'));
   });
 
   it('logs and continues when the backfill fails', async () => {
@@ -771,6 +828,15 @@ describe('boot source contract', () => {
     // property these tests rely on and let a service sneak into the boot path
     // untested.
     expect(SEQUENCE).not.toMatch(/\bimport\s/);
+  });
+
+  it('bootstrap.js gates every boot phase on the smoke flag (#8343)', () => {
+    // Dropping one of these leaves the smoke arming that phase's schedulers,
+    // agent recovery, or peer sync against whatever install it booted from.
+    for (const phase of ['preRoute', 'postRoute', 'postListen']) {
+      expect(BOOTSTRAP, `bootstrap.js never gates the ${phase} phase for the boot smoke`)
+        .toMatch(new RegExp(`'${phase}', (smokeBoot|isSmokeBoot\\(\\))\\)`));
+    }
   });
 
   it('bootstrap.js delegates its ordering to the tested sequence module', () => {

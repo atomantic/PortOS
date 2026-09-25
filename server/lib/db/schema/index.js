@@ -36,6 +36,7 @@ import { mindToolRecipesDdl } from './mindToolRecipes.js';
 import { decksDdl } from './decks.js';
 import { beeperDdl } from './beeper.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
+import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './syncFeed.js';
 
 export {
   coreDdl,
@@ -64,6 +65,9 @@ export {
   auditDdl,
   auditedTables,
   buildAuditTriggers,
+  syncFeedDdl,
+  syncFeedTables,
+  buildSyncFeedTriggers,
 };
 
 // Phase 1 — the `upgrades` list: memory-sync columns + migration tracker, then
@@ -87,7 +91,9 @@ export function buildUpgradeDdl() {
 // record_audit table/function, then the per-table audit triggers. catalog_user_types
 // is threaded in AFTER the media block to match its original position (see catalog.js).
 // `beeperDdl` is appended after `xDdl` (#27) — same external-mirror shape as
-// stackerNews/x, added last of that group, before the audit block.
+// stackerNews/x, added last of that group, before the audit block. The
+// commit-ordered sync feed (#8315) comes last: its triggers attach to memories
+// and the catalog tables, which must already exist.
 export function buildCatalogDdl() {
   return [
     ...catalogDdl,
@@ -106,5 +112,7 @@ export function buildCatalogDdl() {
     ...decksDdl,
     ...auditDdl,
     ...buildAuditTriggers(),
+    ...syncFeedDdl,
+    ...buildSyncFeedTriggers(),
   ];
 }

@@ -23,6 +23,9 @@
  * - `src/components/sprites/AnimationProviderPicker.jsx` — sprite ANIMATION
  *   backends (`{ id, label, ready }`), not AI provider records; the name
  *   collides with the detector, the concept does not.
+ * - `src/components/models/ModelComparison.jsx` — read-only chart filter over
+ *   evidence already loaded, not an execution/provider configuration picker.
+ *   Its All providers option must not resolve to an active execution preset.
  * - `LEGACY_BESPOKE` is EMPTY as of #7585 — every legacy site was migrated.
  *   It stays declared, and shrink-only, so a future exception has to be
  *   written down here with a reason rather than smuggled into `ALLOWED`;
@@ -50,7 +53,9 @@ const SHARED_SELECTOR = 'src/components/ProviderModelSelector.jsx';
 const NOT_AI_PROVIDERS = ['src/components/sprites/AnimationProviderPicker.jsx'];
 /** Legacy bespoke selects awaiting migration — shrink-only, never grow. */
 const LEGACY_BESPOKE = [];
-const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...LEGACY_BESPOKE];
+// Filters cannot compose execution presets or fetch unrelated provider configuration.
+const READ_ONLY_FILTERS = ['src/components/models/ModelComparison.jsx'];
+const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...READ_ONLY_FILTERS, ...LEGACY_BESPOKE];
 
 const SELECT_BLOCK = /<select\b[\s\S]*?<\/select>/g;
 const PROVIDER_MAP = /\b(\w*[pP]roviders?\w*)\.map\(/;

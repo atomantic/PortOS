@@ -32,16 +32,30 @@ export const PRIVACY_SUBJECT_RELATIONSHIPS = Object.freeze([
 
 // How a subject's consent was captured. Carried verbatim from unbroker's
 // no-consent-no-action rule: the engine refuses to scan or submit for a subject
-// without at least one consent row, so this is an audit fact, not a UI label.
+// without an active consent row of that purpose's scope, so this is an audit
+// fact, not a UI label.
 export const PRIVACY_CONSENT_METHODS = Object.freeze([
   'self', 'verbal', 'written', 'signed_form', 'guardian', 'power_of_attorney', 'other',
 ]);
 
-// Scope of a consent row. `pii_vault` is what the v1 vault-create path already
-// writes; `broker_optout` narrows to the removal engine. The guard treats ANY
-// row for the subject as active consent (no revocation column exists — a
-// revoked subject is deleted, which hard-deletes their records).
-export const PRIVACY_CONSENT_SCOPES = Object.freeze(['pii_vault', 'broker_optout']);
+// Scope (purpose) of a consent row (#8332). Each purpose is granted and gated
+// independently — a grant for one NEVER implies another:
+//   - `pii_vault`     — local-only storage in the encrypted vault. Written at
+//                       subject creation / first vault record. Discloses nothing.
+//   - `broker_scan`   — the read-only exposure scan: scan-eligible identity
+//                       values fill external broker search URLs.
+//   - `broker_optout` — the removal workflow: opt-out emails / web forms that
+//                       SEND name, email, phone, city/state (and DOB when a
+//                       broker requires it) to the broker, plus the verification
+//                       re-probes of those brokers.
+// The engine requires an ACTIVE (unrevoked) row of the EXACT scope before each
+// purpose's work. Existing `pii_vault` rows stay local-only — never widened.
+export const PRIVACY_CONSENT_SCOPES = Object.freeze(['pii_vault', 'broker_scan', 'broker_optout']);
+
+// The external-disclosure purposes — the only scopes that can be revoked
+// without deleting the subject. Revoking `pii_vault` (local storage) still
+// means deleting the subject, which hard-deletes their records.
+export const PRIVACY_BROKER_CONSENT_SCOPES = Object.freeze(['broker_scan', 'broker_optout']);
 
 // A subject reference on an existing input/query. Optional everywhere — omitted
 // means `self`, so every pre-#3658 client keeps working unchanged.
@@ -79,6 +93,13 @@ export const privacySubjectConsentSchema = z.object({
   scope: z.enum(PRIVACY_CONSENT_SCOPES).optional(),
   method: z.enum(PRIVACY_CONSENT_METHODS),
   note: z.string().max(2000).optional(),
+}).strict();
+
+// POST /api/privacy/subjects/:id/consents/revoke — withdraw one broker-processing
+// purpose. Timestamps the active grant rows (audit trail kept); the subject and
+// their vault records are untouched (#8332).
+export const privacySubjectConsentRevokeSchema = z.object({
+  scope: z.enum(PRIVACY_BROKER_CONSENT_SCOPES),
 }).strict();
 
 export const PRIVACY_VAULT_TYPES = Object.freeze([

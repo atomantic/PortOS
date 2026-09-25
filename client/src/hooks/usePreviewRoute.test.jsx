@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
+// The stale-route case exercises the empty lookup result, not HTTP transport.
+vi.mock('../services/apiImageVideo.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  listMediaGalleryPage: vi.fn().mockResolvedValue({ items: [] }),
+}));
 import usePreviewRoute from './usePreviewRoute';
 
 // Wraps the hook with a MemoryRouter so `useSearchParams` resolves. The
@@ -39,8 +44,9 @@ describe('usePreviewRoute', () => {
     expect(result.current.pair[0]).toBe(FOO);
   });
 
-  it('returns null for a stale param that has no matching item', () => {
+  it('returns null for a stale param that has no matching item', async () => {
     const { result } = renderWithRouter([FOO], '/x?preview=does-not-exist.png');
+    await act(async () => {});
     expect(result.current.pair[0]).toBeNull();
   });
 

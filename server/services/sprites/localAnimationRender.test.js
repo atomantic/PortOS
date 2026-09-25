@@ -53,7 +53,7 @@ vi.mock('../../lib/hfCache.js', () => ({
 const enqueued = [];
 let queueJobs = new Map();
 vi.mock('../mediaJobQueue/index.js', () => ({
-  enqueueJob: (job) => {
+  enqueueJob: async (job) => {
     enqueued.push(job);
     return { jobId: `job-${enqueued.length}` };
   },
@@ -378,8 +378,8 @@ describe('enqueueLocalAnimationRender', () => {
     direction: 'east',
   });
 
-  it('queues an image-conditioned, hidden render at the planned geometry', () => {
-    expect(enqueueWalk()).toBe('job-1');
+  it('queues an image-conditioned, hidden render at the planned geometry', async () => {
+    expect(await enqueueWalk()).toBe('job-1');
     expect(enqueued[0]).toMatchObject({ kind: 'video', owner: 'sprites' });
     expect(enqueued[0].params).toMatchObject({
       modelId: 'minimax_h3_8bit',
@@ -395,18 +395,18 @@ describe('enqueueLocalAnimationRender', () => {
     });
   });
 
-  it('tags the job so the completion hook can file it with no in-memory state', () => {
-    enqueueWalk();
+  it('tags the job so the completion hook can file it with no in-memory state', async () => {
+    await enqueueWalk();
     expect(enqueued[0].params.spriteAnimation).toEqual({
       recordId: 'hero', runId: 'walk-east-abc12345', track: 'walk', direction: 'east',
     });
   });
 
-  it('also carries the shipped spriteWalk tag the client rehydrate keys off', () => {
+  it('also carries the shipped spriteWalk tag the client rehydrate keys off', async () => {
     // owner 'sprites' + params.spriteWalk.direction is what
     // useSpritePendingRenders reads, so a browser reload mid-render still shows
     // the direction in flight instead of re-enabling its Generate button.
-    enqueueWalk();
+    await enqueueWalk();
     expect(enqueued[0].params.spriteWalk).toEqual({ recordId: 'hero', direction: 'east' });
   });
 

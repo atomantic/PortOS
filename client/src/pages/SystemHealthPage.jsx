@@ -128,6 +128,11 @@ function SystemHealthOverview() {
 
   // Seed the editable draft from server state on first load and after each save.
   useEffect(() => {
+    if (health?.thresholdsAvailable === false) {
+      setDraft(null);
+      draftSeededRef.current = false;
+      return;
+    }
     if (health?.thresholds && !draftSeededRef.current) {
       setDraft(health.thresholds);
       draftSeededRef.current = true;
@@ -222,7 +227,7 @@ function SystemHealthOverview() {
                   size="md"
                   icon={AlertTriangle}
                   align="start"
-                  actions={(
+                  actions={w.dismissible === false ? null : (
                     <button
                       type="button"
                       onClick={() => handleDismissWarning(w)}
@@ -266,7 +271,7 @@ function SystemHealthOverview() {
             pct={Math.min(100, health.system.cpu.usagePercent)}
             sub={`${health.system.cpu.cores} cores · ${health.system.cpu.loadAvg1m.toFixed(2)} load`}
           />
-          {health.system.disk && (
+          {health.system.disk ? (
             <ResourceCard
               icon={Database}
               label="Disk"
@@ -275,7 +280,12 @@ function SystemHealthOverview() {
               critical={t.diskCritical}
               sub={`${health.system.disk.usedFormatted} / ${health.system.disk.totalFormatted}`}
             />
-          )}
+          ) : health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') ? (
+            <div className="bg-port-card border border-port-border rounded-xl p-4" aria-label="Disk status unavailable">
+              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">Disk</div>
+              <div className="text-3xl font-bold text-port-warning">Unavailable</div>
+            </div>
+          ) : null}
         </section>
 
         <MediaCapacityPanel media={health.media} />
@@ -315,30 +325,40 @@ function SystemHealthOverview() {
               <Zap size={16} />
               Alert thresholds
             </h3>
-            <span className="text-xs text-gray-500">Disk capacity alerts. Defaults: 90/98%.</span>
+            <span className="text-xs text-gray-500">
+              {health.thresholdsAvailable === false ? 'Configured thresholds unavailable' : 'Disk capacity alerts. Defaults: 90/98%.'}
+            </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <ThresholdField id="system-health-disk-warn" label="Disk warn %" value={draft?.diskWarn} onChange={(v) => setDraft(d => ({ ...d, diskWarn: v }))} />
-            <ThresholdField id="system-health-disk-critical" label="Disk critical %" value={draft?.diskCritical} onChange={(v) => setDraft(d => ({ ...d, diskCritical: v }))} />
-          </div>
-          {!draftValid && (
-            <p className="mt-2 text-xs text-port-error">Warn thresholds must be lower than critical thresholds.</p>
+          {health.thresholdsAvailable === false ? (
+            <p role="status" className="text-sm text-port-warning">
+              Default thresholds are being used for health checks. Repair the settings file before changing thresholds.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <ThresholdField id="system-health-disk-warn" label="Disk warn %" value={draft?.diskWarn} onChange={(v) => setDraft(d => ({ ...d, diskWarn: v }))} />
+                <ThresholdField id="system-health-disk-critical" label="Disk critical %" value={draft?.diskCritical} onChange={(v) => setDraft(d => ({ ...d, diskCritical: v }))} />
+              </div>
+              {!draftValid && (
+                <p className="mt-2 text-xs text-port-error">Warn thresholds must be lower than critical thresholds.</p>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={handleSaveThresholds}
+                  disabled={!draftDirty || !draftValid || saving}
+                  className="px-3 py-2 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors"
+                >
+                  {saving ? 'Saving…' : 'Save thresholds'}
+                </button>
+                <button
+                  onClick={handleResetThresholds}
+                  className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
+                >
+                  Reset to defaults
+                </button>
+              </div>
+            </>
           )}
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={handleSaveThresholds}
-              disabled={!draftDirty || !draftValid || saving}
-              className="px-3 py-2 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors"
-            >
-              {saving ? 'Saving…' : 'Save thresholds'}
-            </button>
-            <button
-              onClick={handleResetThresholds}
-              className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
-            >
-              Reset to defaults
-            </button>
-          </div>
         </section>
     </div>
   );

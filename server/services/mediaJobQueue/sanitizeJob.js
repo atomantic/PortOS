@@ -101,6 +101,9 @@ export function sanitizeJob(job) {
     executionLane: mediaJobExecutionLane({ kind: job.kind, mode: job.params?.mode, remote: routed }),
     owner: job.owner,
     status: job.status,
+    // This flag describes an in-flight request. Archived terminal jobs can
+    // retain the internal marker, and remote recovery may resume as queued.
+    cancelRequested: (job.status === 'queued' || job.status === 'running') && job.cancelRequested === true,
     ...(hold?.success ? { hold: { ...hold.data, heldJobCount: job.hold.heldJobCount,
       ...(job.hold.scope === 'local-video' ? { scope: 'local-video' } : {}) } } : {}),
     queuedAt: job.queuedAt,

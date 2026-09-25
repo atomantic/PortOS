@@ -932,6 +932,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
             claimCommentGate: promptTaskType === 'claim-issue',
+            enforceIsolation: promptTaskType.startsWith('claim-issue'),
           })
         : '');
 }

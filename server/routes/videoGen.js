@@ -11,6 +11,7 @@ import { basename } from 'path';
 import os from 'os';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields } from '../lib/multipart.js';
 import {
   validateRequest, videoModelTermsSchema,
@@ -118,14 +119,15 @@ const hardwareAwareVideoModels = async () => {
 // MLX import, no model load, cached both ways). /status keeps returning them
 // for its other readers — this is the single builder both routes share, so the
 // two can't drift.
-const videoModelContext = async () => {
+const videoModelContext = async (loadedSettings = null) => {
   const { capabilities, models } = await hardwareAwareVideoModels();
+  const settings = loadedSettings || await getSettings();
   return {
     // Each entry carries its optional `disclosure` block (provenance, weights/
     // runtime licenses, pinned-snapshot download size) straight off the
     // registry — absent for custom models, which the UI renders as Unknown.
     models,
-    defaultModel: defaultVideoModelId(capabilities),
+    defaultModel: defaultVideoModelId(capabilities, settings?.videoGen?.defaultModelId),
     // Total system memory in GB — the client uses this to auto-select the
     // highest-memory mode-compatible model that fits on this machine.
     // Rounded to nearest GB; sub-GB precision isn't useful for the
@@ -510,7 +512,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // kept here for the callers that already read them off /status. The Video
     // Gen page takes them from GET /model-context instead, so its Model picker
     // never waits on the python probe above.
-    ...(await videoModelContext()),
+    ...(await videoModelContext(s)),
     // Server-owned execution + policy scope per render backend (#3674). The
     // client renders these strings verbatim so the wording can't drift between
     // the two surfaces.
@@ -1096,20 +1098,6 @@ router.post('/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: false, reason: 'no active or queued video render' });
 }));
 
-// The ONE contract every `/history/:id*` route resolves its record id through
-// (#5713) — GET, DELETE, visibility and prompt all name the same stored row, so
-// they share one schema instead of three (loose / strict / none).
-//
-// It stays looser than `historyIdSchema` below on purpose: that UUID check suits
-// ids this install MINTS, but entries also arrive from a caller-supplied
-// download id and from federated peers, so a `.guid()` gate here would 400 rows
-// that are legitimately in the list. The charset bound is the floor — every
-// legitimate id is `[A-Za-z0-9._-]+`, and a value carrying a path segment or a
-// `..` can no longer parse, so `safeUnder()` two modules away in historyOps is
-// defense in depth rather than the only thing standing between a hostile id and
-// an unlink loop.
-const historyRecordIdSchema = z.string().trim().min(1).max(200)
-  .regex(/^[A-Za-z0-9._-]+$/, 'invalid history id');
 const updatePromptSchema = z.object({ prompt: z.string().max(8000) });
 // `hidden` is required: reading an absent body as `false` turned a malformed
 // request into a silent unhide.
@@ -1119,19 +1107,8 @@ router.get('/history', asyncHandler(async (_req, res) => {
   res.json(await loadHistory());
 }));
 
-// One history entry by id (#4165). A history id is NOT the filename stem — the
-// timeline renderer mints `timeline-<project>-<ts>.mp4` beside an independent
-// `randomUUID()` id — so a client holding only an id (a Creative Director
-// `finalVideoId`, an EpisodeVideoStage final) has to ask the server which file
-// it points at. Before this route existed, every such surface pulled the WHOLE
-// history list to find one row.
-router.get('/history/:id', asyncHandler(async (req, res) => {
-  const parsed = historyRecordIdSchema.safeParse(req.params.id);
-  if (!parsed.success) failValidation(parsed);
-  const entry = await getHistoryItem(parsed.data);
-  if (!entry) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(entry);
-}));
+// One history entry by id (#4165) — see videoHistoryRead.js.
+router.get('/history/:id', createVideoHistoryItemRead(getHistoryItem));
 
 // Upload a video into the shared gallery (#4188) — the video counterpart of
 // POST /api/image-gen/upload. Lands the bytes under PATHS.videos with a

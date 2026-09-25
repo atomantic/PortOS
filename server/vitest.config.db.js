@@ -15,12 +15,14 @@ process.env.NODE_ENV = 'test';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  '../scripts/perf/collectionFixture.db.test.js',
   'services/appQuality.db.test.js',
   '**/db.test.js',
   'services/dbAdmin.db.test.js',
   'services/backup.db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
+  'services/catalogSync.tombstoneRevival.db.test.js',
   'services/humanActivity.db.test.js',
   'services/postRunDb.db.test.js',
   'services/userActions.db.test.js',
@@ -48,6 +50,7 @@ export const DB_TEST_INCLUDE = [
   'services/modelPinRecords.db.test.js',
   'scripts/run-db-migrations.test.js',
   'lib/db/schema/audit.db.test.js',
+  'lib/db/schema/syncFeed.db.test.js',
 ];
 
 /**

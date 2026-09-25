@@ -21,8 +21,10 @@
  *
  * HARD GUARDRAILS (autonomy never overrides — mirrors unbroker):
  *   - NO CONSENT, NO ACTION. `runOptOutPass` / `runVerificationPass` refuse to
- *     act for a subject with no recorded consent row
- *     (privacySubjects.assertSubjectConsent, #3658). Like the disclosure
+ *     act for a subject without an ACTIVE `broker_optout` grant
+ *     (privacySubjects.assertSubjectConsent, #3658/#8332) — neither the
+ *     local-only `pii_vault` grant nor the read-only `broker_scan` grant
+ *     unlocks a submission or its verification probes. Like the disclosure
  *     allowlist below, the guard lives in the SERVICE — a scheduled recheck, a
  *     direct API call, or a future agent path is refused exactly like a hidden
  *     UI button would be.
@@ -411,10 +413,11 @@ export async function runVerificationPass({
   now = new Date(), messagesProvider = getMessages, removalProbe = probeBroker, probeDeps = {},
   subjectId, maxVerificationRechecks = DEFAULT_MAX_VERIFICATION_RECHECKS,
 } = {}) {
-  // CONSENT GATE — the verification pass re-probes brokers for the subject, so
-  // it is gated exactly like the submission pass.
+  // CONSENT GATE — the verification pass re-probes brokers for the subject as
+  // part of the removal workflow, so it is gated on `broker_optout` exactly
+  // like the submission pass.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: 'opt-out verification pass' });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'opt-out verification pass' });
   const cases = await listBrokerCases({ subjectId: resolvedSubjectId });
   const advanced = [];
   const confirmed = [];
@@ -494,10 +497,10 @@ export async function runOptOutPass({
   now = new Date(), settingsProvider = getSettings, deps = {}, runVerification = true, subjectId,
 } = {}) {
   // CONSENT GATE — BEFORE any vault read, broker fetch, or draft creation. NO
-  // CONSENT, NO ACTION: a subject without a recorded consent row is refused
-  // (403) here in the service, not merely in the UI.
+  // CONSENT, NO ACTION: a subject without an active `broker_optout` grant is
+  // refused (403) here in the service, not merely in the UI.
   const resolvedSubjectId = resolveSubjectId(subjectId);
-  await assertSubjectConsent(resolvedSubjectId, { action: 'broker opt-out pass' });
+  await assertSubjectConsent(resolvedSubjectId, { scope: 'broker_optout', action: 'broker opt-out pass' });
   const settings = await settingsProvider();
   const recheck = settings?.privacy?.recheck || {};
   const autoApprove = recheck.autoApproveOptOutEmails === true;
@@ -510,7 +513,7 @@ export async function runOptOutPass({
     return { submitted: [], skipped: 0, verification: null, subjectId: resolvedSubjectId, reason: 'no_disclosure_identity' };
   }
 
-  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases({ subjectId: resolvedSubjectId })]);
+  const [brokers, cases] = await Promise.all([listBrokers({ enabled: true }), listBrokerCases({ subjectId: resolvedSubjectId, includeIdentity: true })]);
   const brokerById = new Map(brokers.map((b) => [b.id, b]));
   const casesWithBroker = cases
     .map((c) => ({ case: c, broker: brokerById.get(c.brokerId) }))
@@ -520,7 +523,8 @@ export async function runOptOutPass({
   const submitted = [];
   let skipped = 0;
   for (const { case: kase, broker } of submit) {
-    const listingUrls = Array.isArray(kase.evidence?.listing_urls) ? kase.evidence.listing_urls : [];
+    // Listing URLs live in the case's sealed identity evidence (#8333).
+    const listingUrls = Array.isArray(kase.identity?.listing_urls) ? kase.identity.listing_urls : [];
     const disclosedFields = computeDisclosedFields(broker, payload, { listingUrls });
     const lane = chooseLane(broker);
     if (lane === 'human') {
@@ -558,8 +562,8 @@ export async function runOptOutPass({
 export async function getOptOutDigest({ subjectId } = {}) {
   const resolvedSubjectId = resolveSubjectId(subjectId);
   const [human, blocked] = await Promise.all([
-    listBrokerCases({ state: 'human_task_queued', subjectId: resolvedSubjectId }),
-    listBrokerCases({ state: 'blocked', subjectId: resolvedSubjectId }),
+    listBrokerCases({ state: 'human_task_queued', subjectId: resolvedSubjectId, includeIdentity: true }),
+    listBrokerCases({ state: 'blocked', subjectId: resolvedSubjectId, includeIdentity: true }),
   ]);
   const toItem = (c) => ({
     caseId: c.id,
@@ -575,7 +579,8 @@ export async function getOptOutDigest({ subjectId } = {}) {
     optoutUrl: c.evidence?.optout_url || null,
     // Filled broker-search URL for blocked cases — lets the digest offer
     // "check manually in your browser" (the sanctioned path past a bot wall).
-    searchUrl: c.evidence?.search_url || null,
+    // Decrypted from the sealed identity evidence (#8333); null once erased.
+    searchUrl: c.identity?.search_url || null,
     playbook: c.evidence?.playbook || [],
     nextRecheckAt: c.nextRecheckAt,
   });

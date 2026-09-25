@@ -1319,6 +1319,35 @@ describe('Settings routes — backup schedule resolution (#6632)', () => {
     expect(res.body.backup).toMatchObject({ destPath: null, enabled: true, cronExpression: '0 0 * * *' });
   });
 
+  // #8334: an install that predates the retention setting has no stored value —
+  // that must resolve to unlimited (null), never to the new-install default of
+  // 30. A migration/reference-seed is what gives a genuinely new install 30 on
+  // disk; the resolver itself must never invent that default for an absence.
+  it('resolves retentionCount to null (unlimited) when absent', async () => {
+    store = { backup: { destPath: '/example-backups' } };
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.body.backup.retentionCount).toBeNull();
+  });
+
+  it('preserves an explicitly stored retentionCount', async () => {
+    store = { backup: { destPath: '/example-backups', retentionCount: 14 } };
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.body.backup.retentionCount).toBe(14);
+  });
+
+  it('rejects an out-of-range retentionCount on save', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({ backup: { retentionCount: 366 } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('accepts an explicit null retentionCount (operator choosing Unlimited) on save', async () => {
+    store = { backup: { destPath: '/example-backups', retentionCount: 30 } };
+    const res = await request(buildApp()).put('/api/settings').send({ backup: { retentionCount: null } });
+    expect(res.status).toBe(200);
+    expect(store.backup.retentionCount).toBeNull();
+  });
+
   // Resolution is read-time only: the sparse shape survives on disk, so an older
   // peer/client reading settings.json still sees exactly what it wrote.
   it('does not persist the resolved values back into the store', async () => {

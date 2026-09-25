@@ -78,6 +78,7 @@ describe('SongRecordings — pitch analysis wiring (#1092)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /record take/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /stop & save/i })).toBeTruthy());
+    await waitFor(() => expect(matchStart).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /stop & save/i }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());

@@ -73,6 +73,7 @@ vi.mock('../hooks/useLocalModels', () => ({
 }));
 vi.mock('../components/models/ModelsTabsHeader', () => ({
   default: ({ activeTab }) => <div data-testid="models-tabs-header" data-active-tab={activeTab} />,
+  ModelsSectionLayout: ({ children }) => <>{children}</>,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
   // `params` becomes the setup request's query string, so the test can assert
@@ -2244,7 +2245,7 @@ describe('compatibility matrix', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm save' }));
     await waitFor(() => expect(api.createProviderPreset).toHaveBeenCalledWith(expect.objectContaining({ compositeId: 'claude.cli@ollama' })));
     expect(await screen.findByText(/Derived from service/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+    expect(screen.getByRole('link', { name: 'service settings for ollama' })).toHaveAttribute('href', '/ai/services/ollama');
     expect(screen.queryByLabelText('Command *')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Name *')).toHaveValue('Claude Code · Ollama');
     expect(screen.getByLabelText('Arguments (space-separated)')).toBeInTheDocument();

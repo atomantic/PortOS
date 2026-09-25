@@ -710,15 +710,6 @@ export async function recordRunUsage(record) {
 }
 
 /**
- * Record tool calls
- */
-export async function recordToolCalls(count) {
-  if (!usageData) await loadUsage();
-  usageData.totalToolCalls += count;
-  await saveUsage();
-}
-
-/**
  * Record token usage
  */
 export async function recordTokens(inputTokens, outputTokens) {

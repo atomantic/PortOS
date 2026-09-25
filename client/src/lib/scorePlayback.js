@@ -13,6 +13,7 @@
 
 import { getAudioContext as ctx } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
+import { midiToFreq } from '../../../server/lib/pitchMath.js';
 
 // --- Pitch → frequency ------------------------------------------------------
 // Equal-tempered, A4 = 440 Hz. MIDI 69 == A4, so f = 440 · 2^((midi−69)/12).
@@ -29,8 +30,9 @@ export const pitchToMidi = (pitch) => {
   return (pitch.octave + 1) * 12 + pc + shift;
 };
 
-// Frequency (Hz) for a MIDI note number. A4 (69) → 440.
-export const midiToFreq = (midi) => (Number.isFinite(midi) ? 440 * Math.pow(2, (midi - 69) / 12) : null);
+// Frequency (Hz) for a MIDI note number. A4 (69) → 440. The shared
+// server/lib/pitchMath.js math, re-exported for the client playback stack.
+export { midiToFreq };
 
 // Frequency (Hz) for a parsed pitch, or null when it isn't a pitch.
 export const noteToFrequency = (pitch) => {

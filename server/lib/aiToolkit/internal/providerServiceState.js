@@ -340,6 +340,7 @@ export function createProviderServiceState(config = {}) {
       secretEnvVars: providerData.secretEnvVars || [],
       headlessArgs: providerData.headlessArgs || [],
       tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
+      ...(providerData.lowPriorityOnUsageLimit === true ? { lowPriorityOnUsageLimit: true } : {}),
       ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {}),
       ...Object.fromEntries(['harnessId', 'method', 'serviceId', 'credentialBootstrapId']
         .filter(key => typeof providerData[key] === 'string' && providerData[key])

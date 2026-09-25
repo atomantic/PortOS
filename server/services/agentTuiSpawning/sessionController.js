@@ -37,7 +37,7 @@ import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
-import { createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
@@ -80,6 +80,7 @@ import {
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
   isPasteCommitted,
+  CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS,
   SUBMIT_KEY,
   detectMissingTuiBinary,
 } from '../../lib/tuiHandshake.js';
@@ -521,6 +522,12 @@ export function createTuiSessionController({
   let mergeGateReprompted = false;
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
+  let claudeLowPriorityPromptResubmitted = false;
+  const mayUseClaudeLowPriority = provider?.type === 'tui'
+    && provider?.lowPriorityOnUsageLimit === true
+    && isClaudeCommand(tuiConfig.command);
+  let lowPriorityCommandAttempted = false;
   // Holds the wait-it-out window for a provider signal carrying a `graceMs`
   // (agy's account-eligibility banner). The provider-signal timer below resolves
   // its deadline and drives the re-submission cadence.
@@ -654,6 +661,7 @@ export function createTuiSessionController({
   // silently equivalent to "nothing to stop".
   let promptTimer = null;
   let providerSignalTimer = null;
+  let claudeLowPriorityResubmitTimer = null;
   let doneSentinelWatcher = null;
 
   const streamingStrip = createStreamingAnsiStripper();
@@ -764,6 +772,7 @@ export function createTuiSessionController({
   const stopRunMachinery = () => {
     if (providerSignalTimer) { clearInterval(providerSignalTimer); providerSignalTimer = null; }
     if (promptTimer) { clearInterval(promptTimer); promptTimer = null; }
+    if (claudeLowPriorityResubmitTimer) { clearTimeout(claudeLowPriorityResubmitTimer); claudeLowPriorityResubmitTimer = null; }
     doneSentinelWatcher?.();
     doneSentinelWatcher = null;
     // Cancels the paste-attempt timers and releases the post-paste accumulator
@@ -1177,6 +1186,59 @@ export function createTuiSessionController({
         if (firstOutputAt === null) firstOutputAt = lastOutputAt;
       }
       recordFirstOutput('tui-pty');
+
+      // `/low-priority` is a hidden Claude Code TUI command, not a CLI startup
+      // argument or a supported --print/SDK prompt. On an opted-in session
+      // limit, enable the mode and then re-submit the rejected task. A later
+      // limit after that re-submit means the mode was unavailable or exhausted.
+      if (isClaudeCommand(tuiConfig.command) && promptSubmittedAt) {
+        const sessionLimit = detectClaudeSessionLimitBanner(stripped);
+        if (sessionLimit) {
+          if (lowPriorityCommandAttempted) {
+            if (claudeLowPriorityPromptResubmitted) await failOverToFallback(sessionLimit);
+            return;
+          }
+          if (!mayUseClaudeLowPriority) {
+            await failOverToFallback(sessionLimit);
+            return;
+          }
+          lowPriorityCommandAttempted = true;
+          let submitted = false;
+          try {
+            submitted = session.write(sessionId, `/low-priority${SUBMIT_KEY}`) !== false;
+          } catch (err) {
+            emitLog('warn', `TUI agent ${agentId} could not send Claude low-priority command: ${err?.message || err}`, { agentId });
+          }
+          if (submitted) {
+            appendLine('⏳ Claude Code session limit reached — sent /low-priority from the provider opt-in');
+            claudeLowPriorityResubmitTimer = setTimeout(() => {
+              claudeLowPriorityResubmitTimer = null;
+              if (sessionPhase !== 'running') return;
+              let promptResubmitted = false;
+              try {
+                promptResubmitted = !!pasteController?.resubmit({ label: 'Claude low-priority continuation' });
+              } catch (err) {
+                emitLog('warn', `TUI agent ${agentId} could not re-submit after Claude low-priority: ${err?.message || err}`, { agentId });
+              }
+              if (promptResubmitted) {
+                claudeLowPriorityPromptResubmitted = true;
+                appendLine('🔁 Re-submitted the task after enabling Claude low-priority mode');
+                return;
+              }
+              failOverToFallback({
+                ...sessionLimit,
+                message: 'Claude Code low-priority mode was enabled, but the task could not be re-submitted',
+              }).catch((err) => emitLog('error', `TUI agent ${agentId} low-priority re-submit fallback failed: ${err?.message || err}`, { agentId }));
+            }, CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS);
+          } else {
+            await failOverToFallback({
+              ...sessionLimit,
+              message: 'Claude Code session limit reached and /low-priority could not be sent',
+            });
+          }
+          return;
+        }
+      }
 
       if (!hasStartedWorking) {
         hasStartedWorking = true;

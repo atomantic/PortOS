@@ -27,7 +27,7 @@ import { getImageModels } from '../../lib/mediaModels.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
 import { writeLoraSidecar } from '../loras.js';
-import { enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
+import { assertMediaQueueRoom, enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
 import { sleepDisplayForTraining, wakeDisplay } from './displayPower.js';
@@ -188,6 +188,10 @@ export async function startTrainingRun({
     }
   }
 
+  // A full media queue (#8326) refuses the launch before the run row exists,
+  // so the common case leaves no failed run behind; the enqueue below still
+  // re-checks (and fails the row) if another producer filled the queue since.
+  assertMediaQueueRoom(1);
   const mergedParams = mergeParams(settings, params);
   const runId = uuidv4();
   const run = {
@@ -219,7 +223,9 @@ export async function startTrainingRun({
   };
   await runsDb.createRun(run);
 
-  const queued = enqueueJob({
+  // The run row already exists, so a refused admission (#8325) must fail it
+  // rather than leave a 'queued' run no job will ever pick up.
+  const queued = await enqueueJob({
     kind: 'training',
     owner: 'lora-training',
     params: {
@@ -234,6 +240,9 @@ export async function startTrainingRun({
       rank: mergedParams.rank,
       pythonPath,
     },
+  }).catch(async (err) => {
+    await runsDb.updateRun(runId, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
+    throw err;
   });
   await runsDb.updateRun(runId, { jobId: queued.jobId });
   await stampDatasetTrainingStatus(run, queued.jobId);
@@ -312,7 +321,7 @@ export async function resumeTrainingRun(runId, { auto = false } = {}) {
     });
   }
 
-  const queued = enqueueJob({
+  const queued = await enqueueJob({
     kind: 'training',
     owner: 'lora-training',
     params: {

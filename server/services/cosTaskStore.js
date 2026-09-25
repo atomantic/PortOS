@@ -505,11 +505,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
  * via `completeAgent` — which takes the same non-reentrant `withStateLock`, so
  * running either inside would deadlock. Resolving first is also what keeps the task
  * from ever being `pending` (spawnable) without its pointer.
+ *
+ * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
+ * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, expectedStatus = null } = {}) {
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue });
-  if (release && !result?.error) {
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, expectedStatus });
+  if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
   return result;
@@ -613,7 +616,7 @@ function mergeUpdateMetadata(existingMetadata, updates) {
   return merged;
 }
 
-async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false }) {
+async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null }) {
   return withStateLock(async () => {
   const state = await loadState();
   const filePath = taskType === 'user'
@@ -631,6 +634,13 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   if (taskIndex === -1) {
     console.log(`⚠️ updateTask: task ${taskId} not found in ${filePath} (taskType=${taskType}, parsed ${tasks.length} tasks, status update: ${updates.status || 'none'})`);
     return { error: 'Task not found' };
+  }
+
+  // Deterministic sweepers can retire a queued task only while it is still
+  // pending. Check under the same lock as the write so a concurrent dequeue or
+  // user action cannot be overwritten by a stale queue snapshot.
+  if (expectedStatus && tasks[taskIndex].status !== expectedStatus) {
+    return { statusChanged: true, task: tasks[taskIndex] };
   }
 
   const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);

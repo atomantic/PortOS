@@ -67,7 +67,10 @@ vi.mock('../lib/gitCommitProbe.js', () => ({
 }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => null) }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(), completeAgentRun: vi.fn(async () => null) }));
-vi.mock('./taskTypeHooks.js', () => ({
+vi.mock('./taskTypeHooks.js', async (importOriginal) => ({
+  // isClaimFlowDispatch stays REAL: the claim-flow fidelity cases below depend
+  // on it resolving the claim marker/type exactly as production does.
+  ...(await importOriginal()),
   canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
   isProgrammaticIoTaskType: vi.fn(() => false),
   resolveTaskHookType: vi.fn(() => null),

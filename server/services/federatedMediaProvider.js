@@ -41,6 +41,7 @@ import {
   laneConcurrencyFor,
   listJobs,
 } from './mediaJobQueue/index.js';
+import { MEDIA_QUEUE_FULL } from './mediaJobQueue/admission.js';
 import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
 import { BYOV_VIDEO_RUNTIMES, isByovRuntimeReady } from './videoGen/runtimes.js';
 import { minimaxH3ControlError } from './videoGen/minimaxH3Controls.js';
@@ -307,7 +308,8 @@ export function normalizeFederatedMediaProviderConfig(settings) {
 /**
  * The provider is stricter than ordinary federation reads: it never inherits
  * authGate's auth-off bypass and never accepts a browser session. A verified
- * Basic credential plus a registered, enabled caller is required every time.
+ * peer credential (the paired peer token, or legacy Basic) plus a registered,
+ * enabled caller is required every time.
  * Status discovery is expected to encounter disabled or misconfigured peers,
  * so callers can mark those denials as warnings: the HTTP response still tells
  * the consumer exactly why discovery failed, but it stays off this provider's
@@ -322,9 +324,9 @@ export async function authorizeFederatedMediaPeer(req, { statusProbe = false } =
       ...(statusProbe ? { severity: 'warning' } : {}),
     });
   };
-  if (req.portosAuthContext?.method !== 'basic' || req.portosAuthContext?.authenticated !== true) {
+  if (!['peer', 'basic'].includes(req.portosAuthContext?.method) || req.portosAuthContext?.authenticated !== true) {
     deny(
-      'Verified peer Basic authentication is required',
+      'Verified peer authentication is required',
       'MEDIA_PROVIDER_PEER_AUTH_REQUIRED',
       403,
     );
@@ -858,10 +860,18 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       idempotencyKey,
       requestHash,
     };
-    const queued = enqueueJob({
+    const queued = await enqueueJob({
       kind: input.kind,
       owner: jobOwner(callerId),
       params: buildQueueParams(input, capability, federatedMedia, inputAssetParams),
+    }).catch((error) => {
+      // The shared queue's own pending ceiling (#8326) is the same capacity
+      // refusal as the provider bound above; answer in the wire's vocabulary so
+      // the consumer retries later instead of seeing a local queue code.
+      if (error?.code === MEDIA_QUEUE_FULL) {
+        unavailable('Provider queue is at capacity', 'MEDIA_PROVIDER_BUSY', 429, { retryable: true });
+      }
+      throw error;
     });
     return {
       replayed: false,

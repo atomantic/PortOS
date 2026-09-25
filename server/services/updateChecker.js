@@ -562,17 +562,3 @@ export function startUpdateScheduler() {
 
   console.log(`🔄 Update scheduler started (every ${CHECK_INTERVAL_MS / 60000}min)`);
 }
-
-/**
- * Stop the periodic update checker.
- */
-export function stopUpdateScheduler() {
-  if (startupTimeout) {
-    clearTimeout(startupTimeout);
-    startupTimeout = null;
-  }
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-  }
-}

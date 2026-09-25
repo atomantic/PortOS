@@ -6,13 +6,14 @@ import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
-const listMediaJobs = vi.fn();
+const listQueueMediaJobs = vi.fn();
+const cancelMediaJob = vi.fn();
 const retryMediaJob = vi.fn();
 const resumeMediaVideoHold = vi.fn();
 const listMediaVideoHolds = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
-  listMediaJobs: (...a) => listMediaJobs(...a),
-  cancelMediaJob: vi.fn(),
+  listQueueMediaJobs: (...a) => listQueueMediaJobs(...a),
+  cancelMediaJob: (...a) => cancelMediaJob(...a),
   cancelQueuedMediaJobs: vi.fn(),
   deleteMediaJob: vi.fn(),
   retryMediaJob: (...a) => retryMediaJob(...a),
@@ -55,7 +56,8 @@ const trainingJob = {
 };
 
 beforeEach(() => {
-  listMediaJobs.mockReset();
+  listQueueMediaJobs.mockReset();
+  cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
   listMediaVideoHolds.mockReset().mockResolvedValue([]);
   resumeMediaVideoHold.mockReset();
   listLoraTrainingCheckpoints.mockReset();
@@ -104,7 +106,7 @@ const failedCodexDefaultEffortJob = {
 
 describe('MediaJobsQueue — unavailable state', () => {
   it('does not report a failed queue probe as an empty queue', async () => {
-    listMediaJobs.mockRejectedValue(new Error('offline'));
+    listQueueMediaJobs.mockRejectedValue(new Error('offline'));
 
     render(<MediaJobsQueue kind="image" />);
 
@@ -113,9 +115,47 @@ describe('MediaJobsQueue — unavailable state', () => {
   });
 });
 
+describe('MediaJobsQueue — cancellation state', () => {
+  it('keeps a running cancellation through refresh and clears it on terminal status', async () => {
+    const user = userEvent.setup();
+    const runningJob = {
+      id: 'canceljob12345678',
+      kind: 'image',
+      status: 'running',
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'an invented cancellation prompt', modelId: 'example-model' },
+    };
+    let queueSnapshot = [runningJob];
+    listQueueMediaJobs.mockImplementation(() => Promise.resolve(queueSnapshot));
+
+    render(<MediaJobsQueue kind="image" />);
+
+    await screen.findByText(/an invented cancellation prompt/);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(cancelMediaJob).toHaveBeenCalledWith('canceljob12345678', { silent: true });
+    expect(await screen.findByText('cancelling…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+
+    queueSnapshot = [{ ...runningJob, cancelRequested: true }];
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(screen.getByText('cancelling…')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+    });
+
+    queueSnapshot = [{ ...runningJob, status: 'canceled', cancelRequested: false, error: 'Canceled' }];
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await user.click(await screen.findByText(/Show failed \/ canceled/));
+
+    expect(await screen.findByText('canceled')).toBeInTheDocument();
+    expect(screen.queryByText('cancelling…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+});
+
 describe('MediaJobsQueue — Creative Director renders', () => {
   it('surfaces a Creative Director-owned video job in the live queue', async () => {
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       id: 'cdvideo0000live',
       kind: 'video',
       owner: 'cd:example-project',
@@ -128,6 +168,7 @@ describe('MediaJobsQueue — Creative Director renders', () => {
     render(<MediaJobsQueue kind="video" />);
 
     await waitFor(() => expect(screen.getByText(/Creative Director/)).toBeInTheDocument());
+    expect(listQueueMediaJobs).toHaveBeenCalledWith({ kind: 'video', limit: 10 });
     expect(screen.getByText(/#2 in queue/)).toBeInTheDocument();
     expect(screen.getByText(/an invented establishing shot/)).toBeInTheDocument();
   });
@@ -137,7 +178,7 @@ describe('MediaJobsQueue — video render lanes', () => {
   it('files each job under the lane the server scheduled it into', async () => {
     // The lane comes from the server's own classifier (`executionLane`), so a
     // cloud backend the client has never heard of still lands in Cloud renders.
-    listMediaJobs.mockResolvedValue([
+    listQueueMediaJobs.mockResolvedValue([
       {
         id: 'localvideo0001',
         kind: 'video',
@@ -196,7 +237,7 @@ describe('MediaJobsQueue — video render lanes', () => {
   });
 
   it('badges a cloud provider render with its provider, not the local engine', async () => {
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       id: 'falvideo00001',
       kind: 'video',
       status: 'running',
@@ -215,7 +256,7 @@ describe('MediaJobsQueue — video render lanes', () => {
     // A rebuilt bundle can be served briefly by a server process that has not
     // restarted onto the new projection yet; the queue must not fall back to
     // filing every cloud render under Local machine while that window is open.
-    listMediaJobs.mockResolvedValue([
+    listQueueMediaJobs.mockResolvedValue([
       {
         id: 'legacylocal01',
         kind: 'video',
@@ -252,7 +293,7 @@ describe('MediaJobsQueue — federated render badge', () => {
   it('badges a peer-rendered job remote instead of claiming a local render', async () => {
     // The server projects `renderer` and rebuilds `modelId` off the wire
     // request — the raw job nulls both so a rolled-back build fails closed.
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       id: 'remotejob0000beef',
       kind: 'image',
       status: 'running',
@@ -268,7 +309,7 @@ describe('MediaJobsQueue — federated render badge', () => {
   });
 
   it('keeps the local badge on a job with no renderer projection', async () => {
-    listMediaJobs.mockResolvedValue([{ ...failedLocalJob, status: 'running', error: undefined }]);
+    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, status: 'running', error: undefined }]);
 
     render(<MediaJobsQueue kind="image" />);
 
@@ -280,7 +321,7 @@ describe('MediaJobsQueue — federated render badge', () => {
     // renders from the wire request inside the marker — so showing the form
     // would silently discard what the user typed.
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', renderer: 'remote' }]);
+    listQueueMediaJobs.mockResolvedValue([{ ...failedLocalJob, id: 'remotefail0000beef', renderer: 'remote' }]);
 
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
@@ -293,7 +334,7 @@ describe('MediaJobsQueue — federated render badge', () => {
 describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
   it('surfaces the job effort in the row label', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · high/)).toBeInTheDocument());
@@ -301,7 +342,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
 
   it('shows the effective default effort in the row label when the job stored none', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    listQueueMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     // Default-effort jobs store no `effort`, but codex still rendered at `low`.
@@ -312,7 +353,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
     const user = userEvent.setup();
     // A hand-edited media-jobs.json could carry a numeric effort; the row label
     // must coerce safely (mirror of codex.js) instead of throwing on .trim().
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       ...failedCodexDefaultEffortJob, id: 'codexbadeff00dead', params: { ...failedCodexDefaultEffortJob.params, effort: 5 },
     }]);
     render(<MediaJobsQueue kind="image" />);
@@ -323,7 +364,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
 
   it('pre-fills the retry editor to Default for a job that stored no effort', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    listQueueMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -336,7 +377,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
 
   it('renders the effort select (Codex only) and pins a new level on retry', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -352,7 +393,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
 
   it('sends the clear sentinel when the effort is reset to Default', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    listQueueMediaJobs.mockResolvedValue([failedCodexJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -366,7 +407,7 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
 
   it('does not render the effort control for non-Codex jobs', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedLocalJob]);
+    listQueueMediaJobs.mockResolvedValue([failedLocalJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -393,7 +434,7 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 
   it('pre-fills the Agy model from params.model and retries with the edited value', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([failedAgyJob]);
+    listQueueMediaJobs.mockResolvedValue([failedAgyJob]);
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -410,7 +451,7 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 
   it('shows the configured-default sentinel as an empty field and sends no override', async () => {
     const user = userEvent.setup();
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       ...failedAgyJob,
       id: 'agysentinel00dead',
       params: { ...failedAgyJob.params, model: 'antigravity-configured-default' },
@@ -430,7 +471,7 @@ describe('MediaJobsQueue — Agy retry model field', () => {
 
 describe('MediaJobsQueue — training rows', () => {
   it('renders a training summary + engine/character label instead of a prompt', async () => {
-    listMediaJobs.mockResolvedValue([trainingJob]);
+    listQueueMediaJobs.mockResolvedValue([trainingJob]);
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
@@ -442,7 +483,7 @@ describe('MediaJobsQueue — training rows', () => {
   });
 
   it('draws a loss sparkline and sample thumbnails from the run checkpoints', async () => {
-    listMediaJobs.mockResolvedValue([trainingJob]);
+    listQueueMediaJobs.mockResolvedValue([trainingJob]);
     listLoraTrainingCheckpoints.mockResolvedValue({
       checkpoints: [
         { step: 100, loss: 0.8, previewUrl: '/api/lora-training/runs/run-abc/samples/a.png', deployed: false },
@@ -461,7 +502,7 @@ describe('MediaJobsQueue — training rows', () => {
   });
 
   it('shows a friendly placeholder when no checkpoints exist yet', async () => {
-    listMediaJobs.mockResolvedValue([trainingJob]);
+    listQueueMediaJobs.mockResolvedValue([trainingJob]);
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
@@ -470,7 +511,7 @@ describe('MediaJobsQueue — training rows', () => {
   });
 
   it('does not fetch checkpoints for non-training jobs', async () => {
-    listMediaJobs.mockResolvedValue([{
+    listQueueMediaJobs.mockResolvedValue([{
       id: 'img1', kind: 'image', status: 'running', progress: 0.2,
       params: { prompt: 'a castle', modelId: 'z-image-turbo' },
     }]);
@@ -491,7 +532,7 @@ describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('pauses the checkpoint poll while the tab is hidden and re-fires on return', async () => {
-    listMediaJobs.mockResolvedValue([trainingJob]);
+    listQueueMediaJobs.mockResolvedValue([trainingJob]);
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
@@ -504,7 +545,7 @@ describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
      * "the mount fetches finished". A mount chain needing one more turn on a
      * loaded machine is measured mid-flight, and the counts race BOTH ways
      * (#7592/#7448): the checkpoint assertion goes red, and
-     * `listMediaJobs.mock.calls.length` is a baseline taken before the list had
+     * `listQueueMediaJobs.mock.calls.length` is a baseline taken before the list had
      * loaded — so "the count did not move" then passes for the wrong reason,
      * because nothing had loaded to move it.
      *
@@ -531,13 +572,13 @@ describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
      */
     await screen.findByText(/No checkpoints yet/);
     expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-    const jobListCalls = listMediaJobs.mock.calls.length;
+    const jobListCalls = listQueueMediaJobs.mock.calls.length;
 
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
     // The queue's own job poll is paused by the same hook.
-    expect(listMediaJobs.mock.calls.length).toBe(jobListCalls);
+    expect(listQueueMediaJobs.mock.calls.length).toBe(jobListCalls);
 
     visibility.mockReturnValue('visible');
     await act(async () => {
@@ -568,7 +609,7 @@ describe('MediaJobsQueue — video retry reference mode (#4874)', () => {
   };
 
   const openRetryEditor = async (user) => {
-    listMediaJobs.mockResolvedValue([failedInspireJob]);
+    listQueueMediaJobs.mockResolvedValue([failedInspireJob]);
     render(<MediaJobsQueue kind="video" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -649,7 +690,7 @@ describe('MediaJobsQueue — video retry decode override (#5449)', () => {
   });
 
   const openRetryEditor = async (user, job) => {
-    listMediaJobs.mockResolvedValue([job]);
+    listQueueMediaJobs.mockResolvedValue([job]);
     render(<MediaJobsQueue kind="video" />);
     await expandReel(user);
     await user.click(await screen.findByLabelText('Edit and retry'));
@@ -752,7 +793,7 @@ describe('MediaJobsQueue — video retry decode override (#5449)', () => {
 
 describe('MediaJobsQueue — local video holds', () => {
   it('makes the scope of damaged-hold recovery explicit before resuming', async () => {
-    listMediaJobs.mockResolvedValue([]);
+    listQueueMediaJobs.mockResolvedValue([]);
     listMediaVideoHolds.mockResolvedValue([{ id: 'recovery-hold', scope: 'local-video', modelId: '*', runtime: '*',
       cause: 'Saved video holds are damaged.', heldJobCount: 0 }]);
     const user = userEvent.setup();
@@ -769,7 +810,7 @@ describe('MediaJobsQueue — local video holds', () => {
   it('retains held state on a failed resume and clears it only after a successful response', async () => {
     const hold = { id: 'example-hold', modelId: 'example-mlx', runtime: 'mlx_video', cause: 'Shader compilation failed', heldJobCount: 2 };
     const jobs = ['held-1', 'held-2'].map((id) => ({ id, kind: 'video', status: 'queued', hold, params: {} }));
-    listMediaJobs.mockResolvedValue(jobs);
+    listQueueMediaJobs.mockResolvedValue(jobs);
     listMediaVideoHolds.mockResolvedValue([hold]);
     resumeMediaVideoHold.mockRejectedValueOnce(new Error('Resume unavailable'));
     const user = userEvent.setup();
@@ -784,7 +825,7 @@ describe('MediaJobsQueue — local video holds', () => {
     await user.click(screen.getByRole('button', { name: 'Resume' }));
     expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled();
     expect(screen.getByText('2 video jobs held')).toBeInTheDocument();
-    listMediaJobs.mockResolvedValue(jobs.map((job) => ({ ...job, hold: undefined })));
+    listQueueMediaJobs.mockResolvedValue(jobs.map((job) => ({ ...job, hold: undefined })));
     listMediaVideoHolds.mockResolvedValue([]);
     await act(async () => { finishResume({ resumed: true }); });
     await waitFor(() => expect(screen.queryByText('2 video jobs held')).not.toBeInTheDocument());
@@ -793,7 +834,7 @@ describe('MediaJobsQueue — local video holds', () => {
   });
 
   it('offers resume for an active hold after all retained jobs were canceled', async () => {
-    listMediaJobs.mockResolvedValue([]);
+    listQueueMediaJobs.mockResolvedValue([]);
     listMediaVideoHolds.mockResolvedValue([{ id: 'empty-hold', modelId: 'example-mlx', runtime: 'mlx_video',
       cause: 'Shader compilation failed', heldJobCount: 0 }]);
     const user = userEvent.setup();

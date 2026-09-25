@@ -6,6 +6,7 @@ vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
   getImageGenStatus: vi.fn(),
+  getVideoGenModelContext: vi.fn(),
   generateImage: vi.fn(),
   registerTool: vi.fn(),
   updateTool: vi.fn(),
@@ -35,7 +36,8 @@ vi.mock('../../hooks/useMediaJobSse', () => ({
 }));
 
 import {
-  getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus, generateImage,
+  getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
+  getVideoGenModelContext, generateImage,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -64,11 +66,19 @@ beforeEach(() => {
   });
   getToolsList.mockResolvedValue([]);
   getImageGenStatus.mockResolvedValue({ connected: true, mode: 'local', readiness: 'ready', model: 'FLUX.1 Dev', modelId: 'dev' });
+  getVideoGenModelContext.mockResolvedValue({
+    models: [
+      { id: 'fastmetal_5b_qad', name: 'FastMetal 5B QAD' },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4' },
+    ],
+    defaultModel: 'fastmetal_5b_qad',
+  });
   useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
   updateSettings.mockResolvedValue({});
   listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
   listImageModels.mockResolvedValue([
     { id: 'dev', name: 'FLUX.1 Dev' },
+    { id: 'qwen-image-2.1', name: 'Qwen-Image 2.1' },
     { id: 'flux2-klein-4b', name: 'FLUX.2 Klein' },
   ]);
 });
@@ -106,6 +116,35 @@ describe('ImageGenTab grouped tabs', () => {
     expect(screen.getByTestId('local-setup-panel')).toBeTruthy();
     // The tab's lazy model-catalog probe resolves after the click.
     await act(async () => {});
+  });
+
+  it('lets the user set a default local video model separately from the backend target', async () => {
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+
+    const select = screen.getByLabelText('Default local video model');
+    expect(select.value).toBe('');
+    expect(screen.getByRole('option', { name: 'Install default (FastMetal 5B QAD)' })).toBeTruthy();
+    fireEvent.change(select, { target: { value: 'ltx23_distilled_q4' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+
+    expect(updateSettings.mock.calls[0][0].videoGen.defaultModelId).toBe('ltx23_distilled_q4');
+  });
+
+  it('clears the saved local video model pin to follow the install default', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'external', external: { sdapiUrl: 'http://localhost:7860' } },
+      videoGen: { defaultModelId: 'ltx23_distilled_q4' },
+    });
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText('Default local video model'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+
+    expect(updateSettings.mock.calls[0][0].videoGen.defaultModelId).toBeNull();
   });
 
   it('keeps LocalSetupPanel mounted (hidden) after leaving the Local tab so an in-flight install stream is not torn down', async () => {
@@ -245,7 +284,7 @@ describe('ImageGenTab grouped tabs', () => {
     // Nothing pinned in settings — blank names what the server actually
     // resolves to, not an empty option the user has to guess at.
     expect(select.value).toBe('');
-    expect(screen.getByRole('option', { name: 'Install default (FLUX.1 Dev)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Install default (Qwen-Image 2.1)' })).toBeTruthy();
 
     fireEvent.change(select, { target: { value: 'flux2-klein-4b' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
@@ -576,7 +615,7 @@ describe('ImageGenTab local runtime card', () => {
   it('probes the runtime for the model the tab has pinned, not the install default', async () => {
     await renderTab();
     fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
-    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'dev', expect.anything()));
+    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'qwen-image-2.1', expect.anything()));
 
     fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
     await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));

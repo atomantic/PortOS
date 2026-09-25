@@ -2,14 +2,18 @@
  * Memory Federation Sync Service
  *
  * Enables memory synchronization between PortOS instances via the
- * sync_sequence column in PostgreSQL. Peers pull changes since their
- * last known sequence number.
+ * commit-ordered federation change feed (`sync_feed`, #8315). Peers pull
+ * changes since their last known feed position.
  *
  * Sync Protocol:
- *   1. Each memory row has an auto-incrementing sync_sequence (BIGSERIAL)
- *   2. Peers request GET /api/memory/sync?since={lastSequence}&limit=100
- *   3. Response includes memories changed since that sequence + the max sequence
- *   4. Peer stores the max sequence and uses it for the next poll
+ *   1. Every committed memory change gets a feed position, drawn AT COMMIT
+ *      (server/lib/db/schema/syncFeed.js) — never the write-time
+ *      sync_sequence, which a late-committing transaction could land below a
+ *      cursor a peer already advanced past
+ *   2. Peers request GET /api/memory/sync?since={lastPosition}&limit=100
+ *   3. Response includes memories changed since that position + the max position
+ *   4. Peer stores the max position and uses it for the next poll. A legacy
+ *      sync_sequence cursor is below every position, so it replays the stream
  *   5. Conflict resolution: last-writer-wins by updated_at timestamp
  *
  * Note: memory_links (relationships) are not synced — only the memories table
@@ -22,26 +26,28 @@ import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistentMindChosenName
 import { dedupeByKey } from '../lib/arrayUtils.js';
 
 /**
- * Get memories changed since a given sync sequence.
+ * Get memories changed since a given feed position.
  * Used by peers to pull incremental updates.
  *
- * @param {string} sinceSequence - Return changes after this sequence (string to avoid BigInt precision loss)
+ * @param {string} sinceSequence - Return changes after this feed position (string to avoid BigInt precision loss)
  * @param {number} limit - Max records to return per batch
  * @returns {Promise<{memories: Array, maxSequence: string, hasMore: boolean}>}
  */
 export async function getChangesSince(sinceSequence = '0', limit = 100) {
   // Fetch limit+1 rows to detect whether more records exist beyond this batch
   const result = await query(
-    `SELECT id, type, content, summary, category, tags,
-            embedding, embedding_model, confidence, importance,
-            status, source_task_id, source_agent_id, source_app_id,
-            expires_at, created_at, updated_at, sync_sequence,
-            origin_instance_id
-     FROM memories
-     WHERE sync_sequence > $1
-       AND source_agent_id IS DISTINCT FROM $3
-       AND NOT ($4 = ANY(COALESCE(tags, '{}'::text[])))
-     ORDER BY sync_sequence ASC
+    `SELECT m.id, m.type, m.content, m.summary, m.category, m.tags,
+            m.embedding, m.embedding_model, m.confidence, m.importance,
+            m.status, m.source_task_id, m.source_agent_id, m.source_app_id,
+            m.expires_at, m.created_at, m.updated_at, m.origin_instance_id,
+            f.position::text AS feed_position
+     FROM sync_feed f
+     JOIN memories m ON m.sync_sequence = f.row_sequence
+     WHERE f.stream = 'memories'
+       AND f.position > $1
+       AND m.source_agent_id IS DISTINCT FROM $3
+       AND NOT ($4 = ANY(COALESCE(m.tags, '{}'::text[])))
+     ORDER BY f.position ASC
      LIMIT $2`,
     [sinceSequence, limit + 1, PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG]
   );
@@ -69,7 +75,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
     expiresAt: row.expires_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
-    syncSequence: String(row.sync_sequence),
+    syncSequence: row.feed_position,
     originInstanceId: row.origin_instance_id
   }));
 
@@ -186,12 +192,13 @@ export async function applyRemoteChanges(incomingMemories) {
 }
 
 /**
- * Get the current maximum sync sequence.
- * Used by peers to determine if they're up-to-date.
+ * Get the current maximum feed position.
+ * Used by peers to determine if they're up-to-date, and to detect a reset
+ * (a saved cursor above this maximum rewinds to 0).
  *
- * @returns {Promise<string>} Sequence as string to avoid BigInt precision loss
+ * @returns {Promise<string>} Position as string to avoid BigInt precision loss
  */
 export async function getMaxSequence() {
-  const result = await query('SELECT COALESCE(MAX(sync_sequence), 0)::text AS max_seq FROM memories');
+  const result = await query("SELECT COALESCE(MAX(position), 0)::text AS max_seq FROM sync_feed WHERE stream = 'memories'");
   return result.rows?.[0]?.max_seq ?? '0';
 }

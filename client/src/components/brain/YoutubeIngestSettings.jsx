@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Film, Save, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { INGEST_OPTIONS } from '../../lib/youtubeUrl';
 import { formatDurationMs, timeAgo } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
+import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
+import { usePagedCollection } from '../../hooks/usePagedCollection';
 import toast from '../ui/Toast';
 
 const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const INGESTS_PAGE_SIZE = 50;
 
 /**
  * Settings for the YouTube → Brain ingest, plus the list of what has been
@@ -23,7 +26,6 @@ export default function YoutubeIngestSettings() {
   const [saving, setSaving] = useState(false);
   const [vaults, setVaults] = useState([]);
   const [settings, setSettings] = useState(null);
-  const [ingests, setIngests] = useState([]);
   // Two-click arm rather than a confirm dialog, per the client UI conventions.
   const [armedDelete, setArmedDelete] = useState(null);
 
@@ -31,14 +33,26 @@ export default function YoutubeIngestSettings() {
     Promise.all([
       api.getYoutubeIngestSettings({ silent: true }).catch(() => null),
       api.getNotesVaults().catch(() => ({ vaults: [] })),
-      api.getYoutubeIngests({ silent: true }).catch(() => ({ ingests: [] })),
-    ]).then(([loaded, vaultData, ingestData]) => {
+    ]).then(([loaded, vaultData]) => {
       setSettings(loaded);
       setVaults(vaultData?.vaults || []);
-      setIngests(ingestData?.ingests || []);
       setLoading(false);
     });
   }, []);
+
+  // Loads 50 records at a time; `usePagedCollection` dedupes by `id`, so each
+  // record is given one from its `videoId` (the ingest index's own key). A
+  // failed fetch must reject rather than resolve empty, or `usePagedCollection`
+  // reads it as "no more records" and InfiniteScrollFooter's retry never shows.
+  const fetchIngestsPage = useCallback(async ({ cursor, signal }) => {
+    const res = await api.getYoutubeIngests({ limit: INGESTS_PAGE_SIZE, cursor, silent: true, signal });
+    return {
+      items: (res.ingests || []).map((record) => ({ ...record, id: record.videoId })),
+      nextCursor: res.nextCursor ?? null,
+    };
+  }, []);
+  const ingestsPage = usePagedCollection(fetchIngestsPage);
+  const ingests = ingestsPage.items;
 
   const handleForget = async (videoId) => {
     if (armedDelete !== videoId) {
@@ -51,7 +65,7 @@ export default function YoutubeIngestSettings() {
       return null;
     });
     if (!ok) return;
-    setIngests((prev) => prev.filter((i) => i.videoId !== videoId));
+    ingestsPage.setItems((prev) => prev.filter((i) => i.videoId !== videoId));
     toast.success('Ingest removed — the link, video and timeline entry were kept');
   };
 
@@ -190,47 +204,57 @@ export default function YoutubeIngestSettings() {
         {saving ? 'Saving…' : 'Save YouTube Settings'}
       </button>
 
-      {ingests.length > 0 && (
+      {(ingests.length > 0 || ingestsPage.loading || Boolean(ingestsPage.error)) && (
         <div className="pt-4 border-t border-port-border">
-          <h4 className="text-sm font-medium text-gray-400 mb-2">Ingested ({ingests.length})</h4>
-          <ul className="space-y-1 max-h-64 overflow-y-auto">
-            {ingests.map((ingest) => (
-              <li key={ingest.videoId} className="flex items-center gap-2 py-1.5 text-sm">
-                <div className="min-w-0 flex-1">
-                  <a
-                    href={ingest.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block truncate text-gray-200 hover:text-port-accent transition-colors"
+          <h4 className="text-sm font-medium text-gray-400 mb-2">
+            Ingested ({ingests.length}{ingestsPage.hasMore ? '+' : ''})
+          </h4>
+          <div className="max-h-64 overflow-y-auto">
+            <ul className="space-y-1">
+              {ingests.map((ingest) => (
+                <li key={ingest.videoId} className="flex items-center gap-2 py-1.5 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <a
+                      href={ingest.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block truncate text-gray-200 hover:text-port-accent transition-colors"
+                    >
+                      {ingest.title || ingest.videoId}
+                    </a>
+                    <p className="text-xs text-gray-500 truncate">
+                      {[
+                        ingest.channel,
+                        ingest.durationSec ? formatDurationMs(ingest.durationSec * 1000) : null,
+                        ingest.transcript ? `${Math.round(ingest.transcript.chars / 1000)}k transcript` : 'no transcript',
+                        ingest.audio ? 'audio' : null,
+                        ingest.video ? 'video' : null,
+                        ingest.ingestedAt ? timeAgo(ingest.ingestedAt) : null,
+                      ].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleForget(ingest.videoId)}
+                    onBlur={() => setArmedDelete((v) => (v === ingest.videoId ? null : v))}
+                    aria-label={`Forget ingest: ${ingest.title || ingest.videoId}`}
+                    title="Removes the stored transcript, audio and Obsidian note. The link, downloaded video and timeline entry are kept."
+                    className={`flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors ${armedDelete === ingest.videoId
+                      ? 'text-red-300 bg-red-500/20'
+                      : 'text-gray-500 hover:text-red-400'}`}
                   >
-                    {ingest.title || ingest.videoId}
-                  </a>
-                  <p className="text-xs text-gray-500 truncate">
-                    {[
-                      ingest.channel,
-                      ingest.durationSec ? formatDurationMs(ingest.durationSec * 1000) : null,
-                      ingest.transcript ? `${Math.round(ingest.transcript.chars / 1000)}k transcript` : 'no transcript',
-                      ingest.audio ? 'audio' : null,
-                      ingest.video ? 'video' : null,
-                      ingest.ingestedAt ? timeAgo(ingest.ingestedAt) : null,
-                    ].filter(Boolean).join(' · ')}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleForget(ingest.videoId)}
-                  onBlur={() => setArmedDelete((v) => (v === ingest.videoId ? null : v))}
-                  aria-label={`Forget ingest: ${ingest.title || ingest.videoId}`}
-                  title="Removes the stored transcript, audio and Obsidian note. The link, downloaded video and timeline entry are kept."
-                  className={`flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors ${armedDelete === ingest.videoId
-                    ? 'text-red-300 bg-red-500/20'
-                    : 'text-gray-500 hover:text-red-400'}`}
-                >
-                  {armedDelete === ingest.videoId ? <span className="text-xs px-1">Sure?</span> : <Trash2 size={14} />}
-                </button>
-              </li>
-            ))}
-          </ul>
+                    {armedDelete === ingest.videoId ? <span className="text-xs px-1">Sure?</span> : <Trash2 size={14} />}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <InfiniteScrollFooter
+              hasMore={ingestsPage.hasMore}
+              loading={ingestsPage.loading}
+              error={ingestsPage.error}
+              onLoadMore={ingestsPage.loadMore}
+            />
+          </div>
         </div>
       )}
     </section>

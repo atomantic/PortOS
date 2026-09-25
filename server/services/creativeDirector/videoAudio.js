@@ -1,6 +1,7 @@
 /** Standalone soundtrack selection over the existing music library and audio queue. */
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { sleep } from '../../lib/fileUtils.js';
 
 const blocked = message => new ServerError(message, { status: 409, code: 'VIDEO_AUDIO_BLOCKED' });
@@ -70,9 +71,16 @@ export async function prepareVideoSoundtrack(project, isCurrent) {
     if (!attempt) return null;
     await assertVideoAttemptDispatch(project.id, attempt.id);
     // Persist before enqueue; the queue worker checks this receipt again.
-    const { jobId } = enqueueJob({ kind: 'audio', owner: `creative-director:${project.id}`,
+    const { jobId } = await enqueueJob({ kind: 'audio', owner: `creative-director:${project.id}`,
       params: { engine: audio.providerId, modelId: audio.model, prompt: audio.prompt, durationSec: audio.durationSec,
-        videoProduction: { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId } } });
+        videoProduction: { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId } } })
+      .catch(async (error) => {
+        // A refused admission (#8325 failed snapshot, #8326 full queue) submitted
+        // nothing; fail the receipt so the next Resume retries instead of
+        // treating it as an uncertain submission.
+        if (isMediaAdmissionRefusal(error)) await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
+        throw error;
+      });
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId });
     attempt = { ...attempt, jobId };
   }

@@ -184,6 +184,40 @@ const PLAYING_RANKS = Object.freeze([
   { key: 'K', name: 'King' },
 ]);
 
+const PLAYING_SUIT_SHAPES = Object.freeze({
+  spades: Object.freeze({ color: 'black', noun: 'spade', shape: 'pointed leaf with a narrow stem' }),
+  hearts: Object.freeze({ color: 'red', noun: 'heart', shape: 'two rounded lobes and a pointed bottom' }),
+  diamonds: Object.freeze({ color: 'red', noun: 'diamond', shape: 'pointed lozenge' }),
+  clubs: Object.freeze({ color: 'black', noun: 'club', shape: 'three rounded lobes and a short stem' }),
+});
+
+/**
+ * The fixed visual identity a playing-card render must preserve. The stable
+ * roster key is authoritative, so this also repairs renders from older saved
+ * subject prompts that named the card without spelling out its suit or count.
+ */
+export function deckCardIdentityPrompt(deck, card) {
+  if (deck?.kind !== DECK_KIND.PLAYING) return '';
+  const match = /^(spades|hearts|diamonds|clubs)-(A|[2-9]|10|J|Q|K)$/.exec(String(card?.key || ''));
+  if (!match) return '';
+
+  const [, suitKey, rankKey] = match;
+  const suit = PLAYING_SUITS.find((entry) => entry.key === suitKey);
+  const rank = PLAYING_RANKS.find((entry) => entry.key === rankKey);
+  if (!suit || !rank) return '';
+
+  const pip = PLAYING_SUIT_SHAPES[suitKey];
+  const cardName = `${rank.name} of ${suit.name}`;
+  const cornerIndex = `Both corner indices show the exact rank ${rankKey} beside one matching ${suit.symbol} suit mark.`;
+  if (rankKey === 'A') {
+    return `Fixed identity: ${cardName}. Show one large ornate ${pip.color} ${pip.noun} emblem (${suit.symbol}), shaped as a ${pip.shape}, in the center; do not repeat it as a pip field. ${cornerIndex} Show no other suit.`;
+  }
+  if (/^\d+$/.test(rankKey)) {
+    return `Fixed identity: ${cardName}. Show exactly ${rankKey} separate ${pip.color} ${pip.noun}-shaped pips in the central field, each a ${pip.shape}; count them literally, with none missing or added. ${cornerIndex} Show no other suit or pip count.`;
+  }
+  return `Fixed identity: ${cardName}. Show one full ${rank.name.toLowerCase()} figure as the central subject, with ${pip.color} ${pip.noun} emblems shaped as a ${pip.shape}. ${cornerIndex} Do not replace the face rank with a numbered pip field or show another suit.`;
+}
+
 // Major arcana with the traditional motif each card carries — the prompt
 // generator gets these as grounding so a deck stays recognizable as tarot even
 // when a universe's cast is placed on the cards.
@@ -313,9 +347,13 @@ export function composeCardRenderPrompt(deck, card) {
   const layout = trimmed(deck?.layoutPrompt);
   const orientation = deckCardOrientationPrompt(deck);
   const orientationNegative = deckCardOrientationNegativePrompt(deck);
-  const subject = [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
+  const identity = deckCardIdentityPrompt(deck, card);
+  const subject = identity
+    ? [identity, trimmed(card?.prompt)].filter(Boolean).join(' ')
+    : [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
   const body = [layout, orientation, subject].filter(Boolean).join('. ');
-  const cardNegative = [trimmed(card?.negativePrompt), orientationNegative].filter(Boolean).join(', ');
+  const identityNegative = identity ? 'wrong card rank, wrong card suit, incorrect pip count, missing pips, extra pips' : '';
+  const cardNegative = [trimmed(card?.negativePrompt), orientationNegative, identityNegative].filter(Boolean).join(', ');
   const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
   return { ...composed, parts: { style, layout, orientation, subject } };
 }

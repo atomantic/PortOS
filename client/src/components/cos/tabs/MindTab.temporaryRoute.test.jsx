@@ -358,8 +358,9 @@ describe('MindTab temporary thinking sessions', () => {
     renderTab('/cos/mind?panel=models&turn=turn-1');
 
     await waitFor(() => expect(screen.getByText('Session provenance')).toBeTruthy());
-    expect(screen.getByText('Run run-1')).toBeTruthy();
-    expect(screen.getByText(/Usage unknown/)).toBeTruthy();
-    expect(screen.getAllByText('Completed').length).toBeGreaterThan(0);
+    // Dependent session receipt rows land one await after the heading.
+    expect(await screen.findByText('Run run-1')).toBeTruthy();
+    expect(await screen.findByText(/Usage unknown/)).toBeTruthy();
+    expect((await screen.findAllByText('Completed')).length).toBeGreaterThan(0);
   });
 });

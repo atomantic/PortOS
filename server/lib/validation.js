@@ -1,6 +1,15 @@
 import { CREDENTIALS } from './credentialRegistry.js';
-import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
+import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
+
+export const gitDeleteBranchBodySchema = z.object({
+  path: z.string().min(1),
+  branch: z.string().min(1),
+  local: z.boolean().default(false),
+  remote: z.boolean().default(false),
+}).refine(({ local, remote }) => local || remote, {
+  message: 'at least one of local or remote must be true',
+});
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
@@ -576,6 +585,9 @@ export const providerSchema = z.object({
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
   tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // Kept in schema parity with aiToolkit's provider schema. This opt-in applies
+  // only to interactive Claude TUI runs after the session-limit banner.
+  lowPriorityOnUsageLimit: z.boolean().optional(),
   // Preset structure (#7565), in parity with the toolkit schema: the harness,
   // method and service slug a DERIVED preset is materialized from, the
   // optional catalog narrowing, and the bootstrap app it spawns through.
@@ -989,7 +1001,13 @@ export const backupConfigSchema = z.object({
     z.string().trim().min(1).max(EXCLUDE_PATTERN_MAX_LENGTH + 1)
       .refine(isSafeExcludePattern, { message: `Exclude pattern must be at most ${EXCLUDE_PATTERN_MAX_LENGTH} characters once anchored, and may not contain ".." or a NUL byte` })
   ).optional().default([]),
-  disabledDefaultExcludes: z.array(z.string()).optional().default([])
+  disabledDefaultExcludes: z.array(z.string()).optional().default([]),
+  // Per-source completed-snapshot retention. `null` (and an omitted field, via
+  // `resolveRetentionCount`) both mean unlimited — see backupConfig.js for why
+  // an existing install must never see this default itself. `.nullable()`
+  // rather than `emptyToUndefined`: the UI's explicit "Unlimited" choice IS a
+  // value worth persisting distinctly from "never touched this setting".
+  retentionCount: z.number().int().min(MIN_RETENTION_COUNT).max(MAX_RETENTION_COUNT).nullable().optional()
 });
 
 // Automatic PortOS self-update (Update tab). Stored under the top-level
@@ -1635,10 +1653,9 @@ export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
 });
 
-// System health dashboard warnings — see server/routes/systemHealth.js. The
-// `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
-// keep the two lists in sync.
-export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review'];
+// Dismissible system health warnings — see server/routes/systemHealth.js.
+// Probe failures are intentionally excluded: a missing measurement cannot be dismissed.
+export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review', 'health-settings'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
 
@@ -1983,9 +2000,9 @@ export const renderDefaultsSettingsSchema = z.object(
 // third rung in resolveVideoMode's ladder (request → target pin → THIS →
 // local). `'auto'`/`''`/null all mean "no pin — local". Tolerant of unknown
 // keys for the same rollback/forward-compat reason as renderDefaults above.
-// `defaultModelId` predates this schema (pipeline storyboards/episodeVideo
-// read it as the local-model default) — typed here so a Settings save can't
-// write junk to it.
+// `defaultModelId` is the install-wide local video model choice used by the
+// Video Gen form and pipeline video stages — typed here so a Settings save
+// can't write junk to it.
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
@@ -2262,7 +2279,12 @@ export const modelComparisonObservationSchema = z.object({
   totalTasks: z.number().int().positive().max(1000).nullable().optional(),
   quota: z.object({ unitsPerTask: z.number().finite().nonnegative(), unit: z.string().min(1).max(80), source: comparisonSourceSchema }).strict().nullable(),
   notes: z.string().max(2000),
-}).strict();
+}).strict().superRefine((row, ctx) => {
+  if (row.benchmark === 'PortOS Research Index v1 (AA v4.3.2 scale)' && row.quality) {
+    if (row.quality.value > 100) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quality', 'value'], message: 'PortOS research index must be between 0 and 100' });
+    if (!row.quality.source.methodology.startsWith('PortOS estimate:')) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['quality', 'source', 'methodology'], message: 'Research estimates must disclose their derivation with PortOS estimate:' });
+  }
+});
 const modelComparisonCatalogBaseSchema = z.object({
   schemaVersion: z.literal(1),
   // Source imports can contain thousands of independently attributed rows and

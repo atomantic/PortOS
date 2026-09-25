@@ -80,7 +80,10 @@ import {
   peerSocketOptions,
   peerSocketOptionsFor,
   peerFetch,
+  readPeerBody,
+  PEER_BODY_IDLE_TIMEOUT,
   peerAuthHeaders,
+  derivePeerAuthToken,
   __resetSelfInstanceIdForTests,
 } from './peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from './httpClient.js';
@@ -125,6 +128,40 @@ describe('peerHttpClient', () => {
       await peerFetch('http://peer.example/api/peer-sync/record', {}, { auth: { username: 'alice', password: 'pw' } });
       expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
       expect(calls[0].options.headers.Authorization).toBe(`Basic ${Buffer.from('alice:pw').toString('base64')}`);
+    });
+
+    describe('paired peer credential (#8356)', () => {
+      const syncSecret = 'example-pair-secret-0123456789-abcdef';
+      const basic = `Basic ${Buffer.from(':example-password').toString('base64')}`;
+      const token = () => derivePeerAuthToken(syncSecret, 'self-instance-id');
+
+      it('sends only the pair token once the receiver has confirmed it', async () => {
+        await peerFetch('http://peer.example/api/cos/agents', {}, {
+          auth: { password: 'example-password' }, syncSecret, peerAuthAccepted: true,
+        });
+        const { headers } = calls[0].options;
+        expect(headers['X-PortOS-Peer-Auth']).toBe(token());
+        expect(headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
+        expect(Object.keys(headers).some((k) => k.toLowerCase() === 'authorization')).toBe(false);
+        // The token is an HMAC, never the secret itself, and differs per sender.
+        expect(headers['X-PortOS-Peer-Auth']).not.toContain(syncSecret);
+        expect(derivePeerAuthToken(syncSecret, 'other-instance-id')).not.toBe(token());
+      });
+
+      it('keeps Basic beside the token until the receiver confirms it, and for unpaired peers', async () => {
+        await peerFetch('http://peer.example/api/cos/agents', {}, { auth: { password: 'example-password' }, syncSecret });
+        expect(calls[0].options.headers.Authorization).toBe(basic);
+        expect(calls[0].options.headers['X-PortOS-Peer-Auth']).toBe(token());
+        await peerFetch('http://peer.example/api/cos/agents', {}, { auth: { password: 'example-password' }, peerAuthAccepted: true });
+        expect(calls[1].options.headers.Authorization).toBe(basic);
+        expect(calls[1].options.headers['X-PortOS-Peer-Auth']).toBeUndefined();
+      });
+
+      it('puts the same credential on the socket relay handshake', async () => {
+        await peerFetch('http://peer.example/x'); // warms the memoized instance id
+        const opts = peerSocketOptionsFor({ auth: { password: 'example-password' }, syncSecret, peerAuthAccepted: true });
+        expect(opts.extraHeaders).toEqual({ 'X-PortOS-Instance-Id': 'self-instance-id', 'X-PortOS-Peer-Auth': token() });
+      });
     });
 
     it('lets explicit caller headers win', async () => {
@@ -178,6 +215,18 @@ describe('peerHttpClient', () => {
       await peerFetch('http://peer.example/x');
       expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBeUndefined();
     });
+  });
+
+  it('sends the pair secret only to the push endpoint and refuses redirects', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const peer = { syncSecret: 'synthetic-pair-secret-32-characters-long' };
+    try {
+      await peerFetch('http://peer.example.com/api/peer-sync/push', { method: 'POST', body: '{}' }, peer);
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'error', headers: { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } });
+      await peerFetch('http://peer.example.com/api/instances/peers/announce', {}, peer);
+      expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-PortOS-Peer-Sync-Token');
+    } finally { vi.unstubAllGlobals(); }
   });
 
   describe('peerFetch over HTTPS', () => {
@@ -291,6 +340,56 @@ describe('peerHttpClient', () => {
       } finally {
         process.off('unhandledRejection', recordUnhandled);
       }
+    });
+  });
+
+  describe('response body idle deadline', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it.each(['json', 'arrayBuffer'])('keeps progressing %s bytes intact beyond the header budget', async (method) => {
+      vi.useFakeTimers();
+      let stream;
+      const bytes = method === 'json'
+        ? Buffer.from(JSON.stringify({ text: 'aé🙂z' }))
+        : Buffer.from([0, 255, 128, 1, 254]);
+      const response = new Response(new ReadableStream({ start(controller) { stream = controller; } }));
+      const result = readPeerBody(response, method);
+      // Each chunk arrives inside 60s, while the total exceeds both the 15s
+      // header budget and the initial body deadline. Split UTF-8 bytes too.
+      for (const byte of bytes) {
+        await vi.advanceTimersByTimeAsync(40000);
+        stream.enqueue(Uint8Array.of(byte));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      stream.close();
+      const value = await result;
+      expect(method === 'json' ? value : Buffer.from(value)).toEqual(
+        method === 'json' ? { text: 'aé🙂z' } : bytes
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('cancels a stalled body at the idle boundary and releases its reader', async () => {
+      vi.useFakeTimers();
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream({ cancel }));
+      const result = readPeerBody(response, 'json');
+      const rejected = expect(result).rejects.toMatchObject({ code: PEER_BODY_IDLE_TIMEOUT });
+      await vi.advanceTimersByTimeAsync(59999);
+      expect(cancel).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await rejected;
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(response.body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('preserves buffered HTTPS binary and bad-JSON response behavior', async () => {
+      const bytes = Buffer.from([0, 255, 128]);
+      const response = { arrayBuffer: async () => bytes, json: async () => JSON.parse('{') };
+      expect(await readPeerBody(response, 'arrayBuffer')).toEqual(bytes);
+      await expect(readPeerBody(response, 'json')).rejects.toBeInstanceOf(SyntaxError);
+      await expect(readPeerBody(new Response('{'), 'json')).rejects.toBeInstanceOf(SyntaxError);
     });
   });
 

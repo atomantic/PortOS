@@ -1,7 +1,8 @@
+import { messageInboxRead, messageDetailRead, messageParamsSchema } from './messageInboxRead.js';
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
@@ -142,20 +143,7 @@ router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
 }));
 
 // === Inbox Routes ===
-router.get('/inbox', asyncHandler(async (req, res) => {
-  const { accountId, search } = req.query;
-  if (accountId && !UUID_RE.test(accountId)) {
-    throw new ServerError('Invalid accountId format', { status: 400 });
-  }
-  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 100 });
-  const result = await messageSync.getMessages({
-    accountId,
-    search,
-    limit: parsedLimit,
-    offset: parsedOffset
-  });
-  res.json(result);
-}));
+router.get('/inbox', messageInboxRead);
 
 // === Triage Rules Routes ===
 router.get('/triage-rules', asyncHandler(async (req, res) => {
@@ -373,11 +361,6 @@ router.get('/thread/:accountId/:threadId', asyncHandler(async (req, res) => {
 }));
 
 // === Message params schema (shared by detail + refresh routes) ===
-const messageParamsSchema = z.object({
-  accountId: z.string().guid(),
-  messageId: z.string().min(1)
-});
-
 // === Per-message refresh ===
 router.post('/:accountId/:messageId/refresh', asyncHandler(async (req, res) => {
   const parsed = messageParamsSchema.safeParse(req.params);
@@ -490,12 +473,6 @@ router.post('/debug/clear-token', asyncHandler(async (req, res) => {
 
 // === Message Detail Route (last to avoid capturing /launch, /selectors paths) ===
 
-router.get('/:accountId/:messageId', asyncHandler(async (req, res) => {
-  const parsed = messageParamsSchema.safeParse(req.params);
-  if (!parsed.success) throw new ServerError('Invalid accountId or messageId format', { status: 400 });
-  const message = await messageSync.getMessage(parsed.data.accountId, parsed.data.messageId);
-  if (!message) throw new ServerError('Message not found', { status: 404 });
-  res.json(message);
-}));
+router.get('/:accountId/:messageId', messageDetailRead);
 
 export default router;

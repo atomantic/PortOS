@@ -369,8 +369,15 @@ async function startTrackGenerationImpl(trackId, recordId, body) {
     // boot-registered completion hook stages the clip and runs the attach. See
     // the walk lane's note: that is what survives a restart, which matters most
     // on this lane because track runs have no wall-clock backstop at all.
-    const jobId = enqueueLocalAnimationRender({
+    // A refused admission (#8325) would otherwise leave the run at
+    // `rendering` with no job to finish it — and this lane's in-flight guard
+    // would then refuse every retry — so settle it as an error first.
+    const jobId = await enqueueLocalAnimationRender({
       plan: localPlan, canvas, prompt, inputAbs, recordId, runId, track: row.id, direction,
+    }).catch(async (err) => {
+      Object.assign(run, { status: 'error', postprocessError: err.message, completedAt: new Date().toISOString() });
+      await saveRun(recordId, run);
+      throw err;
     });
     run.jobId = jobId;
     await saveRun(recordId, run);

@@ -99,7 +99,7 @@ function mapAndRethrow(err) {
 // merge-time LWW, reverse-subscribe direction gating).
 router.post('/push', asyncHandler(async (req, res) => {
   const payload = validateRequest(peerSyncPushSchema, req.body || {});
-  const result = await applyIncomingPush(payload).catch(mapAndRethrow);
+  const result = await applyIncomingPush(payload, { peerToken: req.get('X-PortOS-Peer-Sync-Token') }).catch(mapAndRethrow);
   res.json(result);
 }));
 

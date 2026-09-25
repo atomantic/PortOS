@@ -45,6 +45,11 @@ describe('GET /api/api-docs/openapi.json', () => {
     const res = await request(buildApp()).get('/api/api-docs/internal/openapi.json');
     expect(res.status).toBe(200);
     expect(res.body.paths['/api/cos/mind/tools'].get).toBeDefined();
+    const works = res.body.paths['/api/writers-room/works'].get;
+    expect(works.parameters.find(param => param.name === 'limit').schema.maximum).toBe(100);
+    expect(works.parameters.some(param => param.name === 'cursor')).toBe(true);
+    expect(works.responses[200].content['application/json'].schema.anyOf).toHaveLength(2);
+    expect(works.responses[409]['x-portos-error-codes']).toContain('CURSOR_EXPIRED');
     expect(Object.keys(res.body.paths).length).toBeGreaterThan(1000);
   });
 

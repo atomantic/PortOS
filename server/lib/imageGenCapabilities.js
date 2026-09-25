@@ -102,7 +102,7 @@ export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.8-flash-low';
 // Lives here rather than in `services/imageGen/modes.js` because the Settings
 // Local tab labels its "install default" option with whichever model a blank
 // pin actually resolves to — the same reason the Codex/Agy pins moved down.
-export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'dev';
+export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'qwen-image-2.1';
 
 // The image model behind agy's generate_image tool — fixed server-side by
 // Antigravity and NOT selectable by PortOS. Re-probed 2026-07-30 against agy

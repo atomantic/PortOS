@@ -12,6 +12,7 @@ vi.mock('../services/backup.js', () => ({
   openSnapshotStream: vi.fn(),
   restoreSnapshot: vi.fn(),
   restorePostgres: vi.fn(),
+  deleteSnapshot: vi.fn(),
   DEFAULT_EXCLUDES: [
     { path: '/browser-profile/', reason: 'test', overridable: false },
     { path: '/loras/*.safetensors', reason: 'test', overridable: true }
@@ -94,7 +95,7 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: ['/node_modules', '.git'], disabledDefaultExcludes: [] }
+        { excludePaths: ['/node_modules', '.git'], disabledDefaultExcludes: [], retentionCount: null }
       );
     });
 
@@ -105,7 +106,7 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: [], disabledDefaultExcludes: [] }
+        { excludePaths: [], disabledDefaultExcludes: [], retentionCount: null }
       );
     });
 
@@ -118,7 +119,20 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: [], disabledDefaultExcludes: ['/loras/*.safetensors'] }
+        { excludePaths: [], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: null }
+      );
+    });
+
+    it('forwards the resolved retentionCount', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/dest', retentionCount: 14 }
+      });
+      backup.runBackup.mockResolvedValue({ success: true });
+      await request(buildApp()).post('/api/backup/run');
+      expect(backup.runBackup).toHaveBeenCalledWith(
+        '/dest',
+        undefined,
+        { excludePaths: [], disabledDefaultExcludes: [], retentionCount: 14 }
       );
     });
   });
@@ -188,6 +202,48 @@ describe('backup routes', () => {
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('BACKUP_NOT_CONFIGURED');
       expect(backup.openSnapshotStream).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /api/backup/snapshots/:snapshotId', () => {
+    it('deletes a snapshot on the current machine by default', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.deleteSnapshot.mockResolvedValue({ deleted: true, snapshotId: 'snap-1', source: 'this-machine' });
+
+      const res = await request(buildApp()).delete('/api/backup/snapshots/snap-1');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ deleted: true, snapshotId: 'snap-1', source: 'this-machine' });
+      expect(backup.deleteSnapshot).toHaveBeenCalledWith('/dest', 'snap-1', { source: undefined });
+    });
+
+    it('forwards an explicitly selected source', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.deleteSnapshot.mockResolvedValue({ deleted: true, snapshotId: 'snap-1', source: 'previous-machine' });
+
+      const res = await request(buildApp())
+        .delete('/api/backup/snapshots/snap-1?source=previous-machine');
+
+      expect(res.status).toBe(200);
+      expect(backup.deleteSnapshot).toHaveBeenCalledWith('/dest', 'snap-1', { source: 'previous-machine' });
+    });
+
+    it('rejects a traversing source before deleting anything', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      const res = await request(buildApp())
+        .delete('/api/backup/snapshots/snap-1?source=..%2Fother-machine');
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(backup.deleteSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when the backup destination is not configured', async () => {
+      getSettings.mockResolvedValue({ backup: {} });
+      const res = await request(buildApp()).delete('/api/backup/snapshots/snap-1');
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('BACKUP_NOT_CONFIGURED');
+      expect(backup.deleteSnapshot).not.toHaveBeenCalled();
     });
   });
 

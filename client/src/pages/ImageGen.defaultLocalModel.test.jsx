@@ -20,6 +20,7 @@ const DEV = imageGenModel('dev', { name: 'FLUX.1 Dev' });
 // Deliberately NOT first in the catalog — the regression this suite pins is the
 // page opening on models[0] and ignoring the saved pin.
 const KLEIN = imageGenModel('flux2-klein-4b', { name: 'FLUX.2 Klein', runner: 'flux2' });
+const QWEN = imageGenModel('qwen-image-2.1', { name: 'Qwen-Image 2.1', runner: 'qwen' });
 
 await loadImageGenPage();
 
@@ -29,7 +30,7 @@ const modelSelect = () => screen.getByLabelText('Model');
 describe('ImageGen default local model', () => {
   beforeEach(() => {
     resetImageGenMockState();
-    state.models = [DEV, KLEIN];
+    state.models = [DEV, KLEIN, QWEN];
     window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   });
 
@@ -49,24 +50,24 @@ describe('ImageGen default local model', () => {
     await waitFor(() => expect(modelSelect().value).toBe('flux2-klein-4b'));
   });
 
-  it('falls back to the first catalog entry when nothing is pinned', async () => {
+  it('uses Qwen-Image 2.1 when no model is pinned', async () => {
     state.getSettings.mockResolvedValue(settingsWith({}));
     await renderImageGenPage();
-    await waitFor(() => expect(modelSelect().value).toBe('dev'));
+    await waitFor(() => expect(modelSelect().value).toBe('qwen-image-2.1'));
   });
 
-  it('falls back to the first catalog entry when the pin no longer resolves', async () => {
+  it('falls back to Qwen-Image 2.1 when the saved pin no longer resolves', async () => {
     // A retired/incompatible pin must not leave the select empty — the form
     // would then submit a blank modelId the local runner cannot dispatch.
     state.getSettings.mockResolvedValue(settingsWith({ modelId: 'retired-model' }));
     await renderImageGenPage();
-    await waitFor(() => expect(modelSelect().value).toBe('dev'));
+    await waitFor(() => expect(modelSelect().value).toBe('qwen-image-2.1'));
   });
 
   it('still settles on a model when the settings fetch fails', async () => {
     state.getSettings.mockRejectedValue(new Error('offline'));
     await renderImageGenPage();
-    await waitFor(() => expect(modelSelect().value).toBe('dev'));
+    await waitFor(() => expect(modelSelect().value).toBe('qwen-image-2.1'));
   });
 
   it('lets a ?modelId= deep link win over the pin', async () => {

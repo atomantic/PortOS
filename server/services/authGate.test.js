@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { readFileSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -27,6 +27,14 @@ vi.mock('../../lib/portosAuthCore.js', async () => {
     },
   };
 });
+
+// The peer registry resolves its own path (not through the PATHS proxy), so
+// stub its reader: the gate must never read this machine's real instances.json.
+const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }));
+vi.mock('./instanceIdentity.js', async () => ({
+  ...(await vi.importActual('./instanceIdentity.js')),
+  loadData: async () => instanceRegistry.data,
+}));
 
 // Direct settings.json writes that also drop the getSettings() read cache —
 // see server/lib/settingsTestUtil.js for why the reset is required here
@@ -626,6 +634,166 @@ describe('authGate HTTP Basic auth (peer federation)', () => {
       await expect(__testing.verifyBasicPassword(password)).resolves.toBe(false);
     },
   );
+});
+
+describe('host-control authority', () => {
+  it('accepts a real operator session and refuses peer Basic credentials even on loopback', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-password' });
+    const { authGate, requireHostControl } = await import('./authGate.js');
+    const gate = (req, res, next) => authGate(req, res, () => requireHostControl(req, res, next));
+    const req = { path: '/api/commands/execute', socket: { remoteAddress: '127.0.0.1' } };
+    const operator = await runGate(gate, { ...req, headers: { cookie: `portos_auth=${token}` } });
+    expect(operator.called).toBe(true);
+    const peer = await runGate(gate, { ...req, headers: {
+      authorization: `Basic ${Buffer.from(':example-password').toString('base64')}`,
+    } });
+    expect(peer.called).toBe(false);
+    expect(peer.res.statusCode).toBe(403);
+    expect(peer.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+  });
+});
+
+describe('paired peer credential (#8356)', () => {
+  const PAIR_SECRET = 'example-pair-secret-0123456789-abcdef';
+  const PEER_ID = 'peer-example-instance';
+  const basicHeader = (password) => `Basic ${Buffer.from(`:${password}`).toString('base64')}`;
+  const writePeers = (peers) => { instanceRegistry.data = { self: null, peers }; };
+  const pairedPeer = (overrides = {}) => ({
+    id: 'peer-record', name: 'Example Peer', instanceId: PEER_ID, enabled: true, syncSecret: PAIR_SECRET, ...overrides,
+  });
+  const peerHeaders = async (instanceId = PEER_ID, secret = PAIR_SECRET) => {
+    const { derivePeerAuthToken } = await import('../lib/peerHttpClient.js');
+    return { 'X-PortOS-Instance-Id': instanceId, 'X-PortOS-Peer-Auth': derivePeerAuthToken(secret, instanceId) };
+  };
+  const buildApp = async () => {
+    const { authGate, requireHostControl } = await import('./authGate.js');
+    const { default: authRoutes } = await import('../routes/auth.js');
+    const app = express();
+    app.use(authGate);
+    app.use(express.json());
+    app.use('/api/auth', authRoutes);
+    app.get('/api/example', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.get('/api/peer-sync/manifest', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/cos/tasks', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
+    return app;
+  };
+  const withHeaders = (req, headers) => Object.entries(headers).reduce((r, [k, v]) => r.set(k, v), req);
+
+  afterEach(() => {
+    instanceRegistry.data = { self: null, peers: [] };
+    vi.restoreAllMocks();
+  });
+
+  it('authenticates federation reads and pushes as method "peer" but never host control or a session', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+
+    const read = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
+    expect(read.status).toBe(200);
+    expect(read.body.auth).toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
+    expect((await withHeaders(request(app).post('/api/peer-sync/push').send({}), headers)).body.auth.method).toBe('peer');
+
+    const exec = await withHeaders(request(app).post('/api/commands/execute').send({}), headers);
+    expect(exec.status).toBe(403);
+    // The gate's peer scope refuses it before requireHostControl is reached.
+    expect(exec.body.code).toBe('PEER_SCOPE_FORBIDDEN');
+
+    // The token is not the password, so it cannot be exchanged for a session.
+    const login = await request(app).post('/api/auth/login').send({ password: headers['X-PortOS-Peer-Auth'] });
+    expect(login.status).toBe(401);
+    expect(login.headers['set-cookie']).toBeUndefined();
+
+    // Operator session still passes; legacy Basic still reads but is refused host control.
+    expect((await request(app).post('/api/commands/execute').set('Cookie', `portos_auth=${token}`).send({})).status).toBe(200);
+    const basic = { Authorization: basicHeader('example-password') };
+    expect((await withHeaders(request(app).get('/api/example'), basic)).body.auth.method).toBe('basic');
+    expect((await withHeaders(request(app).post('/api/commands/execute').send({}), basic)).status).toBe(403);
+  });
+
+  it('confines the peer credential to the federation surface (#8387)', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await buildApp();
+    const headers = await peerHeaders();
+    const basic = { Authorization: basicHeader('example-password') };
+    const operatorMutations = [
+      () => request(app).post('/api/cos/tasks').send({}),
+      () => request(app).post('/api/apps/example-app/restart').send({}),
+      () => request(app).put('/api/settings').send({}),
+      () => request(app).get('/api/example'),
+    ];
+    for (const send of operatorMutations) {
+      const refused = await withHeaders(send(), headers);
+      expect(refused.status).toBe(403);
+      expect(refused.body.code).toBe('PEER_SCOPE_FORBIDDEN');
+      // Presenting the password alongside the token does not widen the peer's reach.
+      expect((await withHeaders(send(), { ...headers, ...basic })).status).toBe(403);
+      expect((await send().set('Cookie', `portos_auth=${token}`)).body.auth.method).toBe('session');
+      // Basic is the operator password (the companion-app contract), not a peer scope.
+      expect((await withHeaders(send(), basic)).body.auth.method).toBe('basic');
+    }
+    const asset = await withHeaders(request(app).get('/data/voice-profiles/example.wav'), headers);
+    expect(asset.status).toBe(403);
+    expect(asset.text).toBe('Forbidden');
+    expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
+  });
+
+  it('rejects a token for another instance, a wrong secret, a disabled peer, or an unpaired peer', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const app = await buildApp();
+    const forged = { ...(await peerHeaders('other-instance')), 'X-PortOS-Instance-Id': PEER_ID };
+    const cases = [
+      [[pairedPeer()], forged],
+      [[pairedPeer()], await peerHeaders(PEER_ID, 'a-different-pair-secret-0123456789-xyz')],
+      [[pairedPeer({ enabled: false })], await peerHeaders()],
+      [[pairedPeer({ syncSecret: undefined })], await peerHeaders()],
+    ];
+    for (const [peers, headers] of cases) {
+      writePeers(peers);
+      expect((await withHeaders(request(app).get('/api/example'), headers)).status).toBe(401);
+    }
+  });
+
+  it('keeps an unpaired or older peer federating over Basic, warning once when a paired peer still uses it', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    writePeers([pairedPeer(), pairedPeer({ id: 'unpaired', instanceId: 'unpaired-instance', syncSecret: undefined })]);
+    const app = await buildApp();
+    const basic = (instanceId) => ({ Authorization: basicHeader('example-password'), 'X-PortOS-Instance-Id': instanceId });
+
+    expect((await withHeaders(request(app).get('/api/example'), basic('unpaired-instance'))).status).toBe(200);
+    expect(warn).not.toHaveBeenCalled();
+    for (let i = 0; i < 2; i++) {
+      expect((await withHeaders(request(app).get('/api/example'), basic(PEER_ID))).body.auth.method).toBe('basic');
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('Example Peer');
+  });
+
+  it('admits a paired peer relay handshake on the socket gate', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const { socketAuthGate } = await import('./authGate.js');
+    const handshake = async (headers) => new Promise((resolve) => {
+      socketAuthGate({ handshake: { headers } }, (err) => resolve(err));
+    });
+    const headers = Object.fromEntries(Object.entries(await peerHeaders()).map(([k, v]) => [k.toLowerCase(), v]));
+    expect(await handshake(headers)).toBeUndefined();
+    expect((await handshake({ ...headers, 'x-portos-peer-auth': 'f'.repeat(64) }))?.data).toEqual({ code: 'AUTH_REQUIRED' });
+  });
 });
 
 describe('socketAuthGate middleware', () => {

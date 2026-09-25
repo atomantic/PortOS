@@ -18,8 +18,8 @@ import { stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, resolve, isAbsolute } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS, atomicWrite, isPathInsideDir, unlinkGuarded } from '../lib/fileUtils.js';
-import { findFfmpeg, runFfmpegProcess } from '../lib/ffmpeg.js';
+import { PATHS, atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
+import { writeWavAudioFile } from '../lib/wavAudioFile.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
 import { resolveProviderAndModel, assertProvider, runPromptThroughProvider } from './promptRunner.js';
@@ -117,29 +117,7 @@ export async function generateChiptuneScore({ trackId, prompt, providerId, model
   return { track: updated, providerId: run.provider?.id || provider.id, model: run.model ?? selectedModel ?? null };
 }
 
-// Render the score to an audio file in `dir` as `<basename>.ogg` (via ffmpeg)
-// or `<basename>.wav` when ffmpeg isn't installed. Returns the filename used.
-async function renderScoreToFile(score, dir, basename) {
-  const wavPath = join(dir, `${basename}.wav`);
-  const oggPath = join(dir, `${basename}.ogg`);
-  await atomicWrite(wavPath, renderScoreToWav(score)); // ensureDir + temp-rename
-  const bin = await findFfmpeg();
-  if (!bin) {
-    // WAV fallback: drop any stale <slug>.ogg from an earlier ffmpeg-equipped
-    // publish, or a game still referencing it would play the old composition
-    // while the score JSON says otherwise.
-    await unlinkGuarded(oggPath).catch(() => {});
-    return `${basename}.wav`;
-  }
-  const result = await runFfmpegProcess({ bin, args: ['-y', '-i', wavPath, '-c:a', 'libvorbis', '-q:a', '5', oggPath] });
-  if (!result.ok) {
-    console.error(`❌ Chiptune OGG encode failed (keeping WAV): ${result.reason}`);
-    await unlinkGuarded(oggPath).catch(() => {}); // stale or partial encode output
-    return `${basename}.wav`;
-  }
-  await unlinkGuarded(wavPath).catch(() => {});
-  return `${basename}.ogg`;
-}
+const renderScoreToFile = (score, dir, basename) => writeWavAudioFile(renderScoreToWav(score), dir, basename);
 
 /**
  * Render the track's current score into the shared music library and append
@@ -151,20 +129,8 @@ export async function renderChiptuneTrack({ trackId }) {
   const filename = await renderScoreToFile(score, PATHS.music, `music-${randomUUID()}`);
   const durationSec = Math.max(1, Math.round(scoreDurationSec(score)));
 
-  // Re-read so the append lands on the freshest history (musicGen route pattern).
-  const current = (await tracks.getTrack(trackId)) ?? track;
-  const { renders } = tracks.buildRenderAppend(current, {
-    audioFilename: filename,
-    prompt: track.chiptunePrompt,
-    engine: 'chiptune',
-    durationSec,
-  });
-  const updated = await tracks.updateTrack(trackId, {
-    audioFilename: filename,
-    engine: 'chiptune',
-    modelId: '',
-    durationSec,
-    renders,
+  const updated = await tracks.appendActiveTake(trackId, {
+    audioFilename: filename, prompt: track.chiptunePrompt, engine: 'chiptune', durationSec,
   });
   return { track: updated, filename, durationSec };
 }

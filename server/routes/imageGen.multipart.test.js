@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import express from 'express';
 import { createServer } from 'http';
+import { randomUUID } from 'crypto';
 import { mkdtemp, rm, readdir, readFile, unlink, writeFile } from 'fs/promises';
 import { join, parse as parsePath } from 'path';
 import { tmpdir } from 'os';
@@ -72,6 +73,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: vi.fn(() => ({ jobId: 'multipart-job', position: 1, status: 'queued' })),
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(),
@@ -115,6 +117,35 @@ afterAll(async () => {
   await rm(imagesSandbox, { recursive: true, force: true });
   await rm(refsSandbox, { recursive: true, force: true });
 });
+
+const TEMP_ENV_KEYS = ['TMPDIR', 'TMP', 'TEMP'];
+
+function snapshotTempEnvironment() {
+  return Object.fromEntries(TEMP_ENV_KEYS.map((key) => [key, process.env[key]]));
+}
+
+async function withScopedUploadTempDir(run) {
+  const globalTmpRoot = tmpdir();
+  const requestTmpRoot = await mkdtemp(join(globalTmpRoot, 'portos-imagegen-multipart-uploads-'));
+  const originalTempEnvironment = snapshotTempEnvironment();
+
+  try {
+    // os.tmpdir() uses different environment variables on Windows and POSIX.
+    // Set all supported names so the parser resolves to this request's directory.
+    for (const key of TEMP_ENV_KEYS) process.env[key] = requestTmpRoot;
+    await run(requestTmpRoot, globalTmpRoot);
+  } finally {
+    for (const key of TEMP_ENV_KEYS) {
+      if (originalTempEnvironment[key] === undefined) delete process.env[key];
+      else process.env[key] = originalTempEnvironment[key];
+    }
+    await rm(requestTmpRoot, { recursive: true, force: true });
+  }
+}
+
+async function listUploadTemps(directory) {
+  return (await readdir(directory)).filter((name) => name.startsWith('upload-'));
+}
 
 // Build a multipart/form-data body buffer. Each part is { name, filename?,
 // contentType?, value: string|Buffer }. Returns the body + the Content-Type
@@ -533,23 +564,33 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     // exists — the route's res.on('close') sweep is wired from the return value
     // this throw prevents — so the throw itself has to unlink it.
     mockedSettings = { imageGen: { mode: 'agy', agy: { enabled: true } } };
-    const tmpRoot = tmpdir();
-    const beforeTmp = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
+    const originalTempEnvironment = snapshotTempEnvironment();
+    await withScopedUploadTempDir(async (tmpRoot, globalTmpRoot) => {
+      const beforeTmp = new Set(await listUploadTemps(tmpRoot));
+      const unrelatedUpload = join(globalTmpRoot, `upload-${randomUUID()}.zip`);
+      try {
+        // This unrelated system-temp upload lands inside the assertion window.
+        await writeFile(unrelatedUpload, 'unrelated upload');
+        const res = await postMultipart(app, '/api/image-gen/generate', [
+          { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+        ]);
 
-    const res = await postMultipart(app, '/api/image-gen/generate', [
-      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
-    ]);
-
-    expect(res.status).toBe(400);
-    expect(res.body.error || res.body).toMatch(/prompt is required/i);
-    expect(enqueueJob).not.toHaveBeenCalled();
-    await new Promise((r) => setTimeout(r, 50));
-    const refDirContents = await readdir(refsSandbox).catch(() => []);
-    expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
-    const afterTmp = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
-    expect([...afterTmp].filter((f) => !beforeTmp.has(f))).toEqual([]);
+        expect(res.status).toBe(400);
+        expect(res.body.error || res.body).toMatch(/prompt is required/i);
+        expect(enqueueJob).not.toHaveBeenCalled();
+        await new Promise((r) => setTimeout(r, 50));
+        const refDirContents = await readdir(refsSandbox).catch(() => []);
+        expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
+        expect(await readFile(unrelatedUpload, 'utf8')).toBe('unrelated upload');
+        const afterTmp = new Set(await listUploadTemps(tmpRoot));
+        expect([...afterTmp].filter((f) => !beforeTmp.has(f))).toEqual([]);
+      } finally {
+        await unlink(unrelatedUpload).catch((error) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      }
+    });
+    expect(snapshotTempEnvironment()).toEqual(originalTempEnvironment);
   });
 
   it('deletes the multer temp when the gallery init image is missing', async () => {
@@ -558,46 +599,39 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     // the multer temps are at risk. Reachable on every cloud backend now that
     // they accept reference uploads.
     mockedSettings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
-    const tmpRoot = tmpdir();
-    const before = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
+    await withScopedUploadTempDir(async (tmpRoot) => {
+      const before = new Set(await listUploadTemps(tmpRoot));
+      const res = await postMultipart(app, '/api/image-gen/generate', [
+        { name: 'prompt', value: 'a fox' },
+        { name: 'initImageFile', value: 'does-not-exist.png' },
+        { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+      ]);
 
-    const res = await postMultipart(app, '/api/image-gen/generate', [
-      { name: 'prompt', value: 'a fox' },
-      { name: 'initImageFile', value: 'does-not-exist.png' },
-      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
-    ]);
-
-    expect(res.status).toBe(400);
-    expect(res.body.error || res.body).toMatch(/init image not found/i);
-    await new Promise((r) => setTimeout(r, 50));
-    const after = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
-    expect([...after].filter((f) => !before.has(f))).toEqual([]);
+      expect(res.status).toBe(400);
+      expect(res.body.error || res.body).toMatch(/init image not found/i);
+      await new Promise((r) => setTimeout(r, 50));
+      const after = new Set(await listUploadTemps(tmpRoot));
+      expect([...after].filter((f) => !before.has(f))).toEqual([]);
+    });
   });
 
   it('rejecting a non-FLUX.2 ref upload deletes the multer-staged tmp file (no os.tmpdir leak)', async () => {
-    // Snapshot the tmpdir's `upload-*` entries before and after the request.
-    // The multipart parser writes uploads as `upload-<uuid><ext>`, so the
-    // post-cleanup diff must be empty for the rejected request.
-    const tmpRoot = tmpdir();
-    const before = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
+    // Snapshot only this request's temp directory; the multipart parser writes
+    // `upload-<uuid><ext>` there, so the strict post-cleanup diff is request-local.
+    await withScopedUploadTempDir(async (tmpRoot) => {
+      const before = new Set(await listUploadTemps(tmpRoot));
+      const res = await postMultipart(app, '/api/image-gen/generate', [
+        { name: 'prompt', value: 'wrong-model ref tmp-cleanup' },
+        { name: 'modelId', value: 'dev' },
+        { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+      ]);
+      expect(res.status).toBe(400);
 
-    const res = await postMultipart(app, '/api/image-gen/generate', [
-      { name: 'prompt', value: 'wrong-model ref tmp-cleanup' },
-      { name: 'modelId', value: 'dev' },
-      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
-    ]);
-    expect(res.status).toBe(400);
-
-    // unlink() is fire-and-forget — give it a microtask tick to settle so the
-    // post-snapshot reflects the cleanup.
-    await new Promise((r) => setTimeout(r, 50));
-    const after = new Set((await readdir(tmpRoot).catch(() => []))
-      .filter((f) => f.startsWith('upload-')));
-    // Any `upload-*` entry that's new vs. the pre-request snapshot is a leak.
-    const leaked = [...after].filter((f) => !before.has(f));
-    expect(leaked).toEqual([]);
+      // unlink() is fire-and-forget — give it a microtask tick to settle.
+      await new Promise((r) => setTimeout(r, 50));
+      const after = new Set(await listUploadTemps(tmpRoot));
+      const leaked = [...after].filter((f) => !before.has(f));
+      expect(leaked).toEqual([]);
+    });
   });
 });

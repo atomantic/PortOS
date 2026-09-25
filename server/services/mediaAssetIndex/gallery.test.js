@@ -30,6 +30,43 @@ describe('indexed gallery page', () => {
     expect(disk).not.toHaveBeenCalled();
   });
 
+  it('binds and serializes the synthetic video snapshot once for a mixed summary page', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    const serialize = vi.fn(function () { return { id: this.id, createdAt: this.createdAt }; });
+    const videos = Array.from({ length: 200 }, (_, i) => ({
+      id: `example-${i}`, createdAt: '2026-01-01', toJSON: serialize,
+    }));
+    loadHistory.mockResolvedValue(videos);
+    listAnnotations.mockResolvedValue({ 'video:example-1': { own: { starred: true } } });
+    query.mockResolvedValue({ rows: [{ items: [], total: '1', hiddenTotal: '0', image: '0', video: '200' }] });
+    expect(await listGalleryPage({ kind: 'video', summary: true, starred: true, limit: 1, offset: 1 }))
+      .toEqual({ items: [], total: 1, hiddenTotal: 0, counts: { image: 0, video: 200, all: 200 }, limit: 1, offset: 1 });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(serialize).toHaveBeenCalledTimes(200);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql.match(/jsonb_array_elements/g)).toHaveLength(1);
+    expect(sql).toContain('gallery_assets AS MATERIALIZED');
+    expect(JSON.parse(params[0])).toHaveLength(200);
+    expect(params.slice(-2)).toEqual([1, 1]);
+  });
+
+  it('projects compact mixed rows after the indexed query without changing counts', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    loadHistory.mockResolvedValue([]);
+    const video = { id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', prompt: 'x'.repeat(8192), stitchedFrom: ['a', 'b'], guidanceScale: 3 };
+    query.mockResolvedValue({ rows: [{ items: [{ kind: 'video', data: video }], total: '9', hiddenTotal: '2', image: '4', video: '5' }] });
+    const page = await listGalleryPage({ kind: 'all', media: true, summary: true, hidden: false, compact: true, limit: 60 });
+    expect(page).toMatchObject({ total: 9, hiddenTotal: 2, counts: { image: 4, video: 5, all: 9 } });
+    expect(page.items).toEqual([{ kind: 'video', data: {
+      compact: true, id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', stitchedFrom: ['a', 'b'], prompt: 'x'.repeat(240) + '…',
+    } }]);
+  });
+
   it('does not turn an index failure into a full disk scan', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);

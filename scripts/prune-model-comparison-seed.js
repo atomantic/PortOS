@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Keep `data.reference/model-comparison.json` scoped to dispatched models and
- * publicly sourced benchmark and token-price observations. PortOS task
+ * publicly sourced benchmark and token-price observations. Keep benchmark calibration
+ * cohorts and OpenRouter route prices even for models not yet installed. PortOS task
  * benchmark runs remain machine-local under Models → Performance.
  *
  * Scope is derived from `data.reference/providers.json` rather than a hand-kept
@@ -33,7 +34,7 @@ export const FRONTIER_ANCHORS = [
   'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'gpt-6-luna', 'gpt-6-sol',
 ];
 
-const RETIRED_PUBLIC_BENCHMARK = /^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i;
+
 
 export async function inScopeModels() {
   const providers = JSON.parse(await readFile(providersPath, 'utf8'));
@@ -66,7 +67,7 @@ export async function prunedSeed() {
   return {
     pruned: {
       ...catalog,
-      observations: catalog.observations.filter(row => scope.has(row.model) && !RETIRED_PUBLIC_BENCHMARK.test(row.benchmark || '')),
+      observations: catalog.observations.filter(row => (scope.has(row.model) || Boolean(row.quality) || ['OpenRouter', 'OpenCode Zen'].includes(row.provider))),
     },
     originalCount: catalog.observations.length,
   };

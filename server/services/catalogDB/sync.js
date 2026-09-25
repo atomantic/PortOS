@@ -1,11 +1,20 @@
 /**
  * Creative Ingredients Catalog — peer-sync change feeds & upserts.
  *
- * The `get*ChangesSince` readers page rows by `sync_sequence` for outbound
- * pulls; the `upsert*FromPeer` writers apply an inbound peer's rows. Mixed-
+ * The `get*ChangesSince` readers page rows by their commit-ordered feed
+ * position (`sync_feed`, #8315 — see server/lib/db/schema/syncFeed.js) for
+ * outbound pulls; the `upsert*FromPeer` writers apply an inbound peer's rows. Mixed-
  * version federation is handled per-table: "tombstone keys absent" is treated
  * as "peer has no opinion" so a pre-tombstone peer can't revive a local delete,
  * and FK-lagged child/parent rows retry parent-less then re-link on a later page.
+ *
+ * The three tuple-unique kinds (refs, relations, media) additionally gate
+ * their tombstone/revival apply on an `updated_at` change-clock (#8347): a
+ * peer's `deleted`/`deleted_at` only lands when its `updated_at` is strictly
+ * newer than the local row's, so a stale re-send of a still-live row (a
+ * reset rewind, a role/data resend, or the #8315 upgrade replay that resends
+ * every catalog row once) can't revive a tombstone that happened after the
+ * peer's own clock. See `upsertRefFromPeer` for the full rationale.
  */
 
 import { query, arrayToPgvector } from '../../lib/db.js';
@@ -19,15 +28,29 @@ import {
   rowToTag,
 } from './shared.js';
 
-export async function getRelationChangesSince(since = '0', limit = 100) {
+// One page of a table's feed: rows whose committed feed position is past the
+// peer's cursor, in position order. `syncSequence` on each item carries the
+// FEED POSITION — the cursor unit peers store — not the row's write-time
+// `sync_sequence`, which a late-committing transaction can land below a
+// cursor a peer already advanced past. `stream` is one of the table-name
+// literals the exported readers below pass, never caller input.
+async function getFeedChangesSince(stream, mapRow, since, limit) {
   const result = await query(
-    `SELECT * FROM catalog_ingredient_relations WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
+    `SELECT t.*, f.position::text AS feed_position
+     FROM sync_feed f
+     JOIN ${stream} t ON t.sync_sequence = f.row_sequence
+     WHERE f.stream = $1 AND f.position > $2
+     ORDER BY f.position ASC
+     LIMIT $3`,
+    [stream, since, limit + 1],
   );
   const hasMore = result.rows.length > limit;
   const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToRelation), hasMore };
+  return { items: rows.map((row) => ({ ...mapRow(row), syncSequence: row.feed_position })), hasMore };
 }
+
+export const getRelationChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_ingredient_relations', rowToRelation, since, limit);
 
 export async function upsertRelationFromPeer(rel) {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
@@ -39,14 +62,26 @@ export async function upsertRelationFromPeer(rel) {
     Object.prototype.hasOwnProperty.call(rel, 'deleted') ||
     Object.prototype.hasOwnProperty.call(rel, 'deletedAt');
   if (hasTombstoneFields) {
+    // #8347 revival guard: `updated_at` is the tombstone/revival change-clock
+    // (bumped by the trg_catalog_relation_sync_seq trigger on every
+    // deleted/deleted_at flip — see catalog.js). Gate the apply on it being
+    // strictly newer than the local row's, the same LWW shape as
+    // upsertTagFromPeer, so a stale re-send of a still-live edge (a reset
+    // rewind, a role/data resend, or the #8315 upgrade replay) can't revive a
+    // local unlink that already happened. A peer that predates this field
+    // (`rel.updatedAt` absent) falls back to its `deletedAt`/`createdAt`,
+    // which is always older than a genuine later local tombstone.
+    const updatedAtClock = rel.updatedAt || rel.deletedAt || rel.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_relations
-         (from_id, to_id, kind, created_at, deleted, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (from_id, to_id, kind, created_at, deleted, deleted_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (from_id, to_id, kind) DO UPDATE
          SET deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at`,
-      [rel.fromId, rel.toId, rel.kind, rel.createdAt, !!rel.deleted, rel.deletedAt || null],
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at
+       WHERE EXCLUDED.updated_at > catalog_ingredient_relations.updated_at`,
+      [rel.fromId, rel.toId, rel.kind, rel.createdAt, !!rel.deleted, rel.deletedAt || null, updatedAtClock],
     );
   } else {
     await query(
@@ -58,15 +93,8 @@ export async function upsertRelationFromPeer(rel) {
   }
 }
 
-export async function getMediaChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_ingredient_media WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToMedia), hasMore };
-}
+export const getMediaChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_ingredient_media', rowToMedia, since, limit);
 
 export async function upsertMediaFromPeer(media) {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
@@ -88,23 +116,30 @@ export async function upsertMediaFromPeer(media) {
     && media.metadata && typeof media.metadata === 'object'
     && !Array.isArray(media.metadata) && Object.keys(media.metadata).length > 0;
   const metadataColumn = hasMetadata ? ', metadata' : '';
-  const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 9 : 7}` : '';
+  const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 10 : 7}` : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const metadataParam = hasMetadata ? [JSON.stringify(media.metadata || {})] : [];
   if (hasTombstoneFields) {
+    // #8347 revival guard — see upsertRelationFromPeer for the rationale.
+    // `updated_at` also moves on a role/caption/metadata-only edit (the
+    // media trigger watches those too), so the same guard additionally
+    // protects a live edit from a stale peer resend, not just a tombstone.
+    const updatedAtClock = media.updatedAt || media.deletedAt || media.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at${metadataColumn})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8${metadataPlaceholder})
+         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
          SET role = EXCLUDED.role,
              caption = EXCLUDED.caption,
              deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at${metadataUpdate}`,
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at${metadataUpdate}
+       WHERE EXCLUDED.updated_at > catalog_ingredient_media.updated_at`,
       [
         media.ingredientId, media.mediaKey, media.kind,
         media.role ?? null, media.caption ?? null, media.createdAt,
-        !!media.deleted, media.deletedAt || null,
+        !!media.deleted, media.deletedAt || null, updatedAtClock,
         ...metadataParam,
       ],
     );
@@ -120,15 +155,8 @@ export async function upsertMediaFromPeer(media) {
   }
 }
 
-export async function getTagChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_tags WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToTag), hasMore };
-}
+export const getTagChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_tags', rowToTag, since, limit);
 
 export async function upsertTagFromPeer(tag) {
   // LWW on updated_at for the mutable fields (description/color/parent_id) +
@@ -173,59 +201,35 @@ export async function upsertTagFromPeer(tag) {
   return { applied: result.rows.length > 0, isInsert: result.rows[0]?.is_insert ?? false };
 }
 
+// Per-stream maximum feed position. Each subquery is a backward scan of the
+// (stream, position) index.
 export async function getMaxSequences() {
+  const maxOf = (stream) =>
+    `COALESCE((SELECT MAX(position) FROM sync_feed WHERE stream = '${stream}'), 0)::text`;
   const result = await query(`
     SELECT
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredients), 0)::text AS ingredients,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_scraps), 0)::text AS scraps,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_sources), 0)::text AS sources,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_refs), 0)::text AS refs,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_relations), 0)::text AS relations,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_tags), 0)::text AS tags,
-      COALESCE((SELECT MAX(sync_sequence) FROM catalog_ingredient_media), 0)::text AS media
+      ${maxOf('catalog_ingredients')} AS ingredients,
+      ${maxOf('catalog_scraps')} AS scraps,
+      ${maxOf('catalog_ingredient_sources')} AS sources,
+      ${maxOf('catalog_ingredient_refs')} AS refs,
+      ${maxOf('catalog_ingredient_relations')} AS relations,
+      ${maxOf('catalog_tags')} AS tags,
+      ${maxOf('catalog_ingredient_media')} AS media
   `);
   return result.rows[0];
 }
 
-export async function getScrapChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_scraps WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToScrap), hasMore };
-}
+export const getScrapChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_scraps', rowToScrap, since, limit);
 
-export async function getIngredientChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_ingredients WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToIngredient), hasMore };
-}
+export const getIngredientChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_ingredients', rowToIngredient, since, limit);
 
-export async function getSourceChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_ingredient_sources WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToSource), hasMore };
-}
+export const getSourceChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_ingredient_sources', rowToSource, since, limit);
 
-export async function getRefChangesSince(since = '0', limit = 100) {
-  const result = await query(
-    `SELECT * FROM catalog_ingredient_refs WHERE sync_sequence > $1 ORDER BY sync_sequence ASC LIMIT $2`,
-    [since, limit + 1],
-  );
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  return { items: rows.map(rowToRef), hasMore };
-}
+export const getRefChangesSince = (since = '0', limit = 100) =>
+  getFeedChangesSince('catalog_ingredient_refs', rowToRef, since, limit);
 
 export async function upsertScrapFromPeer(scrap) {
   // A child scrap (parent_scrap_id set) may arrive in the envelope BEFORE its
@@ -333,11 +337,16 @@ export async function upsertSourceFromPeer(src) {
 
 export async function upsertRefFromPeer(ref) {
   // ON CONFLICT DO UPDATE so a peer's soft-delete (or revival) of a ref row
-  // is mirrored locally. Refs don't carry an `updated_at` column — they're
-  // tuple-unique — so a strict LWW window doesn't apply; the receiver simply
-  // adopts the peer's `deleted` / `deleted_at` state. The trigger only bumps
-  // sync_sequence when those columns change, so a no-op replay (peer already
-  // matches local) stays silent on the next outbound pull.
+  // is mirrored locally. Refs are tuple-unique (no editable content fields),
+  // so `updated_at` exists ONLY as a tombstone/revival change-clock (#8347),
+  // bumped by trg_catalog_ref_sync_seq whenever deleted/deleted_at flips —
+  // never by a content edit, since there is no other mutable field. The
+  // WHERE guard below rejects a stale apply whose clock isn't strictly newer
+  // than the local row's, so a stale re-send of a still-live ref (a reset
+  // rewind or the #8315 upgrade replay resending every row once) can't
+  // silently revive a tombstone that happened after the peer's clock. A
+  // no-op replay (peer already matches local) still bumps nothing new, so
+  // it stays silent on the next outbound pull.
   //
   // Mixed-version federation: a v1 peer (pre-tombstone) emits ref rows with
   // NO `deleted`/`deletedAt` keys. Treat "key absent" as "peer has no opinion"
@@ -346,18 +355,25 @@ export async function upsertRefFromPeer(ref) {
   // a locally tombstoned ref. The `hasTombstoneFields` flag distinguishes this
   // from an explicit v2 revival (`deleted: false` present). On INSERT a v1
   // peer's row defaults to `deleted=false`, which is correct — the row is
-  // brand-new locally and the peer believes it's active.
+  // brand-new locally and the peer believes it's active. A peer that carries
+  // tombstone fields but predates the `updatedAt` wire field (a v2-but-not-v3
+  // sender, which cannot occur once every peer ships this fix) falls back to
+  // its `deletedAt`/`createdAt`, which is always older than a genuine later
+  // local tombstone.
   const hasTombstoneFields =
     Object.prototype.hasOwnProperty.call(ref, 'deleted') ||
     Object.prototype.hasOwnProperty.call(ref, 'deletedAt');
   if (hasTombstoneFields) {
+    const updatedAtClock = ref.updatedAt || ref.deletedAt || ref.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_refs
-         (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
          SET deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at`,
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at
+       WHERE EXCLUDED.updated_at > catalog_ingredient_refs.updated_at`,
       [
         ref.ingredientId,
         ref.refKind,
@@ -366,6 +382,7 @@ export async function upsertRefFromPeer(ref) {
         ref.createdAt,
         !!ref.deleted,
         ref.deletedAt || null,
+        updatedAtClock,
       ],
     );
   } else {

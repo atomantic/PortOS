@@ -963,7 +963,7 @@ const DEFAULT_REGISTRY = {
         supportsDisableAudio: false,
       },
     ]))))),
-    defaultMlx: 'ltx23_distilled_q4',
+    defaultMlx: 'fastmetal_5b_qad',
     defaultCuda: 'ltx_video',
   },
   image: [
@@ -1301,7 +1301,6 @@ export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
 export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
 export const isHiDream = (model) => model?.runner === RUNNER_FAMILIES.HIDREAM;
 export const isQwen = (model) => model?.runner === RUNNER_FAMILIES.QWEN;
-export const isCfgDisabled = (model) => model?.cfgDisabled === true;
 export const isEditOnly = (model) => model?.editOnly === true;
 
 // Append models that are genuinely new in this release (not in
@@ -1985,7 +1984,7 @@ export const getVideoModels = ({ includeDisabled = false } = {}) => {
   ));
 };
 
-export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities()) => {
+export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities(), preferredId = null) => {
   const reg = loadMediaModels();
   // Note: defaultMlx / defaultCuda may legitimately point at a model
   // flagged `deprecated: true` — the dgrauet (non-deprecated) runtime
@@ -1995,6 +1994,7 @@ export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities(
   // pattern; user-driven migration > auto-rolling forward.
   const bucket = activeVideoBucket();
   const configuredId = readVideoDefault(reg.video, bucket);
+  const preferred = typeof preferredId === 'string' && preferredId.trim() ? preferredId.trim() : null;
   // Validate against the bucket's available (non-broken) list — a typo or
   // a model marked broken on this bucket would otherwise surface as
   // "Unknown video model" the first time the UI tries to use the default.
@@ -2004,14 +2004,20 @@ export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities(
     model.hardwareRequirements,
   ));
   const compatible = available.filter((model) => isHardwareCompatible(model.hardwareCompatibility));
-  if (compatible.some((m) => m.id === configuredId)) return configuredId;
+  const candidates = [preferred, configuredId];
+  // FastMetal 5B is the shipped Apple Silicon default. On a machine below its
+  // 16 GB floor, use the smaller FastMetal profile when it is compatible
+  // before considering older catalog entries.
+  if (candidates.includes('fastmetal_5b_qad')) candidates.push('fastmetal_1_3b_qad');
+  const selected = candidates.find((id) => compatible.some((model) => model.id === id));
+  if (selected) return selected;
   const fallback = compatible[0]?.id;
   if (fallback) {
-    console.log(`⚠️ Default video model "${configuredId}" is unavailable or unknown for ${bucket}; falling back to "${fallback}"`);
+    console.log(`⚠️ Default video model "${preferred || configuredId}" is unavailable or unknown for ${bucket}; falling back to "${fallback}"`);
     return fallback;
   }
-  console.log(`⚠️ Default video model "${configuredId}" is unavailable or unknown for ${bucket}; no available models to fall back to`);
-  return configuredId;
+  console.log(`⚠️ Default video model "${preferred || configuredId}" is unavailable or unknown for ${bucket}; no available models to fall back to`);
+  return preferred || configuredId;
 };
 
 export const getImageModels = ({ includeDisabled = false } = {}) => {

@@ -15,7 +15,7 @@ vi.mock('os', async (importActual) => {
 
 const createRunMock = vi.fn(async () => {});
 const updateRunMock = vi.fn(async () => {});
-const enqueueJobMock = vi.fn(() => ({ jobId: 'job-1', position: 0 }));
+const enqueueJobMock = vi.fn(async () => ({ jobId: 'job-1', position: 0 }));
 const validateDatasetReadyMock = vi.fn(async () => ({
   dataset: { character: { entryId: 'c1', universeId: 'u1', name: 'Test Subject' }, triggerWord: 'test_subject' },
   manifest: { images: [] },
@@ -31,6 +31,7 @@ vi.mock('./dataset.js', () => ({ validateDatasetReady: (...a) => validateDataset
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../loraDatasets.js', () => ({ updateDataset: vi.fn(async () => {}) }));
 vi.mock('../mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: (...a) => enqueueJobMock(...a),
   getJob: vi.fn(),
   mediaJobEvents: { emit: vi.fn(), on: vi.fn() },

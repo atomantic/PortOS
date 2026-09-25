@@ -17,7 +17,13 @@ function getTempRoot() {
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makePathsProxy({ ...actual, readJSONFile: vi.fn(actual.readJSONFile) }, { dataRoot: () => getTempRoot() });
+  return makePathsProxy({
+    ...actual,
+    readJSONFile: vi.fn(actual.readJSONFile),
+    // The sync log's disk write — lets a test fail an append the way a full or
+    // flaky disk would, including one that lands its bytes before throwing.
+    appendFileGuarded: vi.fn(actual.appendFileGuarded),
+  }, { dataRoot: () => getTempRoot() });
 });
 
 // getInstanceId is used by create()/backfill; stub to a stable id.
@@ -30,12 +36,15 @@ vi.mock('./brainSyncLog.js', async () => {
   return {
     ...actual,
     appendChanges: vi.fn(actual.appendChanges),
+    appendLocalChanges: vi.fn(actual.appendLocalChanges),
   };
 });
 
 import * as brainStorage from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { applyRemoteChanges } from './brainSync.js';
+import { applyBrainSnapshot, relayUnloggedRecords } from './brainReconcile.js';
+import { readJSONFile, appendFileGuarded } from '../lib/fileUtils.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -174,7 +183,8 @@ describe('brainStorage tombstones', () => {
       'links', 'l1', { updatedAt: ISO('2026-01-01') }, 'delete'
     );
     expect(again.applied).toBe(false);
-    expect(again.reason).toBe('local_newer');
+    // Same clock, same delete-ness: already applied, not stale.
+    expect(again.reason).toBe('local_current');
   });
 
   it('update() treats a tombstone as not-found', async () => {
@@ -204,6 +214,160 @@ describe('brainStorage tombstones', () => {
     expect(await rawRecord('memories', 'old')).toBeUndefined();
     expect((await rawRecord('memories', freshCreated.id))._deleted).toBe(true);
     expect(await brainStorage.getById('memories', live.id)).toMatchObject({ content: 'alive' });
+  });
+});
+
+// What a delta-only (legacy) peer pulling from this instance would receive for
+// one record: every sync-log entry after `sinceSeq` naming it.
+async function relayedEntries(sinceSeq, id) {
+  const { changes } = await brainSyncLog.getChangesSince(sinceSeq, 1000);
+  return changes.filter((c) => c.id === id);
+}
+
+describe('inbound brain changes keep relaying across a crash (#8316)', () => {
+  it('relays a saved-but-unrelayed change when the source re-serves it', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const changes = [
+      { op: 'create', type: 'ideas', id: 'relay-up', record: { title: 'From B', updatedAt: ISO('2026-03-01') }, originInstanceId: 'peer-b' },
+      { op: 'delete', type: 'ideas', id: 'relay-del', record: { updatedAt: ISO('2026-03-02') }, originInstanceId: 'peer-b' },
+    ];
+
+    // The records land, then the relay append is rejected: the call must fail
+    // so the caller keeps its source cursor rather than advancing past them.
+    brainSyncLog.appendChanges.mockRejectedValueOnce(new Error('disk full'));
+    await expect(applyRemoteChanges(changes)).rejects.toThrow('disk full');
+    expect(await brainStorage.getById('ideas', 'relay-up')).toMatchObject({ title: 'From B' });
+    expect((await rawRecord('ideas', 'relay-del'))._deleted).toBe(true);
+    expect(await relayedEntries(sinceSeq, 'relay-up')).toEqual([]);
+
+    // A restart rebuilds the log index from disk, then the source re-serves the
+    // same sequence. LWW skips the re-apply, but the op is relayed.
+    await brainSyncLog.initSyncLog();
+    const retry = await applyRemoteChanges(changes);
+    expect(retry.skipped).toBe(2);
+
+    const up = await relayedEntries(sinceSeq, 'relay-up');
+    expect(up).toHaveLength(1);
+    expect(up[0]).toMatchObject({ op: 'create', record: { title: 'From B', updatedAt: ISO('2026-03-01') } });
+    const del = await relayedEntries(sinceSeq, 'relay-del');
+    expect(del).toHaveLength(1);
+    expect(del[0]).toMatchObject({ op: 'delete', record: { updatedAt: ISO('2026-03-02') } });
+  });
+
+  it('retries a change whose relay already landed without a second log entry', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const change = { op: 'update', type: 'people', id: 'relay-once', record: { name: 'Bo', updatedAt: ISO('2026-04-01') }, originInstanceId: 'peer-b' };
+
+    await applyRemoteChanges([change]);
+    // Crash before the cursor save: restart, then the source re-serves it —
+    // twice, as another cycle would.
+    await brainSyncLog.initSyncLog();
+    await applyRemoteChanges([change]);
+    await applyRemoteChanges([change]);
+
+    expect(await relayedEntries(sinceSeq, 'relay-once')).toHaveLength(1);
+  });
+
+  it('neither applies nor relays a genuinely stale change', async () => {
+    const local = await brainStorage.create('ideas', { title: 'Local' });
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+
+    const result = await applyRemoteChanges([
+      // Older clock than our copy.
+      { op: 'update', type: 'ideas', id: local.id, record: { title: 'Stale', updatedAt: ISO('2000-01-01') }, originInstanceId: 'peer-b' },
+      // Same clock, but a delete of a record we hold live — not our state.
+      { op: 'delete', type: 'ideas', id: local.id, record: { updatedAt: local.updatedAt }, originInstanceId: 'peer-b' },
+    ]);
+
+    expect(result.skipped).toBe(2);
+    expect(await brainStorage.getById('ideas', local.id)).toMatchObject({ title: 'Local', updatedAt: local.updatedAt });
+    expect(await relayedEntries(sinceSeq, local.id)).toEqual([]);
+  });
+});
+
+describe('snapshot merges keep relaying across a failed append (#8351)', () => {
+  it('fails the merge on a rejected relay append, then relays every applied record exactly once', async () => {
+    const stale = await brainStorage.create('ideas', { title: 'Ours' });
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const snapshot = { records: {
+      ideas: {
+        'snap-up': { title: 'From B', updatedAt: ISO('2026-05-01'), originInstanceId: 'peer-b' },
+        'snap-del': { _deleted: true, updatedAt: ISO('2026-05-02'), originInstanceId: 'peer-b' },
+        // Older than our copy: neither applied nor relayed, on any pass.
+        [stale.id]: { title: 'Stale', updatedAt: ISO('2000-01-01'), originInstanceId: 'peer-b' },
+      },
+    } };
+
+    brainSyncLog.appendChanges.mockRejectedValueOnce(new Error('disk full'));
+    await expect(applyBrainSnapshot(snapshot)).rejects.toThrow('disk full');
+    expect(await brainStorage.getById('ideas', 'snap-up')).toMatchObject({ title: 'From B' });
+    expect((await rawRecord('ideas', 'snap-del'))._deleted).toBe(true);
+    expect(await relayedEntries(sinceSeq, 'snap-up')).toEqual([]);
+
+    // The next cycle fetches the same snapshot: every record is already
+    // reflected here, and the ones our log lacks are relayed now.
+    await brainSyncLog.initSyncLog();
+    expect(await applyBrainSnapshot(snapshot)).toMatchObject({ updated: 0, deleted: 0, skipped: 3 });
+    await applyBrainSnapshot(snapshot);
+
+    const up = await relayedEntries(sinceSeq, 'snap-up');
+    expect(up).toHaveLength(1);
+    expect(up[0]).toMatchObject({ op: 'update', record: { title: 'From B', updatedAt: ISO('2026-05-01') } });
+    const del = await relayedEntries(sinceSeq, 'snap-del');
+    expect(del).toHaveLength(1);
+    expect(del[0]).toMatchObject({ op: 'delete', record: { updatedAt: ISO('2026-05-02') } });
+    expect(await relayedEntries(sinceSeq, stale.id)).toEqual([]);
+  });
+});
+
+describe('local writes reach the sync log after a failed append (#8351)', () => {
+  // An append that lands its bytes and then throws: the retry must not log the
+  // operation a second time.
+  const failAfterWriting = () => appendFileGuarded.mockImplementationOnce(async (...args) => {
+    const { appendFileGuarded: real } = await vi.importActual('../lib/fileUtils.js');
+    await real(...args);
+    throw new Error('EIO after write');
+  });
+
+  it('keeps the write successful and relays it once on the next retry', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    appendFileGuarded.mockRejectedValueOnce(new Error('disk full'));
+    const created = await brainStorage.create('people', { name: 'Queued' });
+    expect(await brainStorage.getById('people', created.id)).toMatchObject({ name: 'Queued' });
+    expect(await relayedEntries(sinceSeq, created.id)).toEqual([]);
+
+    expect(await brainSyncLog.retryPendingAppends()).toBe(1);
+    expect(await brainSyncLog.retryPendingAppends()).toBe(0);
+    const logged = await relayedEntries(sinceSeq, created.id);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ op: 'create', record: { name: 'Queued', updatedAt: created.updatedAt } });
+  });
+
+  it('retries a queued append before the next local write, without duplicating a landed one', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    failAfterWriting();
+    const first = await brainStorage.create('people', { name: 'Landed' });
+    const second = await brainStorage.create('people', { name: 'Next' });
+
+    expect(await relayedEntries(sinceSeq, first.id)).toHaveLength(1);
+    expect(await relayedEntries(sinceSeq, second.id)).toHaveLength(1);
+  });
+
+  it('recovers an append a restart lost through the boot sweep, once', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const kept = await brainStorage.create('projects', { name: 'Doomed' });
+    appendFileGuarded.mockRejectedValueOnce(new Error('disk full'));
+    await brainStorage.remove('projects', kept.id);
+    const tombstone = await rawRecord('projects', kept.id);
+
+    // Restart: the in-memory retry queue is gone; the stored tombstone is not.
+    await brainSyncLog.initSyncLog();
+    expect(await relayUnloggedRecords()).toBeGreaterThan(0);
+    expect(await relayUnloggedRecords()).toBe(0);
+
+    const logged = await relayedEntries(sinceSeq, kept.id);
+    expect(logged.map((e) => e.op)).toEqual(['create', 'delete']);
+    expect(logged[1].record).toEqual({ updatedAt: tombstone.updatedAt });
   });
 });
 
@@ -311,7 +475,7 @@ describe('reorderBuckets (batched sync log)', () => {
   it('writes all bucket orders and appends one sync-log batch', async () => {
     const first = await brainStorage.create('buckets', { name: 'First', order: 0 });
     const second = await brainStorage.create('buckets', { name: 'Second', order: 1 });
-    brainSyncLog.appendChanges.mockClear();
+    brainSyncLog.appendLocalChanges.mockClear();
 
     const reordered = await brainStorage.reorderBuckets([
       { id: second.id, order: 0 },
@@ -324,8 +488,8 @@ describe('reorderBuckets (batched sync log)', () => {
     ]);
     expect(await brainStorage.getBucketById(first.id)).toMatchObject({ name: 'First', order: 1 });
     expect(await brainStorage.getBucketById(second.id)).toMatchObject({ name: 'Second', order: 0 });
-    expect(brainSyncLog.appendChanges).toHaveBeenCalledTimes(1);
-    expect(brainSyncLog.appendChanges).toHaveBeenCalledWith([
+    expect(brainSyncLog.appendLocalChanges).toHaveBeenCalledTimes(1);
+    expect(brainSyncLog.appendLocalChanges).toHaveBeenCalledWith([
       expect.objectContaining({
         op: 'update',
         type: 'buckets',

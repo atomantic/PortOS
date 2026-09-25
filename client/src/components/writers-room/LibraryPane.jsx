@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor,
@@ -6,6 +6,9 @@ import {
 } from '@dnd-kit/core';
 import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import toast from '../ui/Toast';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
+import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
+import { formatCount } from '../../utils/formatters';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import {
   createWritersRoomFolder,
@@ -26,8 +29,10 @@ const libraryKeyboardCoordinates = createFreeDroppableKeyboardCoordinates();
 
 export default function LibraryPane({
   folders, works, activeWorkId, onSelectWork, onRefresh, onCollapse,
-  creatingWork, onCreatingWorkChange,
+  creatingWork, onCreatingWorkChange, paging,
 }) {
+  const deletingWorks = useRef(new Set());
+  const [removingWorks, setRemovingWorks] = useState(new Set());
   const [openFolders, setOpenFolders] = useState({});
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
@@ -70,7 +75,7 @@ export default function LibraryPane({
     setFolderName('');
     setCreatingFolder(false);
     setOpenFolders((s) => ({ ...s, [folder.id]: true }));
-    onRefresh?.();
+    onRefresh?.({ folder });
   };
 
   const submitWork = async (e) => {
@@ -85,19 +90,27 @@ export default function LibraryPane({
     setWorkTitle('');
     setWorkKind('short-story');
     onCreatingWorkChange(null);
-    onRefresh?.();
+    onRefresh?.({ work });
     onSelectWork?.(work.id);
   };
 
   const handleDeleteFolder = (id) => confirmDelete(async () => {
-    await deleteWritersRoomFolder(id, { silent: true }).catch((err) => toast.error(`Delete failed: ${err.message}`));
-    onRefresh?.();
+    const result = await deleteWritersRoomFolder(id, { silent: true }).catch((err) => {
+      toast.error(`Delete failed: ${err.message}`);
+      return null;
+    });
+    if (result) onRefresh?.({ deletedFolderId: id });
   });
 
   const handleDeleteWork = (id) => confirmDelete(async () => {
-    await deleteWritersRoomWork(id, { silent: true }).catch((err) => toast.error(`Delete failed: ${err.message}`));
-    if (activeWorkId === id) onSelectWork?.(null);
-    onRefresh?.();
+    if (deletingWorks.current.has(id)) return;
+    deletingWorks.current.add(id);
+    const result = await deleteWritersRoomWork(id, { silent: true }).catch((err) => {
+      toast.error(`Delete failed: ${err.message}`);
+      return null;
+    });
+    if (!result) { deletingWorks.current.delete(id); return; }
+    setRemovingWorks(prev => new Set([...prev, id]));
   });
 
   // PointerSensor with a small activation distance so a quick click still
@@ -132,7 +145,7 @@ export default function LibraryPane({
     const targetFolder = folders.find((f) => f.id === targetFolderId);
     toast.success(`Moved "${work.title}" to ${targetFolder ? targetFolder.name : 'Unfiled'}`);
     if (targetFolderId) setOpenFolders((s) => ({ ...s, [targetFolderId]: true }));
-    onRefresh?.();
+    onRefresh?.({ work: updated });
   }, [folders, onRefresh]);
 
   // Escape (and a pointer drag released outside any zone) ends the drag without
@@ -175,8 +188,14 @@ export default function LibraryPane({
   }, [folders]);
 
   const renderWorkRow = (work) => (
+    <li key={work.id} tabIndex={-1}>
+      <CollapsibleListItem removing={removingWorks.has(work.id)} spacing="0.125rem" onExited={() => {
+        if (activeWorkId === work.id) onSelectWork?.(null);
+        onRefresh?.({ deletedWorkId: work.id });
+        deletingWorks.current.delete(work.id);
+        setRemovingWorks(prev => { const next = new Set(prev); next.delete(work.id); return next; });
+      }}>
     <WorkRow
-      key={work.id}
       work={work}
       isActive={work.id === activeWorkId}
       confirming={isConfirming(`work:${work.id}`)}
@@ -185,6 +204,8 @@ export default function LibraryPane({
       onConfirmDelete={() => handleDeleteWork(work.id)}
       onCancelDelete={cancelDelete}
     />
+      </CollapsibleListItem>
+    </li>
   );
 
   return (
@@ -278,7 +299,7 @@ export default function LibraryPane({
         onDragCancel={handleDragCancel}
       >
         <ul className="space-y-1">
-          {folders.length === 0 && grouped.get(null).length === 0 && !creatingFolder && !creatingWork && (
+          {(!paging || (paging.loaded && !paging.hasMore && !paging.error)) && folders.length === 0 && grouped.get(null).length === 0 && !creatingFolder && !creatingWork && (
             <li className="px-2 py-3 text-center">
               <p className="text-xs text-gray-500 mb-2">No works yet.</p>
               <button
@@ -303,6 +324,7 @@ export default function LibraryPane({
             <FolderRow
               key={folder.id}
               folder={folder}
+              partial={paging?.hasMore}
               works={grouped.get(folder.id) || []}
               isOpen={!!openFolders[folder.id]}
               isDragging={!!draggingWork}
@@ -326,6 +348,21 @@ export default function LibraryPane({
           )}
         </DragOverlay>
       </DndContext>
+      {paging && (
+        <>
+          <p className="px-2 text-xs text-port-text-muted">
+            {formatCount(works.length)} works loaded
+          </p>
+          <InfiniteScrollFooter
+            autoLoad={false}
+            hasMore={paging.hasMore}
+            loading={paging.loading}
+            error={paging.error}
+            onLoadMore={paging.error?.code === 'CURSOR_EXPIRED' ? paging.reload : paging.loadMore}
+            label="Load more works"
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -338,7 +375,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
     data: { work },
   });
   return (
-    <li className={`group relative ${isDragging ? 'opacity-30' : ''}`}>
+    <div className={`group relative ${isDragging ? 'opacity-30' : ''}`}>
       <div className="flex items-stretch">
         <button
           ref={setNodeRef}
@@ -380,7 +417,7 @@ function WorkRow({ work, isActive, confirming, onSelect, onRequestDelete, onConf
           <Trash2 size={14} />
         </button>
       )}
-    </li>
+    </div>
   );
 }
 
@@ -399,7 +436,7 @@ function UnfiledZone({ works, renderWorkRow, showHeader, isDragging }) {
         <div className="text-[10px] uppercase text-gray-500 px-2 py-1">Unfiled</div>
       )}
       {hasWorks ? (
-        <ul className="space-y-0.5 pl-1 relative">{works.map(renderWorkRow)}</ul>
+        <ul className="pl-1 relative">{works.map(renderWorkRow)}</ul>
       ) : (
         <div className="text-xs text-gray-600 italic px-2 py-1">Drop here to unfile</div>
       )}
@@ -407,7 +444,7 @@ function UnfiledZone({ works, renderWorkRow, showHeader, isDragging }) {
   );
 }
 
-function FolderRow({ folder, works, isOpen, isDragging, confirming, onToggle, onCreateWork, onRequestDelete, onConfirmDelete, onCancelDelete, renderWorkRow }) {
+function FolderRow({ folder, partial, works, isOpen, isDragging, confirming, onToggle, onCreateWork, onRequestDelete, onConfirmDelete, onCancelDelete, renderWorkRow }) {
   const { setNodeRef, isOver } = useDroppable({ id: `folder:${folder.id}`, data: { folderId: folder.id } });
   return (
     <li className="group/folder">
@@ -424,7 +461,7 @@ function FolderRow({ folder, works, isOpen, isDragging, confirming, onToggle, on
           {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <Folder size={14} className="text-gray-400" />
           <span className="flex-1 text-left truncate">{folder.name}</span>
-          <span className="text-[10px] text-gray-500">{works.length}</span>
+          <span className="text-[10px] text-gray-500">{formatCount(works.length)}{partial ? '+ loaded' : ''}</span>
         </button>
         {confirming ? (
           <ConfirmButtonPair
@@ -456,9 +493,9 @@ function FolderRow({ folder, works, isOpen, isDragging, confirming, onToggle, on
         )}
       </div>
       {isOpen && (
-        <ul className="space-y-0.5 pl-5 relative">
+        <ul className="pl-5 relative">
           {works.length === 0 && (
-            <li className="text-xs text-gray-500 px-2 py-1">Empty</li>
+            <li className="text-xs text-gray-500 px-2 py-1">{partial ? 'No loaded works in this folder' : 'Empty'}</li>
           )}
           {works.map(renderWorkRow)}
         </ul>

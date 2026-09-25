@@ -1,15 +1,42 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, ImageOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 
+// Any src/href/poster/url()/@import that points at a remote http(s) or
+// protocol-relative (`//host/...`) resource — the load vectors a tracking
+// pixel or remote stylesheet rides in on. Used only to decide whether to show
+// the "remote images blocked" notice; the CSP meta below is what actually
+// blocks the fetch (for every scheme, including a bare `//`), regardless of
+// what this matches.
+const REMOTE_REF_RE = /(?:<(?:img|source|video)\b[^>]*\bsrc\s*=\s*["']?(?:https?:)?\/\/)|(?:<link\b[^>]*\bhref\s*=\s*["']?(?:https?:)?\/\/)|(?:\burl\(\s*["']?(?:https?:)?\/\/)|(?:@import\s+(?:url\()?["']?(?:https?:)?\/\/)|(?:\bposter\s*=\s*["']?(?:https?:)?\/\/)/i;
+
+// `default-src 'none'` blocks every fetch the sanitizer regex above doesn't
+// catch (background-image, @import, <link>, <source>, <video poster>, …);
+// img-src only widens to https: once the user opts in for this message, and
+// stays data:/cid: (inline + attachment-referenced) otherwise.
+const buildContentSecurityPolicy = (allowRemote) =>
+  `default-src 'none'; img-src data: cid:${allowRemote ? ' https:' : ''}; style-src 'unsafe-inline'; font-src data:`;
+
 /**
  * Renders HTML email content in a sandboxed iframe.
- * Strips scripts, sets sandbox restrictions, and auto-resizes to content height.
+ * Strips scripts, sets sandbox restrictions, blocks remote loads (images,
+ * stylesheets, @import) behind a CSP until the user opts in per message, and
+ * auto-resizes to content height.
  */
 function SafeHtmlBody({ html }) {
   const iframeRef = useRef(null);
+  const [allowRemote, setAllowRemote] = useState(false);
+  const hasRemoteRefs = useMemo(() => REMOTE_REF_RE.test(html || ''), [html]);
+
+  // Consent is per rendered body, not per component instance: if this
+  // instance gets reused for a different message/refreshed content (list
+  // position reuse, not a remount), a prior "Load remote images" click must
+  // not silently carry over to content the user never opted into.
+  useEffect(() => {
+    setAllowRemote(false);
+  }, [html]);
 
   const writeContent = useCallback(() => {
     const iframe = iframeRef.current;
@@ -33,7 +60,7 @@ function SafeHtmlBody({ html }) {
     if (!doc) return;
 
     doc.open();
-    doc.write(`<!DOCTYPE html><html><head><style>
+    doc.write(`<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="${buildContentSecurityPolicy(allowRemote)}"><style>
       body { margin: 0; padding: 8px; font-family: -apple-system, sans-serif; font-size: 14px; color: #d1d5db; background: transparent; word-wrap: break-word; overflow-wrap: break-word; }
       a { color: #3b82f6; }
       img { max-width: 100%; height: auto; }
@@ -49,23 +76,40 @@ function SafeHtmlBody({ html }) {
     resize();
     // Resize again after images load
     doc.querySelectorAll('img').forEach(img => img.addEventListener('load', resize, { once: true }));
-  }, [html]);
+  }, [html, allowRemote]);
 
   useEffect(() => {
     writeContent();
   }, [writeContent]);
 
   return (
-    <iframe
-      ref={iframeRef}
-      // allow-same-origin is required to write/resize via contentDocument;
-      // scripts remain blocked (no allow-scripts), and we sanitize HTML upstream
-      // before injecting so the email body cannot execute JS.
-      sandbox="allow-same-origin"
-      className="w-full border-0 min-h-[100px]"
-      style={{ background: 'transparent' }}
-      title="Email content"
-    />
+    <div>
+      <iframe
+        ref={iframeRef}
+        // allow-same-origin is required to write/resize via contentDocument;
+        // scripts remain blocked (no allow-scripts), and we sanitize HTML upstream
+        // before injecting so the email body cannot execute JS. The written
+        // document's own CSP meta blocks remote image/stylesheet loads until
+        // allowRemote is set.
+        sandbox="allow-same-origin"
+        className="w-full border-0 min-h-[100px]"
+        style={{ background: 'transparent' }}
+        title="Email content"
+      />
+      {hasRemoteRefs && !allowRemote && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+          <ImageOff size={14} className="shrink-0" />
+          <span>Remote images blocked</span>
+          <button
+            type="button"
+            onClick={() => setAllowRemote(true)}
+            className="text-port-accent hover:underline"
+          >
+            Load remote images
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

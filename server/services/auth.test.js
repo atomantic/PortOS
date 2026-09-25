@@ -225,6 +225,26 @@ describe('auth service', () => {
     expect(await fresh.verifySession(token)).toBe(true);
   });
 
+  it('picks up a session another process wrote to disk after this process loaded', async () => {
+    // Keepalive mints via createSession in a separate Node process against the
+    // same auth-sessions.json. The already-running server must accept that
+    // token without a restart (mergeSessionsFromDisk on verify miss).
+    const server = await import('./auth.js');
+    await server.setPassword({ newPassword: 'correct-horse' });
+    // Prime the server Map + mtime stamp.
+    expect(await server.verifySession('not-a-real-token')).toBe(false);
+
+    // Separate module namespace = separate Map, writing the shared session file
+    // the way an out-of-process mint does.
+    vi.resetModules();
+    const mint = await import('./auth.js');
+    const { token } = await mint.createSession({ label: 'keepalive' });
+
+    // The original server namespace is still alive (resetModules only affects
+    // subsequent imports). Its Map lacks `token` until the miss-path merge.
+    expect(await server.verifySession(token)).toBe(true);
+  });
+
   it('stores sessions hashed at rest (plaintext token never lands in the file)', async () => {
     const { readFileSync } = await import('fs');
     const { join } = await import('path');

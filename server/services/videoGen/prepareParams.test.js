@@ -176,6 +176,20 @@ describe('prepareVideoGenParams', () => {
       expect(unlink).toHaveBeenCalledWith('/tmp/multipart-sourceImage-frame.png');
     });
 
+    it('uses the saved local video model when a request omits modelId', async () => {
+      const preferredModel = {
+        id: 'preferred-video-model', name: 'Preferred model', runtime: 'ltx2', supportedModes: ['text'],
+      };
+      getSettings.mockResolvedValueOnce({ videoGen: { defaultModelId: preferredModel.id } });
+      listVideoModels.mockReturnValue([preferredModel]);
+      defaultVideoModelId.mockImplementationOnce((_capabilities, preferredId) => preferredId || 'ltx2_unified');
+
+      const prepared = await prepare({});
+
+      expect(prepared.effectiveModelId).toBe(preferredModel.id);
+      expect(defaultVideoModelId).toHaveBeenCalledWith(expect.any(Object), preferredModel.id);
+    });
+
     it('probes LTX-2.5 audio and derives a full-duration 8n+1 frame canvas', async () => {
       const ltx25 = {
         id: 'ltx25_mlx_q8',

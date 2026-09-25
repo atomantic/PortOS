@@ -329,3 +329,195 @@ describe('videoGen/fal — generateVideo', () => {
     expect(frames.at(-1)).toEqual({ type: 'error', error: expect.stringContaining('faststart remux failed') });
   }, 10000);
 });
+
+// #8340 — a remote fal.ai render must not keep consuming metered compute
+// after PortOS locally abandons it. These cover: recovering from a transient
+// status-fetch failure without resubmitting, cancelling once retries are
+// exhausted, cancelling at the local render deadline, and never sending a
+// redundant cancel once fal.ai already reported a terminal status.
+describe('videoGen/fal — cancel abandoned renders (#8340)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries a transient status-fetch failure up to twice, never resubmits, and still completes', async () => {
+    vi.useFakeTimers();
+    const requestId = 'req-retry';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const responseUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}`;
+    const cancelUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/cancel`;
+    let submitCalls = 0;
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (url) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        submitCalls += 1;
+        return jsonResponse({ request_id: requestId, status_url: statusUrl, cancel_url: cancelUrl, response_url: responseUrl });
+      }
+      if (url === statusUrl) {
+        statusCalls += 1;
+        if (statusCalls <= 2) return { ok: false, status: 502, json: async () => null };
+        return jsonResponse({ status: 'COMPLETED' });
+      }
+      if (url === responseUrl) return jsonResponse({ video: { url: 'https://cdn.fal.ai/out.mp4' } });
+      if (url === 'https://cdn.fal.ai/out.mp4') {
+        return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('bytes')).buffer };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const completed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'retry me' });
+
+    // Two failed status attempts, each separated by the normal poll interval,
+    // then a third attempt that reports COMPLETED.
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    // Let the completion path (fetchFalResult + download + finalize) settle.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    expect(submitCalls).toBe(1);
+    expect(statusCalls).toBe(3);
+    expect(fetchMock.mock.calls.some(([url]) => url === cancelUrl)).toBe(false);
+  });
+
+  it('cancels the remote render once status retries are exhausted', async () => {
+    vi.useFakeTimers();
+    const requestId = 'req-exhausted';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const cancelUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/cancel`;
+    let submitCalls = 0;
+    let statusCalls = 0;
+    let cancelCalls = 0;
+    const fetchMock = vi.fn(async (url, opts) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        submitCalls += 1;
+        return jsonResponse({ request_id: requestId, status_url: statusUrl, cancel_url: cancelUrl, response_url: `https://queue.fal.run/fal-ai/x/requests/${requestId}` });
+      }
+      if (url === statusUrl) {
+        statusCalls += 1;
+        return { ok: false, status: 502, json: async () => null };
+      }
+      if (url === cancelUrl) {
+        cancelCalls += 1;
+        expect(opts.method).toBe('PUT');
+        expect(opts.headers.Authorization).toBe('Key test-key');
+        return jsonResponse({});
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
+
+    // Initial attempt + two retries, each separated by the poll interval.
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    expect(submitCalls).toBe(1);
+    expect(statusCalls).toBe(3);
+    expect(cancelCalls).toBe(1);
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({
+      generationId: job.jobId,
+      error: expect.stringContaining('status checks failed'),
+    }));
+  });
+
+  it('cancels the remote render when the local render deadline expires while fal.ai still reports nonterminal', async () => {
+    vi.useFakeTimers();
+    const requestId = 'req-deadline';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const cancelUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/cancel`;
+    let cancelCalls = 0;
+    const fetchMock = vi.fn(async (url, opts) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        return jsonResponse({ request_id: requestId, status_url: statusUrl, cancel_url: cancelUrl, response_url: `https://queue.fal.run/fal-ai/x/requests/${requestId}` });
+      }
+      if (url === statusUrl) return jsonResponse({ status: 'IN_PROGRESS' });
+      if (url === cancelUrl) {
+        cancelCalls += 1;
+        expect(opts.method).toBe('PUT');
+        expect(opts.headers.Authorization).toBe('Key test-key');
+        return jsonResponse({});
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
+
+    // Drive well past the 20-minute default render deadline.
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000 + 6000);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    expect(cancelCalls).toBe(1);
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({
+      generationId: job.jobId,
+      error: expect.stringContaining('did not finish within'),
+    }));
+  });
+
+  it('never sends a cancellation once fal.ai already reported ERROR', async () => {
+    const requestId = 'req-no-redundant-cancel';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const cancelUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/cancel`;
+    const fetchMock = vi.fn(async (url) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        return jsonResponse({ request_id: requestId, status_url: statusUrl, cancel_url: cancelUrl, response_url: `https://queue.fal.run/fal-ai/x/requests/${requestId}` });
+      }
+      if (url === statusUrl) return jsonResponse({ status: 'ERROR', error: 'model overloaded' });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    expect(fetchMock.mock.calls.some(([url]) => url === cancelUrl)).toBe(false);
+  });
+
+  it('is idempotent with explicit cancellation — a second cancel() does not resend the PUT', async () => {
+    vi.useFakeTimers();
+    const requestId = 'req-explicit-cancel';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const cancelUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/cancel`;
+    let cancelCalls = 0;
+    const fetchMock = vi.fn(async (url, opts) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') {
+        return jsonResponse({ request_id: requestId, status_url: statusUrl, cancel_url: cancelUrl, response_url: `https://queue.fal.run/fal-ai/x/requests/${requestId}` });
+      }
+      if (url === statusUrl) return jsonResponse({ status: 'IN_PROGRESS' });
+      if (url === cancelUrl) {
+        cancelCalls += 1;
+        expect(opts.method).toBe('PUT');
+        return jsonResponse({});
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
+    // Let the run reach its first poll iteration (submit + one status check)
+    // before cancelling, so entry.cancelUrl is populated.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fal.cancel(job.jobId)).toBe(true);
+    expect(fal.cancel(job.jobId)).toBe(true);
+    // The poll loop notices `entry.aborted` on its next iteration.
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    expect(cancelCalls).toBe(1);
+  });
+});

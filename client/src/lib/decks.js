@@ -20,6 +20,7 @@ export {
   cardStatus,
   composeCardRenderPrompt,
   defaultDeckCardOrientationPrompt,
+  deckCardIdentityPrompt,
   deckCardOrientation,
   deckCardOrientationNegativePrompt,
   deckCardOrientationPrompt,

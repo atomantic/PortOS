@@ -15,6 +15,9 @@
  *   POST   /api/tracks/:id/audio/upload → Track      (multipart 'track' file)
  *   POST   /api/tracks/:id/audio/attach → Track      (attach a library filename)
  *   DELETE /api/tracks/:id/audio        → Track      (clear the audio pointer)
+ *   POST   /api/tracks/:id/waveform/draw   → { sketch, llm, track } (LLM-drawn sketch, stored on the track)
+ *   POST   /api/tracks/:id/waveform/render → { track, filename, durationSec } (drawn-waveform take)
+ *   POST   /api/tracks/:id/code/render → { track, filename, durationSec } (multipart 'track' WAV recorded from code)
  *
  * Tracks store only a pointer (`audioFilename`) into the shared music library
  * (services/pipeline/musicLibrary.js, `data/music/`); the bytes are uploaded /
@@ -28,6 +31,7 @@
  */
 
 import { Router } from 'express';
+import { readFile, unlink } from 'fs/promises';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
@@ -43,6 +47,9 @@ import {
 } from '../services/trackYoutubeImport.js';
 import { YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE } from '../lib/youtubeUrl.js';
 import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
+import { drawWaveSketchForTrack, renderWaveSketchToTrack } from '../services/musicWaveform.js';
+import { WAVE_SKETCH_LIMITS } from '../lib/waveSketch.js';
+import { saveCodeTakeToTrack } from '../services/musicCode.js';
 
 const router = Router();
 
@@ -283,6 +290,55 @@ router.post('/:id/chiptune/publish', asyncHandler(async (req, res) => {
   await requireTrack(req.params.id);
   const body = validateRequest(chiptunePublishSchema, req.body ?? {});
   res.json(await publishChiptuneTrack({ trackId: req.params.id, ...body }));
+}));
+
+// --- Drawn waveform takes — the Music Designer's LLM-drawn sketch
+// (server/lib/waveSketch.js). `draw` persists the sketch on the track
+// (`waveSketch`/`waveSketchPrompt`, #8376); `render` renders that STORED sketch
+// with the same deterministic synth the browser previewed. Drawing is one
+// explicit user action per call (AI Provider Usage Policy).
+const optionalPick = (max) => z.string().max(max).optional().transform((v) => v?.trim() || undefined);
+const waveformDrawSchema = z.object({
+  description: z.string().trim().min(1, 'description is required').max(tracks.PROMPT_MAX),
+  lyrics: z.string().trim().max(tracks.LYRICS_MAX).optional(),
+  guidance: z.string().trim().max(4000).optional(),
+  durationSec: z.number().min(WAVE_SKETCH_LIMITS.DURATION_MIN_SEC).max(WAVE_SKETCH_LIMITS.DURATION_MAX_SEC).optional(),
+  // true = revise the track's stored drawing instead of drawing from scratch.
+  revise: z.boolean().optional(),
+  providerId: optionalPick(128),
+  model: optionalPick(256),
+  effort: optionalPick(64),
+});
+
+const waveformRenderSchema = z.object({
+  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
+  title: z.string().trim().max(200).optional(),
+});
+
+router.post('/:id/waveform/draw', asyncHandler(async (req, res) => {
+  const body = validateRequest(waveformDrawSchema, req.body ?? {});
+  res.json(await drawWaveSketchForTrack({ trackId: req.params.id, ...body }));
+}));
+
+router.post('/:id/waveform/render', asyncHandler(async (req, res) => {
+  const body = validateRequest(waveformRenderSchema, req.body ?? {});
+  res.json(await renderWaveSketchToTrack({ trackId: req.params.id, ...body }));
+}));
+
+// --- Code takes: the Music Designer's code engine runs LLM-written Strudel in
+// a sandboxed browser frame and records it there. The server stores the
+// recorded WAV and never runs the code.
+const codeRenderSchema = z.object({
+  prompt: z.string().trim().max(tracks.PROMPT_MAX).optional(),
+  title: z.string().trim().max(200).optional(),
+});
+
+router.post('/:id/code/render', musicUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No recorded take uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
+  // Read the temp upload before validating so a rejected body can't strand it.
+  const wav = await readFile(req.file.path).finally(() => unlink(req.file.path).catch(() => {}));
+  const body = validateRequest(codeRenderSchema, req.body ?? {});
+  res.json(await saveCodeTakeToTrack({ trackId: req.params.id, wav, ...body }));
 }));
 
 // Make a past render the active one (re-point the player + gen-metadata badges

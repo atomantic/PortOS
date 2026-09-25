@@ -12,7 +12,7 @@ import { getMemoryStats } from '../lib/memoryStats.js';
 import { formatBytes, formatDuration } from '../lib/fileUtils.js';
 import { parseFilesystemStats } from '../lib/fileCore.js';
 import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
 import { checkGhHealth } from '../services/github.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
@@ -20,6 +20,7 @@ import { getActiveProcessing } from '../services/activeProcessing.js';
 import { getMediaCapacity } from '../services/mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
 // for older clients, but no longer generate warnings or degrade health.
@@ -29,6 +30,12 @@ const DEFAULT_THRESHOLDS = {
   diskWarn: 90,
   diskCritical: 98
 };
+
+// When a stale dismissal cannot be removed, remember the exact record that
+// needs pruning. A matching recurrence remains visible until a later health
+// read successfully removes that same persisted value.
+const pendingDismissalPrunes = new Map();
+const sameDismissal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
 // Dashboard warnings are recomputed fresh on every read (nothing about them is
 // persisted), so "dismiss" can't delete a row — it has to remember, per warning
@@ -43,10 +50,18 @@ const DEFAULT_THRESHOLDS = {
 // per concern), paying for two deep-clones of the settings cache on every
 // dashboard poll.
 async function loadHealthSettings() {
-  const settings = await getSettings().catch(() => ({}));
-  const h = settings.health || {};
+  const status = await getSettingsWithStatus().catch(() => {
+    console.error('❌ Failed to read system health settings; default thresholds will be used');
+    return { corrupt: true, settings: {} };
+  });
+  const settingsAvailable = status?.corrupt === false
+    && status.settings
+    && typeof status.settings === 'object'
+    && !Array.isArray(status.settings);
+  const h = settingsAvailable ? (status.settings.health || {}) : {};
   const dismissedWarnings = h.dismissedWarnings;
   return {
+    thresholdsAvailable: Boolean(settingsAvailable),
     thresholds: {
       memoryWarn: Number(h.memoryWarn) || DEFAULT_THRESHOLDS.memoryWarn,
       memoryCritical: Number(h.memoryCritical) || DEFAULT_THRESHOLDS.memoryCritical,
@@ -58,6 +73,19 @@ async function loadHealthSettings() {
       : {}
   };
 }
+
+async function assertHealthSettingsWritable() {
+  const status = await getSettingsWithStatus().catch(() => ({ corrupt: true }));
+  if (status?.corrupt !== false || !status.settings || typeof status.settings !== 'object' || Array.isArray(status.settings)) {
+    throw new ServerError('System health settings are unavailable; repair settings before changing thresholds or warning dismissals.', { status: 503 });
+  }
+}
+
+const assertDismissibleWarningType = (type) => {
+  if (type === 'health-settings' || type === 'probe-unavailable') {
+    throw new ServerError('This system health warning cannot be dismissed.', { status: 400 });
+  }
+};
 
 // Every write below only ever touches settings.health — shallow-merging a
 // patch into whatever the write queue's freshest snapshot already holds there.
@@ -81,11 +109,10 @@ router.get('/processing', asyncHandler(async (req, res) => {
  * path — `probePeer` reads /health/details, /api/apps and /api/instances/
  * sync-status only — so the stamp never leaves the machine on its own.
  *
- * That is the guarantee being made, and the limit of it: the generic
- * `queryPeer` proxy (routes/instances.js, predates this) lets an authenticated
- * peer deliberately GET any /api/* path, as it can for every other endpoint on
- * this server. The point here is that the stamp is not PUSHED into a payload
- * that federates unprompted.
+ * That is the guarantee being made, and the limit of it: a peer holding the
+ * legacy Basic password can still deliberately GET this path (a paired peer's
+ * scoped token cannot — it is outside PEER_API_SURFACE, #8387). The point here
+ * is that the stamp is not PUSHED into a payload that federates unprompted.
  * See the root AGENTS.md privacy rules and #4694 ("local-only diagnostic data
  * — must not join a sync payload"). `health.test.js` pins both halves.
  */
@@ -128,12 +155,16 @@ router.get('/health', asyncHandler(async (req, res) => {
  */
 router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
+  const failedProbe = Symbol('failed health probe');
 
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcesses().catch(() => []),
     getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
-    cos.getStatus().catch(() => null),
+    cos.getStatus().catch((error) => {
+      console.error('Chief of Staff health probe failed', error);
+      return failedProbe;
+    }),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
     // such field — `cosStatus.queueLength` never existed, so the widget's
     // "N queued" was dead and always rendered 0. Both reads ride the same
@@ -143,7 +174,10 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
-    statfs('/').catch(() => null),
+    statfs('/').catch((error) => {
+      console.error('Root filesystem health probe failed', error);
+      return failedProbe;
+    }),
     getMemoryStats(),
     loadHealthSettings(),
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
@@ -154,7 +188,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       .then(({ getReviewerConfigHealth }) => getReviewerConfigHealth())
       .catch(() => ({ status: 'unknown', configFaults: {} }))
   ]);
-  const { thresholds, dismissedWarnings } = healthSettings;
+  const { thresholds, dismissedWarnings, thresholdsAvailable } = healthSettings;
 
   const memUsagePercent = Math.round((memStats.used / memStats.total) * 100);
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
@@ -165,7 +199,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // bavail = blocks available to unprivileged users (what the user can actually fill).
   // Derive used/usagePercent from the same figure so `used + free === total` and
   // the UI's percent corresponds to the displayed `free`.
-  const parsedDisk = parseFilesystemStats(diskStats);
+  const parsedDisk = diskStats === failedProbe ? null : parseFilesystemStats(diskStats);
   const disk = parsedDisk && {
     total: parsedDisk.total,
     used: parsedDisk.used,
@@ -213,6 +247,22 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const rawWarnings = [];
 
   // Memory occupancy and CPU load describe work, not a health failure.
+
+  if (!thresholdsAvailable) {
+    rawWarnings.push({
+      type: 'health-settings',
+      severity: 'warning',
+      message: 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.',
+      dismissible: false
+    });
+  }
+
+  if (diskStats === failedProbe) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false });
+  }
+  if (cosStatus === failedProbe) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false });
+  }
 
   if (disk) {
     if (disk.usagePercent >= thresholds.diskCritical) {
@@ -273,6 +323,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     });
   }
 
+  if (!thresholdsAvailable) rawWarnings.forEach((warning) => { warning.dismissible = false; });
+
   // A dismissal only stays applied while the warning it was recorded against
   // is still current (same type AND same message) — see loadHealthSettings.
   // Anything else (the condition cleared, or recurred with a different
@@ -282,14 +334,45 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const warnings = [];
   for (const warning of rawWarnings) {
     const dismissal = dismissedWarnings[warning.type];
-    if (dismissal?.message === warning.message) {
+    const pendingPrune = pendingDismissalPrunes.get(warning.type);
+    if (warning.dismissible !== false && dismissal?.message === warning.message && !sameDismissal(pendingPrune, dismissal)) {
       nextDismissedWarnings[warning.type] = dismissal;
       continue;
     }
     warnings.push(warning);
   }
-  if (Object.keys(dismissedWarnings).length !== Object.keys(nextDismissedWarnings).length) {
-    await updateSettingsWith((current) => patchHealth(current, { dismissedWarnings: nextDismissedWarnings })).catch(() => {});
+
+  if (thresholdsAvailable) {
+    for (const [type, pending] of pendingDismissalPrunes) {
+      if (!Object.hasOwn(dismissedWarnings, type) || !sameDismissal(dismissedWarnings[type], pending)) {
+        pendingDismissalPrunes.delete(type);
+      }
+    }
+
+    const staleDismissals = Object.entries(dismissedWarnings)
+      .filter(([type]) => !Object.hasOwn(nextDismissedWarnings, type));
+    if (staleDismissals.length) {
+      for (const [type, dismissal] of staleDismissals) pendingDismissalPrunes.set(type, dismissal);
+      try {
+        const saved = await updateSettingsWith((current) => {
+          const next = { ...(current.health?.dismissedWarnings || {}) };
+          for (const [type, dismissal] of staleDismissals) {
+            if (sameDismissal(next[type], dismissal)) delete next[type];
+          }
+          return patchHealth(current, { dismissedWarnings: next });
+        });
+        for (const [type, dismissal] of staleDismissals) {
+          if (sameDismissal(pendingDismissalPrunes.get(type), dismissal)
+            && !sameDismissal(saved?.health?.dismissedWarnings?.[type], dismissal)) {
+            pendingDismissalPrunes.delete(type);
+          }
+        }
+      } catch (error) {
+        for (const [type] of staleDismissals) {
+          console.error(`❌ Failed to prune stale system health warning dismissal (type=${type}, error=${error?.code || 'write-failed'})`);
+        }
+      }
+    }
   }
 
   const overallHealth = warnings.some(w => w.severity === 'critical')
@@ -303,7 +386,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // An unreadable list degrades to null — unknown, which the widget hides —
   // rather than to a manufactured zero.
   const heldByRunningAgent = runningAgentsByTaskId(cosAgents);
-  const cosInfo = cosStatus ? {
+  const cosInfo = cosStatus && cosStatus !== failedProbe ? {
     running: cosStatus.running,
     paused: cosStatus.paused,
     activeAgents: cosAgents
@@ -323,6 +406,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     instanceId: self?.instanceId ?? null,
     version,
     overallHealth,
+    // Peer credential handshake (#8356): `accepted` tells the probing peer that
+    // THIS request authenticated with its pair token, so it can stop sending
+    // the instance password. Older receivers omit the field; senders keep Basic.
+    peerAuth: {
+      version: PORTOS_SCHEMA_VERSIONS.peerAuth,
+      accepted: req.portosAuthContext?.method === 'peer',
+    },
     warnings,
     system: {
       uptime,
@@ -358,7 +448,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     database: dbHealth,
     forge: forgeHealth,
     codeReview: reviewerConfigHealth,
-    thresholds,
+    thresholds: thresholdsAvailable ? thresholds : undefined,
+    thresholdsAvailable,
     topProcesses: [...pm2Processes]
       .sort((a, b) => (b.memory || 0) - (a.memory || 0))
       .slice(0, 10)
@@ -385,7 +476,9 @@ router.get('/health/details', asyncHandler(async (req, res) => {
  */
 router.post('/health/warnings/:type/dismiss', asyncHandler(async (req, res) => {
   const { type } = validateRequest(systemHealthWarningParamsSchema, req.params);
+  assertDismissibleWarningType(type);
   const { message } = validateRequest(systemHealthWarningDismissSchema, req.body || {});
+  await assertHealthSettingsWritable();
   const next = await updateSettingsWith((current) => patchHealth(current, {
     dismissedWarnings: {
       ...(current.health?.dismissedWarnings || {}),
@@ -401,6 +494,8 @@ router.post('/health/warnings/:type/dismiss', asyncHandler(async (req, res) => {
  */
 router.delete('/health/warnings/:type/dismiss', asyncHandler(async (req, res) => {
   const { type } = validateRequest(systemHealthWarningParamsSchema, req.params);
+  assertDismissibleWarningType(type);
+  await assertHealthSettingsWritable();
   await updateSettingsWith((current) => {
     const dismissedWarnings = { ...(current.health?.dismissedWarnings || {}) };
     delete dismissedWarnings[type];
@@ -439,6 +534,7 @@ router.put('/health/thresholds', asyncHandler(async (req, res) => {
 
   // Merge the health thresholds against the freshest snapshot inside the write
   // queue so a concurrent settings write isn't clobbered by a stale base.
+  await assertHealthSettingsWritable();
   await updateSettingsWith((current) => patchHealth(current, next));
   res.json(next);
 }));

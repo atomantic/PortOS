@@ -45,6 +45,38 @@ describe('ProviderForm', () => {
     }
   });
 
+  it('offers and saves low-priority continuation only for a Claude TUI provider', async () => {
+    renderForm({ provider: {
+      id: 'claude-code-tui',
+      name: 'Claude Code TUI',
+      type: 'tui',
+      command: 'claude',
+      lowPriorityOnUsageLimit: false,
+    } });
+
+    const toggle = screen.getByRole('checkbox', { name: /Continue with Claude Code's \/low-priority mode/ });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith(
+      'claude-code-tui', expect.objectContaining({ lowPriorityOnUsageLimit: true }),
+    ));
+  });
+
+  it('does not offer Claude low-priority continuation for headless or non-Claude providers', () => {
+    const { unmount } = renderForm({ provider: {
+      id: 'claude-code-cli', name: 'Claude Code CLI', type: 'cli', command: 'claude',
+    } });
+    expect(screen.queryByRole('checkbox', { name: /low-priority mode/ })).not.toBeInTheDocument();
+    unmount();
+
+    renderForm({ provider: {
+      id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex',
+    } });
+    expect(screen.queryByRole('checkbox', { name: /low-priority mode/ })).not.toBeInTheDocument();
+  });
+
   // The Drawer body remounts per tab (key={currentTab}), so any field state left
   // inside a panel would be wiped on a tab switch. All of it is hoisted into the
   // form component above the Drawer — this is the regression guard for that.
@@ -365,7 +397,8 @@ describe('ProviderForm model access', () => {
     it('explains a derived preset, links its service, hides the connection-owned fields and offers no conversion', () => {
       renderForm({ provider: { ...legacy, presetKind: 'derived', presetDerivable: false, harnessId: 'claude', method: 'cli', serviceId: 'ollama' } });
       expect(screen.getByText(/Derived from service/)).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+      expect(screen.getByRole('link', { name: 'service settings for ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+      expect(screen.getByText(/To edit this service's credentials/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Convert to derived preset/ })).not.toBeInTheDocument();
       // The service owns type, command and the inline bootstrap (#7567); the
       // preset keeps its name and arguments.

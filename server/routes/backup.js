@@ -9,6 +9,7 @@ import {
 } from '../lib/validation.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
+import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const router = Router();
 
@@ -34,8 +35,9 @@ router.post('/run', asyncHandler(async (req, res) => {
   }
   const excludePaths = settings.backup?.excludePaths || [];
   const disabledDefaultExcludes = settings.backup?.disabledDefaultExcludes || [];
+  const { retentionCount } = resolveBackupConfig(settings.backup);
   const io = req.app.get('io');
-  const result = await backup.runBackup(destPath, io, { excludePaths, disabledDefaultExcludes });
+  const result = await backup.runBackup(destPath, io, { excludePaths, disabledDefaultExcludes, retentionCount });
   res.json(result);
 }));
 
@@ -64,6 +66,19 @@ router.get('/snapshots/:snapshotId/download', asyncHandler(async (req, res) => {
     failure: new ServerError('Snapshot download failed', { status: 500, code: 'BACKUP_DOWNLOAD_FAILED' }),
     label: `Backup snapshot ${snapshotId}`,
   });
+}));
+
+// DELETE /api/backup/snapshots/:snapshotId
+router.delete('/snapshots/:snapshotId', asyncHandler(async (req, res) => {
+  const settings = await getSettings();
+  const destPath = settings.backup?.destPath;
+  if (!destPath) {
+    throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
+  }
+  const { snapshotId } = req.params;
+  const { source } = validateRequest(snapshotDownloadQuerySchema, req.query);
+  const result = await backup.deleteSnapshot(destPath, snapshotId, { source });
+  res.json(result);
 }));
 
 // POST /api/backup/restore

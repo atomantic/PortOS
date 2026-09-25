@@ -60,6 +60,7 @@ import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 import {
   getPeers,
   getAssignableInstances,
@@ -362,12 +363,21 @@ describe('instances.js', () => {
     });
   });
 
+  it('pairing a legacy peer preserves its outbound relationship', async () => {
+    const peer = { id: 'legacy-peer', instanceId: 'peer-a', enabled: true, syncEnabled: false };
+    readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+    await updatePeer('legacy-peer', { syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(peer.directions).toEqual(['outbound', 'inbound']);
+    expect(peer.syncEnabled).toBe(false);
+  });
+
   describe('redactPeerForWire', () => {
     it('strips credentials and local media-routing state before a peer crosses the wire', () => {
       const peer = {
         id: 'peer-1',
         name: 'host',
         auth: { username: 'a', password: 'b' },
+        syncSecret: 'synthetic-pair-secret-32-characters-long',
         mediaProvider: { enabled: true, audioModels: [{ engine: 'example', modelId: 'example' }] },
         mediaProviderStatus: { state: 'ready' },
         status: 'online',
@@ -375,6 +385,9 @@ describe('instances.js', () => {
       const redacted = redactPeerForWire(peer);
 
       expect(redacted).not.toHaveProperty('auth');
+      expect(redacted).not.toHaveProperty('syncSecret');
+      expect(sanitizePeerForClient(peer)).not.toHaveProperty('syncSecret');
+      expect(sanitizePeerForClient(peer).hasSyncSecret).toBe(true);
       expect(redacted).not.toHaveProperty('mediaProvider');
       expect(redacted).not.toHaveProperty('mediaProviderStatus');
       expect(redacted).toMatchObject({ id: 'peer-1', name: 'host', status: 'online' });
@@ -1328,6 +1341,26 @@ describe('instances.js', () => {
       expect(result.authRequired).toBe(false);
     });
 
+    it('latches the receiver confirmation of the pair token, and drops it on an auth failure (#8356)', async () => {
+      const peer = makePeer({ syncSecret: 'example-pair-secret-0123456789-abcdef' });
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      const health = (body) => ({ ok: true, json: () => Promise.resolve({ instanceId: 'r-id', ...body }) });
+
+      // An older receiver never answers: the sender keeps presenting Basic.
+      fetch.mockResolvedValueOnce(health({})).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(false);
+
+      fetch.mockResolvedValueOnce(health({ peerAuth: { version: 1, accepted: true } }))
+        .mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(true);
+
+      // A timeout keeps the confirmation; a 401 (lost pairing, downgrade) clears it.
+      fetch.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(true);
+      fetch.mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(false);
+    });
+
     it('should auto-update name from hostname when name is an IP', async () => {
       const peer = makePeer({ name: '10.0.0.1' });
       const peers = [peer];
@@ -1480,6 +1513,44 @@ describe('instances.js', () => {
   });
 
   describe('handleAnnounce', () => {
+    it('keeps an admitted peer identity, callback endpoint and consent unchanged after forged discovery', async () => {
+      const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        host: 'configured.example.com', directions: ['inbound'], syncSecret: 'synthetic-pair-secret-32-characters-long',
+        syncEnabled: false, syncCategories: { universe: false } };
+      const before = structuredClone(peer);
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+      await handleAnnounce({ instanceId: 'peer-forged', address: '192.0.2.10', port: 5555, host: 'attacker.example.com' });
+      expect(peer).toEqual(before);
+      await applyReciprocalSync('peer-a', { universe: true }, { fullSync: true });
+      expect(peer).toEqual(before);
+    });
+
+    it('ignores host/port/name/status from an announce whose address does not match the stored peer, even without a syncSecret', async () => {
+      // instanceId is public (GET /api/system/health, unauthenticated), so a caller
+      // that only knows it — but isn't calling from the peer's real address — must
+      // not be able to redirect this peer record to a host of their choosing.
+      const peer = {
+        id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        host: 'configured.example.com', name: 'configured.example.com', status: 'offline',
+        directions: ['outbound']
+      };
+      const before = structuredClone(peer);
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+
+      const result = await handleAnnounce({
+        instanceId: 'peer-a', address: '198.51.100.99', port: 443,
+        host: 'attacker.example.com', name: 'attacker'
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.peer.host).toBe(before.host);
+      expect(result.peer.port).toBe(before.port);
+      expect(result.peer.name).toBe(before.name);
+      expect(result.peer.status).toBe(before.status);
+      expect(result.peer.directions).toEqual(before.directions);
+      expect(peerBaseUrl(result.peer)).toBe(peerBaseUrl(before));
+    });
+
     it('preserves the managed tailcat endpoint when the remote announces its own host and port', async () => {
       const existing = {
         id: 'tailcat-peer', address: '127.0.0.1', port: 15555, host: null,

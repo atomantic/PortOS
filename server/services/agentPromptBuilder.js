@@ -20,7 +20,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
-import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
+import { isClaimFlowDispatch } from './taskTypeHooks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSections/constants.js';
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
@@ -96,9 +96,11 @@ const UI_AUDIT_TASK_TYPE_SET = new Set(UI_AUDIT_TASK_TYPES);
 export const UI_AUDIT_RUNTIME_RULE = `## UI Audit Runtime (PortOS local system)
 This is an unattended run, but it is not browserless when the target has a web UI. PortOS provides a managed Chromium browser for CoS agents over Chrome DevTools Protocol (CDP). The agent-facing browser bridge is separate from that managed browser: an empty array returned by agent.browsers.list() ([]), getForUrl() returning "No browser is available", or an otherwise unusable agent-browser binding is a provider-bridge failure, not evidence that PortOS's managed Chromium or CDP endpoint is unavailable. Do not skip live UI verification because the provider bridge is empty, unusable, or no human is present.
 
-- Use the available Playwright/browser tools against that PortOS-managed browser when the provider has a working browser bridge; fall back to the configured CDP endpoint from the local shell when the provider has no browser bridge, or when its bridge is empty or unusable.
+- Use Playwright/browser tools only with a working browser bridge that can attach to the dedicated PortOS tab described below without creating a page or bringing the browser window to the front. Otherwise use the configured CDP endpoint from the local shell, including when the provider bridge is empty or unusable.
 - When the agent browser bridge is empty or unusable, query the configured PortOS browser health endpoint (usually http://127.0.0.1:5557/health, or its configured healthPort) and the CDP /json/version or /json/list endpoints before stopping. The richer /api/browser/health check may require the instance password; a 401 from that API route is an authentication response, not evidence that PortOS's managed browser is unavailable. A healthy PortOS health/CDP response overrides the provider's "No browser is available" response.
-- Reuse the PortOS-managed browser over CDP instead of launching a separate browser. Check the browser status/configuration when needed; the CDP endpoint is local and its port is configurable (the shipped default is 127.0.0.1:5556). For a local smoke check, select a normal type: "page" target from /json/list and attach to its webSocketDebuggerUrl with Node's WebSocket or another installed CDP client; if /json/list is empty, create an about:blank page target with PUT /json/new?about:blank. Navigate the page with Page.navigate, then inspect it with Runtime.evaluate on that same page socket. Do not send Page or Runtime commands to the browser-level socket from /json/version; use Page, Runtime, Log, and Network domains on the page socket for live evidence.
+- Check browser status/configuration when needed; the CDP endpoint is local and configurable, with shipped default 127.0.0.1:5556.
+- All UI audits share one persistent, dedicated PortOS browser tab. At the start, inspect normal type: "page" targets from /json/list and read window.name over each page's webSocketDebuggerUrl. Reuse only the target marked window.name === "portos-ui-quality-audit"; never guess ownership from a URL, title, or which tab is active, and never navigate, activate, or close any other page. If no marked target exists, create exactly one background target by sending Target.createTarget with {url: "about:blank", background: true} to the browser-level webSocketDebuggerUrl from /json/version, then find its page target by the returned targetId. Do not use PUT /json/new, browser.newPage(), context.newPage(), a new browser context/window, or an "open in new tab" action for this audit. If background target creation fails, do not fall back to a foreground tab; report the specific CDP failure and stop the live UI portion.
+- Navigate that one dedicated target in place with Page.navigate and inspect it with Runtime.evaluate on its page socket. Reuse the same target for every route and control; never create a page per view. Do not send Page or Runtime commands to the browser-level socket from /json/version, and do not call Page.bringToFront or use UI actions that select/focus a tab. After navigation, set window.name = "portos-ui-quality-audit" again if a cross-site navigation cleared it. At the end, set window.name to that marker and document.title to "PortOS UI Audit", then leave the tab open for the next audit. Use Page, Runtime, Log, and Network domains on the dedicated page socket for live evidence.
 - Treat the target as a running local system: discover its actual UI/API URL and ports from the app configuration, PortOS app/process state, and health endpoints, then inspect scoped server logs when diagnosing console or request failures. Do not guess a URL or treat source-only speculation as a UI finding.
 - Capture live evidence (snapshots, console/request results, and observed runtime state) before changing code. Do not stop the UI audit merely because the provider bridge is unavailable. Stop the web-UI portion only after the PortOS health/CDP probes fail or no usable page target can be created, navigated, and inspected; the handoff must name the concrete endpoint, HTTP/process, or WebSocket failure. A provider-only "No browser is available" result is not enough, and a failed CDP probe must not become a source-only UX finding. For a native or source-only target with no web surface, continue the relevant audit without inventing a browser target and record that limitation.`;
 
@@ -111,8 +113,15 @@ export function isUiAuditTask(task) {
 }
 
 export function isClaimFlowTask(task, isTruthyMetaFn = (value) => value === true || value === 'true') {
+  // Delegates to isClaimFlowDispatch (taskTypeHooks.js) so the prompt-side
+  // claim posture and the finalization/learning-side exemption resolve the
+  // SAME task shapes — that predicate reads the marker plus the full
+  // analysisType → taskAnalysisType → taskType chain, covering an archived
+  // projection or a bare taskType this narrower chain used to miss (the #6613
+  // writer/reader split, one shape over). The isTruthyMetaFn seam stays for
+  // the suites that inject it.
   return isTruthyMetaFn(task?.metadata?.claimFlow)
-    || CLAIM_FLOW_TASK_TYPES.has(task?.metadata?.analysisType);
+    || isClaimFlowDispatch(task);
 }
 
 /**

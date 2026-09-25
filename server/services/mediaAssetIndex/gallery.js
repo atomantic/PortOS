@@ -1,6 +1,6 @@
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
-import { listAssets, countAssets, galleryFacets } from './db.js';
+import { listAssets, countAssets, galleryFacets, listMixedGalleryPage } from './db.js';
 
 const escapeHatch = () => process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
@@ -8,6 +8,33 @@ const keyForRef = item => `${item.kind}:${item.ref}`;
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0;
 const text = value => typeof value === 'string' && value.trim() ? value : null;
 const readImages = async diskReader => (diskReader || (await import('../imageGen/local.js')).listGallery)();
+
+// Card fields a compact list row keeps: identity, file addressing, lineage
+// badges and the chips MediaCard renders. Everything else — full prompts,
+// negative prompts, provider payloads — stays on the record and is read on
+// demand (`/gallery/lookup`, `/video-gen/history/:id`).
+const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
+  'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'renderMs', 'loraFilenames',
+  'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
+  'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved'];
+const COMPACT_PROMPT_CHARS = 240;
+
+/**
+ * Opt-in list projection (#8292). `compact: true` marks the row as a PREVIEW:
+ * its prompt is cut to a display label, so a consumer must hydrate the full
+ * record before editing it or handing its prompt/settings to a generation
+ * action. Search and counts still run over the full stored metadata.
+ */
+function compactGalleryRecord(data) {
+  if (!data || typeof data !== 'object') return data;
+  const row = { compact: true };
+  for (const field of COMPACT_FIELDS) if (data[field] !== undefined) row[field] = data[field];
+  const prompt = text(data.prompt) || text(data.metadata?.prompt);
+  if (prompt) {
+    row.prompt = prompt.length > COMPACT_PROMPT_CHARS ? `${prompt.slice(0, COMPACT_PROMPT_CHARS).trimEnd()}…` : prompt;
+  }
+  return row;
+}
 
 async function resolveScope({ collectionId, starred, mediaKeys, collectionSnapshot }) {
   let keys = mediaKeys;
@@ -35,7 +62,7 @@ async function resolveScope({ collectionId, starred, mediaKeys, collectionSnapsh
 
 /** Bounded reads; sidecars remain the reconcile authority and test escape hatch. */
 export async function listGalleryPage({
-  limit = 60, offset = 0, q = '', hidden, filename, starred = false, summary = false,
+  limit = 60, offset = 0, q = '', hidden, filename, starred = false, summary = false, compact = false,
   kind = 'image', media = false, cover = false, videoSnapshot, collectionSnapshot, collectionId, universeId, entryCategory, entryKind, mediaKeys,
 } = {}, diskReader) {
   const mixed = media || kind !== 'image';
@@ -77,17 +104,19 @@ export async function listGalleryPage({
       counts = { image: counted.filter(row => row.kind === 'image').length,
         video: counted.filter(row => row.kind === 'video').length, all: counted.length };
     }
+  } else if (summary && mixed) {
+    const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
+    ({ items, total, hiddenTotal, counts } = await listMixedGalleryPage({
+      ...filters, limit, offset, orderedKeys: scope.orderedKeys, cover, countMediaKeys: countScope.mediaKeys,
+    }));
   } else {
     [items, total, hiddenTotal] = await Promise.all([
       listAssets({ ...filters, limit, offset, typed: mixed, orderedKeys: scope.orderedKeys, cover }),
       countAssets(filters), summary ? countAssets({ ...filters, hidden: true }) : undefined,
     ]);
-    if (summary && mixed) {
-      const countScope = starred ? await resolveScope({ collectionId, mediaKeys, collectionSnapshot }) : scope;
-      const base = { ...filters, mediaKeys: countScope.mediaKeys };
-      const [image, video] = await Promise.all(['image', 'video'].map(kind => countAssets({ ...base, kind })));
-      counts = { image, video, all: image + video };
-    }
+  }
+  if (compact) {
+    items = items.map(item => mixed ? { kind: item.kind, data: compactGalleryRecord(item.data) } : compactGalleryRecord(item));
   }
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }

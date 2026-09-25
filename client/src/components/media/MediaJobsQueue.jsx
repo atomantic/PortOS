@@ -5,7 +5,7 @@ import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
-import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
+import { listQueueMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel, mediaJobLane, isCloudVideoMode } from '../../lib/imageGenBackends';
 import { ANTIGRAVITY_CONFIGURED_DEFAULT, effortLevelsForProvider, isConfiguredDefaultModel } from '../../utils/providers';
@@ -142,7 +142,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
 
   const fetchJobs = useCallback(async () => {
     const outcome = await Promise.all([
-      listMediaJobs(kind ? { kind } : {}),
+      listQueueMediaJobs({ ...(kind ? { kind } : {}), limit: recentLimit }),
       !kind || kind === 'video' ? listMediaVideoHolds() : [],
     ]).then(
       (value) => ({ value }),
@@ -158,7 +158,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     setHasSnapshot(true);
     setLoadError(false);
     setLoading(false);
-  }, [kind]);
+  }, [kind, recentLimit]);
 
   useAutoRefetch(fetchJobs, 3000, { pollOnly: true });
 
@@ -166,8 +166,8 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     .then(() => {
       // Optimistic update: queued jobs flip to 'canceled' immediately (the
       // worker won't pick them up). For running jobs leave the server status
-      // alone and track a UI-only `cancelRequested` flag — the next poll
-      // resolves to 'canceled' once the worker observes it.
+      // alone; the next queue refresh replaces this optimistic flag with the
+      // server-projected `cancelRequested` state until the job is terminal.
       setJobs((prev) => prev.map((j) => {
         if (j.id !== id) return j;
         if (j.status === 'queued') return { ...j, status: 'canceled', cancelRequested: false };

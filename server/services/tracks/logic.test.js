@@ -247,4 +247,40 @@ describe('tracks logic', () => {
       expect(merged.next.chiptunePrompt).toBe('');
     });
   });
+
+  describe('drawn wave sketch fields (#8376)', () => {
+    const sketch = {
+      version: 1, title: 'Glass Tide', durationSec: 2,
+      shapes: { glass: [0, 0.8, 1, 0.3, 0, -0.5, -1, -0.2] },
+      voices: [{ name: 'lead', shape: 'glass', notes: [{ t: 0, d: 1, pitch: 'A4' }] }],
+    };
+    const local = () => sanitizeTrack({
+      id: 'track-1', title: 'X', waveSketch: sketch, waveSketchPrompt: 'glassy', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    it('normalizes a stored sketch and sanitizes an invalid one to null', () => {
+      expect(local().waveSketch).toMatchObject({ title: 'Glass Tide', voices: [{ notes: [{ hz: 440 }] }] });
+      expect(local().waveSketchPrompt).toBe('glassy');
+      // Nothing playable (unknown shape) and a non-object both collapse to null.
+      expect(sanitizeTrack({ id: 'track-1', title: 'X', waveSketch: { voices: [{ shape: 'nope', notes: [] }] } }).waveSketch).toBeNull();
+      expect(sanitizeTrack({ id: 'track-1', title: 'X', waveSketch: 'draw me' }).waveSketch).toBeNull();
+      expect(sanitizeTrack({ id: 'track-1', title: 'X' })).toMatchObject({ waveSketch: null, waveSketchPrompt: '' });
+    });
+
+    it('merge keeps the local drawing when a winning v6 peer payload lacks the keys', () => {
+      const merged = mergeTrackRecord(local(), { id: 'track-1', title: 'Renamed', updatedAt: '2026-02-01T00:00:00.000Z' });
+      expect(merged.remoteWins).toBe(true);
+      expect(merged.next.title).toBe('Renamed');
+      expect(merged.next.waveSketch).toEqual(local().waveSketch);
+      expect(merged.next.waveSketchPrompt).toBe('glassy');
+    });
+
+    it('merge applies an explicit remote clear', () => {
+      const merged = mergeTrackRecord(local(), {
+        id: 'track-1', title: 'X', waveSketch: null, waveSketchPrompt: '', updatedAt: '2026-02-01T00:00:00.000Z',
+      });
+      expect(merged.next.waveSketch).toBeNull();
+      expect(merged.next.waveSketchPrompt).toBe('');
+    });
+  });
 });

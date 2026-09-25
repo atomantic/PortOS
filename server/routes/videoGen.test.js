@@ -649,6 +649,20 @@ describe('videoGen routes', () => {
       expect(checkPackages).not.toHaveBeenCalled();
     });
 
+    it('uses the saved local video model as the form default when available', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { defaultModelId: 'preferred-video-model' } });
+      videoGenService.defaultVideoModelId.mockImplementationOnce((capabilities, preferredId) => (
+        preferredId || 'ltx2_unified'
+      ));
+
+      const r = await request(app).get('/api/video-gen/model-context');
+
+      expect(r.status).toBe(200);
+      expect(r.body.defaultModel).toBe('preferred-video-model');
+      expect(videoGenService.defaultVideoModelId).toHaveBeenCalledWith(expect.any(Object), 'preferred-video-model');
+    });
+
     // The payload's `runtimeLoraCapable` is only as good as the probe having
     // ANSWERED first — the reason is on warmByovLoraCapabilities in
     // services/videoGen/runtimes.js. Calling the warm is not enough: the list

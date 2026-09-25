@@ -2,15 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-const { fetchPage, deleteImage, saveAnnotation } = vi.hoisted(() => ({ fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn() }));
-vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage }));
+const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants } = vi.hoisted(() => ({ fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
+vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
 vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, deleteVideoHistoryItem: vi.fn(), stitchVideos: vi.fn() }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: saveAnnotation, getCardProps: () => ({}) }) }));
 vi.mock('../hooks/useMediaPreviewActions', () => ({ default: () => ({}) }));
 vi.mock('../components/media/VideoUpscaleDrawer', () => ({ default: () => null }));
-vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}</div> : null }));
-vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar }) => <div><span>{item.prompt}</span><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
+vi.mock('../components/media/MediaPreview', () => ({ default: ({ preview }) => preview ? <div role="dialog">{preview.prompt}{preview.detailError && ' [details unavailable]'}</div> : null }));
+vi.mock('../components/media/MediaCard', () => ({ default: ({ item, onDelete, onToggleStar, onPreview }) => <div><button type="button" onClick={() => onPreview(item)}>{item.prompt}</button><button type="button" onClick={() => onToggleStar(item)}>Favorite {item.filename}</button><button type="button" onClick={() => onDelete(item)}>Delete {item.filename}</button></div> }));
 import MediaHistory from './MediaHistory';
 
 let rows;
@@ -22,6 +22,12 @@ beforeEach(() => {
     const matches = rows.filter(row => (!filename || row.data.filename === filename) && row.data.prompt.includes(q));
     return { items: matches.slice(offset, offset + limit), total: matches.length, offset, limit, counts: { all: matches.length, image: matches.length, video: 0 } };
   });
+  getGalleryImages.mockImplementation(async filenames => rows.filter(row => filenames.includes(row.data.filename)).map(row => row.data));
+  // Hydration tries the variants group first (mediaDetail.js's
+  // `fetchImageVariantGroup`, #8341); resolving "not indexed" by default
+  // falls back to `getGalleryImages` so the existing hydration tests below
+  // exercise that fallback exactly as before.
+  listImageVariants.mockImplementation(async () => ({ items: [] }));
   deleteImage.mockImplementation(async filename => { rows = rows.filter(row => row.data.filename !== filename); return { ok: true }; });
 });
 const open = (url = '/media/history') => render(<MemoryRouter initialEntries={[url]}><MediaHistory /></MemoryRouter>);
@@ -31,7 +37,7 @@ describe('bounded media history', () => {
     open();
     await screen.findByText('Picture 0');
     expect(screen.queryByText('Picture 60')).toBeNull();
-    expect(fetchPage).toHaveBeenCalledWith(expect.objectContaining({ limit: 60, offset: 0, summary: true }), { silent: true });
+    expect(fetchPage).toHaveBeenCalledWith(expect.objectContaining({ limit: 60, offset: 0, summary: true, hidden: false, compact: true }), { silent: true });
     fetchPage.mockRejectedValueOnce(new Error('Page unavailable'));
     fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
     await screen.findByRole('alert');
@@ -59,6 +65,53 @@ describe('bounded media history', () => {
     await screen.findByText('Picture 60');
     expect(screen.queryByText('Picture 0')).toBeNull();
     expect(screen.queryByRole('button', { name: /Show more/ })).toBeNull();
+  });
+
+  it('opens a compact card by hydrating only that record, and never shows the preview as its prompt', async () => {
+    const full = 'Picture 0 ' + 'with a long stored prompt '.repeat(30);
+    rows[0].data.prompt = full;
+    fetchPage.mockImplementation(async ({ offset = 0 }) => ({
+      items: rows.slice(offset, offset + 60).map(row => ({ kind: row.kind, data: { ...row.data, compact: true, prompt: row.data.prompt.slice(0, 12) + '…' } })),
+      total: rows.length, offset, limit: 60, counts: { all: rows.length, image: rows.length, video: 0 },
+    }));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Picture 0 wi…' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent(full.trim());
+    expect(getGalleryImages).toHaveBeenCalledTimes(1);
+    expect(getGalleryImages).toHaveBeenCalledWith(['0.png'], { silent: true });
+  });
+
+  // #8341: opening an image used to cost two full-record reads (this
+  // hydration's `gallery/lookup` PLUS the lightbox's own `variants` read for
+  // the original-vs-cleaned toggle). The variants group always carries the
+  // opened filename's own record, so hydration takes it from there and never
+  // falls back to `getGalleryImages`.
+  it('hydrates an opened image from the variants group without a separate gallery lookup', async () => {
+    const full = 'Picture 0 ' + 'with a long stored prompt '.repeat(30);
+    rows[0].data.prompt = full;
+    fetchPage.mockImplementation(async ({ offset = 0 }) => ({
+      items: rows.slice(offset, offset + 60).map(row => ({ kind: row.kind, data: { ...row.data, compact: true, prompt: row.data.prompt.slice(0, 12) + '…' } })),
+      total: rows.length, offset, limit: 60, counts: { all: rows.length, image: rows.length, video: 0 },
+    }));
+    listImageVariants.mockImplementation(async filename => ({
+      items: filename === '0.png' ? [rows[0].data] : [],
+    }));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Picture 0 wi…' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent(full.trim());
+    expect(listImageVariants).toHaveBeenCalledWith('0.png');
+    expect(getGalleryImages).not.toHaveBeenCalled();
+  });
+
+  it('marks a compact record whose detail read fails instead of passing its preview off as complete', async () => {
+    fetchPage.mockImplementation(async ({ offset = 0 }) => ({
+      items: rows.slice(offset, offset + 60).map(row => ({ kind: row.kind, data: { ...row.data, compact: true } })),
+      total: rows.length, offset, limit: 60, counts: { all: rows.length, image: rows.length, video: 0 },
+    }));
+    getGalleryImages.mockRejectedValue(new Error('offline'));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Picture 3' }));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Picture 3 [details unavailable]'));
   });
 
   it('resolves an older deep-linked preview with a one-item request outside the loaded page', async () => {

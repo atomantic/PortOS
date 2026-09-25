@@ -476,7 +476,7 @@ describe('NotesTab URL state and unavailable reads', () => {
   it('replays note selection through browser back and forward', async () => {
     const rootNote = { ...note, path: 'first.md', folder: '' };
     api.scanNotesVault.mockResolvedValueOnce({ notes: [rootNote], total: 1 });
-    api.getNote.mockResolvedValueOnce(rootNote);
+    api.getNote.mockResolvedValue(rootNote);
     await renderTab();
 
     await act(async () => { fireEvent.click(screen.getByText('first')); });

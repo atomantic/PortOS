@@ -129,6 +129,7 @@ vi.mock('../lib/systemCapabilities.js', async () => {
 });
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: vi.fn(({ kind }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
@@ -238,6 +239,31 @@ describe('Image Gen Routes', () => {
       expect(preview.body).toEqual({ items: [items[2]], total: 1, limit: 1, offset: 0 });
       const empty = await request(app).get('/api/image-gen/gallery?q=missing');
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
+    });
+
+    // #8292: migrated consumers opt into compact card rows; search and visible
+    // counts still read the full stored metadata, and older callers keep full records.
+    it('projects compact visible rows on request while searching the full prompt', async () => {
+      const longPrompt = 'harbor at dawn '.repeat(60) + 'lighthouse';
+      const items = [
+        { filename: 'a.png', prompt: longPrompt, negativePrompt: 'blur '.repeat(200), path: '/data/images/a.png', seed: 3, width: 64, height: 64, cfgScale: 4, cleanedFrom: 'root.png' },
+        { filename: 'b.png', prompt: 'short', hidden: true },
+      ];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      const compact = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false&summary=true&compact=true&q=lighthouse');
+      expect(compact.status).toBe(200);
+      expect(compact.body).toMatchObject({ total: 1, hiddenTotal: 0 });
+      const [row] = compact.body.items;
+      expect(row).toMatchObject({ compact: true, filename: 'a.png', path: '/data/images/a.png', seed: 3, width: 64, cleanedFrom: 'root.png' });
+      expect(row.prompt.length).toBeLessThanOrEqual(241);
+      expect(longPrompt.startsWith(row.prompt.slice(0, -1))).toBe(true);
+      expect(row).not.toHaveProperty('negativePrompt');
+      expect(row).not.toHaveProperty('cfgScale');
+      const visible = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false&summary=true&compact=true');
+      expect(visible.body).toMatchObject({ total: 1, hiddenTotal: 1 });
+      const full = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false');
+      expect(full.body.items).toEqual([items[0]]);
+      expect((await request(app).get('/api/image-gen/gallery?compact=yes')).status).toBe(400);
     });
 
     it('hydrates only requested filenames and rejects an oversized reference batch', async () => {
@@ -525,7 +551,7 @@ describe('Image Gen Routes', () => {
       expect(response.body.path).toBe('/data/images/queued-job-001.png');
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'image',
-        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3', modelId: 'dev' }),
+        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3', modelId: 'qwen-image-2.1' }),
       }));
       // Synchronous generateImage MUST NOT be called in local mode — the
       // queue takes ownership of the job lifecycle.
@@ -537,6 +563,24 @@ describe('Image Gen Routes', () => {
         payload: { jobId: 'queued-job-001' },
       }));
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a fox in a forest');
+    });
+
+    // #8326: a full media queue must answer with a retryable refusal before
+    // any job id exists — and before the render's inputs are staged.
+    it('answers a full media queue with a retryable 429 and no job id', async () => {
+      const { mediaQueueFullError } = await import('../services/mediaJobQueue/admission.js');
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.assertMediaQueueRoom.mockImplementationOnce(() => { throw mediaQueueFullError({ pending: 250 }); });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(429);
+      expect(response.body).toMatchObject({ code: 'MEDIA_QUEUE_FULL', context: { retryable: true, maxPendingJobs: 250 } });
+      expect(response.body.jobId).toBeUndefined();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(recordUserAction).not.toHaveBeenCalled();
     });
 
     it('local mode maps cfgScale to guidance before enqueueing', async () => {
@@ -770,15 +814,15 @@ describe('Image Gen Routes', () => {
       });
     });
 
-    // Local mode without a configured pythonPath now rejects up-front (400)
-    // rather than enqueueing a job that can never run. The queue is meant to
-    // serialize concurrent renders, not to absorb hard configuration errors.
-    it('local mode with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
+    // An explicit mflux model without a configured pythonPath rejects up-front
+    // (400) rather than enqueueing a job that can never run. The new Qwen
+    // default uses the shared diffusers runtime and does not require this path.
+    it('mflux model with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
       getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no `local.pythonPath`
 
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'a fox in a forest' });
+        .send({ prompt: 'a fox in a forest', modelId: 'dev' });
 
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/not configured/i);

@@ -440,7 +440,15 @@ export const cancelYoutubeIngest = (jobId, options = {}) => request(
   `/brain/youtube/ingest/${encodeURIComponent(jobId)}/cancel`,
   { method: 'POST', ...options }
 );
-export const getYoutubeIngests = (options = {}) => request('/brain/youtube/ingests', options);
+// `limit`/`cursor` opt into a bounded page (echo `nextCursor` from the
+// previous response); a query-less call keeps the legacy full-history array.
+export const getYoutubeIngests = ({ limit, cursor, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (limit !== undefined && limit !== null) params.set('limit', limit);
+  if (cursor) params.set('cursor', cursor);
+  const qs = params.toString();
+  return request(`/brain/youtube/ingests${qs ? `?${qs}` : ''}`, options);
+};
 export const deleteYoutubeIngest = (videoId, options = {}) => request(
   `/brain/youtube/ingests/${encodeURIComponent(videoId)}`,
   { method: 'DELETE', ...options }

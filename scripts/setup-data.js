@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, writeFileSync, renameSync, rmdirSync } from 'fs';
+import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, renameSync, rmdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { md5, buildPromptDriftTables } from './migrations/_lib.js';
-import { MIGRATION_OWNED_PATHS } from './lib/migrationOwnedPaths.js';
+import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
+import { mergeJsonStarter } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -18,9 +19,7 @@ const referenceDir = join(rootDir, 'data.reference');
 // present, no-op, and leave shipped defaults where the user's settings were.
 // See scripts/migrations/340-cos-config-seed-repair.js for the case that
 // prompted it.
-const migrationOwnedSeeds = new Set(
-  [...MIGRATION_OWNED_PATHS].map((relPath) => join(referenceDir, ...relPath.split('/'))),
-);
+const isSeedable = isSeedableReferencePath(referenceDir);
 
 console.log('📁 Setting up data directory...');
 
@@ -58,7 +57,7 @@ const rewritePortosRootPlaceholder = () => {
 if (!existsSync(dataDir)) {
   console.log('📁 Creating data directory from data.reference...');
   mkdirSync(dataDir, { recursive: true });
-  cpSync(referenceDir, dataDir, { recursive: true, filter: (src) => !migrationOwnedSeeds.has(src) });
+  cpSync(referenceDir, dataDir, { recursive: true, filter: isSeedable });
   rewritePortosRootPlaceholder();
   console.log('✅ Data directory created');
 } else {
@@ -67,7 +66,7 @@ if (!existsSync(dataDir)) {
     const items = readdirSync(srcDir);
     for (const item of items) {
       const srcPath = join(srcDir, item);
-      if (migrationOwnedSeeds.has(srcPath)) continue;
+      if (!isSeedable(srcPath)) continue;
       const destPath = join(destDir, item);
       const stat = statSync(srcPath);
 
@@ -106,38 +105,13 @@ const JSON_MERGE_TARGETS = [
   { relPath: 'providers.json',            mergeKey: 'providers' },
 ];
 
-const mergeJsonStarter = (relPath, mergeKey) => {
-  const samplePath = join(referenceDir, relPath);
-  const dataPath = join(dataDir, relPath);
-  if (!existsSync(samplePath) || !existsSync(dataPath)) return;
-  let sample, data;
-  try {
-    sample = JSON.parse(readFileSync(samplePath, 'utf8'));
-    data = JSON.parse(readFileSync(dataPath, 'utf8'));
-  } catch (err) {
-    console.log(`⚠️ Skipping JSON merge for ${relPath}: ${err.message}`);
-    return;
-  }
-  const sampleEntries = sample?.[mergeKey];
-  if (!sampleEntries || typeof sampleEntries !== 'object' || Array.isArray(sampleEntries)) return;
-  if (!data[mergeKey] || typeof data[mergeKey] !== 'object' || Array.isArray(data[mergeKey])) {
-    data[mergeKey] = {};
-  }
-  const added = [];
-  for (const [key, value] of Object.entries(sampleEntries)) {
-    if (!(key in data[mergeKey])) {
-      data[mergeKey][key] = value;
-      added.push(key);
-    }
-  }
-  if (added.length > 0) {
-    writeFileSync(dataPath, JSON.stringify(data, null, 2) + '\n');
-    console.log(`📝 ${relPath}: merged ${added.length} new ${mergeKey} ${added.length === 1 ? 'entry' : 'entries'} (${added.join(', ')})`);
-  }
-};
-
 for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
-  mergeJsonStarter(relPath, mergeKey);
+  mergeJsonStarter({
+    samplePath: join(referenceDir, relPath),
+    dataPath: join(dataDir, relPath),
+    mergeKey,
+    displayPath: relPath,
+  });
 }
 
 // Drift detection — warn when a data.reference/prompts/{stages,_partials}/*.md

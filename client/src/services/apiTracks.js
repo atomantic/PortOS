@@ -104,6 +104,33 @@ export const publishTrackChiptune = (id, body, requestOptions = {}) => request(`
   ...requestOptions,
 });
 
+// Have the LLM DRAW the music as a wave sketch (server/lib/waveSketch.js) and
+// store it on the track (`waveSketch`/`waveSketchPrompt`, #8376).
+// `body`: { description, lyrics?, guidance?, durationSec?, revise? (redraw the
+// stored sketch), providerId?, model?, effort? } → { sketch, llm, track }.
+export const drawTrackWaveform = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/waveform/draw`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// Render the track's STORED wave sketch into the shared music library as the
+// track's active take. `body`: { prompt?, title? } → { track, filename, durationSec }.
+export const renderTrackWaveform = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/waveform/render`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// Save a take recorded from the code engine's sandboxed player. `formData`
+// carries the WAV as a `track` file plus optional `prompt`/`title` fields.
+// → { track, filename, durationSec }.
+export const renderTrackCode = (id, formData, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/code/render`, {
+  method: 'POST',
+  body: formData,
+  ...requestOptions,
+});
+
 // Mirror server caps in server/services/tracks/logic.js — bump both sides.
 export const TRACK_TITLE_MAX = 200;
 export const TRACK_LYRICS_MAX = 20000;

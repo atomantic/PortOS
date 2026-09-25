@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Cpu, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
-import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
@@ -509,7 +509,7 @@ export default function LocalLlmPlayground() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <ModelsSectionLayout activeTab="playground">
       <div className="flex items-center justify-between gap-3 p-4 border-b border-port-border">
         <div className="flex items-center gap-3 min-w-0">
           <Link to="/models/llms" className="p-2 rounded-lg bg-port-card border border-port-border text-gray-400 hover:text-white" title={`Back to ${getNavPageForPath('/models/llms')?.breadcrumb || 'its management page'}`}>
@@ -535,7 +535,7 @@ export default function LocalLlmPlayground() {
           bar arriving here would strand the user outside it. */}
       <ModelsTabsHeader activeTab="playground" />
 
-      <div className="flex-1 overflow-auto p-4 space-y-4">
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto p-4 space-y-4">
         <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
           <aside className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
             {/* One header slot holding both breakpoints' variants, so the
@@ -802,6 +802,6 @@ export default function LocalLlmPlayground() {
           </main>
         </div>
       </div>
-    </div>
+    </ModelsSectionLayout>
   );
 }

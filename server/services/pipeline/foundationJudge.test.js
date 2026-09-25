@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../lib/seriesAutopilotDefaults.js';
 import { sanitizeCharacter } from '../../lib/storyBible.js';
 
 // I/O is the only thing mocked in fileUtils — PATHS/safeJSONParse stay real so
@@ -1957,6 +1958,7 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
 
 describe('DEFAULT_FOUNDATION_THRESHOLD', () => {
   it('mirrors autonovel\'s 7.5 foundation bar', () => {
+    expect(DEFAULT_FOUNDATION_THRESHOLD).toBe(SERIES_AUTOPILOT_DEFAULTS.foundationThreshold);
     expect(DEFAULT_FOUNDATION_THRESHOLD).toBe(7.5);
   });
 });

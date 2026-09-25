@@ -93,6 +93,18 @@ describe('SystemHealthPage remediation links', () => {
     expect(within(banner).getByRole('link', { name: /Disk usage breakdown/ })).toHaveAttribute('href', '/system-resources/storage');
   });
 
+  it('renders an unavailable disk card when the disk probe fails', async () => {
+    api.getSystemHealth.mockResolvedValue({
+      ...HEALTH,
+      system: { ...HEALTH.system, disk: null },
+      warnings: [{ type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false }],
+    });
+    renderPage();
+
+    expect(await screen.findByLabelText('Disk status unavailable')).toHaveTextContent('Unavailable');
+    expect(screen.queryByRole('button', { name: 'Dismiss warning: Disk status unavailable' })).not.toBeInTheDocument();
+  });
+
   it('links memory, process and app alerts to their own remediation page', async () => {
     api.getSystemHealth.mockResolvedValue(withWarnings([
       { type: 'memory', message: 'Memory usage at or above 85%' },
@@ -118,6 +130,29 @@ describe('SystemHealthPage remediation links', () => {
     // The drill-in nav is unaffected — it always offers its three destinations.
     const nav = screen.getByRole('navigation', { name: 'System drill-downs' });
     expect(within(nav).getAllByRole('link')).toHaveLength(3);
+  });
+
+  it('keeps corrupt health settings visible and disables threshold editing and dismissal', async () => {
+    const message = 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.';
+    api.getSystemHealth.mockResolvedValue({
+      ...HEALTH,
+      thresholds: undefined,
+      thresholdsAvailable: false,
+      warnings: [
+        { type: 'health-settings', severity: 'warning', message, dismissible: false },
+        { type: 'disk', severity: 'warning', message: 'Disk usage at or above 90%', dismissible: false },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText('Configured thresholds unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Default thresholds are being used for health checks. Repair the settings file before changing thresholds.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Dismiss warning: ${message}` })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss warning: Disk usage at or above 90%' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save thresholds' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Disk warn %')).not.toBeInTheDocument();
+    expect(api.updateHealthThresholds).not.toHaveBeenCalled();
   });
 
   it('renders the drill-in links above the metric cards', async () => {

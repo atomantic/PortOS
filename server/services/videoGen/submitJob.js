@@ -92,7 +92,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       request,
       inputAssets,
     });
-    const { jobId, position, status } = enqueueJob({
+    const { jobId, position, status } = await enqueueJob({
       kind: 'video',
       params: { remoteMedia },
     });

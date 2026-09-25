@@ -168,12 +168,17 @@ function threadBelongsToView(thread, view, timezone, now = new Date()) {
 // Read live state so legacy recovery commitments clear as soon as
 // automation resumes or finishes. Missing tasks stay visible; unreadable tasks
 // fail the source read rather than falsely reporting an empty queue.
-async function taskNeedsUserAction(taskId) {
+async function taskActionContext(taskId) {
   const task = await cosTaskStore.getTaskById(taskId);
-  if (!task) return true;
-  if (task.status === 'pending' && task.approvalRequired) return true;
-  if (task.status === 'blocked') return !TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory);
-  return !['pending', 'in_progress', 'completed', 'cancelled'].includes(task.status);
+  if (!task) return { needsUserAction: true, task: null };
+  if (task.status === 'pending' && task.approvalRequired) return { needsUserAction: true, task };
+  if (task.status === 'blocked') {
+    return { needsUserAction: !TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory), task };
+  }
+  return {
+    needsUserAction: !['pending', 'in_progress', 'completed', 'cancelled'].includes(task.status),
+    task,
+  };
 }
 
 const visibleInLiveViews = (producer, view) => {
@@ -252,18 +257,63 @@ const PRODUCERS = [
         .filter((thread) => threadBelongsToView(thread, ctx.view, timezone, now));
       const actionable = await Promise.all(candidates.map(async thread => {
         const taskRef = thread.source === 'cos' && thread.refs?.find(ref => ref?.kind === 'cos.task' && ref.id);
-        return !taskRef || ctx.view === 'history' || await taskNeedsUserAction(taskRef.id);
+        if (!taskRef || ctx.view === 'history') return { needsUserAction: true, task: null };
+        return taskActionContext(taskRef.id);
       }));
-      const matching = candidates.filter((_, index) => actionable[index]);
-      return { items: matching, truncated: matching.length > limit };
+      const matching = candidates.flatMap((thread, index) => actionable[index].needsUserAction
+        ? [{ thread, task: actionable[index].task }]
+        : []);
+      const appIds = [...new Set(matching
+        .map(({ task }) => typeof task?.metadata?.app === 'string' ? task.metadata.app.trim() : '')
+        .filter(Boolean))];
+      const appNames = new Map();
+      if (appIds.length) {
+        const appService = await import('./apps.js').catch(() => null);
+        if (appService?.getAppById) {
+          await Promise.all(appIds.map(async appId => {
+            const app = await appService.getAppById(appId).catch(() => null);
+            if (typeof app?.name === 'string' && app.name.trim()) appNames.set(appId, app.name.trim());
+          }));
+        }
+      }
+      return {
+        items: matching.map(({ thread, task }) => {
+          const nextAction = threadNextLine(thread);
+          const summaryParts = [nextAction || (thread.waitingOn ? `Waiting on ${thread.waitingOn}` : 'No next action set')];
+          const metadata = task?.metadata && typeof task.metadata === 'object' ? task.metadata : {};
+          const blockedCategory = typeof metadata.blockedCategory === 'string' ? metadata.blockedCategory.trim() : '';
+          if (task?.status === 'blocked') {
+            const reason = typeof metadata.blockedReason === 'string' ? metadata.blockedReason.trim() : '';
+            summaryParts.push(reason
+              ? `Still blocked: ${reason}`
+              : `Still blocked${blockedCategory ? ` (${blockedCategory})` : ''}.`);
+          }
+          const appId = typeof metadata.app === 'string' ? metadata.app.trim() : '';
+          const appLabel = appId ? (appNames.get(appId) || appId) : '';
+          const prUrl = typeof metadata.reviewLoopPRUrl === 'string'
+            ? metadata.reviewLoopPRUrl.trim()
+            : typeof metadata.prUrl === 'string' ? metadata.prUrl.trim() : '';
+          const meta = {
+            ...threadMeta(thread),
+            ...(typeof task?.status === 'string' ? { taskStatus: task.status } : {}),
+            ...(blockedCategory ? { blockedCategory } : {}),
+            ...(appLabel ? { appLabel } : {}),
+            ...(prUrl ? { reviewLoopPRUrl: prUrl } : {}),
+          };
+          return {
+            ...thread,
+            queueSummary: summaryParts.join(' ').slice(0, 500),
+            queueMeta: meta,
+          };
+        }),
+        truncated: matching.length > limit,
+      };
     },
     map(thread) {
-      const nextAction = threadNextLine(thread);
-      const summary = nextAction || (thread.waitingOn ? `Waiting on ${thread.waitingOn}` : 'No next action set');
       return {
         id: `threads:${thread.id}`,
         title: thread.title || 'Untitled commitment',
-        summary,
+        summary: thread.queueSummary || threadNextLine(thread) || (thread.waitingOn ? `Waiting on ${thread.waitingOn}` : 'No next action set'),
         timestamp: thread.updatedAt || thread.createdAt || null,
         severity: thread.priority === 'urgent' ? 'high' : 'normal',
         required: true,
@@ -271,7 +321,7 @@ const PRODUCERS = [
         dueAt: thread.dueAt || null,
         drillTo: `/brain/threads?thread=${encodeURIComponent(thread.id)}`,
         operations: threadAction(thread),
-        meta: threadMeta(thread),
+        meta: thread.queueMeta || threadMeta(thread),
       };
     },
   },

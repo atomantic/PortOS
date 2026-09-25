@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import * as commands from '../services/commands.js';
+import { requireHostControl } from '../services/authGate.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
@@ -9,7 +10,7 @@ import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspa
 const router = Router();
 
 // POST /api/commands/execute - Execute a command
-router.post('/execute', asyncHandler(async (req, res) => {
+router.post('/execute', requireHostControl, asyncHandler(async (req, res) => {
   const { command, workspacePath } = req.body;
 
   if (!command) {
@@ -72,7 +73,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/commands/:id/stop - Stop a running command
-router.post('/:id/stop', asyncHandler(async (req, res) => {
+router.post('/:id/stop', requireHostControl, asyncHandler(async (req, res) => {
   const stopped = commands.stopCommand(req.params.id);
 
   if (!stopped) {

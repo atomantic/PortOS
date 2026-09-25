@@ -3,11 +3,13 @@ import {
   analyzeError,
   analyzeHttpError,
   normalizeRateLimitHeaders,
+  createClaudeSessionLimitBannerDetector,
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createLocalRuntimeOomDetector,
   createTerminalRequestTimeoutDetector,
   detectImmediateFallbackSignal,
+  detectClaudeSessionLimitBanner,
   detectLocalRuntimeOom,
   detectTerminalModelError,
   detectTerminalRequestTimeout,
@@ -466,6 +468,53 @@ describe('Error Detection', () => {
       // detector; a model-id rejection must NOT fire here (it lives in
       // detectTerminalModelError, consulted only by tuiPromptRunner).
       expect(detectImmediateFallbackSignal('⏺ API Error (claude-opus-4-8): 400 The provided model identifier is invalid.')).toBeNull();
+    });
+  });
+
+  describe('detectClaudeSessionLimitBanner', () => {
+    it('recognizes Claude Code session-limit chrome and returns a fallback analysis', () => {
+      expect(detectClaudeSessionLimitBanner("⏺ You've hit your session limit · resets 6:00 PM\n"))
+        .toMatchObject({
+          hasError: true,
+          category: ERROR_CATEGORIES.USAGE_LIMIT,
+          requiresFallback: true,
+          actionable: false,
+          origin: 'provider',
+        });
+    });
+
+    it.each([
+      ['inline prose', "Claude said: You've hit your session limit"],
+      ['a markdown bullet', "- You've hit your session limit\n"],
+      ['an unadorned echoed prompt line', "You've hit your session limit · resets 6:00 PM\n"],
+      ['a generic usage-limit line', 'Provider usage limit reached\n'],
+    ])('ignores %s', (_label, text) => {
+      expect(detectClaudeSessionLimitBanner(text)).toBeNull();
+    });
+
+    it('buffers a split banner and resumes trusted line detection after long output', () => {
+      const detect = createClaudeSessionLimitBannerDetector();
+      expect(detect("⏺ You've hit your ")).toBeNull();
+      expect(detect('session limit · resets 6:00 PM\n')).toMatchObject({
+        category: ERROR_CATEGORIES.USAGE_LIMIT,
+        origin: 'provider',
+      });
+
+      expect(detectClaudeSessionLimitBanner("You've hit your session limit", { lineStartTrusted: false }))
+        .toBeNull();
+
+      const afterLongSession = createClaudeSessionLimitBannerDetector({ maxBuffer: 64 });
+      expect(afterLongSession('x'.repeat(80))).toBeNull();
+      expect(afterLongSession("\n⏺ You've hit your session limit · resets 6:00 PM"))
+        .toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT, origin: 'provider' });
+    });
+
+    it('emits once for a painted line and recognizes a later banner line', () => {
+      const detect = createClaudeSessionLimitBannerDetector();
+      const banner = "⏺ You've hit your session limit · resets 6:00 PM";
+      expect(detect(banner)).toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT });
+      expect(detect(' repaint')).toBeNull();
+      expect(detect(`\n${banner}`)).toMatchObject({ category: ERROR_CATEGORIES.USAGE_LIMIT });
     });
   });
 

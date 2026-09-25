@@ -235,6 +235,33 @@ describe('brainSyncLog', () => {
       expect(appendFile).not.toHaveBeenCalled();
     });
 
+    it('skipLogged drops an op the log already carries, through a restart and a compaction (#8316)', async () => {
+      const v1 = { name: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' };
+      const v2 = { name: 'v2', updatedAt: '2026-01-02T00:00:00.000Z' };
+      await appendChanges([
+        { op: 'create', type: 'people', id: 'p1', record: v1, originInstanceId: 'inst-1' },
+        { op: 'update', type: 'people', id: 'p1', record: v2, originInstanceId: 'inst-1' },
+      ]);
+      // Both rebuild the op index: a restart from disk, then a compaction that
+      // drops the superseded v1 entry.
+      await initSyncLog();
+      expect(await compactLog(0, { force: true })).toBe(1);
+      vi.clearAllMocks();
+
+      const relayOfV2 = { op: 'update', type: 'people', id: 'p1', record: v2, originInstanceId: 'peer-b' };
+      expect(await appendChanges([relayOfV2], { skipLogged: true })).toEqual([]);
+      expect(appendFile).not.toHaveBeenCalled();
+
+      // A delete at the same clock is a different op; a repeat within the batch is not.
+      const written = await appendChanges([
+        relayOfV2,
+        { op: 'delete', type: 'people', id: 'p1', record: { updatedAt: v2.updatedAt }, originInstanceId: 'peer-b' },
+        { op: 'delete', type: 'people', id: 'p1', record: { updatedAt: v2.updatedAt }, originInstanceId: 'peer-b' },
+      ], { skipLogged: true });
+      expect(written.map((e) => [e.seq, e.op])).toEqual([[3, 'delete']]);
+      expect(getCurrentSeq()).toBe(3);
+    });
+
     it('returns entries with correct shape', async () => {
       const entries = await appendChanges([
         { op: 'create', type: 'links', id: 'l1', record: { url: 'http://example.com' }, originInstanceId: 'peer-3' }

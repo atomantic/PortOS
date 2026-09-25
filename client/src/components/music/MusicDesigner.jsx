@@ -7,7 +7,11 @@
  * The user starts from a short reference/vibe ("a cross between X and Y"), an
  * AI provider of their choosing expands it into a rich, genre-dense musical
  * description, they optionally generate lyrics from that description plus their
- * own extra guidance, and the existing `MusicGenPanel` renders the track. Every
+ * own extra guidance, and the render step either hands it to an audio model
+ * (`MusicGenPanel`), asks the AI to DRAW the waveform itself (`WaveformPanel`,
+ * `?engine=drawn`) and plays that drawing back in the browser, or asks it to
+ * write the piece as Strudel code (`CodePanel`, `?engine=code`) that a
+ * sandboxed player frame runs and records. Every
  * step's output lands in an editable textarea — **the AI drafts, the human owns
  * the text** — and every step stays revisitable from the step bar.
  *
@@ -26,9 +30,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  AudioLines, ChevronDown, ChevronUp, FileText, Lightbulb, Loader2, Mic2, Sparkles, Wand2,
+  AudioLines, AudioWaveform, Brush, ChevronDown, ChevronUp, Code2, FileText, Lightbulb, Loader2, Mic2, Sparkles, Wand2,
 } from 'lucide-react';
+import CodePanel from './CodePanel';
 import MusicGenPanel from './MusicGenPanel';
+import WaveformPanel from './WaveformPanel';
+import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import ProviderModelSelector from '../ProviderModelSelector';
 import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
@@ -46,6 +53,24 @@ const STEPS = [
   { id: 'render', label: 'Render', icon: AudioLines },
 ];
 const STEP_IDS = STEPS.map((s) => s.id);
+// How the render step turns the description into sound: an on-device/remote
+// audio model, a waveform the AI draws point by point, or Strudel code the AI
+// writes. Rides in `?engine=` (absent = the audio model).
+const RENDER_ENGINES = [
+  { id: 'model', label: 'Audio model', icon: AudioWaveform },
+  { id: 'drawn', label: 'Drawn waveform', icon: Brush },
+  { id: 'code', label: 'Code', icon: Code2 },
+];
+const DEFAULT_ENGINE = 'model';
+const ENGINE_IDS = RENDER_ENGINES.map((e) => e.id);
+// The engines where the chosen AI provider writes the music itself. Both panels
+// take the same props; the audio model gets MusicGenPanel instead.
+const LLM_ENGINE_PANELS = { drawn: WaveformPanel, code: CodePanel };
+const PROMPT_HINTS = {
+  model: 'Required. This editable description is the prompt sent to the selected audio engine.',
+  drawn: 'Required. The AI draws the waveform from this editable description.',
+  code: 'Required. The AI writes the Strudel code from this editable description.',
+};
 const FIRST_STEP = STEP_IDS[0];
 const DRAFT_TITLE = 'Untitled music draft';
 const ACTIVE_DRAFT_KEY = 'portos.musicDesigner.activeDraft';
@@ -56,17 +81,15 @@ const ACTIVE_DRAFT_KEY = 'portos.musicDesigner.activeDraft';
 const DESCRIBE_PLACEHOLDER = 'Rewrite the musical reference into a detailed, generation-oriented structured caption in English. Preserve explicit requirements and exclusions while developing genre and subgenres, emotional arc, imagery, sonics, production character, core instruments, and spatial feel. Describe approximate tempo, meter or time signature, rhythmic subdivision, and groove when they matter. Use exact BPM, key, scale, or time signature only when deliberately requested. State the vocal plan explicitly; for instrumental music, rule out vocals and name the lead melodic instrument. Treat the arrangement as a continuous section-by-section timeline with plausible entrances, exits, changes, and transitions. Keep lyric words out of the caption.';
 const LYRICS_PLACEHOLDER = 'Write original, singable song lyrics that fit the musical description. Put every bracketed section tag alone on its own line, using useful tags such as [intro], [verse], [pre-chorus], [chorus], [post-chorus], [bridge], [instrumental], [solo], and [outro], with words beginning on the following line. Build enough sections for the intended song length. Keep tempo, meter, key, arrangement, and production instructions in the separate musical description.';
 
-const FIELD_CLASS = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
-const LABEL_CLASS = 'mb-1 block text-xs uppercase tracking-wider text-gray-500';
-const PRIMARY_BTN = 'inline-flex items-center justify-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]';
-const GHOST_BTN = 'inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 transition-colors hover:border-port-accent hover:text-white disabled:opacity-50 min-h-[40px]';
 
 export default function MusicDesigner() {
   const navigate = useNavigate();
   const { id } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const mountedRef = useMounted();
   const requestedTrackId = searchParams.get('trackId') || '';
+  const renderEngine = ENGINE_IDS.includes(searchParams.get('engine')) ? searchParams.get('engine') : DEFAULT_ENGINE;
+  const LlmEnginePanel = LLM_ENGINE_PANELS[renderEngine];
   const storedDraftId = requestedTrackId || safeReadStorage(ACTIVE_DRAFT_KEY) || '';
 
   // Wizard text — lifted here so MusicGenPanel (which never writes back to
@@ -205,9 +228,21 @@ export default function MusicDesigner() {
     return draftSaveTailRef.current;
   };
 
+  // Step changes keep the query (the draft's trackId and the render engine).
   const goTo = (stepId) => {
-    const suffix = trackId ? `?trackId=${encodeURIComponent(trackId)}` : '';
-    navigate(`/music/generate/${stepId}${suffix}`);
+    const params = new URLSearchParams(searchParams);
+    if (trackId) params.set('trackId', trackId);
+    const query = params.toString();
+    navigate(`/music/generate/${stepId}${query ? `?${query}` : ''}`);
+  };
+
+  const setRenderEngine = (engineId) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (engineId === DEFAULT_ENGINE || !ENGINE_IDS.includes(engineId)) next.delete('engine');
+      else next.set('engine', engineId);
+      return next;
+    }, { replace: true });
   };
 
   const runDescribe = async ({ advance }) => {
@@ -250,6 +285,8 @@ export default function MusicDesigner() {
     setLyrics(res.lyrics);
     persistDesignerPrefs({ providerId: selectedProviderId || '', model: selectedModel || '', effort: effort || '' });
   };
+
+  const openTrack = (track) => navigate(`/music/tracks/${encodeURIComponent(track.id)}`);
 
   const busy = describing || writing;
   const draftReady = !!trackId && !draftLoading;
@@ -535,6 +572,15 @@ export default function MusicDesigner() {
 
       {step === 'render' && (
         <div className="space-y-4">
+          <TabPills
+            tabs={RENDER_ENGINES}
+            activeTab={renderEngine}
+            onChange={setRenderEngine}
+            variant="pills"
+            size="sm"
+            mobileCompact
+            ariaLabel="Render engine"
+          />
           <label htmlFor="music-designer-render-prompt" className="block">
             <span className={LABEL_CLASS}>Prompt for this render</span>
             <textarea
@@ -550,7 +596,7 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
             <span id="music-designer-render-prompt-hint" className="mt-1 block text-xs text-gray-500">
-              Required. This editable description is the prompt sent to the selected audio engine.
+              {PROMPT_HINTS[renderEngine]}
             </span>
           </label>
           <label htmlFor="music-designer-title" className="block">
@@ -571,13 +617,29 @@ export default function MusicDesigner() {
               className={FIELD_CLASS}
             />
           </label>
-          <MusicGenPanel
-            track={trackId ? { id: trackId } : undefined}
-            title={title}
-            prompt={description}
-            lyrics={lyrics}
-            onGenerated={(track) => navigate(`/music/tracks/${encodeURIComponent(track.id)}`)}
-          />
+          {LlmEnginePanel ? (
+            <LlmEnginePanel
+              key={trackId}
+              trackId={trackId}
+              disabled={!draftReady || busy}
+              description={description}
+              lyrics={lyrics}
+              title={title}
+              providerId={selectedProviderId}
+              model={selectedModel}
+              effort={effort}
+              providerPicker={providerPicker}
+              onRendered={openTrack}
+            />
+          ) : (
+            <MusicGenPanel
+              track={trackId ? { id: trackId } : undefined}
+              title={title}
+              prompt={description}
+              lyrics={lyrics}
+              onGenerated={openTrack}
+            />
+          )}
         </div>
       )}
     </section>

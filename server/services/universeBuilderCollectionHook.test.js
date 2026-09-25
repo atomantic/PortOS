@@ -155,6 +155,23 @@ describe('universeBuilderCollectionHook', () => {
     expect(hook.__testing.getActiveRuns().size).toBe(0);
   });
 
+  // #8326: a batch the media queue refused part-way registered more jobs than
+  // it enqueued. Without the shrink the run never reaches zero and every
+  // later completion stays suppressed with no final emit.
+  it('closes a run shrunk after a partial admission once its admitted jobs finish', async () => {
+    const universeId = 'uni-partial';
+    const c = await makeCollection(universeId);
+    hook.registerUniverseBuilderRun({ runId: 'r-partial', universeId, jobCount: 3 });
+    hook.shrinkUniverseBuilderRun('r-partial', 2);
+    expect(hook.__testing.getActiveRuns().size).toBe(1);
+
+    emitCompletion({ runId: 'r-partial', universeId, collectionId: c.id, filename: 'p.png' });
+
+    const unsuppressed = () => updates.filter((u) => u.recordKind === 'universe' && u.recordId === universeId && !u.suppressed);
+    await waitFor(() => hook.__testing.getActiveRuns().size === 0 && unsuppressed().length >= 1);
+    expect(unsuppressed()).toHaveLength(1);
+  });
+
   it('falls back to per-image emits when run is not registered', async () => {
     const universeId = 'uni-3';
     const c = await makeCollection(universeId);

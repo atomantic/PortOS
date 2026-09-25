@@ -29,6 +29,11 @@
  *                     modelId, executionProfile, durationSec, createdAt }`. The
  *                     top-level `audioFilename`/`engine`/`modelId`/`durationSec`
  *                     point at whichever render is currently ACTIVE (selected).
+ *   - chiptuneScore / chiptunePrompt — the LLM-composed looping 8-bit score
+ *                     and the brief it was composed from (#2911), or null / ''
+ *   - waveSketch / waveSketchPrompt — the Music Designer's LLM-drawn wave
+ *                     sketch (lib/waveSketch.js) and the description it was
+ *                     drawn from (#8376), or null / ''
  *
  * Tracks are `db-primary` (PostgreSQL `tracks` table). The audio bytes live in
  * the shared music library (services/pipeline/musicLibrary.js, `data/music/`);
@@ -40,6 +45,7 @@
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
+import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const TRACK_ID_RE = /^track-[A-Za-z0-9-]{1,64}$/;
@@ -188,6 +194,11 @@ export function sanitizeTrack(raw) {
     // "no score", never to a half-valid object the renderer would trip on).
     chiptuneScore: sanitizeChiptuneScore(raw.chiptuneScore),
     chiptunePrompt: trimTo(raw.chiptunePrompt, PROMPT_MAX),
+    // Drawn wave sketch (#8376): same sentinel rule — null = no drawing, and an
+    // invalid stored/synced value normalizes to null rather than a sketch the
+    // synth would trip on.
+    waveSketch: normalizeWaveSketch(raw.waveSketch),
+    waveSketchPrompt: trimTo(raw.waveSketchPrompt, PROMPT_MAX),
     createdAt,
     updatedAt,
     deleted,
@@ -286,7 +297,7 @@ export function deleteRenderPatch(current, renderId) {
 // generic create/patch route schemas omit it so a client can't inject history.
 const PATCHABLE = [
   'title', 'albumId', 'artistId', 'artist', 'concept', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders',
-  'chiptuneScore', 'chiptunePrompt',
+  'chiptuneScore', 'chiptunePrompt', 'waveSketch', 'waveSketchPrompt',
 ];
 
 /**
@@ -311,6 +322,9 @@ export function mergeTrackRecord(local, remoteRaw) {
     if (!('concept' in remoteRaw) && local.concept) carry.concept = local.concept;
     if (!('chiptuneScore' in remoteRaw) && local.chiptuneScore) carry.chiptuneScore = local.chiptuneScore;
     if (!('chiptunePrompt' in remoteRaw) && local.chiptunePrompt) carry.chiptunePrompt = local.chiptunePrompt;
+    // Same for the drawn wave sketch (#8376): a ≤v6 peer's payload lacks the keys.
+    if (!('waveSketch' in remoteRaw) && local.waveSketch) carry.waveSketch = local.waveSketch;
+    if (!('waveSketchPrompt' in remoteRaw) && local.waveSketchPrompt) carry.waveSketchPrompt = local.waveSketchPrompt;
     if (Object.keys(carry).length) next = { ...remote, ...carry };
   }
   const changed = JSON.stringify(next) !== JSON.stringify(local);

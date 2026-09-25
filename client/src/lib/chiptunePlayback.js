@@ -14,24 +14,19 @@
 import { getAudioContext as ctx, getNoiseBuffer } from './audioContext.js';
 import { createLookaheadTransport, SYNTH_TIMING } from './lookaheadTransport.js';
 import { midiToFreq, makeSafeCall } from './scorePlayback.js';
+import { pitchToMidi } from '../../../server/lib/pitchMath.js';
 
 const { SCHEDULE_AHEAD } = SYNTH_TIMING;
 const safeCall = makeSafeCall('chiptune playback');
 
 // --- Pure schedule build (mirrors server buildScoreEvents) ------------------
 
-const PITCH_CLASS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-const PITCH_RE = /^([A-Ga-g])(#{1,2}|b{1,2})?(-?\d)$/;
 export const CHIPTUNE_NOISE_PRESETS = ['kick', 'snare', 'hat', 'open-hat'];
 
-// MIDI number for a scientific-pitch STRING ("C4" = 60), or null. Differs from
-// scorePlayback.pitchToMidi, which takes a parsed { letter, accidental, octave }.
-export function parseChiptunePitch(pitch) {
-  const m = PITCH_RE.exec(String(pitch || '').trim());
-  if (!m) return null;
-  const shift = m[2] ? (m[2][0] === '#' ? m[2].length : -m[2].length) : 0;
-  return (Number(m[3]) + 1) * 12 + PITCH_CLASS[m[1].toUpperCase()] + shift;
-}
+// MIDI number for a scientific-pitch STRING ("C4" = 60), or null — the shared
+// server/lib/pitchMath.js parser. Differs from scorePlayback.pitchToMidi, which
+// takes a parsed { letter, accidental, octave }.
+export const parseChiptunePitch = pitchToMidi;
 
 /**
  * Flatten a chiptune score into absolute-time events + the exact loop length.

@@ -81,7 +81,9 @@ export const localCatalogBenchmarkModels = () =>
 // `claude-opus-5-thinking-xhigh` reduces to `claude-opus-5`.
 const SUFFIXES = ['thinking', 'reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'free', 'contributor', 'spark'];
 const QUANTIZATIONS = ['4bit', '8bit', 'fp8', 'mxfp4', 'awq', 'gguf', 'optimized-speed'];
-const TAIL = new RegExp(`(?:-(?:${[...QUANTIZATIONS, ...SUFFIXES].join('|')}))+$`);
+const TAIL = new RegExp(`-(?:${[...QUANTIZATIONS, ...SUFFIXES].join('|')})$`);
+// These words are release identities, not harness effort suffixes.
+const RELEASE_SUFFIX = /^(?:qwen.*-max(?:-thinking)?|qwen.*-thinking|kimi-k2-thinking|sonar-reasoning|.*-non-reasoning-low-effort)$/;
 
 // Namespace prefixes that address a gateway or region rather than the model.
 const PREFIXES = ['us.anthropic.', 'global.anthropic.', 'anthropic.', 'us.', 'global.'];
@@ -100,9 +102,29 @@ const ALIASES = new Map([
   ['gemini-3.1-pro', 'gemini-3.1-pro-preview'],
   ['grok-3-mini', 'grok-3-mini-reasoning'],
   ['kimi-k2-instruct', 'kimi-k2'],
-  ['ling-3.0-flash-fin', 'ling-3.0-flash'],
   ['nemotron-3-ultra', 'nemotron-3-ultra-550b-a55b'],
   ['claude-fable-5-1', 'claude-fable-5.1'],
+  // Published Bedrock model ids and dated API aliases for the same weights.
+  ['nemotron-nano-3-30b', 'nvidia-nemotron-3-nano-30b-a3b'],
+  ['nemotron-super-3-120b', 'nemotron-3-super-120b-a12b'],
+  ['nemotron-nano-9b-v2', 'nvidia-nemotron-nano-9b-v2'],
+  ['nemotron-nano-12b-v2', 'nvidia-nemotron-nano-12b-v2-vl'],
+  ['llama4-maverick-17b-instruct', 'llama-4-maverick'],
+  ['llama4-scout-17b-instruct', 'llama-4-scout'],
+  ['llama3-1-70b-instruct', 'llama-3.1-70b-instruct'],
+  ['llama3-1-8b-instruct', 'llama-3.1-8b-instruct'],
+  ['llama3-3-70b-instruct', 'llama-3.3-70b-instruct'],
+  ['nova-2-lite', 'nova-2.0-lite'],
+  ['r1', 'deepseek-r1'],
+  ['solar-pro4', 'solar-pro-4'],
+  ['lfm-2.5-2.6b', 'lfm2.5-2.6b'],
+  ['jamba-1.5-large-instruct', 'jamba-1.5-large'],
+  ['mixtral-8x22b-v0.1', 'mixtral-8x22b-instruct'],
+  ['ministral-14b-2512', 'ministral-3-14b'],
+  ['ministral-8b-2512', 'ministral-3-8b'],
+  ['ministral-3b-2512', 'ministral-3-3b'],
+  ['gpt-4o-2024-11-20', 'gpt-4o'],
+  ['gpt-4o-mini-2024-07-18', 'gpt-4o-mini'],
 ]);
 
 // Routing policies and local runtime aliases that name no benchmarked model.
@@ -141,7 +163,7 @@ function isLocalCatalogId(modelId) {
  */
 export function canonicalCatalogModelSlug(slug) {
   if (typeof slug !== 'string' || !slug) return '';
-  return slug.replace(/-(\d+)-(\d+)$/, '-$1.$2');
+  return slug.replace(/-([1-9]\d?)-([0-9])$/, '-$1.$2');
 }
 
 /** Normalize one provider model id to a catalog model slug, or '' if it is not one. */
@@ -154,6 +176,10 @@ export function catalogSlugForProviderModel(modelId) {
   // resolves to its reviewed benchmark name; an undeclared one resolves to ''.
   if (isLocalCatalogId(modelId)) return catalogSlugForLocalModel(modelId);
 
+  // Bedrock's namespace and serving-version suffix are not weight revisions.
+  if (slug.startsWith('amazon-bedrock/')) slug = slug.slice('amazon-bedrock/'.length)
+    .replace(/^(?:us\.|eu\.|apac\.|global\.)?([a-z0-9-]+)\./, '')
+    .replace(/(?:-v\d+|-1)?:\d+$/, '').replace(/-v1$/, '');
   slug = slug.replace(/\[[^\]]*\]$/, ''); // context-window marker, e.g. [1m]
   const prefix = PREFIXES.find(candidate => slug.startsWith(candidate));
   if (prefix) slug = slug.slice(prefix.length);
@@ -163,7 +189,8 @@ export function catalogSlugForProviderModel(modelId) {
   // The first test still has to happen before stripping, because some patterns
   // (`stealth/…`) match only the namespaced form.
   if (NOT_A_MODEL.test(slug)) return '';
-  slug = canonicalCatalogModelSlug(slug.replace(TAIL, ''));
+  while (!RELEASE_SUFFIX.test(slug) && TAIL.test(slug)) slug = slug.replace(TAIL, '');
+  slug = canonicalCatalogModelSlug(slug);
   return ALIASES.get(slug) || slug;
 }
 

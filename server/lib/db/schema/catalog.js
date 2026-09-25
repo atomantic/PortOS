@@ -149,6 +149,7 @@ export const catalogDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
       sync_sequence BIGSERIAL,
       PRIMARY KEY (ingredient_id, ref_kind, ref_id, role)
     )`,
@@ -158,6 +159,15 @@ export const catalogDdl = [
     // never learn the ref was removed.
     `ALTER TABLE catalog_ingredient_refs ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE catalog_ingredient_refs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+    // #8347: a tombstone/revival change-clock, independent of `deleted_at`
+    // (which is NULL again on a revival, so it can't order two conflicting
+    // apply attempts). Backfilled for existing rows to `deleted_at` when the
+    // row is already tombstoned (the most accurate change-time we have for
+    // it) or `created_at` otherwise, so a pre-upgrade row's clock isn't
+    // misdated younger than its own last known change.
+    `ALTER TABLE catalog_ingredient_refs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+    `UPDATE catalog_ingredient_refs SET updated_at = COALESCE(deleted_at, created_at) WHERE updated_at IS NULL`,
+    `ALTER TABLE catalog_ingredient_refs ALTER COLUMN updated_at SET DEFAULT NOW()`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_target ON catalog_ingredient_refs (ref_kind, ref_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_refs_sync_seq ON catalog_ingredient_refs (sync_sequence)`,
 
@@ -172,9 +182,15 @@ export const catalogDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
       sync_sequence BIGSERIAL,
       PRIMARY KEY (from_id, to_id, kind)
     )`,
+    // #8347: same tombstone/revival change-clock as catalog_ingredient_refs —
+    // see that block's comment for the backfill rationale.
+    `ALTER TABLE catalog_ingredient_relations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+    `UPDATE catalog_ingredient_relations SET updated_at = COALESCE(deleted_at, created_at) WHERE updated_at IS NULL`,
+    `ALTER TABLE catalog_ingredient_relations ALTER COLUMN updated_at SET DEFAULT NOW()`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_to ON catalog_ingredient_relations (to_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_relations_sync_seq ON catalog_ingredient_relations (sync_sequence)`,
 
@@ -238,12 +254,18 @@ export const catalogDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
       sync_sequence BIGSERIAL,
       PRIMARY KEY (ingredient_id, media_key, kind)
     )`,
     // CREATE IF NOT EXISTS does not add columns to existing installs, so keep
     // the provenance upgrade idempotent for rows created before this field.
     `ALTER TABLE catalog_ingredient_media ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb`,
+    // #8347: same tombstone/revival change-clock as catalog_ingredient_refs —
+    // see that block's comment for the backfill rationale.
+    `ALTER TABLE catalog_ingredient_media ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`,
+    `UPDATE catalog_ingredient_media SET updated_at = COALESCE(deleted_at, created_at) WHERE updated_at IS NULL`,
+    `ALTER TABLE catalog_ingredient_media ALTER COLUMN updated_at SET DEFAULT NOW()`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredient_media (ingredient_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence)`,
@@ -329,11 +351,18 @@ export const catalogDdl = [
     // path would update `deleted`/`deleted_at` but leave sync_sequence at
     // the original INSERT value — peers past that cursor would never see
     // the tombstone and their "Appears in" panels would stay stale.
+    // #8347: also stamps `updated_at` (unless the caller already set an
+    // explicit value — a peer apply carrying the sender's own clock) so the
+    // revival guard in `upsertRefFromPeer` has a change-clock that moves on
+    // BOTH a delete and a revival, unlike `deleted_at` which resets to NULL.
     `CREATE OR REPLACE FUNCTION update_catalog_ref_sync_seq()
      RETURNS TRIGGER AS $$
      BEGIN
        IF NEW.deleted IS DISTINCT FROM OLD.deleted
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+         IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+           NEW.updated_at := NOW();
+         END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_refs', 'sync_sequence'));
        END IF;
        RETURN NEW;
@@ -347,12 +376,15 @@ export const catalogDdl = [
 
     // Relation UPDATE bumps sync_sequence on soft-delete / revival so a peer
     // sees the tombstone (or un-delete) on its next pull — mirrors the ref
-    // trigger above.
+    // trigger above, including the #8347 `updated_at` change-clock stamp.
     `CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
      RETURNS TRIGGER AS $$
      BEGIN
        IF NEW.deleted IS DISTINCT FROM OLD.deleted
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+         IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+           NEW.updated_at := NOW();
+         END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
        END IF;
        RETURN NEW;
@@ -367,7 +399,7 @@ export const catalogDdl = [
     // Media UPDATE bumps sync_sequence on soft-delete/revival OR a mutable
     // field (role/caption/metadata) change so a peer sees the edit/tombstone
     // next pull. Mirrors the relation trigger but also watches the editable
-    // metadata.
+    // metadata, and stamps the same #8347 `updated_at` change-clock.
     `CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
      RETURNS TRIGGER AS $$
      BEGIN
@@ -376,6 +408,9 @@ export const catalogDdl = [
           OR NEW.role IS DISTINCT FROM OLD.role
           OR NEW.caption IS DISTINCT FROM OLD.caption
           OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
+         IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+           NEW.updated_at := NOW();
+         END IF;
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
        END IF;
        RETURN NEW;

@@ -61,6 +61,10 @@ describe('dataManager strict overview', () => {
       size: 0,
       fileCount: 0,
     });
+    // The Data Manager's disk panel reads the volume capacity off the overview.
+    expect(overview.disk.total).toBeGreaterThan(0);
+    expect(overview.disk.free).toBeGreaterThanOrEqual(0);
+    expect(overview.disk.free).toBeLessThanOrEqual(overview.disk.total);
   });
 
   it('rejects the same failed category scan for fail-closed report callers', async () => {

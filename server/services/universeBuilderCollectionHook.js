@@ -38,6 +38,19 @@ export function registerUniverseBuilderRun({ runId, universeId, jobCount }) {
   activeRuns.set(runId, { universeId, pending: jobCount });
 }
 
+// A batch refused part-way by the media queue (#8326) never enqueues
+// `unadmitted` of the jobs it registered. Drop them from the count so the run's
+// coalesced emit still fires once the admitted ones finish — or now, when they
+// already have (or none were admitted).
+export function shrinkUniverseBuilderRun(runId, unadmitted) {
+  const entry = activeRuns.get(runId);
+  if (!entry || !(unadmitted > 0)) return;
+  entry.pending -= unadmitted;
+  if (entry.pending > 0) return;
+  activeRuns.delete(runId);
+  emitRecordUpdated('universe', entry.universeId);
+}
+
 // Returns the run's universeId when this terminal closes the batch (pending → 0),
 // otherwise null. Callers use the return value as the "fire the final emit" signal.
 function noteTerminal(runId) {

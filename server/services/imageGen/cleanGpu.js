@@ -106,7 +106,7 @@ export async function enqueueGpuClean({
   // Render to the temp dir with no sidecar so the gallery stays clean.
   params.outputTarget = { dir: PATHS.imageCleanTmp, skipSidecar: true };
 
-  const queued = enqueueJob({ kind: 'image', params });
+  const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
 
   // Stage the preserve-region inputs (only when a mask rode along) so the

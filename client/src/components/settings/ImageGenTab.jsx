@@ -23,7 +23,7 @@ import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 import {
-  getSettings, updateSettings, getImageGenStatus, generateImage,
+  getSettings, updateSettings, getImageGenStatus, getVideoGenModelContext, generateImage,
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
@@ -129,11 +129,8 @@ export function ImageGenTab() {
   const [pythonPath, setPythonPath] = useState('');
   // Install-wide default local image model (`settings.imageGen.local.modelId`).
   // '' = no pin, which the server resolves to LOCAL_IMAGEGEN_DEFAULT_MODEL.
-  // Every SERVER-side local-render caller reads this key (deckRender, sprite
-  // references, the pipeline visual stages, character sheets, FableLoom, and
-  // now selectLocalImageModel itself); until now it was only reachable by
-  // hand-editing settings.json. Client-side defaults in lib/pipelineImageDefaults
-  // and lib/wrImageDefaults still hardcode their own model and do not consult it.
+  // Server render callers and client forms use this pin unless a surface has
+  // a saved model choice of its own.
   const [localModelId, setLocalModelId] = useState('');
   // Catalog for the picker, probed once the Local tab is mounted — the same
   // "don't probe a tab nobody looked at" rule as the Agy list below.
@@ -141,6 +138,18 @@ export function ImageGenTab() {
   // default this machine's runner refuses is a render error waiting to happen,
   // and `checkLocalConnection` already reports it as unavailable.
   const { models: localModels } = useLocalImageModels(localMounted);
+  const [videoModelContext, setVideoModelContext] = useState(null);
+  const [videoModelContextFailed, setVideoModelContextFailed] = useState(false);
+  const [localVideoModelId, setLocalVideoModelId] = useState('');
+  useEffect(() => {
+    if (!localMounted) return undefined;
+    let active = true;
+    setVideoModelContextFailed(false);
+    getVideoGenModelContext({ silent: true })
+      .then((context) => { if (active) setVideoModelContext(context); })
+      .catch(() => { if (active) setVideoModelContextFailed(true); });
+    return () => { active = false; };
+  }, [localMounted]);
   const [exposeA1111, setExposeA1111] = useState(false);
   // Codex CLI provider config — gated by `codexEnabled` so users without
   // a paid Codex plan that includes image_gen can hide the option entirely.
@@ -209,6 +218,7 @@ export function ImageGenTab() {
     denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
     renderDefaultsJson: '{}',
     videoGenMode: '',
+    localVideoModelId: '',
     videoGenDisplaySleep: false,
     falApiKey: '',
     reactorApiKey: '',
@@ -283,6 +293,7 @@ export function ImageGenTab() {
         // ('auto'/blank → '', i.e. no pin) for the select.
         const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
         const vgMode = normalizeRenderPinValue(vg.mode) || '';
+        const vgModelId = vg.defaultModelId || '';
         const vgDisplaySleep = vg.displaySleep === true;
         const vgFalApiKey = vg.fal?.apiKey || '';
         const vgReactorApiKey = vg.reactor?.apiKey || '';
@@ -321,6 +332,7 @@ export function ImageGenTab() {
         setMode(m);
         setRenderDefaults(rd);
         setVideoGenMode(vgMode);
+        setLocalVideoModelId(vgModelId);
         setVideoGenDisplaySleep(vgDisplaySleep);
         setFalApiKey(vgFalApiKey);
         setReactorApiKey(vgReactorApiKey);
@@ -353,6 +365,7 @@ export function ImageGenTab() {
           cleanC2PAByMode: c2, denoiseByMode: dn,
           renderDefaultsJson: JSON.stringify(rd),
           videoGenMode: vgMode,
+          localVideoModelId: vgModelId,
           videoGenDisplaySleep: vgDisplaySleep,
           falApiKey: vgFalApiKey,
           reactorApiKey: vgReactorApiKey,
@@ -374,6 +387,16 @@ export function ImageGenTab() {
   const { options: localModelOptions, fallbackLabel: localDefaultLabel } = localModelSelectOptions(
     localModels, localModelId,
   );
+  const localVideoModels = videoModelContext?.models ?? null;
+  const localVideoModelOptions = localVideoModels === null ? [] : (
+    localVideoModelId && !localVideoModels.some((model) => model.id === localVideoModelId)
+      ? [{ id: localVideoModelId, name: `${localVideoModelId} (unavailable on this machine)` }, ...localVideoModels]
+      : localVideoModels
+  );
+  const localVideoDefaultId = videoModelContext?.defaultModel || '';
+  const localVideoDefaultLabel = localVideoModels?.length === 0
+    ? 'no compatible local model'
+    : localVideoModels?.find((model) => model.id === localVideoDefaultId)?.name || localVideoDefaultId || 'no compatible local model';
 
   // Probe only while the Agy tab is actually open — the list spawns `agy models`
   // server-side, so an unopened tab must not pay for a child process.
@@ -468,6 +491,7 @@ export function ImageGenTab() {
     || denoiseByMode.external !== saved.denoiseByMode.external
     || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson
     || videoGenMode !== saved.videoGenMode
+    || localVideoModelId !== saved.localVideoModelId
     || videoGenDisplaySleep !== saved.videoGenDisplaySleep
     || falApiKey !== saved.falApiKey
     || reactorApiKey !== saved.reactorApiKey;
@@ -528,6 +552,7 @@ export function ImageGenTab() {
       videoGen: {
         ...videoGenSliceRef.current,
         mode: videoGenMode || null,
+        defaultModelId: localVideoModelId || null,
         displaySleep: videoGenDisplaySleep,
         fal: { ...videoGenSliceRef.current.fal, apiKey: falApiKey.trim() || undefined },
         reactor: { ...videoGenSliceRef.current.reactor, apiKey: reactorApiKey.trim() || undefined },
@@ -548,6 +573,7 @@ export function ImageGenTab() {
         cleanC2PAByMode, denoiseByMode,
         renderDefaultsJson: JSON.stringify(patch.renderDefaults),
         videoGenMode,
+        localVideoModelId,
         videoGenDisplaySleep,
         falApiKey: falApiKey.trim(),
         reactorApiKey: reactorApiKey.trim(),
@@ -737,7 +763,7 @@ export function ImageGenTab() {
         </div>
         <p className="text-xs text-gray-500">
           PortOS can either talk to a remote AUTOMATIC1111 / Forge server or run image
-          generation locally with mflux on this Mac. Pick whichever fits — you can also
+          generation with local Python runtimes, including mflux and diffusers. You can also
           expose this PortOS as an A1111-compatible endpoint for other tailnet boxes.
         </p>
         <div className={`grid grid-cols-1 sm:grid-cols-2 ${(codexEnabled || grokEnabled || agyEnabled) ? 'lg:grid-cols-3' : ''} gap-3`}>
@@ -761,7 +787,7 @@ export function ImageGenTab() {
               <Cpu className="w-4 h-4" />
               <span className="font-medium text-sm">Local (mflux)</span>
             </div>
-            <p className="text-xs text-gray-500 mt-1">Run Flux + LTX models on this machine. Apple Silicon recommended.</p>
+            <p className="text-xs text-gray-500 mt-1">Run image and video models on this machine. Apple Silicon enables MLX models such as FastMetal.</p>
           </button>
           {codexEnabled && (
             <button
@@ -820,9 +846,9 @@ export function ImageGenTab() {
           backend that is disabled (or unconfigured) falls back to whatever that surface would
           have used anyway — enable the backend on its own tab to make a pin take effect. A
           model can be pinned for backends that accept one (Codex, Agy); Grok and Local pick
-          their models elsewhere. Surfaces that also render video get a video backend pin —
-          backend only, since Grok video has no model choice and local video models are picked
-          on the surface itself.
+          their models elsewhere. Surfaces that also render video get a video backend pin.
+          The default local video model is set on the Local tab, and a render's explicit model
+          choice takes precedence.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 sm:items-center border border-port-border rounded-lg px-3 py-2 bg-port-bg/40">
           <FormField
@@ -983,9 +1009,9 @@ export function ImageGenTab() {
 
       {localMounted && (
         <div className={`bg-port-card border border-port-border rounded-xl p-6 space-y-4 ${mediaTab === 'local' ? '' : 'hidden'}`}>
-          <h3 className="text-sm font-medium text-gray-300">Local Python (mflux + mlx_video)</h3>
+          <h3 className="text-sm font-medium text-gray-300">Local runtimes (image + video)</h3>
           <p className="text-xs text-gray-500">
-            Pick a Python 3.10+ interpreter — PortOS auto-detects venvs and conda installs and can install
+            Pick a Python 3.10+ interpreter — PortOS auto-detects the configured local runtimes and can install
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
             and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
           </p>
@@ -1037,6 +1063,44 @@ export function ImageGenTab() {
               No local image models are compatible with this machine.
             </p>
           )}
+          <div className="border-t border-port-border pt-4 space-y-3">
+            <h3 className="text-sm font-medium text-gray-300">Local video model</h3>
+            <FormField
+              label="Default local video model"
+              labelClassName="block text-xs font-medium text-gray-400 mb-1"
+            >
+              <select
+                value={localVideoModelId}
+                onChange={(e) => setLocalVideoModelId(e.target.value)}
+                disabled={localVideoModels === null || videoModelContextFailed}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+              >
+                <option value="">
+                  {localVideoModels === null
+                    ? videoModelContextFailed ? 'Video models unavailable' : 'Loading models…'
+                    : `Install default (${localVideoDefaultLabel})`}
+                </option>
+                {localVideoModelOptions.map((model) => (
+                  <option key={model.id} value={model.id}>{model.name || model.id}</option>
+                ))}
+              </select>
+            </FormField>
+            <p className="text-xs text-gray-500">
+              Used by local video renders that do not choose a model. A model selected for a
+              render still wins. Weights download on first use; check the{' '}
+              <a href="/models/media" className="text-port-accent hover:underline">
+                {getNavPageForPath('/models/media')?.breadcrumb || 'media models page'}
+              </a>{' '}for cached models.
+            </p>
+            {videoModelContextFailed && (
+              <p role="status" className="text-xs text-port-warning">Could not load local video models.</p>
+            )}
+            {localVideoModels?.length === 0 && !videoModelContextFailed && (
+              <p role="status" className="text-xs text-port-warning">
+                No local video models are compatible with this machine.
+              </p>
+            )}
+          </div>
           <CleanersToggles
             cleanC2PA={cleanC2PAByMode.local}
             denoise={denoiseByMode.local}

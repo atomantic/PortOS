@@ -29,6 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { resolveSubjectId } from './privacySubjects.js';
+import { encryptValue, decryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 
 // Cap on each registry fetch so a hung broker source can't stall a
 // user-triggered refresh indefinitely (both fetchers run under Promise.all).
@@ -420,8 +421,133 @@ export async function refreshBrokers({ fetchBadbool = defaultFetchBadbool, fetch
 const CASE_COLUMNS = `id, subject_id, broker_id, state, found, evidence, disclosed_fields,
   channel, reason, next_recheck_at, created_at, updated_at`;
 
+// ─── Identity-bearing case evidence (#8333) ─────────────────────────────────
+//
+// A scan's evidence names the person it matched: the legal name and city/state
+// it found, and the broker search/listing URLs built from them. Those copies
+// must not sit in plaintext JSONB beside the encrypted vault (or in every
+// pg_dump of it), so they live in a sealed envelope under `sealed_identity`,
+// encrypted with the vault's own key (lib/vaultCrypto.js). Everything else in
+// `evidence` (match_basis, lane, playbook, verification metadata…) stays
+// plain — it identifies the broker and the workflow, not the person.
+//
+// Envelope: `{ v: 1, ciphertext: 'v1:<iv>:<tag>:<ct>', listing_count }`. The
+// ciphertext is JSON of the identity fields; `listing_count` is a
+// non-identifying tally so the case list can say "2 listings" without a
+// decrypt. The envelope is dropped wholesale on an explicit erase, on
+// `confirmed_removed`, and when the vault record it was derived from is
+// deleted.
+
+export const IDENTITY_EVIDENCE_KEYS = Object.freeze(['matched_name', 'matched_location', 'search_url', 'listing_urls']);
+const SEALED_EVIDENCE_KEY = 'sealed_identity';
+const EVIDENCE_ENVELOPE_VERSION = 1;
+// Every key that must be gone from a row whose identity evidence is erased.
+const ERASABLE_EVIDENCE_KEYS = Object.freeze([...IDENTITY_EVIDENCE_KEYS, SEALED_EVIDENCE_KEY]);
+
+const hasIdentityValue = (v) => (Array.isArray(v) ? v.length > 0 : (v !== undefined && v !== null && v !== ''));
+
+/**
+ * Split raw evidence into its plain (non-identifying) part and the identity
+ * fields that carry a value. A caller-supplied `sealed_identity` is never
+ * trusted as input — the only envelope a write keeps is the one already stored.
+ */
+function splitEvidence(evidence) {
+  const plain = {};
+  const identity = {};
+  const source = evidence && typeof evidence === 'object' && !Array.isArray(evidence) ? evidence : {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === SEALED_EVIDENCE_KEY) continue;
+    if (IDENTITY_EVIDENCE_KEYS.includes(key)) {
+      if (hasIdentityValue(value)) identity[key] = value;
+    } else {
+      plain[key] = value;
+    }
+  }
+  return { plain, identity };
+}
+
+/**
+ * The evidence object to PERSIST: plain fields + (optionally) the sealed
+ * envelope. Identity fields present in `evidence` are sealed fresh (a new scan
+ * replaces the old match); when there are none, `existingEnvelope` is kept so
+ * a lifecycle transition that only restates workflow metadata doesn't silently
+ * drop the scan's search link. `clearIdentity` drops identity outright.
+ */
+async function prepareEvidenceForStorage(evidence, { existingEnvelope = null, clearIdentity = false } = {}) {
+  const { plain, identity } = splitEvidence(evidence);
+  if (clearIdentity) return plain;
+  if (Object.keys(identity).length === 0) {
+    return existingEnvelope ? { ...plain, [SEALED_EVIDENCE_KEY]: existingEnvelope } : plain;
+  }
+  await ensureVaultKey();
+  const envelope = {
+    v: EVIDENCE_ENVELOPE_VERSION,
+    ciphertext: encryptValue(JSON.stringify(identity)),
+    listing_count: Array.isArray(identity.listing_urls) ? identity.listing_urls.length : 0,
+  };
+  return { ...plain, [SEALED_EVIDENCE_KEY]: envelope };
+}
+
+/** Decrypt a stored envelope → the identity fields. Throws on an unknown version or tampering. */
+function openEvidenceEnvelope(envelope) {
+  if (!envelope) return {};
+  if (envelope.v !== EVIDENCE_ENVELOPE_VERSION || typeof envelope.ciphertext !== 'string') {
+    throw new ServerError('Unsupported broker case evidence envelope', { status: 500, code: 'EVIDENCE_ENVELOPE_UNSUPPORTED' });
+  }
+  return JSON.parse(decryptValue(envelope.ciphertext));
+}
+
+// Legacy-row conversion runs once per process (single-flight), before the
+// first ledger read returns anything. A failure leaves the flag unset, so the
+// read that triggered it fails loudly and the next read retries.
+let evidenceSealed = false;
+let evidenceSealFlight = null;
+
+/**
+ * Seal any case row still holding plaintext identity evidence (rows written
+ * before #8333). Idempotent: a converted row no longer matches the key probe.
+ * One transaction — either every matched row is converted or none is.
+ */
+async function sealLegacyCaseEvidence() {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `SELECT id, evidence FROM privacy_broker_cases WHERE evidence ?| $1::text[] FOR UPDATE`,
+      [IDENTITY_EVIDENCE_KEYS],
+    );
+    for (const row of rows) {
+      const evidence = parseEvidence(row.evidence);
+      const stored = await prepareEvidenceForStorage(evidence, { existingEnvelope: evidence[SEALED_EVIDENCE_KEY] ?? null });
+      await client.query(`UPDATE privacy_broker_cases SET evidence = $1 WHERE id = $2`, [JSON.stringify(stored), row.id]);
+    }
+    if (rows.length) console.log(`🔐 Sealed identity evidence on ${rows.length} legacy broker case(s)`);
+    return { converted: rows.length };
+  });
+}
+
+async function ensureCaseEvidenceSealed() {
+  if (evidenceSealed) return;
+  if (!evidenceSealFlight) {
+    evidenceSealFlight = sealLegacyCaseEvidence()
+      .then(() => { evidenceSealed = true; })
+      .finally(() => { evidenceSealFlight = null; });
+  }
+  await evidenceSealFlight;
+}
+
+export function __resetCaseEvidenceSealForTests() {
+  evidenceSealed = false;
+  evidenceSealFlight = null;
+}
+
+function parseEvidence(raw) {
+  if (typeof raw === 'string') return JSON.parse(raw);
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
 function rowToCase(row) {
   if (!row) return null;
+  const storedEvidence = parseEvidence(row.evidence);
+  const envelope = storedEvidence[SEALED_EVIDENCE_KEY] ?? null;
   return {
     id: row.id,
     subjectId: row.subject_id,
@@ -431,7 +557,12 @@ function rowToCase(row) {
     // strips render only actions whose target is in this list (issue #2417).
     allowedTransitions: allowedTransitionsFor(row.state),
     found: row.found ?? null,
-    evidence: row.evidence ?? {},
+    // Non-identifying evidence only — identity fields are never projected,
+    // even from a row the legacy conversion hasn't reached yet.
+    evidence: splitEvidence(storedEvidence).plain,
+    // Summary of the sealed identity evidence (null once erased). Revealing it
+    // is the explicit `revealCaseEvidence` action.
+    identityEvidence: envelope ? { sealed: true, listingCount: envelope.listing_count ?? 0 } : null,
     disclosedFields: row.disclosed_fields ?? [],
     channel: row.channel ?? null,
     reason: row.reason ?? null,
@@ -444,7 +575,32 @@ function rowToCase(row) {
   };
 }
 
-export async function listBrokerCases({ state, subjectId } = {}) {
+/**
+ * The identity fields a stored row's envelope holds, for SERVER-SIDE engine use
+ * (the opt-out planner's listing URLs, the digest's manual-check link). A
+ * decrypt failure (rotated/missing key, tampering) degrades to `null` with a
+ * warning rather than failing the whole pass — the explicit reveal action is
+ * where that failure surfaces to the user.
+ */
+function readIdentityForEngine(row) {
+  const envelope = parseEvidence(row.evidence)[SEALED_EVIDENCE_KEY];
+  if (!envelope) return null;
+  try {
+    return openEvidenceEnvelope(envelope);
+  } catch (err) {
+    console.warn(`⚠️ Broker case ${row.id}: sealed identity evidence unreadable (${err.message})`);
+    return null;
+  }
+}
+
+/**
+ * List a subject's cases. `includeIdentity` is for in-process engines only
+ * (opt-out planner, digest): it attaches the decrypted identity fields as
+ * `identity` on each case. Route handlers never pass it — the API projection
+ * carries only `identityEvidence` (a summary) and the reveal action decrypts.
+ */
+export async function listBrokerCases({ state, subjectId, includeIdentity = false } = {}) {
+  await ensureCaseEvidenceSealed();
   // Always scoped to ONE subject (defaulting to `self`): two household members
   // hold independent cases against the same broker, and the opt-out engine must
   // never plan a submission for one using the other's ledger.
@@ -462,10 +618,12 @@ export async function listBrokerCases({ state, subjectId } = {}) {
      ORDER BY b.name ASC`,
     params,
   );
-  return rows.map(rowToCase);
+  if (!includeIdentity) return rows.map(rowToCase);
+  return rows.map((row) => ({ ...rowToCase(row), identity: readIdentityForEngine(row) }));
 }
 
 export async function getCaseForBroker(brokerId, { subjectId } = {}) {
+  await ensureCaseEvidenceSealed();
   const { rows } = await query(
     `SELECT ${CASE_COLUMNS} FROM privacy_broker_cases WHERE broker_id = $1 AND subject_id = $2`,
     [brokerId, resolveSubjectId(subjectId)],
@@ -483,6 +641,9 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
     throw new ServerError(`Not a scan verdict: "${verdict}"`, { status: 400, code: 'INVALID_SCAN_VERDICT' });
   }
   const resolvedSubjectId = resolveSubjectId(subjectId);
+  // A fresh scan REPLACES the identity match (a re-scan that no longer finds a
+  // listing must not keep the old one), so no existing envelope is carried.
+  const storedEvidence = JSON.stringify(await prepareEvidenceForStorage(evidence));
   return withTransaction(async (client) => {
     const broker = await client.query(`SELECT id FROM privacy_brokers WHERE id = $1`, [brokerId]);
     if (!broker.rows[0]) throw new ServerError('Broker not found', { status: 404, code: 'NOT_FOUND' });
@@ -503,7 +664,7 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
              (id, subject_id, broker_id, state, found, evidence, next_recheck_at, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
            RETURNING ${CASE_COLUMNS}`,
-          [id, resolvedSubjectId, brokerId, verdict, found, JSON.stringify(evidence), nextRecheck],
+          [id, resolvedSubjectId, brokerId, verdict, found, storedEvidence, nextRecheck],
         );
         await client.query('RELEASE SAVEPOINT sp_insert_scan_verdict');
         console.log(`🔎 Broker ${brokerId}: new case → ${verdict} (subject=${resolvedSubjectId})`);
@@ -521,7 +682,7 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
               `UPDATE privacy_broker_cases
                SET state = $1, found = $2, evidence = $3, next_recheck_at = $4, updated_at = NOW()
                WHERE id = $5 RETURNING ${CASE_COLUMNS}`,
-              [verdict, found, JSON.stringify(evidence), nextRecheck, raceExisting.rows[0].id],
+              [verdict, found, storedEvidence, nextRecheck, raceExisting.rows[0].id],
             );
             console.log(`🔎 Broker ${brokerId}: case ${raceExisting.rows[0].state} → ${verdict} (subject=${resolvedSubjectId})`);
             return rowToCase(rows[0]);
@@ -536,7 +697,7 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
       `UPDATE privacy_broker_cases
        SET state = $1, found = $2, evidence = $3, next_recheck_at = $4, updated_at = NOW()
        WHERE id = $5 RETURNING ${CASE_COLUMNS}`,
-      [verdict, found, JSON.stringify(evidence), nextRecheck, existing.rows[0].id],
+      [verdict, found, storedEvidence, nextRecheck, existing.rows[0].id],
     );
     console.log(`🔎 Broker ${brokerId}: case ${existing.rows[0].state} → ${verdict} (subject=${resolvedSubjectId})`);
     return rowToCase(rows[0]);
@@ -548,12 +709,18 @@ export async function recordScanVerdict(brokerId, verdict, { evidence = {}, foun
  * Enforces the state machine + stamps `next_recheck_at`. `patch` may carry
  * `channel`, `reason`, `disclosedFields`, `evidence`, and a `viaRescan` flag
  * (verification-only targets). Used by the Phase 6 opt-out engine.
+ *
+ * Evidence (#8333): identity fields in `patch.evidence` are sealed; without
+ * any, the case's existing sealed envelope is carried forward. Reaching
+ * `confirmed_removed` ERASES the identity envelope — the listing is gone, so
+ * the only remaining copy of the matched name/location/URLs is ours — while the
+ * plain verdict metadata, state, and timestamps are kept.
  */
 export async function transitionCase(caseId, toState, patch = {}) {
   const { viaRescan = false, now = new Date() } = patch;
   return withTransaction(async (client) => {
     const existing = await client.query(
-      `SELECT id, state FROM privacy_broker_cases WHERE id = $1 FOR UPDATE`, [caseId],
+      `SELECT id, state, evidence FROM privacy_broker_cases WHERE id = $1 FOR UPDATE`, [caseId],
     );
     if (!existing.rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
     assertTransition(existing.rows[0].state, toState, { viaRescan });
@@ -571,7 +738,13 @@ export async function transitionCase(caseId, toState, patch = {}) {
     if (patch.channel !== undefined) add('channel', patch.channel);
     if (patch.reason !== undefined) add('reason', patch.reason);
     if (patch.disclosedFields !== undefined) add('disclosed_fields', patch.disclosedFields);
-    if (patch.evidence !== undefined) add('evidence', JSON.stringify(patch.evidence));
+    const clearIdentity = toState === 'confirmed_removed';
+    if (patch.evidence !== undefined || clearIdentity) {
+      const stored = parseEvidence(existing.rows[0].evidence);
+      add('evidence', JSON.stringify(await prepareEvidenceForStorage(patch.evidence ?? stored, {
+        existingEnvelope: stored[SEALED_EVIDENCE_KEY] ?? null, clearIdentity,
+      })));
+    }
     params.push(caseId);
     const { rows } = await client.query(
       `UPDATE privacy_broker_cases SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING ${CASE_COLUMNS}`,
@@ -580,6 +753,57 @@ export async function transitionCase(caseId, toState, patch = {}) {
     console.log(`📋 Case ${caseId}: ${existing.rows[0].state} → ${toState}`);
     return rowToCase(rows[0]);
   });
+}
+
+/**
+ * Explicit per-case evidence ERASE (#8333): drop the sealed identity envelope
+ * (and any legacy plaintext identity field) from one case, keeping its state,
+ * verdict metadata, and timestamps. Idempotent — erasing an already-clear case
+ * returns it unchanged apart from `updated_at`. 404 if the case is unknown.
+ */
+export async function clearCaseIdentityEvidence(caseId) {
+  const { rows } = await query(
+    `UPDATE privacy_broker_cases SET evidence = evidence - $1::text[], updated_at = NOW()
+     WHERE id = $2 RETURNING ${CASE_COLUMNS}`,
+    [ERASABLE_EVIDENCE_KEYS, caseId],
+  );
+  if (!rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+  console.log(`🗑️ Case ${caseId}: identity evidence erased`);
+  return rowToCase(rows[0]);
+}
+
+/**
+ * Erase the identity evidence on EVERY case of a subject — called when a vault
+ * record that feeds scan vectors is deleted, so the name/location the user just
+ * removed from the vault doesn't survive in the case ledger (or its backups).
+ * The next scan re-derives search links from whatever the vault still holds.
+ * Accepts the caller's transaction client so the erase commits with the delete.
+ */
+export async function clearSubjectIdentityEvidence(subjectId, { client = null } = {}) {
+  const run = client ? (sql, params) => client.query(sql, params) : query;
+  const { rowCount } = await run(
+    `UPDATE privacy_broker_cases SET evidence = evidence - $1::text[], updated_at = NOW()
+     WHERE subject_id = $2 AND evidence ?| $1::text[]`,
+    [ERASABLE_EVIDENCE_KEYS, resolveSubjectId(subjectId)],
+  );
+  if (rowCount) console.log(`🗑️ Erased identity evidence on ${rowCount} broker case(s) (subject=${resolveSubjectId(subjectId)})`);
+  return { cleared: rowCount ?? 0 };
+}
+
+/**
+ * The ONE user-facing decrypt path for case evidence: the case drawer's
+ * search/listing links. Returns `{ caseId, sealed, evidence }` where
+ * `evidence` holds the identity fields (empty once erased). Logs the id only.
+ */
+export async function revealCaseEvidence(caseId) {
+  await ensureCaseEvidenceSealed();
+  const { rows } = await query(`SELECT id, evidence FROM privacy_broker_cases WHERE id = $1`, [caseId]);
+  if (!rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+  const envelope = parseEvidence(rows[0].evidence)[SEALED_EVIDENCE_KEY];
+  if (!envelope) return { caseId, sealed: false, evidence: {} };
+  const identity = openEvidenceEnvelope(envelope);
+  console.log(`🔓 Revealed broker case evidence ${caseId}`);
+  return { caseId, sealed: true, evidence: identity };
 }
 
 /**

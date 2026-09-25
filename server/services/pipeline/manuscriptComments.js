@@ -28,6 +28,7 @@ import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore, listSeries } from './series.js';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { trimTo } from '../../lib/textUtils.js';
@@ -264,6 +265,7 @@ export async function updateComment(seriesId, commentId, patch) {
  * last-write-wins per comment on `updatedAt`. Mirrors `mergeIssuesFromSync`.
  */
 export async function mergeReviewFromSync(seriesId, remoteReview) {
+  assertValidSeriesId(seriesId);
   const remote = sanitizeReview(remoteReview);
   return queueReviewWrite(seriesId, async () => {
     const local = await readReview(seriesId);

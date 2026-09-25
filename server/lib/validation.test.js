@@ -730,6 +730,21 @@ describe('validation.js', () => {
       expect(result.success).toBe(true);
     });
 
+    it('accepts only a boolean for Claude TUI low-priority continuation', () => {
+      expect(providerSchema.safeParse({
+        name: 'Claude Code TUI',
+        type: 'tui',
+        command: 'claude',
+        lowPriorityOnUsageLimit: true,
+      }).success).toBe(true);
+      expect(providerSchema.safeParse({
+        name: 'Claude Code TUI',
+        type: 'tui',
+        command: 'claude',
+        lowPriorityOnUsageLimit: 'true',
+      }).success).toBe(false);
+    });
+
     it('should reject invalid type', () => {
       const provider = { name: 'Test', type: 'invalid' };
       const result = providerSchema.safeParse(provider);

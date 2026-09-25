@@ -41,6 +41,12 @@ export const removeDeckSample = (id, sampleId, options) =>
 export const generateDeckPrompts = (id, body = {}, options) =>
   request(`/decks/${encodeURIComponent(id)}/generate-prompts`, { ...json('POST', body), ...options });
 
+// SSE progress stream for the generate call above. Attaching OPENS the
+// channel server-side, so the caller can subscribe before (or alongside) the
+// POST without racing it. Path only — feed it to `useSseProgress`.
+export const deckPromptsProgressUrl = (id) =>
+  `/api/decks/${encodeURIComponent(id)}/generate-prompts/progress`;
+
 // Batch render — `{ cardIds?, onlyMissing?, mode?, model?, seed? }` →
 // `{ mode, jobs: [{ cardId, key, jobId }], skipped }`.
 export const renderDeckCards = (id, body = {}, options) =>

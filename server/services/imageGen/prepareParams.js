@@ -38,6 +38,7 @@ import {
   cloudPromptRequired, maxInputImages, resolveCloudProviderConfig, resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
+import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
@@ -77,7 +78,7 @@ const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '
 /**
  * Select the model a local render will actually use. An omitted model prefers
  * the install-wide pin (`settings.imageGen.local.modelId`, set on Settings →
- * Media → Local), then the historical `dev` default — each only when it can
+ * Media → Local), then the shipped Qwen-Image 2.1 default — each only when it can
  * actually run on this host; otherwise it falls through to the first
  * compatible catalog entry.
  *
@@ -245,6 +246,18 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     throw cloudConfig.disabledError;
   }
 
+  // A full media queue (#8326) is refused before anything is staged too — the
+  // route's enqueue would refuse the same render, after these copies landed.
+  // Lazy: only a queue-bound render needs the queue loaded.
+  if (data.mediaProviderPeerId || QUEUEABLE_IMAGE_MODES.includes(mode)) {
+    await import('../mediaJobQueue/index.js')
+      .then(({ assertMediaQueueRoom }) => assertMediaQueueRoom(1))
+      .catch((err) => {
+        cleanupReqFilesTemp();
+        throw err;
+      });
+  }
+
   // Resolve cleaners ONCE at the route layer so all three dispatch paths
   // (synchronous external, codex queue, local queue) see the same values.
   // Stamp onto `data` so they flow through the spread-into-params calls
@@ -390,8 +403,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
  * called from the route right before it enqueues a local job.
  *
  * Resolves the effective model via the same fallback chain the local worker
- * uses (`params.modelId` → the install pin → compatible `'dev'` → the first
- * compatible model)
+ * uses (`params.modelId` → the install pin → compatible Qwen-Image 2.1 → the
+ * first compatible model)
  * and validates it can actually run: an edit-only model (e.g. Qwen-Image-Edit)
  * requires a source image, and any model that isn't FLUX.2 or diffusers-run
  * needs a configured pythonPath. Throws the identical `ServerError`s (same
@@ -409,8 +422,8 @@ export function resolveLocalImageModel(settings, params) {
   // accept the job and only surface the failure async over SSE.
   const allModels = getImageModels();
   // Reject a typo'd modelId synchronously rather than enqueueing a doomed
-  // job. When omitted, fall through to the default ('dev'-ish) — the
-  // worker does the same lookup so behavior stays consistent.
+  // job. When omitted, fall through to Qwen-Image 2.1 or the first compatible
+  // catalog model — the worker uses the same selection path.
   if (params.modelId && !allModels.some((m) => m.id === params.modelId)) {
     throw new ServerError(
       `Unknown modelId: ${params.modelId}`,
@@ -418,9 +431,8 @@ export function resolveLocalImageModel(settings, params) {
     );
   }
   // An explicit pin must fail clearly when the host cannot run it. For an
-  // omitted pin, prefer the historical `dev` default only when it is actually
-  // compatible, then choose the first known-compatible model. This keeps a
-  // Windows/Linux install from silently queueing the Apple-only default.
+  // omitted pin, prefer the shipped default only when compatible, then choose
+  // the first known-compatible model.
   const selectedModel = selectLocalImageModelFromSettings(settings, params.modelId, allModels);
   if (selectedModel && !isHardwareCompatible(selectedModel.hardwareCompatibility)) {
     throw new ServerError(

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -203,8 +203,13 @@ describe('InboxTab message selection URL', () => {
   };
 
   it('opens a selected message while preserving triage in the URL and removes selection on back', async () => {
-    api.getMessageInbox.mockResolvedValue({ messages: [message], total: 1 });
+    const { bodyText, ...summary } = message;
+    api.getMessageInbox.mockResolvedValue({ messages: [{ ...summary, preview: 'Short preview' }], total: 5000 });
+    api.getMessageDetail.mockResolvedValue(message);
     renderInboxWithLocation([neverSyncedAccount], { route: '/messages/inbox?triage=reply' });
+    expect(await screen.findByText('Short preview')).toBeInTheDocument();
+    expect(api.getMessageInbox).toHaveBeenCalledWith({ summary: true }, { silent: true });
+    expect(api.getMessageDetail).not.toHaveBeenCalled();
 
     fireEvent.click(await screen.findByRole('button', { name: /a message to inspect/i }));
     expect(await screen.findByText('Message body')).toBeInTheDocument();
@@ -223,10 +228,28 @@ describe('InboxTab message selection URL', () => {
     });
 
     expect(await screen.findByText('Message body')).toBeInTheDocument();
-    expect(api.getMessageDetail).toHaveBeenCalledWith(neverSyncedAccount.id, message.id);
+    expect(api.getMessageDetail).toHaveBeenCalledWith(neverSyncedAccount.id, message.id, { silent: true });
     expect(screen.getByTestId('location')).toHaveTextContent(
       `/messages/inbox?triage=review&message=${message.id}&account=${message.accountId}`,
     );
+  });
+
+  it.each(['resolve', 'reject'])('ignores a late %s from a previously selected summary', async (outcome) => {
+    let finishFirst;
+    const pending = new Promise((resolve, reject) => { finishFirst = outcome === 'resolve' ? resolve : reject; });
+    const second = { ...message, id: 'message-2', subject: 'Second selection', bodyText: 'Second full body' };
+    api.getMessageInbox.mockResolvedValue({ messages: [message, second].map(({ bodyText, ...row }) => ({ ...row, preview: 'Summary only' })), total: 2 });
+    api.getMessageDetail.mockReturnValueOnce(pending).mockResolvedValueOnce(second);
+    renderInboxWithLocation([neverSyncedAccount]);
+
+    fireEvent.click(await screen.findByRole('button', { name: /a message to inspect/i }));
+    await waitFor(() => expect(api.getMessageDetail).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /second selection/i }));
+    expect(await screen.findByText('Second full body')).toBeInTheDocument();
+    await act(async () => finishFirst(outcome === 'resolve' ? message : new Error('Synthetic stale failure')));
+    expect(screen.getByText('Second full body')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('message=message-2');
+    expect(api.getMessageDetail).toHaveBeenCalledTimes(2);
   });
 
   it('keeps sender text in the row and wraps the toolbar instead of a single overflowing flex', async () => {

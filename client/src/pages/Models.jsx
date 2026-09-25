@@ -4,7 +4,7 @@ import { Cpu } from 'lucide-react';
 import { getSectionNavTabForPath } from '../../../server/lib/navManifest.js';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import ModelsTabsHeader, { ModelsDesktopNavigator, TABS } from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsSectionLayout, TABS } from '../components/models/ModelsTabsHeader';
 import { NAV_PRESENTATION } from '../lib/navPresentation.js';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
@@ -116,23 +116,20 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   const DestinationIcon = NAV_PRESENTATION[destination?.to]?.icon || Cpu;
 
   return (
-    <div className="flex h-full min-w-0 overflow-hidden">
-      <ModelsDesktopNavigator activeTab={activeTab} />
-      <div className="flex flex-col h-full min-w-0 flex-1">
-        <PageHeader icon={DestinationIcon} title={destination?.label || 'Models'} />
+    <ModelsSectionLayout activeTab={activeTab}>
+      <PageHeader icon={DestinationIcon} title={destination?.label || 'Models'} />
 
-        <ModelsTabsHeader activeTab={activeTab} desktop={false} />
+      <ModelsTabsHeader activeTab={activeTab} />
 
-        <div className="flex-1 min-w-0 overflow-auto p-4">
-          {/* Local boundary rather than the App-level one: a lazy tab must not blank
-              the section header and tab bar while its chunk loads. */}
-          <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
-            {DetailContent
-              ? <DetailContent recordId={recordId} />
-              : <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />}
-          </Suspense>
-        </div>
+      <div className="flex-1 min-w-0 overflow-auto p-4">
+        {/* Local boundary rather than the App-level one: a lazy tab must not blank
+            the section header and tab bar while its chunk loads. */}
+        <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
+          {DetailContent
+            ? <DetailContent recordId={recordId} />
+            : <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />}
+        </Suspense>
       </div>
-    </div>
+    </ModelsSectionLayout>
   );
 }

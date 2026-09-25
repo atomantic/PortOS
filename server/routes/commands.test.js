@@ -4,6 +4,7 @@ import express from 'express';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { request } from '../lib/testHelper.js';
 import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { ALLOWED_COMMANDS } from '../lib/commandSecurity.js';
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -36,6 +37,23 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
+vi.mock('../services/auth.js', async () => {
+  const { extractToken } = await import('../../lib/portosAuthCore.js');
+  return {
+    extractToken,
+    isAuthEnabled: vi.fn().mockResolvedValue(false),
+    verifySession: vi.fn(async token => token === 'example-operator-session'),
+    verifyPassword: vi.fn(async password => password === 'example-peer-password'),
+  };
+});
+
+vi.mock('../services/settings.js', () => ({
+  getSettings: vi.fn().mockResolvedValue({}),
+  settingsEvents: new EventEmitter(),
+}));
+
+import { authGate } from '../services/authGate.js';
+import { isAuthEnabled } from '../services/auth.js';
 import { existsSync, realpathSync, statSync } from 'fs';
 import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
 import commandsRoutes from './commands.js';
@@ -51,10 +69,16 @@ function createChildProcess() {
   return child;
 }
 
-function createApp(io = { emit: vi.fn() }) {
+function createApp(io = { emit: vi.fn() }, { remoteAddress, withAuthGate = true } = {}) {
   const app = express();
   app.set('io', io);
   app.use(express.json());
+  if (remoteAddress !== undefined) app.use((req, _res, next) => {
+    // Model the server's socket observation, never an HTTP header.
+    Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
+    next();
+  });
+  if (withAuthGate) app.use(authGate);
   app.use('/api/commands', commandsRoutes);
   app.use(errorMiddleware);
   return { app, io };
@@ -82,10 +106,115 @@ describe('commands routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isAuthEnabled.mockResolvedValue(false);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe('host-control authorization through the real auth gate', () => {
+    const basic = `Basic ${Buffer.from(':example-peer-password').toString('base64')}`;
+
+    it.each([
+      ['password-free remote peer', false, {}],
+      ['spoofed forwarding headers', false, { 'X-Forwarded-For': '127.0.0.1', 'X-Real-IP': '::1', [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }],
+      ['authenticated Basic peer', true, { Authorization: basic }],
+      ['unauthenticated password-protected peer', true, {}],
+      ['invalid operator session', true, { Authorization: 'Bearer invalid-session' }],
+    ])('rejects %s before spawning or stopping a process', async (_name, enabled, headers) => {
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const local = createApp().app;
+      const started = await request(local).post('/api/commands/execute').send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      spawnMock.mockClear();
+      isAuthEnabled.mockResolvedValue(enabled);
+      const { app } = createApp(undefined, { remoteAddress: '192.0.2.10' });
+      app.set('trust proxy', true);
+
+      for (const path of ['/api/commands/execute', `/api/commands/${started.body.commandId}/stop`]) {
+        const pending = request(app).post(path).send({ command: 'npx --yes example-package' });
+        for (const [key, value] of Object.entries(headers)) pending.set(key, value);
+        const response = await pending;
+        expect(response.status).toBe(enabled && !headers.Authorization?.startsWith('Basic') ? 401 : 403);
+        expect(response.body.code).toBe(response.status === 401 ? 'AUTH_REQUIRED' : 'HOST_CONTROL_FORBIDDEN');
+      }
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+      child.emit('close', 0);
+    });
+
+    it.each(['192.0.2.10', 'unknown', '127.0.0.1, 192.0.2.10'])(
+      'rejects a dev-proxied nonlocal or ambiguous caller %s', async proxyClient => {
+        const child = createChildProcess();
+        spawnMock.mockReturnValue(child);
+        const { app } = createApp();
+        const started = await request(app).post('/api/commands/execute').send({ command: 'pwd' });
+        expect(started.status).toBe(202);
+        spawnMock.mockClear();
+        for (const path of ['/api/commands/execute', `/api/commands/${started.body.commandId}/stop`]) {
+          const response = await request(app).post(path)
+            .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient)
+            .set('X-Forwarded-For', '127.0.0.1')
+            .send({ command: 'npx --yes example-package' });
+          expect(response.status).toBe(403);
+          expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+        }
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(child.kill).not.toHaveBeenCalled();
+        child.emit('close', 0);
+      },
+    );
+
+    it('keeps local UI command control through the dev proxy', async () => {
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp();
+      const started = await request(app).post('/api/commands/execute')
+        .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::ffff:127.0.0.1').send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      const stopped = await request(app).post(`/api/commands/${started.body.commandId}/stop`)
+        .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1');
+      expect(stopped.status).toBe(200);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    it.each(['127.0.0.1', '127.0.0.2', '::1', '::ffff:127.0.0.1'])(
+      'keeps password-free local command control on %s', async remoteAddress => {
+        const child = createChildProcess();
+        spawnMock.mockReturnValue(child);
+        const { app } = createApp(undefined, { remoteAddress });
+        const started = await request(app).post('/api/commands/execute').send({ command: 'pwd' });
+        expect(started.status).toBe(202);
+        const stopped = await request(app).post(`/api/commands/${started.body.commandId}/stop`);
+        expect(stopped.status).toBe(200);
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      },
+    );
+
+    it.each([
+      ['Cookie', 'portos_auth=example-operator-session'],
+      ['Authorization', 'Bearer example-operator-session'],
+    ])('allows authenticated operator commands through %s', async (header, value) => {
+      isAuthEnabled.mockResolvedValue(true);
+      const child = createChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { app } = createApp(undefined, { remoteAddress: '192.0.2.10' });
+      const started = await request(app).post('/api/commands/execute').set(header, value).set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '192.0.2.10').send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      const stopped = await request(app).post(`/api/commands/${started.body.commandId}/stop`).set(header, value);
+      expect(stopped.status).toBe(200);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    it('fails closed when mounted without the global auth gate', async () => {
+      const { app } = createApp(undefined, { withAuthGate: false });
+      const response = await request(app).post('/api/commands/execute').send({ command: 'pwd' });
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/commands/execute', () => {

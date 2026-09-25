@@ -22,7 +22,7 @@
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
-import { isTestRunner } from '../lib/runtimeEnv.js';
+import { isTestRunner, isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -39,6 +39,7 @@ import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { conflictJournalStore } from '../lib/conflictJournal.js';
 import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
 import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
+import { createHttpDrain } from '../lib/httpDrain.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
 
@@ -51,7 +52,8 @@ import {
   runDbAndCatalogMigrations,
   warmMandatoryStores,
   initCosAfterSpawner,
-  armCommissionScheduler
+  armCommissionScheduler,
+  gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
@@ -127,8 +129,9 @@ import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
+import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, flushMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -231,7 +234,13 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
 
   // The ORDER these run in is `runPreRouteSequence`'s contract (see
   // bootstrapSequence.js); this object is only the "what".
-  return runPreRouteSequence({
+  //
+  // Under the boot smoke (#8343) the steps that would start local-LLM backends,
+  // the auto-fixer, or the CoS spawner (runner connection + agent recovery) are
+  // no-ops — see SMOKE_BOOT_DISABLED_STEPS.
+  const smokeBoot = isSmokeBoot();
+  if (smokeBoot) console.log('🧪 Smoke boot: startup jobs, agent recovery, and external integrations are disabled');
+  return runPreRouteSequence(gateStepsForSmokeBoot({
     // Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
     // and providers.json. Without this, a plain pull-and-restart (no update.sh)
     // leaves new prompt stages and other shipped data changes unregistered —
@@ -356,7 +365,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // The CoS agent spawner (event wiring + orphan cleanup), initialized
     // explicitly now that the runner registration + task learning are ready.
     startSpawner: initSpawner
-  });
+  }, 'preRoute', smokeBoot));
 };
 
 /**
@@ -860,7 +869,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  * the background and any fatal step exits the process itself).
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
-  runPostRouteSequence({
+  runPostRouteSequence(gateStepsForSmokeBoot({
     startBackgroundServices: () => startBackgroundServices({ spawnerReady, io }),
 
     // Instance identity + sync log come up before requests are accepted, so a
@@ -914,12 +923,15 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // that won't load is a real breakage) but never the backfill itself.
     loadSeriesCoverBackfill: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages,
 
-    startListening: () => httpServer.listen(port, host, () => runPostListenSequence({
+    startListening: () => httpServer.listen(port, host, () => runPostListenSequence(gateStepsForSmokeBoot({
       announceListening: () => announceListening({ io, httpServer, localHttpServer, httpsEnabled, port }),
       // Process-level safety net, wired with the io instance so unhandled
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
       backfillOriginInstanceId,
+      // Relay any brain record whose current state never reached the sync log
+      // (a crash or failed append on a previous run) — #8351.
+      relayUnloggedBrainRecords: relayUnloggedRecords,
       startPolling: () => {
         startPolling();
         // Best-effort: re-attach tailcat forwards persisted across restarts.
@@ -931,8 +943,8 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
       initSyncOrchestrator
-    }))
-  });
+    }, 'postListen', isSmokeBoot())))
+  }, 'postRoute', isSmokeBoot()));
 
 // Run an async close but resolve anyway after `ms` — so a close that never
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
@@ -958,8 +970,9 @@ const withGrace = (label, ms, run) => new Promise((resolve) => {
   setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
 
-// graceMs is deliberately bounded: closeAllConnections() force-drops every
-// connection, so there is no graceful drain left to wait for. The close callback
+// graceMs is deliberately bounded: this runs after the request drain's deadline,
+// and closeAllConnections() force-drops every connection still open, so there is
+// no graceful drain left to wait for. The close callback
 // still needs a short window for TLS/socket teardown — the only thing that can
 // outlast it is a WebSocket-upgraded socket the server no longer tracks (and
 // io.close()'s engine.close() already tore those down protocol-side; the OS reaps
@@ -972,8 +985,9 @@ const closeServer = (server, label, graceMs = 1000) => withGrace(label, graceMs,
     if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}`, err);
     else finish(`✅ ${label} closed`);
   });
-  // Order matters: close() above stops accepting NEW connections; NOW force-drop
-  // the existing long-lived ones (SSE + keep-alive). (Node 18.2+.)
+  // Order matters: close() above stops accepting NEW connections (the drain has
+  // normally done that already); NOW force-drop whatever outlived the drain
+  // window. (Node 18.2+.)
   server.closeAllConnections?.();
 });
 
@@ -981,11 +995,19 @@ const closeServer = (server, label, graceMs = 1000) => withGrace(label, graceMs,
 // window, force-exit so PM2 isn't left waiting on a hung process.
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10000;
 
+// How long an already-accepted ordinary API request may keep running after the
+// signal (#8323). Measured from the signal, so it overlaps the teardown steps
+// before the HTTP close rather than adding to them: the drain (5s) + HTTP close
+// grace (1s) + DB pool grace (3s) stays under the ceiling above.
+const HTTP_DRAIN_WINDOW_MS = 5000;
+
 /**
  * Wire SIGTERM/SIGINT to the graceful-shutdown state machine. Idempotent per
  * signal: once shutdown starts, later signals are ignored.
  */
 export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) => {
+  // Track in-flight requests from boot so shutdown knows what it is waiting on.
+  const httpDrain = createHttpDrain([httpServer, localHttpServer]);
   let shuttingDown = false;
   const shutdown = async (signal) => {
     if (shuttingDown) return;
@@ -995,6 +1017,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // microseconds from now — and its exit handler must already know the PTY
     // died because PortOS is going down, not because the agent finished (#3202).
     markHostShuttingDown();
+    // Stop request intake on BOTH listeners before the first await, so nothing
+    // new is accepted while the teardown below runs; requests already accepted
+    // keep running and are waited on (bounded) just before the HTTP close.
+    const requestsDrained = httpDrain.begin(HTTP_DRAIN_WINDOW_MS);
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
       .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
     await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
@@ -1079,11 +1105,6 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
         (err) => finishWithError('⚠️ Codex app-server stop failed', err),
       ));
 
-    // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
-    // below don't wait on connections that never end on their own.
-    try { httpServer.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(http)', e); }
-    try { localHttpServer?.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(mirror)', e); }
-
     // socket.io's io.close() closes engine.io AND its current this.httpServer — and
     // every io.attach() reassigns this.httpServer (socket.io index.js:303), so with
     // HTTPS on (io.attach(localHttpServer) at boot) io.close() closes the *mirror*,
@@ -1091,21 +1112,40 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // time on that already-closed server: Node registers the callback as a one-time
     // 'close' listener for an event that already fired, so it never runs and shutdown
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
+    // The drain already stopped that server, so io.close() reporting
+    // ERR_SERVER_NOT_RUNNING is the expected outcome, not a failure. Its callback
+    // still waits for that server's connections to end, so while a slow request
+    // is draining this grace can lapse first — Socket.IO itself is torn down by
+    // then, and the drain wait below bounds the rest.
     await withGrace('Socket.IO', 3000, ({ finish, finishWithError }) =>
       io.close((err) => {
-        if (err) finishWithError('⚠️ Error closing Socket.IO', err);
+        if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError('⚠️ Error closing Socket.IO', err);
         else finish('✅ Socket.IO closed');
       }));
     await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
       .catch((err) => logBootstrapFailure('❌ Tailcat ingress shutdown failed', err));
-    // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
-    // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
+    // Let accepted requests finish (bounded by the drain window), then force the
+    // rest closed below — a handler mid-write loses its response only at the deadline.
+    const { remaining } = await requestsDrained;
+    if (remaining > 0) console.warn(`⚠️ ${remaining} request(s) still running after the ${HTTP_DRAIN_WINDOW_MS}ms drain — closing them`);
+    // Close BOTH servers explicitly. The drain already stopped both listeners
+    // (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even
     // if a future socket.io version changes which server it owns.
     await Promise.all([
       closeServer(httpServer, 'HTTP server'),
       closeServer(localHttpServer, 'Local HTTP mirror')
     ]);
+
+    // Flush the media-job queue now that no request can admit another job
+    // (#8325): terminal transitions and the latest progress reach the snapshot a
+    // restart restores from. The file write is independent of Postgres, so it
+    // runs alongside the DB close below and is awaited before exit — bounded by
+    // its own timeout so it spends no budget beyond the DB close's.
+    const mediaQueueFlushed = flushMediaJobQueue().then((outcome) => {
+      if (outcome.ok) console.log('✅ Media job queue flushed');
+      else console.error(`❌ Media job queue flush failed: ${outcome.error}`);
+    });
 
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
@@ -1119,6 +1159,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     }
 
     await markerWritten;
+    await mediaQueueFlushed;
     clearTimeout(forceExitTimer);
     process.exit(0);
   };

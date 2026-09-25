@@ -1051,6 +1051,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
 
   const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    projectCapacityExhausted: (appId) =>
+      (capacity.spawnProjectCounts[appId || '_self'] || 0) >= capacity.perProjectLimit,
     // Priority 0 is a COMMITTED tier — the request is cleared and the app-review
     // marker bound before this runs, and nothing persists the task on a denial,
     // so it opts out of the local-endpoint cap (#4834).
@@ -1589,11 +1591,11 @@ export async function init() {
   });
 
   // A task that was going to MERGE a pull request just got blocked — surface the
-  // PR it left orphaned. Registered separately from the dequeue listener above
-  // because it must fire on a transition that listener has no branch for
-  // (→ blocked), and it is not gated on `isDaemonRunning()`: a block that lands
-  // as the daemon stops still strands its PR. See orphanedPrNotifier.js for why
-  // nothing else ever recovers these.
+  // current blocker and PR link. Registered separately from the dequeue listener
+  // above because it must fire on a transition that listener has no branch for
+  // (→ blocked), and it is not gated on `isDaemonRunning()`: even while stopped,
+  // the notification and Brain commitment preserve the next action. The
+  // development watchdog later retires the task if the PR is already terminal.
   cosEvents.on('tasks:changed', (data) => {
     notifyIfPrLeftOrphaned(data)
       .catch(err => console.error(`❌ Orphaned-PR check failed for task ${data?.task?.id}: ${err.message}`));
@@ -1663,9 +1665,17 @@ export async function init() {
 
   const state = await loadState();
 
-  // Auto-start if alwaysOn mode is enabled (or legacy autoStart)
-  if (state.config.alwaysOn || state.config.autoStart) {
-    console.log('🚀 CoS auto-starting (alwaysOn mode)');
+  // Auto-start when alwaysOn/autoStart is set, OR when the previous process left
+  // `running: true` on disk. The in-memory daemon flag dies with the process, but
+  // initializePersistentMindSupervisor (orphan-turn recovery + watchdog) only
+  // runs inside start(). Without this, a portos-server restart with the mind mid-
+  // turn leaves activeTurn stuck on disk forever — especially once the instance
+  // password is on and keepalive's unauthenticated POST /api/cos/start 401s.
+  if (state.config.alwaysOn || state.config.autoStart || state.running) {
+    const reason = (state.config.alwaysOn || state.config.autoStart)
+      ? 'alwaysOn mode'
+      : 'persisted running=true after restart';
+    console.log(`🚀 CoS auto-starting (${reason})`);
     await start();
   }
 }

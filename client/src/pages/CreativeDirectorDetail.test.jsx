@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, Link, useLocation } from 'react-router';
 
 vi.mock('../services/apiCreativeDirector.js', () => ({
   getCreativeDirectorProject: vi.fn(),
@@ -21,13 +21,14 @@ vi.mock('../components/creative-director/TreatmentTab.jsx', () => ({ default: ()
 vi.mock('../components/creative-director/SegmentsTab.jsx', () => ({ default: () => null }));
 vi.mock('../components/creative-director/PlanTab.jsx', () => ({ default: () => null }));
 vi.mock('../components/creative-director/RunsTab.jsx', () => ({ default: () => null }));
-vi.mock('../components/creative-director/ActiveAgentsBanner.jsx', () => ({ default: () => null }));
+vi.mock('../components/creative-director/ActiveAgentsBanner.jsx', () => ({ default: ({ agents }) => <div data-testid="agents">{agents.map(a => a.id).join(',')}</div> }));
 vi.mock('../components/creative-director/CreativeDirectorModelsDrawer.jsx', () => ({ default: () => null }));
 vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
 import * as cdApi from '../services/apiCreativeDirector.js';
+import { getCosAgents } from '../services/apiAgents.js';
 import CreativeDirectorDetail from './CreativeDirectorDetail';
 
 const PROJECT = {
@@ -82,6 +83,57 @@ describe('CreativeDirectorDetail project deletion', () => {
 
     await waitFor(() => expect(cdApi.deleteCreativeDirectorProject).toHaveBeenCalledWith(PROJECT.id, { silent: true }));
     expect(screen.getByTestId('location')).toHaveTextContent('/creative-director');
+  });
+});
+
+describe('CreativeDirectorDetail route isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getCosAgents.mockResolvedValue([]);
+  });
+
+  it('keeps B and its agents when A requests finish last, and deletes only confirmed B', async () => {
+    const user = userEvent.setup();
+    let resolveA;
+    let resolveAgentsA;
+    const pendingA = new Promise(resolve => { resolveA = resolve; });
+    const pendingAgentsA = new Promise(resolve => { resolveAgentsA = resolve; });
+    const projectB = { ...PROJECT, id: 'cd-other', name: 'Other project' };
+    cdApi.getCreativeDirectorProject.mockImplementation(id => id === PROJECT.id ? pendingA : Promise.resolve(projectB));
+    getCosAgents.mockReturnValue(pendingAgentsA);
+    render(
+      <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
+        <LocationProbe />
+        <Link to="/creative-director/cd-other/overview">Open B</Link>
+        <Routes><Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getCosAgents).toHaveBeenCalled());
+    getCosAgents.mockResolvedValue([{ id: 'agent-b', status: 'running', taskId: 'cd-cd-other-task' }]);
+    await user.click(screen.getByRole('link', { name: 'Open B' }));
+    await screen.findByRole('heading', { name: projectB.name });
+    await user.click(screen.getByRole('button', { name: 'Delete project Other project' }));
+    await act(async () => {
+      resolveA(PROJECT);
+      resolveAgentsA([{ id: 'agent-a', status: 'running', taskId: 'cd-cd-example-task' }]);
+    });
+    expect(screen.queryByRole('heading', { name: PROJECT.name })).not.toBeInTheDocument();
+    expect(screen.getByTestId('agents')).toHaveTextContent('agent-b');
+    expect(screen.getByTestId('agents')).not.toHaveTextContent('agent-a');
+    await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(cdApi.deleteCreativeDirectorProject).toHaveBeenCalledWith(projectB.id, { silent: true });
+  });
+
+  it('hides project actions when the response ID differs from the route', async () => {
+    cdApi.getCreativeDirectorProject.mockResolvedValue({ ...PROJECT, id: 'wrong-project' });
+    render(
+      <MemoryRouter initialEntries={['/creative-director/cd-example/overview']}>
+        <Routes><Route path="/creative-director/:id/:tab" element={<CreativeDirectorDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText('Project not found.');
+    expect(screen.queryByRole('button', { name: /Delete|Start|Stop|Pause|Resume/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: PROJECT.name })).not.toBeInTheDocument();
   });
 });
 

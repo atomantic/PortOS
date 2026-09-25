@@ -5,9 +5,11 @@ import {
   voiceSynthesizeBodySchema,
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
+import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
+import { gitDeleteBranchBodySchema } from './validation.js';
 
 const jsonBody = (schema, required = true) => ({
   required,
@@ -15,6 +17,16 @@ const jsonBody = (schema, required = true) => ({
 });
 
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/git/delete-branch': {
+    post: {
+      summary: 'Delete a Git branch locally, remotely, or both',
+      requestBody: jsonBody(gitDeleteBranchBodySchema),
+      responses: {
+        200: { description: 'Branch deletion result' },
+        400: { description: 'Invalid branch deletion request', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+      },
+    },
+  },
   '/api/api-docs/openapi.json': {
     get: { summary: 'Read exposed OpenAPI document', responses: { 200: { description: 'OpenAPI 3.0.3 document for currently exposed external APIs' } } },
   },
@@ -33,6 +45,21 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/api/api-docs/tools.min.json': {
     get: { summary: 'Read minimized semantic tool resource', responses: { 200: { description: 'Schema-optimized provider-neutral tool resource' } } },
   },
+  '/api/writers-room/works': {
+    get: {
+      summary: 'List Writers Room works',
+      description: 'No query returns the legacy array. Paging captures ordered membership for five minutes; echo nextCursor to continue. Deleted works are omitted; total describes original membership. Restart on CURSOR_EXPIRED.',
+      parameters: Object.entries(writersRoomWorksQuerySchema.shape).map(([name, schema]) => ({
+        name, in: 'query', required: false, schema: zodToOpenApiSchema(schema),
+      })),
+      responses: {
+        200: { description: 'Legacy array or bounded snapshot page',
+          content: { 'application/json': { schema: zodToOpenApiSchema(writersRoomWorksResponseSchema) } } },
+        400: { description: 'Invalid paging query or cursor' },
+        409: { description: 'Restart pagination', 'x-portos-error-codes': ['CURSOR_EXPIRED'] },
+      },
+    },
+  },
   '/api/review/queue': {
     get: {
       summary: 'Read the cross-domain review action queue',
@@ -45,6 +72,20 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
         200: { description: 'Canonical action rows, per-source health, totals, and an optional snapshot cursor' },
         400: { description: 'Invalid query or cursor', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_CURSOR', 'CURSOR_QUERY_MISMATCH'] },
         409: { description: 'The short-lived snapshot expired and pagination must restart', 'x-portos-error-codes': ['CURSOR_EXPIRED'] },
+      },
+    },
+  },
+  '/api/brain/youtube/ingests': {
+    get: {
+      summary: 'List YouTube ingest history',
+      description: 'No query returns the legacy { ingests } array of every stored ingest. Passing limit opts into a page ordered by ingestedAt desc (videoId as a deterministic tie-breaker); echo nextCursor from the previous response to continue.',
+      parameters: [
+        { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        { name: 'cursor', in: 'query', required: false, schema: { type: 'string', maxLength: 4096 } },
+      ],
+      responses: {
+        200: { description: 'Legacy full ingest array, or a bounded page with an optional nextCursor' },
+        400: { description: 'Invalid query or cursor', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_CURSOR'] },
       },
     },
   },

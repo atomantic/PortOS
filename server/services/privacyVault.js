@@ -78,12 +78,15 @@ export async function createVaultRecord(input) {
   const subjectId = (await assertSubject(input.subjectId)).id;
   const id = randomUUID();
   const useForScans = resolveUseForScans(input.type, input.useForScans);
-  // First record FOR THIS SUBJECT ⇒ write the consent row (audit trail for the
-  // opt-out engine). Scoped per subject so a household member added directly
-  // through the vault still gets a consent row of their own rather than riding
-  // on `self`'s.
+  // First record FOR THIS SUBJECT without local-vault consent ⇒ write the
+  // `pii_vault` consent row. Scoped per subject so a household member added
+  // directly through the vault still gets a consent row of their own rather than
+  // riding on `self`'s. This grant is LOCAL-ONLY — it never unlocks broker scans
+  // or opt-outs, which need their own explicit grants (#8332) — so keying the
+  // check on the scope (not "any row") keeps a broker grant from standing in for
+  // the vault's own audit fact.
   const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [subjectId],
+    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1 AND scope = 'pii_vault'`, [subjectId],
   );
   const needsConsent = countRows[0].n === 0;
   const { rows } = await query(
@@ -173,11 +176,30 @@ export async function updateVaultRecord(id, patch) {
   });
 }
 
+// Vault types whose values a scan copies into broker-case evidence (the
+// matched name, the matched city/state, and the search/listing URLs built from
+// both) — deleting one of these must not leave that copy behind (#8333).
+const EVIDENCE_SOURCE_TYPES = new Set(['legal_name', 'address']);
+
 export async function deleteVaultRecord(id) {
-  const { rows } = await query(`DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type`, [id]);
-  if (!rows[0]) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
-  console.log(`🗑️ Deleted vault record ${id} (type=${rows[0].type})`);
-  return { ok: true };
+  // Lazy: privacyBrokers is only needed on this path, and most suites that
+  // reach the vault never delete a record.
+  const { clearSubjectIdentityEvidence } = await import('./privacyBrokers.js');
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type, subject_id`, [id],
+    );
+    const deleted = rows[0];
+    if (!deleted) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+    // Same transaction: the vault row and every case-evidence copy derived from
+    // it go together, or neither does. Not gated on the CURRENT use_for_scans:
+    // a record toggled out of scans after a scan used it still left a copy.
+    if (EVIDENCE_SOURCE_TYPES.has(deleted.type)) {
+      await clearSubjectIdentityEvidence(deleted.subject_id, { client });
+    }
+    console.log(`🗑️ Deleted vault record ${id} (type=${deleted.type})`);
+    return { ok: true };
+  });
 }
 
 /** The ONE decrypt path — explicit reveal. Returns plaintext; logs id/type only. */

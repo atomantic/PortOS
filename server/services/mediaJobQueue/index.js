@@ -50,6 +50,17 @@ import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '..
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
+import {
+  MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
+} from './admission.js';
+
+// The admission contract lives in ./admission.js so producers that cannot
+// import the queue can still recognize a refusal; re-exported where callers
+// have always found the queue's API.
+export {
+  MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, MEDIA_QUEUE_FULL, isMediaAdmissionRefusal,
+  partialBatchAdmissionError,
+} from './admission.js';
 
 // Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) share one parallel lane —
 // each render
@@ -347,8 +358,10 @@ export function laneConcurrencyFor(job) {
  * are answered here for the same reason `isRemoteMediaJob` has one definition.
  *
  * `limit` is the lane's configured concurrency, NOT a queue bound: work over
- * the limit waits rather than being rejected. The federated-provider admission
- * bound is a separate setting (see federatedMediaProvider.js).
+ * the limit waits rather than being rejected. Waiting work is bounded once,
+ * across all lanes, by MAX_PENDING_MEDIA_JOBS (see assertMediaQueueRoom). The
+ * federated-provider admission bound is a separate setting (see
+ * federatedMediaProvider.js).
  *
  * @returns {{lanes: Record<'gpu'|'cloud'|'remote', {running: number, queued: number, limit: number}>,
  *   byKind: Record<string, {running: number, queued: number}>,
@@ -403,6 +416,30 @@ export function listJobs({ status, kind, owner } = {}) {
   });
 }
 
+// The render queue displays every live job and only a short recent failure
+// reel. Select that reel before sanitization; the archive can hold 500 rows.
+export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
+  const matches = (job) => (!kind || job.kind === kind) && (!owner || job.owner === owner);
+  const live = [
+    ...(running ? [running] : []),
+    ...cloudRunning,
+    ...remoteRunning,
+    ...queue,
+  ].filter(matches);
+  const recent = [];
+  const finishedAt = (job) => new Date(job.completedAt || job.startedAt || job.queuedAt || 0).getTime();
+  for (const job of archive) {
+    if (!matches(job) || (job.status !== 'failed' && job.status !== 'canceled')) continue;
+    const time = finishedAt(job);
+    let index = 0;
+    while (index < recent.length && !(time > recent[index].time)) index += 1;
+    if (index >= limit) continue;
+    recent.splice(index, 0, { job, time });
+    if (recent.length > limit) recent.pop();
+  }
+  return [...live, ...recent.map(({ job }) => job)];
+}
+
 // Serialize persist() calls through a single chain. atomicWrite rename can
 // finish out-of-order under concurrent calls, so a slow "start" persist
 // landing after a fast "done" persist would regress the on-disk snapshot
@@ -417,7 +454,9 @@ let persistChain = Promise.resolve();
 // still runs normally in memory for the life of the process.
 let persistBlocked = false;
 function persist() {
-  if (persistBlocked) return persistChain;
+  // Blocked: nothing is written, but callers awaiting durability (enqueueJob)
+  // must not inherit a stale rejection from a write that predates the latch.
+  if (persistBlocked) return persistChain.catch(() => {});
   persistChain = persistChain.then(persistImpl, persistImpl);
   return persistChain;
 }
@@ -720,7 +759,7 @@ async function drainLoop() {
       remote: limits.remote - remoteRunning.length,
     };
     for (const job of candidates) {
-      if (job.status !== 'queued' || job.hold) continue;
+      if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
       startLaneJob(job, { lane });
@@ -757,7 +796,7 @@ export function removeArchivedJob(jobId) {
 // even if the lane is at its limit. GPU jobs are rejected (single MLX runtime
 // would OOM). The rejection code stays 'NOT_CODEX' for client back-compat.
 export function runJobNow(jobId) {
-  const job = queue.find((j) => j.id === jobId);
+  const job = queue.find((j) => j.id === jobId && !j.admitting);
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
   if (!isCloudImageJob(job)) {
     return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
@@ -1208,10 +1247,42 @@ async function runJob(job) {
   dispatcher.detach();
 }
 
-export function enqueueJob({ kind, params, owner = null }) {
+/**
+ * Refuse up front when `count` more jobs would not fit under the pending-job
+ * ceiling (#8326). enqueueJob calls it with 1; a batch producer calls it with
+ * its size before creating records, so an oversized batch is refused whole
+ * instead of landing half-queued. Advisory for batches — other producers can
+ * still fill the queue before the batch finishes enqueueing, which each
+ * enqueueJob call re-checks.
+ *
+ * `queue` holds exactly the waiting jobs (including ones mid-admission):
+ * running jobs sit in the lane slots, so the ceiling never counts them.
+ */
+export function assertMediaQueueRoom(count = 1) {
+  if (queue.length + count <= MAX_PENDING_MEDIA_JOBS) return;
+  console.warn(`⚠️ media queue full — refused ${count} job(s) with ${queue.length} waiting (limit ${MAX_PENDING_MEDIA_JOBS})`);
+  throw mediaQueueFullError({ pending: queue.length, requested: count });
+}
+
+// Admission is durable (#8325): the job is acknowledged — and made eligible for
+// dispatch — only after a snapshot containing it has been written. Until then it
+// sits in the queue flagged `admitting` (a transient, unserialized field) so the
+// snapshot includes it while drainLoop/runJobNow leave it alone. A failed write
+// withdraws the job and throws, so a caller never holds a job id that a restart
+// would not restore, and no provider work starts for it.
+// Exception: under the #4115 latch (an unreadable snapshot preserved for repair)
+// nothing is written by design and the queue deliberately keeps working in
+// memory, so admission succeeds without durability; boot already reported it.
+//
+// Bounded (#8326): at MAX_PENDING_MEDIA_JOBS waiting jobs the submission is
+// refused (429 MEDIA_QUEUE_FULL) before ANY state changes — no id, no queue
+// entry, no SSE entry, no snapshot write. The check and the push below run in
+// one synchronous stretch, so concurrent submissions cannot overshoot it.
+export async function enqueueJob({ kind, params, owner = null }) {
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
+  assertMediaQueueRoom(1);
   const id = randomUUID();
   // Every routed job is normalized HERE rather than at each caller (#4683): the
   // downgrade contract only holds if it is unbypassable, and a future enqueue
@@ -1239,11 +1310,30 @@ export function enqueueJob({ kind, params, owner = null }) {
       return laneQueue.length + liveCount + 1;
     })(),
   };
+  job.admitting = true;
   queue.push(job);
-  const sseEntry = ensureSseEntry(id);
-  broadcastSse(sseEntry, { type: 'queued', position: job.position });
+  try {
+    await persist();
+  } catch (err) {
+    // Withdraw before the next snapshot so the rejected job never lands on disk.
+    const idx = queue.indexOf(job);
+    if (idx >= 0) queue.splice(idx, 1);
+    recomputeQueuePositions();
+    // An unrelated write may have landed the admitting job on disk before ours
+    // failed; best-effort rewrite so a restart cannot resurrect a refused job.
+    persist().catch(() => {});
+    console.error(`❌ media-job [${id.slice(0, 8)}] ${kind} not queued — snapshot write failed: ${err.message}`);
+    throw new ServerError(`Could not save the ${kind} job to the media queue: ${err.message}`, {
+      status: 503,
+      code: MEDIA_QUEUE_PERSIST_FAILED,
+    });
+  }
+  delete job.admitting;
+  // A bulk cancel can reach the job while its snapshot is in flight; cancelJob
+  // already archived and announced it, so report that instead of 'queued'.
+  if (job.status !== 'queued') return { jobId: id, position: job.position, status: job.status };
+  broadcastSse(ensureSseEntry(id), { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
-  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on enqueue failed: ${e.message}`));
   startWorker();
   console.log(`📥 media-job [${id.slice(0, 8)}] ${kind} queued (position ${job.position})`);
   return { jobId: id, position: job.position, status: 'queued' };
@@ -1436,6 +1526,34 @@ export function attachSseClient(jobId, res) {
   res.write(`data: ${JSON.stringify(terminal)}\n\n`);
   res.end();
   return true;
+}
+
+export const MEDIA_QUEUE_FLUSH_TIMEOUT_MS = 2000;
+
+// Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
+// then write one fresh snapshot — it captures the latest in-memory progress,
+// so a debounced progress write still pending in runJob is not lost — and wait
+// for the whole persist chain behind it. Bounded so a stalled disk cannot eat
+// the shutdown budget; never rejects, reporting the outcome instead.
+export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
+  const drain = (async () => {
+    while (terminalOperations.size > 0) {
+      await Promise.allSettled([...terminalOperations]);
+    }
+    // The lane finalizer schedules its archive snapshot a few microtasks after
+    // the terminal operation settles; yield so most land ahead of our persist.
+    await Promise.resolve();
+    await persist();
+    // A finalizer that still slipped in behind us wrote a newer snapshot.
+    await persistChain;
+    return { ok: true };
+  })().catch((err) => ({ ok: false, error: err.message }));
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([drain, timeout]).finally(() => clearTimeout(timer));
 }
 
 // Test-only reset hook. Real callers go through enqueueJob/cancelJob.

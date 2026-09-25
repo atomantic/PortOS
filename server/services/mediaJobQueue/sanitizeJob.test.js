@@ -2,6 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { sanitizeJob } from './sanitizeJob.js';
 
 describe('sanitizeJob', () => {
+  it('projects cancellation only while the job is still active', () => {
+    const projectCancellation = (status) => sanitizeJob({
+      id: 'job-cancel-example',
+      kind: 'image',
+      status,
+      cancelRequested: true,
+    }).cancelRequested;
+
+    expect(projectCancellation('running')).toBe(true);
+    // Remote cancellation recovery can restore an active job in the queue.
+    expect(projectCancellation('queued')).toBe(true);
+    expect(projectCancellation('completed')).toBe(false);
+    expect(projectCancellation('canceled')).toBe(false);
+    expect(projectCancellation('failed')).toBe(false);
+  });
+
   it('projects only validated image execution provenance from a completed result', () => {
     const sanitized = sanitizeJob({
       id: 'image-job',

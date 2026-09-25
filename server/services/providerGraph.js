@@ -28,11 +28,9 @@ import {
 import { harnessById } from '../lib/providerHarnesses.js';
 import { modeSiblingName } from '../lib/aiToolkit/internal/providerModes.js';
 import {
-  bootstrapInputFor,
-  derivedPresetPatch,
-  materializeDerivedPreset,
   planPresetBackfill,
   presetBackfillVerdict,
+  rederivePreset,
 } from '../lib/providerPresets.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
@@ -55,6 +53,7 @@ import {
   serviceColumnsForConnection,
   takenServiceSlugs,
 } from '../lib/providerServiceInstances.js';
+import { planServiceInstanceMerges } from '../lib/providerServiceMerge.js';
 import { SERVICE_CREDENTIAL_VIAS, assertServicePlan, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import {
@@ -64,6 +63,7 @@ import {
   commitPendingProjection,
   deleteConnection,
   detachBindingToConnection,
+  mergeServiceInstances,
   readGraph,
   relinkBinding,
   saveBindingSettings,
@@ -222,25 +222,62 @@ async function reconcilePass(reason) {
   // are eligible now, a clone or split waits for the next pass.
   const named = new Map(backfill.map((row) => [row.id, row]));
   const removed = new Set(plan.removals);
-  const presets = await backfillPresets({
+  const applied = {
     connections: [...graph.connections.map((connection) => ({ ...connection, ...(named.get(connection.id) || {}) })), ...plan.imports.connections],
     bindings: [...graph.bindings, ...plan.imports.bindings],
     routes: [...graph.routes.filter((route) => !removed.has(route.providerId)), ...plan.imports.routes],
-  }, providers);
+  };
+  const presets = await backfillPresets(applied, providers);
   presetSkipReasons = new Map(presets.skipped.map(({ id, reason }) => [id, reason]));
+
+  // One service per backend (epic #7561): the import gave every harness its
+  // own row, so fold rows that provably reach one backend under one set of
+  // terms into a single instance. Row-derived and idempotent like the steps
+  // above — a folded graph plans nothing — so it rides every pass. It reads
+  // the same as-applied view, which a regroup (clone, split, in-place update)
+  // leaves stale, so a pass that moved rows leaves the fold to the next one.
+  const regrouped = plan.regroups.some((regroup) => regroup.connectionAction !== 'unchanged' || !regroup.bindingId);
+  const folded = regrouped ? 0 : await foldDuplicateServices(applied, presets.stamped.length > 0 ? null : providers);
 
   const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
   const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
-  if (!noop || plan.conflicts.length > 0 || presets.stamped.length > 0) {
+  if (!noop || plan.conflicts.length > 0 || presets.stamped.length > 0 || folded > 0) {
     console.log(`🔗 Provider graph reconciled (${reason}): ${plan.imports.routes.length} imported, `
       + `${detached} detached, ${split} split, ${plan.removals.length} removed, `
-      + `${plan.acknowledgements.length} acknowledged, ${plan.conflicts.length} conflicted, ${presets.stamped.length} presets derived`);
+      + `${plan.acknowledgements.length} acknowledged, ${plan.conflicts.length} conflicted, ${presets.stamped.length} presets derived, `
+      + `${folded} services folded`);
   }
   for (const conflict of plan.conflicts) {
     console.error(`⚠️ Provider route ${conflict.providerId} changed outside the graph mid-projection; `
       + 'leaving it untouched and blocking its binding until repaired');
   }
   return { activeProvider, plan, noop, presets };
+}
+
+/**
+ * The service-fold half of a pass: `planServiceInstanceMerges` over the graph
+ * as the steps above left it, applied one fold at a time. The provider file is
+ * re-read only when the preset backfill just wrote it (`current` is null), so
+ * the fold judges each record as derived or legacy by what it now is. Each
+ * fold's derived presets are re-pointed in `providers.json` BEFORE the rows
+ * move — they then name a slug that already exists, so a crash between the two
+ * writes leaves every record resolvable and the next pass re-plans the same
+ * fold. Writes through the toolkit directly, under the pass's latch, like
+ * {@link backfillPresets}. Local I/O only.
+ *
+ * @returns {Promise<number>} how many rows were folded away
+ */
+async function foldDuplicateServices(graph, current) {
+  const providers = current ?? (await providerService().getAllProviders()).providers;
+  // Only a preset naming a bootstrap app consults the table.
+  const bootstraps = providers.some((record) => record?.credentialBootstrapId) ? await bootstrapApps() : {};
+  const merges = planServiceInstanceMerges(graph, providers, { bootstraps, env: process.env });
+  for (const merge of merges) {
+    if (Object.keys(merge.presetPatches).length > 0) await providerService().applyProviderPatches(merge.presetPatches);
+    await mergeServiceInstances(merge);
+    console.log(`🔗 Provider graph: folded service(s) ${merge.absorbedSlugs.join(', ')} into ${merge.keeper.slug}`);
+  }
+  return merges.reduce((sum, merge) => sum + merge.absorbedIds.length, 0);
 }
 
 /**
@@ -286,16 +323,8 @@ export async function rematerializeDerivedPresets(connection, { providerIds = nu
   const patches = {};
   for (const record of providers) {
     if (!isDerivedPreset(record) || !onRow(record)) continue;
-    const harness = harnessById(record.harnessId);
-    if (!harness) continue;
-    const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
-    if (record.credentialBootstrapId && !app) continue;
-    const { record: derived } = materializeDerivedPreset({
-      record, harness, instance, catalog: connection.catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
-    });
-    if (!derived) continue;
-    const patch = derivedPresetPatch(record, derived);
-    if (Object.keys(patch).length > 0) patches[record.id] = patch;
+    const patch = rederivePreset(record, { instance, catalog: connection.catalog, bootstraps })?.patch;
+    if (patch && Object.keys(patch).length > 0) patches[record.id] = patch;
   }
   if (Object.keys(patches).length === 0) return [];
   const written = await writeProviderPatches(patches);

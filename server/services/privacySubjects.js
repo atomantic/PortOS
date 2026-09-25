@@ -13,12 +13,18 @@
  * subject is a hard DELETE that CASCADES their vault records, orgs, holdings,
  * change events, broker cases, and consent rows.
  *
- * CONSENT IS ENGINE-ENFORCED, NOT UI-ENFORCED. Carried verbatim from unbroker's
- * no-consent-no-action rule: `assertSubjectConsent()` is called by
- * `privacyScan.runScanPass()` and `privacyOptOut.runOptOutPass()` /
- * `runVerificationPass()` before either touches a broker. Hiding the button in
- * the UI is NOT sufficient — a scheduled recheck, a direct API call, or a future
- * agent path all route through the service, which is where the refusal lives.
+ * CONSENT IS ENGINE-ENFORCED, NOT UI-ENFORCED, AND PURPOSE-SCOPED (#8332).
+ * Carried verbatim from unbroker's no-consent-no-action rule:
+ * `assertSubjectConsent(id, { scope })` is called with `broker_scan` by
+ * `privacyScan.runScanPass()` / `scanBroker()` and with `broker_optout` by
+ * `privacyOptOut.runOptOutPass()` / `runVerificationPass()` before either
+ * touches a broker. Only an ACTIVE (unrevoked) grant of that EXACT scope passes —
+ * the local-only `pii_vault` grant never unlocks external disclosure. Hiding the
+ * button in the UI is NOT sufficient — a scheduled recheck, a direct API call, or
+ * a future agent path all route through the service, which is where the refusal
+ * lives. Broker purposes are revocable (`revokeConsent`) without deleting the
+ * subject; the revocation is a timestamp on the grant row, so the audit trail
+ * survives.
  *
  * Log lines never carry a subject's `display_name` — a household member's name
  * is PII in exactly the way the vault's values are (see privacyVault.js's
@@ -28,7 +34,9 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyValidation.js';
+import {
+  PRIVACY_SELF_SUBJECT_ID, PRIVACY_CONSENT_SCOPES, PRIVACY_BROKER_CONSENT_SCOPES,
+} from '../lib/privacyValidation.js';
 
 const SUBJECT_COLUMNS = `id, display_name, relationship, created_at, updated_at`;
 
@@ -44,6 +52,8 @@ function rowToSubject(row) {
     // Present only on the aggregate list query.
     ...(row.consent_count !== undefined ? { consentCount: row.consent_count } : {}),
     ...(row.record_count !== undefined ? { recordCount: row.record_count } : {}),
+    // The purposes with an ACTIVE grant — what the scheduler and the UI gate on.
+    ...(row.active_scopes !== undefined ? { activeScopes: row.active_scopes } : {}),
   };
 }
 
@@ -60,9 +70,13 @@ export function resolveSubjectId(subjectId) {
 }
 
 /**
- * Write a consent row for a subject. Append-only audit trail. Asserts the
- * subject first so an unknown id is a clean 404 rather than a raw FK violation,
- * and defaults `scope` (the column is NOT NULL and the API leaves it optional).
+ * Grant one purpose (`scope`) for a subject by appending a consent row. Rows
+ * are never deleted while the subject exists — a revocation stamps
+ * `revoked_at` (revokeConsent) and a re-grant appends a fresh row, so the trail
+ * reads as a history. Asserts the subject first so an unknown id is a clean 404
+ * rather than a raw FK violation, and defaults `scope` to the local-only
+ * `pii_vault` (the column is NOT NULL and the API leaves it optional) — a
+ * broker purpose is only ever granted by naming it.
  */
 export async function recordConsent({ subjectId, scope, method, note }) {
   const resolved = (await assertSubject(subjectId)).id;
@@ -81,14 +95,17 @@ export async function recordConsent({ subjectId, scope, method, note }) {
 // ─── Subject CRUD ───────────────────────────────────────────────────────────
 
 /**
- * List every subject with their consent-row count and vault-record count, so
- * the UI switcher can badge a subject that has no consent on file (and would
- * therefore be refused by the engine).
+ * List every subject with their consent-row count, vault-record count, and the
+ * purposes they have an ACTIVE grant for (`activeScopes`, sorted), so the UI
+ * can show which broker purposes the engine would refuse and the scheduler can
+ * pick subjects per purpose.
  */
 export async function listSubjects() {
   const { rows } = await query(
     `SELECT s.id, s.display_name, s.relationship, s.created_at, s.updated_at,
             (SELECT COUNT(*)::int FROM privacy_consents c WHERE c.subject_id = s.id) AS consent_count,
+            (SELECT COALESCE(array_agg(DISTINCT c.scope ORDER BY c.scope), '{}'::text[])
+               FROM privacy_consents c WHERE c.subject_id = s.id AND c.revoked_at IS NULL) AS active_scopes,
             (SELECT COUNT(*)::int FROM privacy_vault_records v WHERE v.subject_id = s.id) AS record_count
      FROM privacy_subjects s
      ORDER BY (s.id <> $1), s.display_name ASC`,
@@ -187,11 +204,11 @@ export async function deleteSubject(id) {
 
 // ─── Consent gate (engine-enforced) ─────────────────────────────────────────
 
-/** The consent audit trail for one subject, newest first. */
+/** The consent audit trail for one subject, newest first (revoked rows included). */
 export async function listSubjectConsents(subjectId) {
   const resolved = resolveSubjectId(subjectId);
   const { rows } = await query(
-    `SELECT id, subject_id, scope, method, note, granted_at
+    `SELECT id, subject_id, scope, method, note, granted_at, revoked_at
      FROM privacy_consents WHERE subject_id = $1 ORDER BY granted_at DESC`,
     [resolved],
   );
@@ -202,39 +219,85 @@ export async function listSubjectConsents(subjectId) {
     method: row.method,
     note: row.note ?? '',
     grantedAt: row.granted_at,
+    revokedAt: row.revoked_at ?? null,
   }));
 }
 
+// A gate call without a known scope is a programming error, never "any consent"
+// — the pre-#8332 unscoped check is exactly what let a local-vault grant
+// through to a broker. Fail loudly instead of guessing a purpose.
+function assertKnownScope(scope) {
+  if (!PRIVACY_CONSENT_SCOPES.includes(scope)) {
+    throw new ServerError(`Unknown privacy consent scope: ${scope}`, { status: 500, code: 'CONSENT_SCOPE_INVALID' });
+  }
+}
+
 /**
- * Does this subject have active consent on file? ANY consent row counts — there
- * is no revocation column, because revoking consent means deleting the subject
- * (which hard-deletes their records; see deleteSubject). Callers that need a
- * hard stop use assertSubjectConsent instead.
+ * Does this subject hold an ACTIVE (unrevoked) grant for exactly `scope`? A
+ * grant for a different purpose never counts — `pii_vault` (local storage)
+ * does not imply `broker_scan`, and `broker_scan` does not imply
+ * `broker_optout`. Module-private: callers use assertSubjectConsent (the hard
+ * stop) or listSubjects' `activeScopes` (the read-only view).
  */
-export async function hasActiveConsent(subjectId) {
+async function hasActiveConsent(subjectId, scope) {
+  assertKnownScope(scope);
   const resolved = resolveSubjectId(subjectId);
   const { rows } = await query(
-    `SELECT 1 FROM privacy_consents WHERE subject_id = $1 LIMIT 1`, [resolved],
+    `SELECT 1 FROM privacy_consents
+     WHERE subject_id = $1 AND scope = $2 AND revoked_at IS NULL LIMIT 1`,
+    [resolved, scope],
   );
   return rows.length > 0;
 }
 
 /**
- * THE consent guard. `privacyScan` and `privacyOptOut` call this before any
- * broker work — a subject with no consent row on file gets a hard refusal, at
- * the SERVICE layer, so a scheduled recheck / direct API call / future agent
+ * Withdraw one broker-processing purpose for a subject (#8332). Stamps
+ * `revoked_at` on every active grant of that scope — the rows stay, so the
+ * audit trail shows when consent was given and when it was withdrawn, and the
+ * subject, their vault records, and their other purposes are untouched. The
+ * next direct or scheduled call for that purpose is refused by the gate.
+ *
+ * Only broker scopes are revocable here; withdrawing local-vault consent still
+ * means deleting the subject. Idempotent: revoking an already-inactive purpose
+ * returns `revoked: 0`.
+ */
+export async function revokeConsent({ subjectId, scope }) {
+  if (!PRIVACY_BROKER_CONSENT_SCOPES.includes(scope)) {
+    throw new ServerError(
+      `Consent scope ${scope} cannot be revoked — only broker purposes are revocable`,
+      { status: 400, code: 'CONSENT_SCOPE_NOT_REVOCABLE' },
+    );
+  }
+  const resolved = (await assertSubject(subjectId)).id;
+  const { rows } = await query(
+    `UPDATE privacy_consents SET revoked_at = NOW()
+     WHERE subject_id = $1 AND scope = $2 AND revoked_at IS NULL
+     RETURNING revoked_at`,
+    [resolved, scope],
+  );
+  const revokedAt = rows[0]?.revoked_at ?? null;
+  console.log(`🚫 Revoked privacy consent (subject=${resolved}, scope=${scope}, rows=${rows.length})`);
+  return { subjectId: resolved, scope, revoked: rows.length, revokedAt };
+}
+
+/**
+ * THE consent guard. `privacyScan` (scope `broker_scan`) and `privacyOptOut`
+ * (scope `broker_optout`) call this before any vault read or broker contact —
+ * a subject without an ACTIVE grant of that exact purpose gets a hard refusal,
+ * at the SERVICE layer, so a scheduled recheck / direct API call / future agent
  * path is refused exactly like a UI click would be. Mirrors the existing
  * disclosure-allowlist guard in privacyOptOut.js: the engine's guarantees do not
- * live in the UI.
+ * live in the UI. `scope` is REQUIRED — there is no "any consent" mode.
  *
  * Returns the subject row so callers can log/annotate without a second read.
  */
-export async function assertSubjectConsent(subjectId, { action = 'this action' } = {}) {
+export async function assertSubjectConsent(subjectId, { scope, action = 'this action' } = {}) {
+  assertKnownScope(scope);
   const subject = await assertSubject(subjectId);
-  if (await hasActiveConsent(subject.id)) return subject;
-  console.warn(`⛔ Refused ${action} for privacy subject ${subject.id}: no consent on file`);
+  if (await hasActiveConsent(subject.id, scope)) return subject;
+  console.warn(`⛔ Refused ${action} for privacy subject ${subject.id}: no active ${scope} consent`);
   throw new ServerError(
-    `Privacy subject ${subject.id} has no recorded consent — ${action} refused`,
-    { status: 403, code: 'SUBJECT_CONSENT_REQUIRED' },
+    `Privacy subject ${subject.id} has no active ${scope} consent — ${action} refused`,
+    { status: 403, code: 'SUBJECT_CONSENT_REQUIRED', context: { scope } },
   );
 }

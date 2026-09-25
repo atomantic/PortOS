@@ -5,6 +5,8 @@
  */
 
 import { Router } from 'express';
+import { extractToken, verifySession } from '../services/auth.js';
+import { isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
 import { getSelf, updateSelf } from '../services/instanceIdentity.js';
@@ -19,6 +21,21 @@ import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
 
 const router = Router();
+
+// Peer admission is local authority even when the instance password is off.
+// Announcements remain discoverable. Reciprocal category changes also require
+// local authority: an anonymous callback cannot admit a discovery-only peer.
+router.use(asyncHandler(async (req, _res, next) => {
+  if (!req.path.toLowerCase().startsWith('/peers') || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    || req.path.toLowerCase().replace(/\/$/, '') === '/peers/announce') return next();
+  // Vite and other private transports can forward a remote request over a
+  // loopback socket. Neither that socket nor supplied Origin/Host proves the
+  // operator's identity. Verify the existing session even when auth is off.
+  if (!isCrossOrigin(req) && await verifySession(extractToken(req))) return next();
+  throw new ServerError('Sign in with an operator session to change peer settings', {
+    status: 403, code: 'PEER_SETTINGS_OPERATOR_REQUIRED',
+  });
+}));
 
 // Optional HTTP Basic credential for a peer behind an auth proxy. `null` clears
 // it; an object sets it. The service's sanitizePeerAuth does the final
@@ -62,6 +79,7 @@ const updatePeerSchema = z.object({
   // Explicit consumer opt-in + model allowlist for using this peer as a media
   // provider. Provider-side sharing remains independently configured there.
   mediaProvider: federatedMediaPeerSettingsSchema.optional(),
+  syncSecret: z.string().min(32).max(256).nullable().optional(),
 });
 
 const announceSchema = z.object({

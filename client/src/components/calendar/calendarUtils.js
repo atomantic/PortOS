@@ -21,6 +21,20 @@ export function getEventDayMinutes(event, day) {
   };
 }
 
+/** An event occupies a local calendar day when its half-open interval overlaps it. */
+export function eventOccursOnDay(event, day) {
+  if (!event.isAllDay) return getEventDayMinutes(event, day) !== null;
+
+  const start = new Date(event.startTime);
+  const end = new Date(event.endTime);
+  const dayStart = new Date(day);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+  return [start, end, dayStart].every(date => Number.isFinite(date.getTime()))
+    && end > start && start < dayEnd && end > dayStart;
+}
+
 /**
  * Neutral chip for an event whose subcalendar has no color (or one we can't
  * parse). `--port-accent` is a space-separated RGB triple, so it only becomes a

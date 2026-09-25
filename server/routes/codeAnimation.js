@@ -49,6 +49,8 @@ const formatSchema = z.object({
 const briefSchema = z.object({
   title: z.string().trim().max(L.titleMax).default(''),
   concept: z.string().trim().min(1, 'Describe what happens in the animation').max(L.conceptMax),
+  // The lead characters' design bible — what the coding model rigs.
+  cast: z.string().trim().max(L.castMax).default(''),
   onScreenText: z.string().trim().max(L.textMax).default(''),
   // Refinements on top of the universe style — the universe is the art direction.
   styleNotes: z.string().trim().max(L.styleNotesMax).default(''),
@@ -90,7 +92,7 @@ const briefIdeaSchema = z.object({
   // The same brief, partially filled — derived from briefSchema so the field
   // caps are stated once, with `concept` relaxed because there may be none yet.
   current: briefSchema
-    .pick({ title: true, onScreenText: true, styleNotes: true })
+    .pick({ title: true, cast: true, onScreenText: true, styleNotes: true })
     .extend({ concept: z.string().trim().max(L.conceptMax).default('') })
     .prefault({}),
   // Only the two the writer's prompt reads — the renderer, fps, and resolution

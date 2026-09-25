@@ -55,11 +55,3 @@ export function startTwinEnrichmentScheduler() {
     checkSchedule().catch((err) => console.error(`🧭 Twin enrichment rollup check failed: ${err.message}`));
   }, CHECK_INTERVAL_MS);
 }
-
-export function stopTwinEnrichmentScheduler() {
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-    console.log('🧭 Twin enrichment scheduler: stopped');
-  }
-}

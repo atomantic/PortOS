@@ -59,7 +59,7 @@ jobs:
       # hosted runner already ships a Node new enough for it — the same
       # pattern the `impact` job in ci.yml uses. Sparse, because the whole
       # value of this workflow is how fast it re-dispatches.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts
           persist-credentials: false

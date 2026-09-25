@@ -33,6 +33,7 @@ vi.mock('../../lib/pythonSetup.js', () => ({
   resolveMfluxPython: (p) => p || null,
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: (...a) => enqueueJobMock(...a),
   getJob: vi.fn(),
   mediaJobEvents: { emit: vi.fn(), on: vi.fn() },

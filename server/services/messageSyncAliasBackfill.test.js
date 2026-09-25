@@ -34,6 +34,8 @@ vi.mock('./messageAccounts.js', () => ({
 }));
 
 vi.mock('./messageGmailSync.js', () => ({ syncGmail: vi.fn() }));
+// Touchpoint logging reads the user timezone before its mocked DB adapter.
+vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn().mockResolvedValue('UTC') }));
 
 // tribe.js is loaded dynamically by logMessageTouchpoints; stub it so the sync
 // path doesn't need a live Postgres.

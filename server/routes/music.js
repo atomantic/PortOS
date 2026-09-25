@@ -4,12 +4,18 @@
  *   GET  /api/music/engines              → { engines, defaultEngine }
  *   POST /api/music/describe             → { description, llm }
  *   POST /api/music/lyrics               → { lyrics, llm }
+ *   POST /api/music/waveform             → { sketch, llm }
+ *   POST /api/music/code                 → { language, code, llm }
  *   POST /api/music/generate             → { jobId, position, status }
  *
  * `describe`/`lyrics` are the Generate tab's stepped designer (#4305): an LLM
  * expands a short reference/vibe into a rich conditioning prompt, then writes
  * lyrics from it. Both are one-shot, user-triggered calls — the studio never
- * fires them on its own (AI Provider Usage Policy).
+ * fires them on its own (AI Provider Usage Policy). `waveform` is the same
+ * designer's "Drawn waveform" engine: the LLM draws single-cycle waveforms and
+ * timed strokes (server/lib/waveSketch.js) that the browser plays directly.
+ * `code` is its "Code" engine: the LLM writes the piece as Strudel code, which
+ * only ever runs in the browser's sandboxed player frame, never on the server.
  *
  * Generation runs the engine-agnostic `generateMusic` (server/services/pipeline/
  * musicGen.js) through the unified audio media-job lane. The completion hook
@@ -36,6 +42,9 @@ import {
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
+import { drawWaveSketch } from '../services/musicWaveform.js';
+import { MUSIC_CODE_LANGUAGES, MUSIC_CODE_MAX, writeMusicCode } from '../services/musicCode.js';
+import { WAVE_SKETCH_LIMITS } from '../lib/waveSketch.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -349,6 +358,42 @@ router.post('/lyrics', asyncHandler(async (req, res) => {
   res.json({ lyrics, llm });
 }));
 
+const waveformSchema = z.object({
+  description: z.string().trim().min(1, 'description is required').max(8000),
+  lyrics: z.string().trim().max(20000).optional(),
+  durationSec: z.number().min(WAVE_SKETCH_LIMITS.DURATION_MIN_SEC).max(WAVE_SKETCH_LIMITS.DURATION_MAX_SEC).optional(),
+  // The drawing to revise — normalized (and size-bounded) by the service.
+  current: z.record(z.string(), z.unknown()).optional(),
+  // The drawing contract is fixed (no meta-prompt override like describe/lyrics).
+  ...designerPickerShape,
+}).omit({ template: true });
+
+// POST /api/music/waveform — stateless: have the LLM DRAW the music (single-cycle
+// waveforms plus timed strokes, lib/waveSketch.js) without storing it. The
+// designer draws via POST /api/tracks/:id/waveform/draw, which persists it.
+// One explicit user action per call.
+router.post('/waveform', asyncHandler(async (req, res) => {
+  const body = validateRequest(waveformSchema, req.body ?? {});
+  res.json(await drawWaveSketch(body));
+}));
+
+const codeSchema = z.object({
+  description: z.string().trim().min(1, 'description is required').max(8000),
+  lyrics: z.string().trim().max(20000).optional(),
+  // The code in the editor, to revise. Only its size is checked: it is text
+  // for the prompt here and runs nowhere but the browser's sandboxed frame.
+  current: z.string().max(MUSIC_CODE_MAX).optional().transform(blankToUndefined),
+  language: z.enum(MUSIC_CODE_LANGUAGES).optional().default('strudel'),
+  ...designerPickerShape,
+}).omit({ template: true });
+
+// POST /api/music/code — have the LLM write the piece as Strudel code for the
+// browser to play. One explicit user action per call; nothing is executed here.
+router.post('/code', asyncHandler(async (req, res) => {
+  const body = validateRequest(codeSchema, req.body ?? {});
+  res.json(await writeMusicCode(body));
+}));
+
 const generateSchema = z.object({
   prompt: z.string().trim().min(1, 'prompt is required').max(8000),
   // No default: distinguish ABSENT (don't touch the track's lyrics) from a
@@ -557,7 +602,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
     };
   }
 
-  const result = enqueueJob({
+  const result = await enqueueJob({
     kind: 'audio',
     params: {
       // Keep only the fixed-vocabulary profile and routing request under the

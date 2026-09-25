@@ -2160,6 +2160,14 @@ const JUSTIFIED_SILENT_ERROR_RENDERS = new Map([
   // already reports the count. It is a clause of that sentence, not a message,
   // and announced on its own it says nothing.
   ['src/components/apps/tabs/DatadogTab.jsx', new Set(['errors.length >= 100'])],
+  // Guards the whole ingest-history section (populated list, loading, OR an
+  // error), not the error text itself — the failure message renders inside
+  // the shared <InfiniteScrollFooter>, which declares role="alert" itself. A
+  // one-file walk cannot see across that import, same shape as the
+  // RepositorySourcePanel entry above.
+  ['src/components/brain/YoutubeIngestSettings.jsx', new Set([
+    '(ingests.length > 0 || ingestsPage.loading || Boolean(ingestsPage.error))',
+  ])],
 ]);
 
 // Two substring-cheap prechecks before the walk: a file that never writes

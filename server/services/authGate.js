@@ -1,12 +1,15 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
-import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath } from '../lib/apiAccessPolicy.js';
+import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath, isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
+import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { loadData as loadInstances } from './instanceIdentity.js';
 
 // Paths that bypass the auth gate even when a password is set:
 //   - /api/auth/status, /api/auth/whoami, /api/auth/login → the login UI
@@ -34,6 +37,62 @@ const verifyBasicPassword = async (password) => {
     basicAuthCache.set(key, { ok: true, expiresAt: Date.now() + BASIC_AUTH_CACHE_TTL_MS });
   }
   return ok;
+};
+
+// A paired peer's token (#8356) resolves to its peer record. Only an enabled
+// peer holding a pair secret can match; a corrupt/unreadable registry fails
+// closed to "not a peer" so the request falls through to the other methods.
+const pairedPeerFor = async (instanceId) => {
+  if (typeof instanceId !== 'string' || !instanceId) return null;
+  const data = await loadInstances().catch(() => null);
+  const peers = Array.isArray(data?.peers) ? data.peers : [];
+  return peers.find((p) => p?.instanceId === instanceId && p.enabled !== false
+    && typeof p.syncSecret === 'string' && p.syncSecret.length >= 32) ?? null;
+};
+
+const verifyPeerToken = async (headers) => {
+  const token = headers?.[PEER_AUTH_HEADER.toLowerCase()];
+  const instanceId = headers?.[PEER_INSTANCE_HEADER.toLowerCase()];
+  if (typeof token !== 'string' || !token) return null;
+  const peer = await pairedPeerFor(instanceId);
+  if (!peer) return null;
+  const expected = Buffer.from(derivePeerAuthToken(peer.syncSecret, instanceId));
+  const given = Buffer.from(token);
+  return expected.length === given.length && timingSafeEqual(expected, given) ? peer : null;
+};
+
+// A paired peer that still authenticates with this install's password (an
+// older sender, or a pair secret that differs between the two machines) is
+// told once per process: the password it holds is operator authority here.
+const warnedBasicPeers = new Set();
+const warnIfPairedPeerUsedBasic = async (headers) => {
+  const instanceId = headers?.[PEER_INSTANCE_HEADER.toLowerCase()];
+  if (typeof instanceId !== 'string' || warnedBasicPeers.has(instanceId)) return;
+  const peer = await pairedPeerFor(instanceId);
+  if (!peer) return;
+  warnedBasicPeers.add(instanceId);
+  console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — update it, re-pair with the same sync secret, then remove the stored password on that machine`);
+};
+
+// Logged once per peer + method + path per process (bounded): an older or
+// newer peer calling outside the contract should be diagnosable without
+// flooding the log.
+const warnedPeerScope = new Set();
+const WARNED_PEER_SCOPE_MAX = 256;
+const refusePeerScope = (req, res, path, peer) => {
+  const key = `${peer.id} ${req.method} ${path}`;
+  if (!warnedPeerScope.has(key)) {
+    if (warnedPeerScope.size >= WARNED_PEER_SCOPE_MAX) warnedPeerScope.clear();
+    warnedPeerScope.add(key);
+    console.warn(`⛔ Peer ${peer.name || peer.id} refused outside the federation surface: ${req.method} ${path}`);
+  }
+  if (path.startsWith('/data/')) {
+    res.status(403).type('text/plain').send('Forbidden');
+    return;
+  }
+  sendErrorResponse(res, new ServerError('A peer credential only reaches the federation API.', {
+    status: 403, code: 'PEER_SCOPE_FORBIDDEN',
+  }));
 };
 
 export const __testing = { verifyBasicPassword };
@@ -100,7 +159,23 @@ export const authGate = async (req, res, next) => {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
     return next();
   }
-  // Also accept HTTP Basic auth — used by peer-to-peer federation probes.
+  // A paired peer's scoped credential. Checked before Basic so a sender that
+  // presents both during the upgrade handshake is identified as the peer.
+  // Its authority ends at the federation surface (#8387): operator routes
+  // refuse it outright rather than falling through to Basic, so a peer that
+  // sends both never borrows the password's reach.
+  const peer = await verifyPeerToken(req.headers);
+  if (peer) {
+    if (!isPeerApiRequestAllowed(req.method, path)) {
+      refusePeerScope(req, res, path, peer);
+      return;
+    }
+    req.portosAuthContext = { enabled: true, authenticated: true, method: 'peer', peerId: peer.id };
+    return next();
+  }
+  // Also accept HTTP Basic auth — the legacy peer credential, kept so unpaired
+  // and not-yet-upgraded peers keep federating (a paired peer that still uses
+  // it is warned once per process). It yields `method: 'basic'`, never a session.
   // The peer sends `Authorization: Basic <base64(:password)>` (the Instances
   // UI stores username + password; only the password is validated here since
   // PortOS is single-user). scrypt verification is intentionally slow but runs
@@ -108,6 +183,7 @@ export const authGate = async (req, res, next) => {
   const basicPassword = extractBasicPassword(req);
   if (basicPassword && await verifyBasicPassword(basicPassword)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'basic' };
+    await warnIfPairedPeerUsedBasic(req.headers);
     return next();
   }
   // /data/* is hit directly by <img>/<audio>/<video> tags which don't show a
@@ -122,6 +198,31 @@ export const authGate = async (req, res, next) => {
   }));
 };
 
+const isLoopbackAddress = (value) => {
+  if (typeof value !== 'string') return false;
+  const address = value.replace(/^::ffff:/i, '');
+  return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
+};
+
+// Host execution needs operator authority: a peer's credential — the scoped
+// peer token or the legacy Basic password — never qualifies.
+// Mount after authGate: missing context fails closed. Password-free installs
+// require loopback socket peers, including the dev proxy caller. Neither req.ip
+// nor the machine-local warning acknowledgement can grant authority.
+export const requireHostControl = (req, res, next) => {
+  const auth = req.portosAuthContext;
+  const proxyClient = req.headers[DEV_PROXY_CLIENT_ADDRESS_HEADER];
+  // Only restrict an actual loopback connection with the dev proxy's marker.
+  // A direct remote caller cannot gain authority by forging a loopback header.
+  const loopback = isLoopbackAddress(req.socket?.remoteAddress)
+    && (proxyClient === undefined || isLoopbackAddress(proxyClient));
+  if ((auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
+    || (auth?.enabled === false && loopback)) return next();
+  sendErrorResponse(res, new ServerError('Host commands require an operator session, or a local connection when no password is set.', {
+    status: 403, code: 'HOST_CONTROL_FORBIDDEN',
+  }));
+};
+
 // Socket.IO middleware. Run after a successful HTTP-side handshake — same
 // `req.headers.cookie` is available on `socket.handshake.headers`. When auth
 // is off, every connection is allowed; when on, the handshake must carry a
@@ -131,6 +232,16 @@ export const authGate = async (req, res, next) => {
 // API surface (apiRegistry) is HTTP-only — external callers hit REST endpoints,
 // not the interactive socket. The socket carries the authenticated UI session
 // (voice streaming, live updates) and must stay fully gated when auth is on.
+// Records which credential passed the handshake so the per-event re-check in
+// socket.js (registerAuthHandlers) can tell a real operator session from a
+// peer relay connection. `socket.data` always exists on a real Socket.IO
+// socket; guarded here only so the plain `{ handshake }` fixtures this
+// module's own tests pass in don't throw.
+const markAuthMethod = (socket, method) => {
+  if (!socket.data) socket.data = {};
+  socket.data.portosAuthMethod = method;
+};
+
 export const socketAuthGate = async (socket, next) => {
   const enabled = await isAuthEnabled();
   if (!enabled) return next();
@@ -141,10 +252,23 @@ export const socketAuthGate = async (socket, next) => {
     return next(err);
   }
   const token = extractToken(fakeReq);
-  if (await verifySession(token)) return next();
-  // Also accept HTTP Basic auth for peer socket relay connections.
+  if (await verifySession(token)) {
+    markAuthMethod(socket, 'session');
+    return next();
+  }
+  // Peer relay connections: the paired peer token, else legacy Basic. Neither
+  // grants operator authority — socket.js re-checks every inbound event and
+  // allows a peer-authenticated socket only the minimal read-only
+  // subscription events it needs (PEER_RELAY_ALLOWED_EVENTS).
+  if (await verifyPeerToken(fakeReq.headers)) {
+    markAuthMethod(socket, 'peer');
+    return next();
+  }
   const basicPassword = extractBasicPassword(fakeReq);
-  if (basicPassword && await verifyBasicPassword(basicPassword)) return next();
+  if (basicPassword && await verifyBasicPassword(basicPassword)) {
+    markAuthMethod(socket, 'basic');
+    return next();
+  }
   const err = new Error('Authentication required');
   err.data = { code: 'AUTH_REQUIRED' };
   next(err);

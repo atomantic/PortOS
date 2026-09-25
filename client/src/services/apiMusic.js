@@ -46,6 +46,16 @@ export const generateLyrics = (body, requestOptions = {}) => request('/music/lyr
   ...requestOptions,
 });
 
+// Have the LLM write the piece as Strudel code (the Music Designer's code
+// engine). Nothing runs server-side; the browser plays it in a sandboxed frame.
+// body: { description, lyrics?, guidance?, current? (code to revise),
+// language?, providerId?, model?, effort? } → { language, code, llm }
+export const writeMusicCode = (body, requestOptions = {}) => request('/music/code', {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
 // De-register a user-installed model (id is the HF repo id) → { removed }.
 export const removeAudioModel = (engine, id, requestOptions = {}) =>
   request(`/music/models/${encodeURIComponent(engine)}/${id.split('/').map(encodeURIComponent).join('/')}`, {

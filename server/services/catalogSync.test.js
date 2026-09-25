@@ -52,7 +52,6 @@ const {
   applyRemoteChanges,
   getChangesSince,
   countAppliedFromStats,
-  CatalogSyncVersionMismatchError,
 } = await import('./catalogSync.js');
 const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 
@@ -72,6 +71,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     catalogDB.upsertMediaFromPeer.mockResolvedValueOnce(undefined);
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       scraps:      [{ id: 's1', rawText: 'x', createdAt: 't', updatedAt: 't' }],
       ingredients: [
         { id: 'i1', type: 'character', name: 'A', createdAt: 't', updatedAt: 't' },
@@ -104,6 +104,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     catalogDB.upsertTagFromPeer.mockRejectedValueOnce(new Error('bad tag'));
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       tags: [
         { id: 'cat-tag-noir', label: 'Noir', createdAt: 't', updatedAt: 't2' },
         { id: 'cat-tag-pulp', label: 'Pulp', createdAt: 't', updatedAt: 't' },
@@ -120,6 +121,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
   it('isolates a failing relation row and records it', async () => {
     catalogDB.upsertRelationFromPeer.mockRejectedValueOnce(new Error('fk violation'));
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       relations: [{ fromId: 'i1', toId: 'gone', kind: 'references', createdAt: 't' }],
     });
     expect(stats.relations.failed).toBe(1);
@@ -131,6 +133,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     catalogDB.upsertScrapFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       scraps: [
         { id: 'bad', rawText: 'x', createdAt: 't', updatedAt: 't' },
         { id: 'good', rawText: 'y', createdAt: 't', updatedAt: 't' },
@@ -168,6 +171,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     });
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       relations:   [{ fromId: 'i1', toId: 'i2', kind: 'lives-in', createdAt: 't' }],
       refs:        [{ ingredientId: 'i1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: 't' }],
       sources:     [{ ingredientId: 'i1', scrapId: 's1', extractedAt: 't' }],
@@ -190,6 +194,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     });
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       // Intentionally CHILD-first in the envelope — the apply path must reorder
       // so the parent (parentScrapId null) is upserted before its children.
       scraps: [
@@ -205,42 +210,42 @@ describe('applyRemoteChanges — dispatch + stats', () => {
 });
 
 describe('applyRemoteChanges — schema-version gate', () => {
-  it('rejects envelopes whose sender is ahead on `catalog` with a 412', async () => {
-    const tooNew = PORTOS_SCHEMA_VERSIONS.catalog + 1;
+  it.each([
+    ['ahead', PORTOS_SCHEMA_VERSIONS.catalog + 1],
+    ['behind', PORTOS_SCHEMA_VERSIONS.catalog - 1],
+    ['unversioned', undefined],
+  ])('rejects %s live catalog rows before replacing stored attachments', async (_direction, catalog) => {
+    const stored = { payload: { attachments: [{ characterId: 'example-character', emotion: 'love' }] } };
+    const before = structuredClone(stored);
+    catalogDB.upsertIngredientFromPeer.mockImplementation(async (incoming) => {
+      Object.assign(stored, incoming);
+      return { applied: true, isInsert: false };
+    });
+    const gap = { category: 'catalog', senderV: catalog ?? 0, receiverV: PORTOS_SCHEMA_VERSIONS.catalog };
+    const ahead = catalog > PORTOS_SCHEMA_VERSIONS.catalog;
     await expect(applyRemoteChanges({
-      portosMeta: { schemaVersions: { catalog: tooNew } },
-      ingredients: [],
-    })).rejects.toBeInstanceOf(CatalogSyncVersionMismatchError);
+      portosMeta: catalog === undefined ? undefined : { schemaVersions: { catalog } },
+      ingredients: [{ id: 'example-object', type: 'object', payload: { name: 'Edited on peer' }, updatedAt: '2026-09-24T12:00:00Z' }],
+    })).rejects.toMatchObject({
+      name: 'CatalogSyncVersionMismatchError', status: 412, code: 'CATALOG_SCHEMA_VERSION_AHEAD',
+      diff: { ahead: ahead ? [gap] : [], behind: ahead ? [] : [gap] },
+    });
+    expect(catalogDB.upsertIngredientFromPeer).not.toHaveBeenCalled();
+    expect(stored).toEqual(before);
+  });
 
-    // The thrown error carries the HTTP status + a structured diff.
-    try {
-      await applyRemoteChanges({
-        portosMeta: { schemaVersions: { catalog: tooNew } },
-        ingredients: [],
+  it.each([PORTOS_SCHEMA_VERSIONS.catalog + 1, PORTOS_SCHEMA_VERSIONS.catalog - 1, undefined])(
+    'accepts tombstone-only catalog envelopes at version %s', async (catalog) => {
+      catalogDB.upsertIngredientFromPeer.mockResolvedValue({ applied: true, isInsert: false });
+      const stats = await applyRemoteChanges({
+        portosMeta: { schemaVersions: { catalog } },
+        ingredients: [{ id: 'example-object', deleted: true, deletedAt: '2026-09-24T12:00:00Z' }],
+        refs: [{ ingredientId: 'example-object', refKind: 'universe', refId: 'example-universe', deleted: true }],
       });
-    } catch (err) {
-      expect(err.status).toBe(412);
-      expect(err.code).toBe('CATALOG_SCHEMA_VERSION_AHEAD');
-      expect(err.diff.ahead[0].category).toBe('catalog');
-    }
-  });
-
-  it('accepts envelopes from a sender behind on `catalog`', async () => {
-    catalogDB.upsertIngredientFromPeer.mockResolvedValue({ applied: true, isInsert: true });
-    const stats = await applyRemoteChanges({
-      portosMeta: { schemaVersions: { catalog: 1 } },
-      ingredients: [{ id: 'i1', type: 'character', name: 'A', createdAt: 't', updatedAt: 't' }],
-    });
-    expect(stats.ingredients.inserted).toBe(1);
-  });
-
-  it('accepts envelopes with no portosMeta (legacy/forked peers)', async () => {
-    catalogDB.upsertIngredientFromPeer.mockResolvedValue({ applied: true, isInsert: true });
-    const stats = await applyRemoteChanges({
-      ingredients: [{ id: 'i1', type: 'character', name: 'A', createdAt: 't', updatedAt: 't' }],
-    });
-    expect(stats.ingredients.inserted).toBe(1);
-  });
+      expect(stats.ingredients.updated).toBe(1);
+      expect(stats.refs.applied).toBe(1);
+    },
+  );
 });
 
 describe('getChangesSince — cursor normalization + per-kind advance', () => {
@@ -400,6 +405,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
     });
 
@@ -417,7 +423,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
     const row = ingredient(['hero', 'from-universe', 'universe:u-1']);
 
-    await applyRemoteChanges({ ingredients: [row] });
+    await applyRemoteChanges({ portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS }, ingredients: [row] });
 
     expect(row.tags).toEqual(['hero', 'from-universe', 'universe:u-1']);
     expect(tagsUpserted()).toEqual(['hero', 'My Universe']);
@@ -428,6 +434,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([]); // u-2 not present locally
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-2'])],
     });
 
@@ -443,6 +450,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1', 'universe:u-2'])],
     });
 
@@ -456,6 +464,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     catalogDB.upsertIngredientFromPeer.mockResolvedValueOnce({ applied: true, isInsert: true });
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'universe:marvel'])], // thematic user tag, no marker
     });
 
@@ -469,6 +478,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
     });
 
@@ -484,6 +494,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [
         { ...ingredient(['from-universe', 'universe:u-1']), id: 'i-1' },
         { ...ingredient(['from-universe', 'universe:u-1']), id: 'i-2' },
@@ -501,6 +512,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockResolvedValueOnce([{ id: 'u-1', name: 'My Universe' }]);
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [
         { ...ingredient(['hero', 'from-universe', 'universe:u-1']), id: 'i-1' },
         { ...ingredient(['hero', 'from-universe', 'universe:u-1']), id: 'i-2' },
@@ -520,6 +532,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     catalogDB.normalizeTags.mockResolvedValueOnce(['My Universe']); // pre-existing row's casing wins
 
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
     });
 
@@ -532,6 +545,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
 
     // The minted name collides with an inbound tag → nothing new to register.
     await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
     });
 
@@ -543,6 +557,7 @@ describe('applyRemoteChanges — legacy universe tag friendlify on inbound sync'
     universeBuilder.listUniverses.mockRejectedValueOnce(new Error('universe read failed'));
 
     const stats = await applyRemoteChanges({
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
       ingredients: [ingredient(['hero', 'from-universe', 'universe:u-1'])],
     });
 

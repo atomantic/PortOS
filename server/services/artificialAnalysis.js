@@ -226,10 +226,6 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
 
 // Presence only — never the value. The comparison page reads this to decide
 // whether the Sync button prompts for a key or just syncs with the stored one.
-export async function hasArtificialAnalysisKey() {
-  return Boolean(await resolveArtificialAnalysisKey());
-}
-
 async function resolveArtificialAnalysisKey(apiKey) {
   const settings = await getSettings();
   return apiKey?.trim() || settings.secrets?.artificialAnalysis?.apiKey || process.env.ARTIFICIAL_ANALYSIS_API_KEY || '';

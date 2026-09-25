@@ -124,6 +124,24 @@ describe('manuscriptReview — record-event emission on write', () => {
     expect(merged.comments.find((c) => c.id === 'mrc-st').subtype).toBeNull();
   });
 
+  it('rejects a series id with path-traversal characters (security: #8355)', async () => {
+    // A malformed series id containing `../` must be rejected before any
+    // filesystem operations, so a malicious peer cannot write files outside
+    // the series directory.
+    await expect(mergeReviewFromSync('../../../etc/passwd', {
+      schemaVersion: 1,
+      comments: [{ id: 'mrc-x', problem: 'attack', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+    })).rejects.toThrow(/Invalid series id/);
+  });
+
+  it('rejects a series id with invalid characters (malformed id)', async () => {
+    // IDs containing spaces, slashes, or other special chars are rejected.
+    await expect(mergeReviewFromSync('ser-1/../../hack', {
+      schemaVersion: 1,
+      comments: [{ id: 'mrc-x', problem: 'note', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+    })).rejects.toThrow(/Invalid series id/);
+  });
+
   it('re-surfacing a finding adopts the run subtype on the existing comment (#1626)', async () => {
     // A finding first raised BEFORE the on-the-nose check sub-classified its
     // output — no subtype yet.

@@ -1,19 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
   Activity,
   Brain,
-  CheckCircle,
   Database,
   ExternalLink,
   FileText,
   Gauge,
   Palette,
   Server,
-  Settings,
   ShieldCheck,
   Sparkles,
-  X,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -57,7 +54,6 @@ const getDefaultFormData = (config, avatarStyle) => ({
   healthCheckIntervalMs: config?.healthCheckIntervalMs ?? 900_000,
   maxConcurrentAgents: config?.maxConcurrentAgents ?? 3,
   maxConcurrentAgentsPerProject: config?.maxConcurrentAgentsPerProject ?? 2,
-  maxProcessMemoryMb: config?.maxProcessMemoryMb ?? 2_048,
   maxTotalProcesses: config?.maxTotalProcesses ?? 50,
   startOnBoot: Boolean(config?.alwaysOn || config?.autoStart),
   improvementEnabled: config?.improvementEnabled ?? config?.selfImprovementEnabled ?? true,
@@ -68,26 +64,6 @@ const getDefaultFormData = (config, avatarStyle) => ({
   appReviewCooldownMs: config?.appReviewCooldownMs ?? 1_800_000,
   avatarStyle: config?.avatarStyle || avatarStyle || 'svg',
   dynamicAvatar: config?.dynamicAvatar ?? true,
-});
-
-const configPayload = (formData) => ({
-  healthCheckIntervalMs: formData.healthCheckIntervalMs,
-  maxConcurrentAgents: formData.maxConcurrentAgents,
-  maxConcurrentAgentsPerProject: formData.maxConcurrentAgentsPerProject,
-  maxProcessMemoryMb: formData.maxProcessMemoryMb,
-  maxTotalProcesses: formData.maxTotalProcesses,
-  alwaysOn: formData.startOnBoot,
-  // Clear the legacy alias so turning boot startup off is not defeated by the
-  // server's `alwaysOn || autoStart` compatibility read.
-  autoStart: false,
-  improvementEnabled: formData.improvementEnabled,
-  idleReviewEnabled: formData.idleReviewEnabled,
-  idleReviewPriority: formData.idleReviewPriority,
-  autonomousJobsEnabled: formData.autonomousJobsEnabled,
-  autoApproveInvestigations: formData.autoApproveInvestigations,
-  appReviewCooldownMs: formData.appReviewCooldownMs,
-  avatarStyle: formData.avatarStyle,
-  dynamicAvatar: formData.dynamicAvatar,
 });
 
 function SectionHeading({ icon: Icon, title, description }) {
@@ -135,7 +111,7 @@ function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange
                     type="button"
                     aria-pressed={active}
                     title={mode.description}
-                    onClick={() => onDomainChange(domain.id, mode.id, mode.label, domain.label)}
+                    onClick={() => onDomainChange(domain.id, mode.id)}
                     className={`rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${active ? colors.active : colors.base}`}
                   >
                     {mode.label}
@@ -163,7 +139,7 @@ function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange
                       inputMode="numeric"
                       defaultValue={cap ?? ''}
                       placeholder="Unlimited"
-                      onBlur={(event) => onBudgetChange(domain.id, field.id, event.target.value, domain.label, field.label)}
+                      onBlur={(event) => onBudgetChange(domain.id, field.id, event.target.value)}
                       className={`w-full rounded-md border bg-port-bg px-2 py-1.5 text-xs text-port-text ${capped ? 'border-port-warning' : 'border-port-border'}`}
                     />
                   </div>
@@ -232,26 +208,117 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   } = useProviderModels();
   const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
   const [embeddingModel, setEmbeddingModel] = useState(config?.embeddingModel || '');
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState(() => getDefaultFormData(config, avatarStyle));
+  const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
+  const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
+  const [saveStatus, setSaveStatus] = useState('idle');
+  const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
   const [mindStatus, setMindStatus] = useState({ data: null, loaded: false, error: null });
+  const configSaveQueueRef = useRef(Promise.resolve());
+  const pendingSaveCountRef = useRef(0);
+  const failedSaveKeysRef = useRef(new Set());
+  const pendingConfigFieldsRef = useRef(new Map());
+
+  const saveConfigPatch = useCallback((patch, { failureKeys = Object.keys(patch), onSuccess } = {}) => {
+    pendingSaveCountRef.current += 1;
+    setSaveStatus('saving');
+
+    const request = configSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => api.updateCosConfig(patch, { silent: true }));
+    configSaveQueueRef.current = request.catch(() => undefined);
+
+    return request.then((result) => {
+      failureKeys.forEach((key) => failedSaveKeysRef.current.delete(key));
+      const reportRefreshError = (error) => toast.error(error?.message || 'Settings saved, but the page could not refresh');
+      try {
+        Promise.resolve(onSuccess?.(result)).catch(reportRefreshError);
+      } catch (error) {
+        reportRefreshError(error);
+      }
+      try {
+        Promise.resolve(onUpdate?.()).catch(reportRefreshError);
+      } catch (error) {
+        reportRefreshError(error);
+      }
+      return result;
+    }, (error) => {
+      failureKeys.forEach((key) => failedSaveKeysRef.current.add(key));
+      toast.error(error?.message || 'Configuration could not be saved');
+      return null;
+    }).finally(() => {
+      pendingSaveCountRef.current -= 1;
+      if (pendingSaveCountRef.current > 0) setSaveStatus('saving');
+      else setSaveStatus(failedSaveKeysRef.current.size ? 'error' : 'saved');
+    });
+  }, [onUpdate]);
+
+  const updateSetting = useCallback((field, value) => {
+    pendingConfigFieldsRef.current.set(field, value);
+    setFormData((current) => ({ ...current, [field]: value }));
+    const patch = field === 'startOnBoot'
+      ? { alwaysOn: value, autoStart: false }
+      : { [field]: value };
+    return saveConfigPatch(patch, { failureKeys: [field] });
+  }, [saveConfigPatch]);
 
   useEffect(() => {
-    if (config?.embeddingProviderId) {
-      setEmbeddingProviderId(config.embeddingProviderId);
-      setProviderHook(config.embeddingProviderId);
-    }
-    if (config?.embeddingModel) {
-      setEmbeddingModel(config.embeddingModel);
-      setModelHook(config.embeddingModel);
-    }
-  }, [config?.embeddingProviderId, config?.embeddingModel, setProviderHook, setModelHook]);
+    const savedFormData = getDefaultFormData(config, avatarStyle);
+    setFormData(Object.fromEntries(Object.entries(savedFormData).map(([field, savedValue]) => {
+      const pendingValue = pendingConfigFieldsRef.current.get(field);
+      if (pendingConfigFieldsRef.current.has(field) && pendingValue !== savedValue) return [field, pendingValue];
+      pendingConfigFieldsRef.current.delete(field);
+      return [field, savedValue];
+    })));
 
+    setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
+      ([domainId, mode]) => getDomainMode(config, domainId) !== mode,
+    )));
+    setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
+      const savedBudget = getDomainBudget(config, domainId);
+      const remaining = Object.fromEntries(Object.entries(fields).filter(([field, value]) => (savedBudget[field] ?? null) !== value));
+      return Object.keys(remaining).length ? [[domainId, remaining]] : [];
+    })));
+  }, [config, avatarStyle]);
+
+  // Kept apart from the form resync above: this one also re-runs when the
+  // provider hook's setters change identity (they do once its providers load,
+  // and it re-applies the saved embedding pick over the hook's initial one).
+  // Every write here is a primitive, so a re-run with nothing new settles
+  // instead of rebuilding the form object and re-rendering without end.
   useEffect(() => {
-    if (!editing) setFormData(getDefaultFormData(config, avatarStyle));
-  }, [config, avatarStyle, editing]);
+    const savedProviderId = config?.embeddingProviderId;
+    if (savedProviderId !== undefined) {
+      const pendingProviderId = pendingConfigFieldsRef.current.get('embeddingProviderId');
+      if (!pendingConfigFieldsRef.current.has('embeddingProviderId') || pendingProviderId === savedProviderId) {
+        pendingConfigFieldsRef.current.delete('embeddingProviderId');
+        setEmbeddingProviderId(savedProviderId);
+        setProviderHook(savedProviderId);
+      }
+    }
+    const savedModel = config?.embeddingModel;
+    if (savedModel !== undefined) {
+      const pendingModel = pendingConfigFieldsRef.current.get('embeddingModel');
+      if (!pendingConfigFieldsRef.current.has('embeddingModel') || pendingModel === savedModel) {
+        pendingConfigFieldsRef.current.delete('embeddingModel');
+        setEmbeddingModel(savedModel);
+        setModelHook(savedModel);
+      }
+    }
+  }, [config, setProviderHook, setModelHook]);
+
+  const displayConfig = useMemo(() => {
+    const domainBudgets = { ...(config?.domainBudgets || {}) };
+    for (const [domainId, fields] of Object.entries(domainBudgetOverrides)) {
+      domainBudgets[domainId] = { ...(domainBudgets[domainId] || {}), ...fields };
+    }
+    return {
+      ...config,
+      domainAutonomy: { ...(config?.domainAutonomy || {}), ...domainAutonomyOverrides },
+      domainBudgets,
+    };
+  }, [config, domainAutonomyOverrides, domainBudgetOverrides]);
 
   const refreshBudgetUsage = useCallback(() => (
     api.getCosBudgetUsage({ silent: true })
@@ -285,16 +352,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       })),
   ]), [riggedAvatars]);
 
-  const avatarLabel = (style) => {
-    if (AVATAR_STYLE_LABELS[style]) return AVATAR_STYLE_LABELS[style];
-    const record = riggedRecordForStyle(riggedAvatars, style);
-    return record ? `${record.name} (rigged 3D)` : style;
-  };
-
-  // Honest coverage note for the staged value: which states the character
+  // Honest coverage note for the selected value: which states the character
   // covers, what the rest fall back to — or a warning when the record the
   // saved style points at is gone.
-  const stagedRiggedNote = useMemo(() => {
+  const selectedRiggedNote = useMemo(() => {
     if (!isRiggedAvatarStyle(formData.avatarStyle)) return null;
     const record = riggedRecordForStyle(riggedAvatars, formData.avatarStyle);
     if (!record) return 'That animated record is no longer available — pick another avatar.';
@@ -303,45 +364,32 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     return `${coverageSummary(record.coverage)}. Covered: ${covered.join(', ') || 'none'}. ${fallback}`.trim();
   }, [formData.avatarStyle, riggedAvatars]);
 
-  const handleCancel = () => {
-    setFormData(getDefaultFormData(config, avatarStyle));
-    setEditing(false);
+  const handleDomainChange = (domainId, mode) => {
+    if (getDomainMode(displayConfig, domainId) === mode) return Promise.resolve();
+    setDomainAutonomyOverrides((current) => ({ ...current, [domainId]: mode }));
+    return saveConfigPatch({ domainAutonomy: { [domainId]: mode } }, {
+      failureKeys: [`domainAutonomy:${domainId}`],
+      onSuccess: refreshMindStatus,
+    });
   };
 
-  const handleSave = () => {
-    setSaving(true);
-    return api.updateCosConfig(configPayload(formData), { silent: true })
-      .then(() => {
-        toast.success('Configuration updated');
-        setEditing(false);
-        onUpdate();
-      })
-      .catch((error) => toast.error(error.message))
-      .finally(() => setSaving(false));
-  };
-
-  const handleDomainChange = (domainId, mode, modeLabel, domainLabel) => (
-    api.updateCosConfig({ domainAutonomy: { [domainId]: mode } }, { silent: true })
-      .then(() => {
-        toast.success(`${domainLabel} autonomy set to ${modeLabel}`);
-        onUpdate();
-        void refreshMindStatus();
-      })
-      .catch((error) => toast.error(error.message))
-  );
-
-  const handleBudgetChange = (domainId, field, rawValue, domainLabel, fieldLabel) => {
+  const handleBudgetChange = (domainId, field, rawValue) => {
     const value = normalizeBudgetLimit(rawValue);
-    const current = getDomainBudget(config, domainId)[field];
+    const current = getDomainBudget(displayConfig, domainId)[field];
     if ((current ?? null) === value) return Promise.resolve();
-    return api.updateCosConfig({ domainBudgets: { [domainId]: { [field]: value } } }, { silent: true })
-      .then(() => {
-        toast.success(`${domainLabel} ${fieldLabel} ${value == null ? 'set to unlimited' : `capped at ${value}`}`);
-        onUpdate();
-        void refreshBudgetUsage();
-      })
-      .catch((error) => toast.error(error.message));
+    setDomainBudgetOverrides((currentOverrides) => ({
+      ...currentOverrides,
+      [domainId]: { ...(currentOverrides[domainId] || {}), [field]: value },
+    }));
+    return saveConfigPatch({ domainBudgets: { [domainId]: { [field]: value } } }, {
+      failureKeys: [`domainBudget:${domainId}:${field}`],
+      onSuccess: refreshBudgetUsage,
+    });
   };
+
+  const displayedSaveStatus = saveStatus === 'error'
+    ? 'error'
+    : saveStatus === 'saving' || profileSaving ? 'saving' : saveStatus;
 
   return (
     <div className="mx-auto max-w-6xl space-y-7 pb-6">
@@ -352,7 +400,13 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
             Configure capacity, automatic work, the persistent mind, and supporting services. Domain guardrails are the authoritative autonomy controls.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <span data-testid="config-save-status" role={displayedSaveStatus === 'error' ? 'alert' : 'status'} aria-live="polite" className={`text-xs ${displayedSaveStatus === 'error' ? 'text-port-error' : 'text-port-text-muted'}`}>
+            {displayedSaveStatus === 'saving' ? 'Saving changes…'
+              : displayedSaveStatus === 'error' ? 'Some changes could not be saved. Change those settings to retry.'
+                : displayedSaveStatus === 'saved' ? 'All changes saved'
+                  : 'Changes save automatically'}
+          </span>
           <button
             type="button"
             onClick={onEvaluate}
@@ -361,34 +415,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           >
             <Activity size={14} /> Force Evaluate
           </button>
-          {!editing ? (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className="inline-flex items-center gap-2 rounded-lg bg-port-border px-3 py-2 text-sm text-port-text transition-colors hover:bg-port-border/80"
-            >
-              <Settings size={14} /> Edit settings
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={handleCancel}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-port-border px-3 py-2 text-sm text-port-text-muted disabled:opacity-50"
-              >
-                <X size={14} /> Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-port-success/15 px-3 py-2 text-sm text-port-success transition-colors hover:bg-port-success/25 disabled:opacity-50"
-              >
-                <CheckCircle size={14} /> {saving ? 'Saving…' : 'Save settings'}
-              </button>
-            </>
-          )}
         </div>
       </header>
 
@@ -405,6 +431,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <div className="rounded-lg border border-port-border bg-port-card p-4">
             <PersistentMindProfileControls
               profile={config?.persistentMindProfile}
+              onSavingChange={setProfileSaving}
               onSaved={() => {
                 onUpdate();
                 void refreshMindStatus();
@@ -423,7 +450,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           />
         </div>
         <DomainAutomationControl
-          config={config}
+          config={displayConfig}
           usage={budgetUsage}
           onDomainChange={handleDomainChange}
           onBudgetChange={handleBudgetChange}
@@ -435,11 +462,11 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <SectionHeading icon={Gauge} title="Capacity and health" description="Concurrency and health thresholds for the local CoS runtime." />
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <ConfigRow label="Concurrent agents" description="Maximum active agents across all projects." value={formData.maxConcurrentAgents} editing={editing} type="number" inputValue={formData.maxConcurrentAgents} min={1} onChange={(value) => setFormData((current) => ({ ...current, maxConcurrentAgents: value }))} />
-          <ConfigRow label="Agents per project" description="Prevents one project from consuming every agent slot." value={formData.maxConcurrentAgentsPerProject} editing={editing} type="number" inputValue={formData.maxConcurrentAgentsPerProject} min={1} onChange={(value) => setFormData((current) => ({ ...current, maxConcurrentAgentsPerProject: value }))} />
-          <ConfigRow label="Process count alert" description="Flags an unexpectedly large PM2 process fleet." value={formData.maxTotalProcesses} editing={editing} type="number" inputValue={formData.maxTotalProcesses} min={1} onChange={(value) => setFormData((current) => ({ ...current, maxTotalProcesses: value }))} />
-          <ConfigRow label="Health check interval" description="How often CoS checks processes and memory." value={`${formData.healthCheckIntervalMs / 60_000} min`} editing={editing} type="number" inputValue={formData.healthCheckIntervalMs / 60_000} min={1} suffix="minutes" onChange={(value) => setFormData((current) => ({ ...current, healthCheckIntervalMs: value * 60_000 }))} />
-          <ConfigRow label="Start on server boot" description="Start the CoS daemon when PortOS starts." value={formData.startOnBoot ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.startOnBoot} onChange={(value) => setFormData((current) => ({ ...current, startOnBoot: value }))} />
+          <ConfigRow label="Concurrent agents" description="Maximum active agents across all projects." type="number" inputValue={formData.maxConcurrentAgents} min={1} onChange={(value) => updateSetting('maxConcurrentAgents', value)} />
+          <ConfigRow label="Agents per project" description="Prevents one project from consuming every agent slot." type="number" inputValue={formData.maxConcurrentAgentsPerProject} min={1} onChange={(value) => updateSetting('maxConcurrentAgentsPerProject', value)} />
+          <ConfigRow label="Process count alert" description="Flags an unexpectedly large PM2 process fleet." type="number" inputValue={formData.maxTotalProcesses} min={1} onChange={(value) => updateSetting('maxTotalProcesses', value)} />
+          <ConfigRow label="Health check interval" description="How often CoS checks processes and memory." type="number" inputValue={formData.healthCheckIntervalMs / 60_000} min={1} suffix="minutes" onChange={(value) => updateSetting('healthCheckIntervalMs', value * 60_000)} />
+          <ConfigRow label="Start on server boot" description="Start the CoS daemon when PortOS starts." type="checkbox" inputValue={formData.startOnBoot} onChange={(value) => updateSetting('startOnBoot', value)} />
         </div>
       </section>
 
@@ -448,12 +475,12 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <SectionHeading icon={Sparkles} title="Work generation and scheduling" description="Independent switches for how eligible work enters and moves through the queue." />
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <ConfigRow label="Improvement tasks" description="Allow improvement work for PortOS and managed apps." value={formData.improvementEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.improvementEnabled} onChange={(value) => setFormData((current) => ({ ...current, improvementEnabled: value }))} />
-          <ConfigRow label="Idle app review" description="Look for app improvements when user work is idle." value={formData.idleReviewEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.idleReviewEnabled} onChange={(value) => setFormData((current) => ({ ...current, idleReviewEnabled: value }))} />
-          <ConfigRow label="Idle review priority" description="Priority assigned to newly generated idle-review tasks." value={PRIORITY_OPTIONS.find((option) => option.value === formData.idleReviewPriority)?.label} editing={editing} type="select" inputValue={formData.idleReviewPriority} options={PRIORITY_OPTIONS} onChange={(value) => setFormData((current) => ({ ...current, idleReviewPriority: value }))} />
-          <ConfigRow label="Scheduled agent jobs" description="Enable the global scheduler in addition to each job's own switch." value={formData.autonomousJobsEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.autonomousJobsEnabled} onChange={(value) => setFormData((current) => ({ ...current, autonomousJobsEnabled: value }))} />
-          <ConfigRow label="App review cooldown" description="Minimum time before CoS reviews the same app again." value={`${formData.appReviewCooldownMs / 60_000} min`} editing={editing} type="number" inputValue={formData.appReviewCooldownMs / 60_000} min={0} step="any" suffix="minutes" onChange={(value) => setFormData((current) => ({ ...current, appReviewCooldownMs: value * 60_000 }))} />
-          <ConfigRow label="Auto-approve investigations" description="Admit failure-loop and failure-storm investigations unattended." value={formData.autoApproveInvestigations ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.autoApproveInvestigations} onChange={(value) => setFormData((current) => ({ ...current, autoApproveInvestigations: value }))} />
+          <ConfigRow label="Improvement tasks" description="Allow improvement work for PortOS and managed apps." type="checkbox" inputValue={formData.improvementEnabled} onChange={(value) => updateSetting('improvementEnabled', value)} />
+          <ConfigRow label="Idle app review" description="Look for app improvements when user work is idle." type="checkbox" inputValue={formData.idleReviewEnabled} onChange={(value) => updateSetting('idleReviewEnabled', value)} />
+          <ConfigRow label="Idle review priority" description="Priority assigned to newly generated idle-review tasks." type="select" inputValue={formData.idleReviewPriority} options={PRIORITY_OPTIONS} onChange={(value) => updateSetting('idleReviewPriority', value)} />
+          <ConfigRow label="Scheduled agent jobs" description="Enable the global scheduler in addition to each job's own switch." type="checkbox" inputValue={formData.autonomousJobsEnabled} onChange={(value) => updateSetting('autonomousJobsEnabled', value)} />
+          <ConfigRow label="App review cooldown" description="Minimum time before CoS reviews the same app again." type="number" inputValue={formData.appReviewCooldownMs / 60_000} min={0} step="any" suffix="minutes" onChange={(value) => updateSetting('appReviewCooldownMs', value * 60_000)} />
+          <ConfigRow label="Auto-approve investigations" description="Admit failure-loop and failure-storm investigations unattended." type="checkbox" inputValue={formData.autoApproveInvestigations} onChange={(value) => updateSetting('autoApproveInvestigations', value)} />
         </div>
       </section>
 
@@ -462,11 +489,11 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           <SectionHeading icon={Palette} title="Appearance" description="Set the default avatar and whether active work may choose a matching style." />
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <ConfigRow label="Default avatar" description="Visual style used by the CoS panel." value={avatarLabel(formData.avatarStyle)} editing={editing} type="select" inputValue={formData.avatarStyle} options={avatarOptions} onChange={(value) => setFormData((current) => ({ ...current, avatarStyle: value }))} />
-          <ConfigRow label="Dynamic avatar" description="Switch style based on task type, provider, or priority." value={formData.dynamicAvatar ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.dynamicAvatar} onChange={(value) => setFormData((current) => ({ ...current, dynamicAvatar: value }))} />
+          <ConfigRow label="Default avatar" description="Visual style used by the CoS panel." type="select" inputValue={formData.avatarStyle} options={avatarOptions} onChange={(value) => updateSetting('avatarStyle', value)} />
+          <ConfigRow label="Dynamic avatar" description="Switch style based on task type, provider, or priority." type="checkbox" inputValue={formData.dynamicAvatar} onChange={(value) => updateSetting('dynamicAvatar', value)} />
         </div>
-        {stagedRiggedNote && (
-          <p className="text-xs leading-relaxed text-port-text-muted">{stagedRiggedNote}</p>
+        {selectedRiggedNote && (
+          <p className="text-xs leading-relaxed text-port-text-muted">{selectedRiggedNote}</p>
         )}
       </section>
 
@@ -483,23 +510,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
             selectedModel={embeddingModel || hookModel}
             availableModels={availableModels}
             onProviderChange={(id) => {
+              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
+              pendingConfigFieldsRef.current.set('embeddingModel', '');
               setEmbeddingProviderId(id);
               setProviderHook(id);
               setEmbeddingModel('');
-              return api.updateCosConfig({ embeddingProviderId: id, embeddingModel: '' })
-                .then(() => {
-                  toast.success('Embedding provider updated');
-                  onUpdate();
-                });
+              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: '' }, {
+                failureKeys: ['embeddingProviderId', 'embeddingModel'],
+              });
             }}
             onModelChange={(model) => {
+              pendingConfigFieldsRef.current.set('embeddingModel', model);
               setEmbeddingModel(model);
               setModelHook(model);
-              return api.updateCosConfig({ embeddingModel: model })
-                .then(() => {
-                  toast.success('Embedding model updated');
-                  onUpdate();
-                });
+              return saveConfigPatch({ embeddingModel: model }, { failureKeys: ['embeddingModel'] });
             }}
             label="Embedding provider"
           />

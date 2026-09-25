@@ -3,11 +3,13 @@
  * and that must therefore ship no `data.reference/` seed.
  *
  * The enforcement is the seed's ABSENCE, asserted by the sibling test. The
- * filter this list drives in `scripts/setup-data.js` (its one consumer) is
- * defense in depth for a seed someone re-adds. Full rationale — and the
+ * seed filter below — used by `scripts/setup-data.js` and the boot smoke's
+ * disposable install (`scripts/smoke-boot.js`) — is defense in depth for a
+ * seed someone re-adds. Full rationale — and the
  * silent data loss a seed causes here — is in
  * `scripts/migrations/340-cos-config-seed-repair.js`.
  */
+import { join } from 'path';
 
 /** Paths relative to `data/` (and to `data.reference/`), always posix-spelled. */
 export const MIGRATION_OWNED_PATHS = new Set([
@@ -41,3 +43,15 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // runs into another machine's rows.
   'cos/agents/index.order.json',
 ]);
+
+/**
+ * A `cpSync` filter for seeding `data/` from `referenceDir`: true for every
+ * source path except a migration-owned one.
+ *
+ * @param {string} referenceDir absolute path to the `data.reference/` being copied
+ * @returns {(srcPath: string) => boolean}
+ */
+export function isSeedableReferencePath(referenceDir) {
+  const owned = new Set([...MIGRATION_OWNED_PATHS].map((relPath) => join(referenceDir, ...relPath.split('/'))));
+  return (srcPath) => !owned.has(srcPath);
+}

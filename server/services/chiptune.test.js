@@ -14,10 +14,7 @@ const musicDir = await makeTmp('chiptune-music-');
 vi.mock('./tracks/index.js', () => ({
   getTrack: vi.fn(),
   updateTrack: vi.fn(),
-  buildRenderAppend: vi.fn((track, input) => {
-    const render = { id: 'render-test', ...input, createdAt: '2026-01-01T00:00:00.000Z' };
-    return { render, renders: [...(track?.renders || []), render] };
-  }),
+  appendActiveTake: vi.fn(async (id, take) => ({ id, ...take })),
 }));
 
 vi.mock('./promptRunner.js', () => ({
@@ -150,17 +147,12 @@ describe('renderChiptuneTrack', () => {
     const files = await readdir(musicDir);
     expect(files).toContain(result.filename);
     expect(result.durationSec).toBe(2); // 16 steps · 0.125s = 2s
-    expect(tracks.buildRenderAppend).toHaveBeenCalledWith(expect.objectContaining({ id: 'track-1' }), {
+    expect(tracks.appendActiveTake).toHaveBeenCalledWith('track-1', {
       audioFilename: result.filename,
       prompt: 'farm loop',
       engine: 'chiptune',
       durationSec: result.durationSec,
     });
-    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({
-      audioFilename: result.filename,
-      engine: 'chiptune',
-      modelId: '',
-    }));
   });
 });
 

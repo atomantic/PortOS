@@ -82,8 +82,6 @@ const ARRAY_KEYS = [
   'nicotineEntries', 'nicotinePresets', 'saunaPresets', 'saunaSessions'
 ];
 
-export function defaultStorePath() { return DEFAULT_ICLOUD_PATH; }
-
 // === Eviction pinning ===
 
 // macOS Optimize-Mac-Storage can evict iCloud files. When that happens the

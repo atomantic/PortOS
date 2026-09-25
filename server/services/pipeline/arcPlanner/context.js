@@ -265,15 +265,6 @@ export const stageVersionsOf = (stage) =>
 
 // The dominant manuscript type across the series' sections — the editor's
 // display "mode". Per-section stageId stays authoritative for writes.
-export function primaryStageIdOf(sections) {
-  const counts = new Map();
-  for (const s of sections) counts.set(s.stageId, (counts.get(s.stageId) || 0) + 1);
-  let best = null;
-  let bestN = 0;
-  for (const [sid, n] of counts) if (n > bestN) { best = sid; bestN = n; }
-  return best;
-}
-
 /**
  * Collect the FULL series manuscript in every format at once, for the
  * format-switching manuscript editor. Unlike `collectManuscriptSections`

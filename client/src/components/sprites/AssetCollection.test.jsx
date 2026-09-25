@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+vi.mock('../../services/apiSprites.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getSpriteAssetPrompt: vi.fn().mockResolvedValue(null),
+}));
 import AssetCollection from './AssetCollection.jsx';
 import { buildCollectionActions } from '../../lib/spriteCollectionActions.js';
 

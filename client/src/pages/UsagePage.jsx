@@ -12,7 +12,7 @@ import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
-import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
 
@@ -899,11 +899,13 @@ function InternalUsageMetrics() {
 
 export function UsagePage() {
   return (
-    <div className="space-y-6">
+    <ModelsSectionLayout activeTab="usage">
       <ModelsTabsHeader activeTab="usage" />
-      <ProviderQuotaSection />
-      <InternalUsageMetrics />
-    </div>
+      <div className="min-h-0 min-w-0 flex-1 space-y-6 overflow-auto">
+        <ProviderQuotaSection />
+        <InternalUsageMetrics />
+      </div>
+    </ModelsSectionLayout>
   );
 }
 

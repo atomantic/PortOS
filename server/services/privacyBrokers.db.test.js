@@ -10,6 +10,9 @@
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // A valid vault key BEFORE privacyVault is imported so the runScanPass test can
 // create a scan-eligible name without touching the repo's real .env.
@@ -38,7 +41,10 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   let svc;
   let scan;
   let vault;
-  const autoBrokerIds = ['test-auto-alpha', 'ca-test-beta-inc', 'test-auto-upgrade'];
+  const autoBrokerIds = [
+    'test-auto-alpha', 'ca-test-beta-inc', 'test-auto-upgrade',
+    'test-evidence-seal', 'test-evidence-erase', 'test-evidence-legacy', 'test-evidence-vault',
+  ];
   const createdVaultIds = [];
   const vaultTableWasEmpty = false;
   const testStart = new Date().toISOString();
@@ -47,13 +53,17 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     svc = await import('./privacyBrokers.js');
     scan = await import('./privacyScan.js');
     vault = await import('./privacyVault.js');
+    // The scan pass needs an explicit broker_scan grant (#8332) — the seeded
+    // `self` row holds only local-vault consent. Removed in afterAll.
+    const subjects = await import('./privacySubjects.js');
+    await subjects.recordConsent({ scope: 'broker_scan', method: 'self', note: 'privacyBrokers.db.test' });
   });
 
   afterAll(async () => {
     for (const id of createdVaultIds) {
       await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
     }
-    await query(`DELETE FROM privacy_consents WHERE scope = 'pii_vault' AND granted_at >= $1`, [testStart]).catch(() => {});
+    await query(`DELETE FROM privacy_consents WHERE scope IN ('pii_vault', 'broker_scan') AND granted_at >= $1`, [testStart]).catch(() => {});
     for (const id of autoBrokerIds) {
       await query(`DELETE FROM privacy_broker_cases WHERE broker_id = $1`, [id]).catch(() => {});
       await query(`DELETE FROM privacy_brokers WHERE id = $1`, [id]).catch(() => {});
@@ -205,6 +215,130 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     // untouched — the pass never overwrites it with a raw scan verdict.
     const owned = await svc.getCaseForBroker('test-auto-alpha');
     expect(owned.state).toBe('confirmed_removed');
+  });
+
+  // ─── Sealed identity evidence (#8333) ─────────────────────────────────────
+  // Fake identity values, distinctive enough that a substring hit on the raw
+  // JSONB column (what pg_dump writes) can only mean a plaintext copy.
+  const IDENTITY = {
+    matched_name: 'Jane Q Sealtest',
+    matched_location: 'Sealville',
+    search_url: 'https://seal-broker.example/Jane-Sealtest/Sealville',
+    listing_urls: ['https://seal-broker.example/p/jane-sealtest'],
+  };
+  const insertTestBroker = (id) => query(
+    `INSERT INTO privacy_brokers (id, name, source, confidence, enabled, created_at, updated_at)
+     VALUES ($1, $1, 'badbool', 'auto', FALSE, NOW(), NOW()) ON CONFLICT (id) DO NOTHING`, [id],
+  );
+  const rawEvidence = async (caseId) => (await query(
+    `SELECT evidence::text AS t FROM privacy_broker_cases WHERE id = $1`, [caseId],
+  )).rows[0].t;
+  const expectNoPlaintextIdentity = (text) => {
+    for (const needle of ['Sealtest', 'Sealville', 'seal-broker.example']) expect(text).not.toContain(needle);
+  };
+
+  it('stores scan identity evidence sealed, reveals it on request, and erases it on confirmed_removed', async () => {
+    await insertTestBroker('test-evidence-seal');
+    const kase = await svc.recordScanVerdict('test-evidence-seal', 'found', {
+      evidence: { match_basis: 'name+location', ...IDENTITY }, found: true,
+    });
+    // At rest (and so in every dump): no plaintext name, location, or URL.
+    expectNoPlaintextIdentity(await rawEvidence(kase.id));
+    // The API projection carries the verdict metadata + a summary, never the identity.
+    expect(kase.evidence).toEqual({ match_basis: 'name+location' });
+    expect(kase.identityEvidence).toEqual({ sealed: true, listingCount: 1 });
+    expect((await svc.revealCaseEvidence(kase.id)).evidence).toEqual(IDENTITY);
+
+    // Lifecycle transitions that restate workflow metadata carry the envelope forward.
+    await svc.transitionCase(kase.id, 'optout_in_progress', { evidence: { lane: 'web_form' } });
+    await svc.transitionCase(kase.id, 'submitted');
+    const pending = await svc.transitionCase(kase.id, 'verification_pending');
+    expect(pending.identityEvidence).toEqual({ sealed: true, listingCount: 1 });
+    expect((await svc.revealCaseEvidence(kase.id)).evidence.search_url).toBe(IDENTITY.search_url);
+
+    // The verifying re-scan's confirmed_removed erases the identity copy but
+    // keeps the non-identifying evidence, the state, and the case history.
+    const removed = await svc.transitionCase(kase.id, 'confirmed_removed', { viaRescan: true });
+    expect(removed.state).toBe('confirmed_removed');
+    expect(removed.identityEvidence).toBe(null);
+    expect(removed.evidence).toEqual({ lane: 'web_form' });
+    expect(new Date(removed.createdAt).getTime()).toBe(new Date(kase.createdAt).getTime());
+    expect(await rawEvidence(kase.id)).not.toContain('sealed_identity');
+    expect(await svc.revealCaseEvidence(kase.id)).toEqual({ caseId: kase.id, sealed: false, evidence: {} });
+  });
+
+  it('erases one case\'s identity evidence on request, keeping its state and verdict', async () => {
+    await insertTestBroker('test-evidence-erase');
+    const kase = await svc.recordScanVerdict('test-evidence-erase', 'blocked', {
+      evidence: { match_basis: 'antibot_wall', search_url: IDENTITY.search_url },
+    });
+    const cleared = await svc.clearCaseIdentityEvidence(kase.id);
+    expect(cleared).toMatchObject({ state: 'blocked', evidence: { match_basis: 'antibot_wall' }, identityEvidence: null });
+    // Gone from later API responses too.
+    const listed = (await svc.listBrokerCases()).find((c) => c.id === kase.id);
+    expect(listed.identityEvidence).toBe(null);
+    expect((await svc.revealCaseEvidence(kase.id)).evidence).toEqual({});
+    await expect(svc.clearCaseIdentityEvidence('00000000-0000-4000-8000-00000000dead')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('converts a legacy plaintext case idempotently, and a failed conversion changes nothing', async () => {
+    await insertTestBroker('test-evidence-legacy');
+    const legacyId = '00000000-0000-4000-8000-0000000833aa';
+    await query(
+      `INSERT INTO privacy_broker_cases (id, broker_id, state, found, evidence, next_recheck_at, created_at, updated_at)
+       VALUES ($1, 'test-evidence-legacy', 'found', TRUE, $2, NOW(), NOW(), NOW())`,
+      [legacyId, JSON.stringify({ match_basis: 'name+location', ...IDENTITY })],
+    );
+    const before = await rawEvidence(legacyId);
+
+    // No usable key and an unwritable .env: the conversion cannot seal, so the
+    // read that triggered it fails and the row is left exactly as it was.
+    const vaultCrypto = await import('../lib/vaultCrypto.js');
+    const blockerDir = mkdtempSync(join(tmpdir(), 'portos-8333-'));
+    writeFileSync(join(blockerDir, 'not-a-dir'), '');
+    const savedKey = process.env.PRIVACY_VAULT_KEY;
+    delete process.env.PRIVACY_VAULT_KEY;
+    vaultCrypto.__setVaultEnvPathForTests(join(blockerDir, 'not-a-dir', '.env'));
+    svc.__resetCaseEvidenceSealForTests();
+    try {
+      await expect(svc.listBrokerCases()).rejects.toThrow();
+      expect(await rawEvidence(legacyId)).toBe(before);
+    } finally {
+      process.env.PRIVACY_VAULT_KEY = savedKey;
+      vaultCrypto.__setVaultEnvPathForTests(null);
+      rmSync(blockerDir, { recursive: true, force: true });
+    }
+
+    // With the key back, the next read converts before returning anything.
+    const listed = (await svc.listBrokerCases()).find((c) => c.id === legacyId);
+    expect(listed.evidence).toEqual({ match_basis: 'name+location' });
+    expect(listed.identityEvidence).toEqual({ sealed: true, listingCount: 1 });
+    expectNoPlaintextIdentity(await rawEvidence(legacyId));
+    expect((await svc.revealCaseEvidence(legacyId)).evidence).toEqual(IDENTITY);
+    // Idempotent: a second conversion pass leaves the sealed row byte-identical
+    // (it is not re-encrypted, which would mint a new IV).
+    const sealed = await rawEvidence(legacyId);
+    svc.__resetCaseEvidenceSealForTests();
+    await svc.listBrokerCases();
+    expect(await rawEvidence(legacyId)).toBe(sealed);
+  });
+
+  it('deleting the source vault record leaves no identity copy in the case API or the stored row', async () => {
+    await insertTestBroker('test-evidence-vault');
+    const nameRec = await vault.createVaultRecord({ type: 'legal_name', label: 'Seal test name', value: IDENTITY.matched_name });
+    const kase = await svc.recordScanVerdict('test-evidence-vault', 'found', {
+      evidence: { match_basis: 'name+location', ...IDENTITY }, found: true,
+    });
+    expect(kase.identityEvidence?.sealed).toBe(true);
+
+    await vault.deleteVaultRecord(nameRec.id);
+    const after = await svc.getCaseForBroker('test-evidence-vault');
+    expect(after.state).toBe('found');
+    expect(after.identityEvidence).toBe(null);
+    expect(after.evidence).toEqual({ match_basis: 'name+location' });
+    const raw = await rawEvidence(kase.id);
+    expectNoPlaintextIdentity(raw);
+    expect(raw).not.toContain('sealed_identity');
   });
 
   it('reports scan status counts', async () => {

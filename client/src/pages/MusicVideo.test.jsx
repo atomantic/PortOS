@@ -59,6 +59,16 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   cancelMusicVideoMidiTranscription: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
+vi.mock('../hooks/useProviderModels', () => ({
+  default: () => ({
+    providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
+    setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
+  }),
+}));
+// MIDI loading/parsing is covered by useMidiNotes; this page checks the link.
+vi.mock('../hooks/useMidiNotes.js', () => ({
+  default: () => ({ status: 'idle', data: null, error: null, reload: vi.fn() }),
+}));
 vi.mock('../services/apiImageVideo.js', () => ({
   generateVideo: vi.fn(),
   listLorasFull: vi.fn(async () => [{

@@ -262,6 +262,103 @@ it('force-with-lease updates an existing snapshot branch rather than committing 
   expect(deps.writeFile.mock.calls[0][0]).toBe(join(worktreePath, '.quality.json'));
 });
 
+it('refreshes refs and rebuilds a detached worktree once after a stale lease', async () => {
+  let remoteSha = 'aa'.repeat(20);
+  let pushes = 0;
+  const git = gitDouble({
+    fetchOrigin: vi.fn(async () => { if (pushes) remoteSha = 'bb'.repeat(20); }),
+    execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') return missingShow;
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: remoteSha, stderr: '' };
+      if (args[0] === 'push' && ++pushes === 1) throw new Error('! [rejected] (stale info)');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+  });
+  const deps = testDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true, prUrl });
+  expect(git.fetchOrigin).toHaveBeenCalledTimes(2);
+  expect(git.fetchOrigin).toHaveBeenLastCalledWith(app.repoPath, { prune: true });
+  expect(deps.probePrForBranch).toHaveBeenCalledWith(app.repoPath, QUALITY_SNAPSHOT_BRANCH);
+  expect(deps.addWorktree).toHaveBeenCalledTimes(2);
+  expect(deps.addWorktree).toHaveBeenLastCalledWith(
+    ['worktree', 'add', '--detach', worktreePath, 'origin/main'], app.repoPath,
+  );
+  expect(git.execGit.mock.calls.filter(([args]) => args[0] === 'push').map(([args]) => args[1])).toEqual([
+    `--force-with-lease=refs/heads/${QUALITY_SNAPSHOT_BRANCH}:${'aa'.repeat(20)}`,
+    `--force-with-lease=refs/heads/${QUALITY_SNAPSHOT_BRANCH}:${'bb'.repeat(20)}`,
+  ]);
+  expect(deps.writeFile.mock.calls.every(([path]) => path === join(worktreePath, '.quality.json'))).toBe(true);
+  expect(git.createPR).toHaveBeenCalledTimes(1);
+});
+
+it.each(['future', 'malformed'])('refuses a %s snapshot found after a stale lease', async kind => {
+  let fetches = 0;
+  const body = kind === 'future'
+    ? JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) })
+    : '{invalid json';
+  const git = gitDouble({
+    fetchOrigin: vi.fn(async () => { fetches++; }),
+    execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') {
+        return fetches > 1 && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)
+          ? { exitCode: 0, stdout: body, stderr: '' }
+          : missingShow;
+      }
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'aa'.repeat(20), stderr: '' };
+      if (args[0] === 'push') throw new Error('! [rejected] (stale info)');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+  });
+  const deps = testDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toEqual({
+    published: false, reason: 'unsupported-format', path: '.quality.json',
+  });
+  expect(git.fetchOrigin).toHaveBeenCalledTimes(2);
+  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
+  expect(git.createPR).not.toHaveBeenCalled();
+  expect(deps.writeFile.mock.calls.every(([path]) => path === join(worktreePath, '.quality.json'))).toBe(true);
+});
+
+it('leaves a second stale lease rejection visible and retryable', async () => {
+  let remoteSha = 'aa'.repeat(20);
+  const git = gitDouble({
+    fetchOrigin: vi.fn(async () => { remoteSha = remoteSha === 'aa'.repeat(20) ? 'bb'.repeat(20) : 'cc'.repeat(20); }),
+    execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') return missingShow;
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: remoteSha, stderr: '' };
+      if (args[0] === 'push') throw new Error('! [rejected] (stale info)');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+  });
+  const deps = testDeps({ git });
+  await expect(publishAppQualitySnapshot(app, deps)).rejects.toThrow('stale info');
+  expect(git.execGit.mock.calls.filter(([args]) => args[0] === 'push')).toHaveLength(2);
+  expect(deps.addWorktree).toHaveBeenCalledTimes(2);
+  expect(git.createPR).not.toHaveBeenCalled();
+  // A failed publish cannot poison the in-process queue or mark these bytes as landed.
+  await expect(publishAppQualitySnapshot(app, deps)).rejects.toThrow('stale info');
+  expect(deps.addWorktree).toHaveBeenCalledTimes(4);
+});
+
+it('does not retry a stale lease when the refreshed PR state cannot be read', async () => {
+  const git = gitDouble({
+    execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') return missingShow;
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'aa'.repeat(20), stderr: '' };
+      if (args[0] === 'push') throw new Error('! [rejected] (stale info)');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+  });
+  const deps = testDeps({
+    git,
+    probePrForBranch: vi.fn(async () => ({ readable: false })),
+  });
+  await expect(publishAppQualitySnapshot(app, deps)).rejects.toThrow('publish PR state unavailable');
+  expect(deps.probePrForBranch).toHaveBeenCalledWith(app.repoPath, QUALITY_SNAPSHOT_BRANCH);
+  expect(deps.addWorktree).toHaveBeenCalledTimes(1);
+  expect(git.createPR).not.toHaveBeenCalled();
+});
+
 it('adopts an already-open PR when createPR reports a conflict and merges it immediately', async () => {
   const deps = testDeps({
     git: gitDouble({

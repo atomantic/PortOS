@@ -68,6 +68,16 @@ const QUEUE_SEVERITY_STYLE = {
   normal: 'border-port-border'
 };
 
+const safeExternalHttpUrl = (value) => {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+};
+
 const TYPE_CONFIG = {
   alert: { label: 'Alerts', icon: AlertTriangle, color: 'text-port-warning' },
   cos: { label: 'CoS Actions', icon: Crown, color: 'text-port-accent' },
@@ -709,6 +719,28 @@ function QueueMetaChips({ meta }) {
       </span>
     );
   }
+  if (typeof meta.appLabel === 'string' && meta.appLabel) {
+    chips.push(
+      <span key="app" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400 max-w-[14rem] truncate" title={meta.appLabel}>
+        App: {meta.appLabel}
+      </span>
+    );
+  }
+  if (typeof meta.taskStatus === 'string' && meta.taskStatus) {
+    const blocked = meta.taskStatus === 'blocked';
+    chips.push(
+      <span key="task-status" className={`text-[10px] px-1.5 py-0.5 rounded border ${blocked ? 'border-port-warning/30 bg-port-warning/10 text-port-warning' : 'border-port-border text-gray-400'}`}>
+        Task: {meta.taskStatus}
+      </span>
+    );
+  }
+  if (typeof meta.blockedCategory === 'string' && meta.blockedCategory) {
+    chips.push(
+      <span key="blocked-category" className="text-[10px] px-1.5 py-0.5 rounded border border-port-warning/30 text-port-warning">
+        Block: {meta.blockedCategory}
+      </span>
+    );
+  }
   if (meta.alertType) {
     chips.push(
       <span key="alert" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
@@ -822,6 +854,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
+  const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
   const promoteTargets = Array.isArray(item.promoteTargets) ? item.promoteTargets : [];
   const goalOptions = Array.isArray(item.goalOptions) ? item.goalOptions : [];
   // The goal target needs a goalId, so it's rendered as a picker rather than a
@@ -859,6 +892,16 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           <p className="text-xs text-gray-500 mt-0.5 line-clamp-2 break-words">{item.summary}</p>
         )}
         <QueueMetaChips meta={item.meta} />
+        {pullRequestUrl && (
+          <a
+            href={pullRequestUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 inline-flex min-h-[32px] items-center gap-1 text-xs text-port-accent hover:underline"
+          >
+            <ExternalLink size={12} /> Open pull request
+          </a>
+        )}
         {item.timestamp && (
           <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
             <Clock3 size={12} />
@@ -1189,6 +1232,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
     : [];
   const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
   const externalState = item.meta?.externalState;
+  const pullRequestUrl = safeExternalHttpUrl(item.meta?.reviewLoopPRUrl);
   const updateDraft = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
   const resolve = async (operation, input = {}) => {
     const ok = await onResolve(item, operation, input);
@@ -1208,10 +1252,14 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
         <div className="space-y-2">
           <p className="text-sm text-gray-300">{item.summary || 'No additional context.'}</p>
           <div className="flex flex-wrap gap-2 text-xs">
-            {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Local: {localStatus}</span>}
+            {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Commitment: {localStatus}</span>}
+            {item.meta?.taskStatus && <span className={`rounded border px-2 py-1 ${item.meta.taskStatus === 'blocked' ? 'border-port-warning/30 text-port-warning' : 'border-port-border text-gray-400'}`}>Task: {item.meta.taskStatus}</span>}
+            {item.meta?.blockedCategory && <span className="rounded border border-port-warning/30 px-2 py-1 text-port-warning">Block: {item.meta.blockedCategory}</span>}
             {externalState && <span className="rounded border border-port-border px-2 py-1 text-gray-400">External: {externalState}</span>}
             {item.meta?.externalSource && <span className="rounded border border-port-border px-2 py-1 text-gray-400">Source: {item.meta.externalSource}</span>}
+            {item.meta?.appLabel && <span className="rounded border border-port-border px-2 py-1 text-gray-400">App: {item.meta.appLabel}</span>}
           </div>
+          {pullRequestUrl && <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:underline"><ExternalLink size={14} /> Open pull request</a>}
         </div>
 
         {(isThread || isTodo) && (

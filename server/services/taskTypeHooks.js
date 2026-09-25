@@ -51,6 +51,7 @@
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { TRACKER_FILING_TASK_TYPES, CONCRETE_WORK_TRACKERS } from '../lib/workTracker.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
+import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 
 // taskType → { load }. `load` is the module import thunk; a module may export
 // either or both hooks, and a missing export means "no hook of that kind for this
@@ -141,10 +142,13 @@ export function resolveTaskHookType(task) {
  * exactly like pipeline/media jobs.
  *
  * Deliberately NOT every self-improvement type: accessibility / security / code-quality
- * / plan-task / claim-issue / claim-work / jira-sprint-manager / do-replan all COMMIT
- * (fixing tasks, /claim flows, or a triage that commits PLAN.md), so their commit
- * criterion is real and must stay — exempting them would MASK genuine failures. Only
- * complete tasks whose DEFAULT contract is structurally no-commit belong here.
+ * / jira-sprint-manager / do-replan all COMMIT (fixing tasks, or a triage that commits
+ * PLAN.md), so their commit criterion is real and must stay — exempting them would
+ * MASK genuine failures. The claim flows (plan-task / claim-issue / claim-issue-gitlab /
+ * claim-issue-jira / claim-work) also commit, but in a worktree the agent itself cuts —
+ * they are exempted from the PARENT-workspace commit probe by their own predicate
+ * (`isClaimFlowDispatch` below), not by this set. Only complete tasks whose DEFAULT
+ * contract is structurally no-commit belong here.
  *
  * pr-watcher is intentionally excluded on a different axis: it is a review-of-others'-PRs
  * TEMPLATE — its shipped prompt explicitly says "the operator customizes this prompt to
@@ -200,6 +204,36 @@ export function isNonCommittingCoordinatorTask(task) {
   if (task?.metadata?.prRemediationFollowUp === true || task?.metadata?.prRemediationFollowUp === 'true') return true;
   const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
   return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
+}
+
+/**
+ * Whether a task runs a CLAIM flow — plan-task / claim-issue / claim-issue-gitlab /
+ * claim-issue-jira / claim-work — whose prompt owns its OWN claim/<item> worktree
+ * and forge lifecycle (worktree, PR/MR, merge, cleanup) while CoS keeps
+ * `useWorktree`/`openPR` false so it never provisions a nested worktree.
+ *
+ * NOT a `declaresNoCommitCriterion` shape, on purpose. A claim run's deliverable
+ * IS a commit — but it lands in the claim worktree the AGENT cut, not in the
+ * workspace `evaluateSuccessCriteria` probes (the app's live checkout for a
+ * first-run claim, or the claim tree only on a `claimResumeInPlace` continuation).
+ * The run-window commit probe is workspace-scoped, so on the common path it sees
+ * nothing and a declared `validationPassed: false` OVERRIDES the exit code in
+ * task-learning — scoring every successful claim run a failure and pinning the
+ * type's bucket at ~0% (the #2696 artifact arriving by a new route). The
+ * goal-fidelity gate still judges claim runs against the claimed issue's
+ * requirements (its claimFlow branch), so this exemption trades a redundant
+ * commit probe for the exit code without losing the fidelity review.
+ *
+ * Resolved the same way `evaluateGoalFidelity` resolves claimFlow (and the same
+ * analysisType → taskAnalysisType → taskType chain the learning bucket uses), so
+ * a LIVE queue task, the archived agent projection, and the bucket agree. The
+ * explicit `claimFlow` marker covers a schedule queued before the marker existed
+ * and a manually marked claim (a dependency task also marked claimFlow); the
+ * type set is the backstop for records carrying only the scheduled type.
+ */
+export function isClaimFlowDispatch(task) {
+  if (isTruthyMeta(task?.metadata?.claimFlow)) return true;
+  return CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
 }
 
 /**

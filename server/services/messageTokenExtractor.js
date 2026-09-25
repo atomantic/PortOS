@@ -209,9 +209,6 @@ export async function getToken(provider) {
 }
 
 // Convenience aliases
-export const getOutlookToken = () => getToken('outlook');
-export const getTeamsToken = () => getToken('teams');
-
 /**
  * Get token info without the raw token value (for status/debug display).
  */

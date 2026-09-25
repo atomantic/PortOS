@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useAutoRefetch } from './useAutoRefetch';
@@ -8,6 +9,25 @@ const setVisibility = (state) => {
 
 const fireVisibilityChange = () => {
   document.dispatchEvent(new Event('visibilitychange'));
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A fetchFn whose every call stays pending until the test settles it, with a
+// live count of overlapping calls.
+const deferredFetch = () => {
+  const calls = [];
+  let active = 0;
+  let maxActive = 0;
+  const fn = vi.fn(() => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; }).finally(() => { active -= 1; });
+    calls.push({ resolve });
+    return promise;
+  });
+  return { fn, calls, maxActive: () => maxActive };
 };
 
 describe('useAutoRefetch', () => {
@@ -331,5 +351,108 @@ describe('useAutoRefetch', () => {
     await act(async () => { await result.current.refetch(); });
     expect(result.current.data).toBeNull();
     expect(compare).not.toHaveBeenCalled();
+  });
+
+  describe('single-flight', () => {
+    it('drops interval and visibility ticks while a fetch is pending', async () => {
+      const { fn, calls } = deferredFetch();
+      const { result } = renderHook(() => useAutoRefetch(fn, 15));
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await sleep(80); // several interval ticks
+      act(() => fireVisibilityChange());
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await act(async () => { calls[0].resolve('first'); });
+      expect(result.current.data).toBe('first');
+      await waitFor(() => expect(fn).toHaveBeenCalledTimes(2)); // polling resumes
+    });
+
+    it('coalesces refetches during a pending fetch into one trailing fetch', async () => {
+      const { fn, calls, maxActive } = deferredFetch();
+      const { result } = renderHook(() => useAutoRefetch(fn, 60_000));
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      let p1;
+      let p2;
+      act(() => {
+        p1 = result.current.refetch();
+        p2 = result.current.refetch();
+      });
+      expect(p2).toBe(p1);
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await act(async () => { calls[0].resolve('older'); });
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(result.current.data).toBe('older');
+
+      await act(async () => { calls[1].resolve('newer'); });
+      await expect(p1).resolves.toBe('newer');
+      expect(result.current.data).toBe('newer');
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(maxActive()).toBe(1);
+    });
+
+    it('serializes pollOnly fetches so side-effect writes land in request order', async () => {
+      const { fn, calls, maxActive } = deferredFetch();
+      const writes = [];
+      const fetchFn = () => fn().then((v) => { writes.push(v); });
+      const { result } = renderHook(() => useAutoRefetch(fetchFn, 10, { pollOnly: true }));
+
+      act(() => { result.current.refetch(); });
+      await sleep(50);
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await act(async () => { calls[0].resolve(1); });
+      await waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
+      await act(async () => { calls[1].resolve(2); });
+      expect(writes).toEqual([1, 2]);
+      expect(maxActive()).toBe(1);
+    });
+
+    it('abandons a queued trailing refetch on unmount', async () => {
+      const { fn, calls } = deferredFetch();
+      const { result, unmount } = renderHook(() => useAutoRefetch(fn, 60_000));
+      let trailing;
+      act(() => { trailing = result.current.refetch(); });
+
+      unmount();
+      await expect(trailing).resolves.toBeUndefined();
+      await act(async () => { calls[0].resolve('late'); });
+      await sleep(20);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps polling after a fetchFn that throws synchronously', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fetchFn = vi.fn()
+        .mockImplementationOnce(() => { throw new Error('sync'); })
+        .mockResolvedValue('ok');
+      const { result } = renderHook(() => useAutoRefetch(fetchFn, 15));
+      await waitFor(() => expect(result.current.data).toBe('ok'));
+      warn.mockRestore();
+    });
+
+    it('applies the initial fetch under StrictMode remount', async () => {
+      const { fn, calls } = deferredFetch();
+      const { result } = renderHook(() => useAutoRefetch(fn, 60_000), { wrapper: StrictMode });
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await act(async () => { calls[0].resolve('first'); });
+      expect(result.current.data).toBe('first');
+      expect(result.current.loading).toBe(false);
+    });
+
+    it('drops a pending poll result once polling is disabled', async () => {
+      const { fn, calls } = deferredFetch();
+      const { result, rerender } = renderHook(
+        ({ enabled }) => useAutoRefetch(fn, 60_000, { enabled }),
+        { initialProps: { enabled: true } },
+      );
+      rerender({ enabled: false });
+
+      await act(async () => { calls[0].resolve('stale'); });
+      expect(result.current.data).toBeNull();
+    });
   });
 });

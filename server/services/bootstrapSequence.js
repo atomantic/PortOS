@@ -33,6 +33,38 @@ const logFailure = (label) => (err) => console.error(`❌ ${label}: ${err?.messa
 const logFailureWithStack = (label) => (err) => console.error(`❌ ${label}: ${err?.stack ?? err}`);
 
 /**
+ * Steps the server boot smoke (`scripts/smoke-boot.js`, #8343) replaces with
+ * no-ops, per phase. The smoke proves boot survives; these are the steps that
+ * would make it DO something — arm schedulers, spawn or recover CoS agents,
+ * replay crash recovery, watch share buckets, poll or sync peers, start a local
+ * LLM backend. Everything else (migrations, toolkit construction, store
+ * checks, the media queue, the DB gate, listen) still runs, because a throw in
+ * any of those is exactly what the smoke exists to catch.
+ */
+export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
+  preRoute: Object.freeze(['ensureLocalLlmBackend', 'initAutoFixer', 'startSpawner']),
+  postRoute: Object.freeze([
+    'startBackgroundServices',
+    'recoverStuckClassifications',
+    'recoverInterruptedRepoClones',
+    'initSharing',
+    'recoverCreativeDirectorProjects'
+  ]),
+  postListen: Object.freeze(['relayUnloggedBrainRecords', 'startPolling', 'initSyncOrchestrator'])
+});
+
+/**
+ * Return `steps` with the phase's smoke-disabled steps swapped for no-ops when
+ * `smokeBoot` is set; otherwise `steps` unchanged.
+ */
+export const gateStepsForSmokeBoot = (steps, phase, smokeBoot) => {
+  if (!smokeBoot) return steps;
+  const disabled = SMOKE_BOOT_DISABLED_STEPS[phase];
+  if (!disabled) throw new Error(`Unknown boot phase: ${phase}`);
+  return { ...steps, ...Object.fromEntries(disabled.map((name) => [name, () => undefined])) };
+};
+
+/**
  * Pre-route boot ordering (`bootstrapServices`).
  *
  * Load-bearing points, in order:
@@ -358,12 +390,15 @@ export const runPostRouteSequence = ({
  * Inside the `listen()` callback: announce the URLs, arm the process-level
  * safety net, then backfill origin tags before peer polling + sync start — the
  * backfill stamps `originInstanceId` on legacy rows, and polling a peer before
- * it completes would ship untagged records.
+ * it completes would ship untagged records. The brain relay sweep (#8351) also
+ * waits for the backfill, so the entries it appends carry the stamped origin;
+ * it runs in the background because nothing after it reads its result.
  */
 export const runPostListenSequence = ({
   announceListening,
   setupProcessErrorHandlers,
   backfillOriginInstanceId,
+  relayUnloggedBrainRecords,
   startPolling,
   initSyncOrchestrator
 }) => {
@@ -371,6 +406,7 @@ export const runPostListenSequence = ({
   setupProcessErrorHandlers();
   return bestEffort(
     Promise.resolve(backfillOriginInstanceId()).then(() => {
+      bestEffort(relayUnloggedBrainRecords(), logFailure('Brain relay sweep failed'));
       startPolling();
       initSyncOrchestrator();
     }),

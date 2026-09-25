@@ -1,3 +1,5 @@
+import http from 'node:http';
+import { once } from 'node:events';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock all dependencies
@@ -19,7 +21,8 @@ vi.mock('./instanceIdentity.js', () => ({
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
   getCurrentSeq: vi.fn(() => 0),
-  compactLog: vi.fn().mockResolvedValue(0)
+  compactLog: vi.fn().mockResolvedValue(0),
+  retryPendingAppends: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
@@ -88,7 +91,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn(async () => ({})),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),
-  PATHS: { data: '/mock/data' },
+  writeFileGuarded: vi.fn().mockResolvedValue(),
+  PATHS: { data: '/mock/data', images: '/mock/data/images' },
   dataPath: (name) => `/mock/data/${name}`
 }));
 vi.mock('../lib/asyncMutex.js', () => ({
@@ -101,6 +105,7 @@ vi.mock('../lib/peerHttpClient.js', async (importOriginal) => {
   return { ...actual, peerFetch: vi.fn(actual.peerFetch) };
 });
 vi.mock('fs/promises', () => ({
+  access: vi.fn().mockRejectedValue(new Error('missing')),
   writeFile: vi.fn().mockResolvedValue(),
   rename: vi.fn().mockResolvedValue()
 }));
@@ -119,7 +124,7 @@ vi.mock('./brainTombstoneGc.js', () => ({
   sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
 
-import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
 import { sweepTombstones } from './sharing/tombstoneGc.js';
 import { sweepBrainTombstones } from './brainTombstoneGc.js';
 import { getPeers } from './instances.js';
@@ -141,6 +146,7 @@ import {
   BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS,
 } from './syncOrchestrator.js';
 
+const nativeFetch = globalThis.fetch;
 const mockFetch = vi.fn();
 
 describe('syncOrchestrator', () => {
@@ -186,6 +192,77 @@ describe('syncOrchestrator', () => {
   });
 
   describe('syncWithPeer', () => {
+    it('records a stalled HTTP body failure, settles progress, and allows the next sync', async () => {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.flushHeaders();
+      });
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      const peer = { ...mockPeer, address: '127.0.0.1', port: server.address().port,
+        syncCategories: { brain: true, memory: false } };
+      let headersReceived;
+      const received = new Promise(resolve => { headersReceived = resolve; });
+      mockFetch.mockImplementationOnce(async (...args) => {
+        const response = await nativeFetch(...args);
+        headersReceived();
+        return response;
+      });
+      try {
+        const sync = syncWithPeer(peer);
+        const rejected = expect(sync).rejects.toMatchObject({ code: 'PEER_BODY_IDLE_TIMEOUT' });
+        await received;
+        await vi.advanceTimersByTimeAsync(60000);
+        await rejected;
+        expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+          [peer.instanceId]: expect.objectContaining({ lastSyncError: 'Peer response body stalled' })
+        }));
+        expect(instanceEvents.emit).toHaveBeenCalledWith('sync:progress', expect.objectContaining({
+          phase: 'complete', peerId: peer.instanceId, error: 'Peer response body stalled'
+        }));
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], hasMore: false }) });
+        await syncWithPeer(peer);
+        expect(instanceEvents.emit.mock.calls.filter(([, event]) => event.phase === 'start')).toHaveLength(2);
+        expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+          phase: 'complete', error: null
+        }));
+      } finally {
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+    });
+
+    it('reports an avatar body stall without persisting partial image bytes', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/data/images/')) return new Response(new ReadableStream({}));
+        return { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) };
+      });
+      const peer = { ...mockPeer, syncCategories: { brain: false, memory: false, character: true } };
+      const sync = syncWithPeer(peer);
+      await vi.advanceTimersByTimeAsync(60000);
+      await sync;
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+        phase: 'complete', error: 'character: Peer response body stalled'
+      }));
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
+    it.each([
+      ['non-success response', () => new Response('unavailable', { status: 503 })],
+      ['malformed JSON', () => new Response('{')],
+    ])('retains the no-op behavior for a %s', async (_name, response) => {
+      mockFetch.mockImplementation(async () => response());
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: false } });
+      expect(result.brain.totalApplied).toBe(0);
+      expect(applyBrainChanges).not.toHaveBeenCalled();
+      expect(instanceEvents.emit).toHaveBeenLastCalledWith('sync:progress', expect.objectContaining({
+        phase: 'complete', error: null
+      }));
+    });
+
     it('skips peers without instanceId', async () => {
       await syncWithPeer({ ...mockPeer, instanceId: undefined });
       expect(mockFetch).not.toHaveBeenCalled();
@@ -563,7 +640,7 @@ describe('syncOrchestrator', () => {
       expect(updatePeer).toHaveBeenCalledWith('local-peer-row', { schemaGaps: null });
     });
 
-    it('records a schema gap and stops draining when the sender is ahead on catalog', async () => {
+    it.each(['ahead', 'behind'])('records a %s catalog gap without advancing cursors, then retries', async (direction) => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -575,7 +652,8 @@ describe('syncOrchestrator', () => {
       });
       const mismatch = new Error('catalog ahead');
       mismatch.code = 'CATALOG_SCHEMA_VERSION_AHEAD';
-      mismatch.diff = { ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }], behind: [] };
+      const gap = { category: 'catalog', senderV: direction === 'ahead' ? 99 : 0, receiverV: 10 };
+      mismatch.diff = { ahead: [], behind: [], [direction]: [gap] };
       applyCatalogChanges.mockRejectedValueOnce(mismatch);
 
       const { updatePeer } = await import('./instances.js');
@@ -586,17 +664,26 @@ describe('syncOrchestrator', () => {
       // Only one apply attempt — we stop draining on the block (no hasMore loop).
       expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
       expect(result.catalog.blockedBySchema).toBeTruthy();
+      expect(result.catalog.catalogSeqs.ingredients).toBeUndefined();
       // Gap persisted on the local peer row under schemaGaps.catalog.
       expect(updatePeer).toHaveBeenCalledWith(
         'local-peer-row',
         expect.objectContaining({
           schemaGaps: expect.objectContaining({
             catalog: expect.objectContaining({
-              ahead: [{ category: 'catalog', senderV: 99, receiverV: 1 }],
+              [direction]: [gap],
             }),
           }),
         }),
       );
+      // The next cycle retries the same rows after peers upgrade.
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+        ingredients: [{ id: 'x' }], maxSequences: { ingredients: '5' }, hasMore: false,
+      }) });
+      applyCatalogChanges.mockResolvedValueOnce({ ingredients: { inserted: 1 } });
+      const retry = await syncWithPeer(catalogPeer);
+      expect(mockFetch.mock.calls.at(-1)[0]).toContain('since[ingredients]=0');
+      expect(retry.catalog.catalogSeqs.ingredients).toBe('5');
     });
   });
 
@@ -966,6 +1053,24 @@ describe('syncOrchestrator', () => {
       expect(applyBrainSnapshot).toHaveBeenCalledTimes(1);
       // delta(0) + reconcile merge(3 upd + 1 del) = 4
       expect(result.brain.totalApplied).toBe(4);
+    });
+
+    it('does NOT cache the peer checksum when the snapshot relay append fails (#8351)', async () => {
+      // A cached checksum short-circuits every later cycle, so caching it over
+      // a merge whose relay never reached our log would strand those records
+      // outside the log for good. The failure must leave the cursor untouched.
+      getBrainChecksum.mockResolvedValue('local-AAA');
+      applyBrainSnapshot.mockRejectedValueOnce(new Error('disk full'));
+      routeFetch({
+        checksum: { checksum: 'peer-BBB' },
+        snapshot: { records: { links: {} }, checksum: 'peer-BBB' },
+      });
+      await expect(syncWithPeer(mockPeer)).rejects.toThrow('disk full');
+
+      const cachedPeerChecksum = atomicWrite.mock.calls
+        .filter(([path]) => String(path).includes('instances_sync_cursors'))
+        .some(([, cursors]) => cursors?.[mockPeer.instanceId]?.brainChecksum === 'peer-BBB');
+      expect(cachedPeerChecksum).toBe(false);
     });
 
     it('SKIPS the snapshot fetch when peer checksum equals our local checksum', async () => {

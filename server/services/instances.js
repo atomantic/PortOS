@@ -130,11 +130,12 @@ function sameAuth(a, b) {
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
   if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
-    && !('tcAddress' in peer)) {
+    && !('tcAddress' in peer) && !('syncSecret' in peer)) {
     return peer;
   }
   const {
     auth: _auth,
+    syncSecret: _syncSecret,
     mediaProvider: _mediaProvider,
     mediaProviderStatus: _mediaProviderStatus,
     tcAddress: _tcAddress,
@@ -164,8 +165,8 @@ export function sanitizePeerForClient(peer) {
   // separately, so masking here would hide the stored selection: every box on a
   // `syncEnabled: false` peer would read unchecked, and ticking one would
   // silently reactivate every other category still true underneath it.
-  const { tcAddress: _tcAddress, ...safePeer } = peer;
-  return { ...safePeer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
+  const { tcAddress: _tcAddress, syncSecret: _syncSecret, ...safePeer } = peer;
+  return { ...safePeer, auth, hasSyncSecret: Boolean(peer.syncSecret), syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
 }
 
 /**
@@ -518,6 +519,25 @@ export async function updatePeer(id, updates) {
   const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
+    if (updates.syncSecret !== undefined) {
+      if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < 32 || updates.syncSecret.length > 256)) {
+        throw new Error('Peer sync secret must contain 32 to 256 characters');
+      }
+      if (updates.syncSecret !== peer.syncSecret) {
+        peer.syncSecret = updates.syncSecret;
+        // The pair token is derived from this secret, so the receiver's earlier
+        // confirmation no longer applies: present Basic again (when stored)
+        // until the next probe re-confirms, and reconnect the relay with the
+        // new headers (#8356).
+        peer.peerAuthAccepted = false;
+        authChanged = true;
+      }
+      // Entering the pair secret is the local inbound-admission action.
+      if (peer.syncSecret && !peer.directions?.includes('inbound')) {
+        const directions = Array.isArray(peer.directions) && peer.directions.length ? peer.directions : ['outbound'];
+        peer.directions = [...directions, 'inbound'];
+      }
+    }
     if (updates.name !== undefined) peer.name = validName(updates.name, peer.name);
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
@@ -818,6 +838,13 @@ export async function probePeer(peer) {
     // Surface "reachable but needs a credential" distinctly from plain offline.
     // Cleared on any successful probe (including after the user adds the password).
     entry.authRequired = authRequired;
+    // Peer credential handshake (#8356). Latch on the receiver's confirmation
+    // that this probe's pair token verified; after that peerFetch stops sending
+    // the stored Basic password. A 401/403 unlatches, so a receiver that loses
+    // its side of the pairing (or is downgraded) gets Basic again next probe.
+    // Other failures (timeouts, offline) keep the last answer.
+    if (status === 'online') entry.peerAuthAccepted = lastHealth?.peerAuth?.accepted === true;
+    else if (authRequired) entry.peerAuthAccepted = false;
     entry.lastApps = remoteApps ?? entry.lastApps ?? null;
     entry.remoteSyncSeqs = remoteSyncSeqs ?? entry.remoteSyncSeqs ?? null;
     if (normalizePeerMediaProviderConfig(entry).enabled) {
@@ -825,7 +852,7 @@ export async function probePeer(peer) {
     } else {
       delete entry.mediaProviderStatus;
     }
-    if (remoteInstanceId) entry.instanceId = remoteInstanceId;
+    if (remoteInstanceId && (!entry.syncSecret || !entry.instanceId)) entry.instanceId = remoteInstanceId;
     if (status === 'online') entry.version = remoteVersion;
     // Auto-update name from hostname if current name is just an IP address
     const remoteHostname = validName(lastHealth?.hostname, null);
@@ -907,12 +934,37 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
+    // instanceId is public (GET /api/system/health returns it unauthenticated),
+    // so a match on instanceId alone does not prove the caller IS that peer —
+    // only that it knows a public value. Track whether the match instead came
+    // through the address+port fallback below, where the caller's address is
+    // already part of the match.
+    let matchedByAddress = false;
     // Fallback: check by address + port
     if (!existing) {
       existing = data.peers.find(p => p.address === address && p.port === port);
+      matchedByAddress = true;
     }
 
     const normalizedHost = validHost(host);
+
+    if (existing?.syncSecret) return { created: false, peer: existing };
+
+    // A forged announce: instanceId matches a stored peer, but the caller's
+    // source address does not match the stored one. Record the sighting only
+    // — never let it teach host/port/name/status, or an attacker who merely
+    // reads a peer's public instanceId could redirect our future requests
+    // (and the peer's Basic credential) to a host they control.
+    // Exempt tailcat: its stored `address` is intentionally the LOCAL forward's
+    // loopback address, never the remote caller's — a mismatch there is the
+    // normal case, not a forgery signal, and its host/port are already pinned
+    // to the local forward by the `transport !== 'tailcat'` guards below.
+    if (existing && !matchedByAddress && existing.transport !== 'tailcat' && existing.address !== address) {
+      console.warn(`⚠️ Peer announce instanceId matched but address mismatched (expected ${existing.address}, got ${address}) — ignoring host/port/name update`);
+      existing.lastSeen = new Date().toISOString();
+      instanceEvents.emit('peers:updated', data.peers);
+      return { created: false, peer: existing };
+    }
 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
@@ -1070,6 +1122,8 @@ function sanitizeSyncCategories(input) {
  * but this keeps a misbehaving peer from churning our state).
  */
 export async function applyReciprocalSync(instanceId, categories, { fullSync } = {}) {
+  // The admitted peer's direction and categories are machine-local consent.
+  // Anonymous reciprocal callbacks must never broaden or revoke them.
   const sanitized = sanitizeSyncCategories(categories);
   // A fullSync-only signal (peer asking us to mirror everything) is valid even
   // if the category map didn't sanitize to anything actionable. An explicit
@@ -1084,7 +1138,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
   let changed = false;
   const peer = await withData(async (data) => {
     const entry = data.peers.find(p => p.instanceId === instanceId);
-    if (!entry) return null;
+    if (!entry || entry.syncSecret) return null;
     // Default the baseline so a partial stored map doesn't make absent-vs-false
     // diverge — otherwise sanitized adding `goals:false` to a `prev` missing
     // `goals` reads as a change (`false !== undefined`) and defeats the guard.

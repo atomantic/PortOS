@@ -269,6 +269,31 @@ export async function detachBindingToConnection({ bindingId, connection }) {
   });
 }
 
+/**
+ * Fold duplicate service instances into one (`planServiceInstanceMerges`):
+ * write the survivor, move every binding off the folded rows onto it (each on
+ * the variant key the plan freed), then delete the folded rows — all or
+ * nothing, so a crash never leaves a binding on a deleted row. The delete is
+ * guarded by the same "no binding names it" rule as {@link deleteConnection}.
+ */
+export async function mergeServiceInstances({ keeper, absorbedIds, bindingMoves }) {
+  await withTransaction(async (client) => {
+    await upsertConnection(client, keeper);
+    for (const { bindingId, variantKey } of bindingMoves) {
+      await client.query(
+        `UPDATE ai_harness_bindings SET connection_id = $1, variant_key = $2, revision = revision + 1, updated_at = NOW()
+          WHERE id = $3`,
+        [keeper.id, variantKey, bindingId],
+      );
+    }
+    await client.query(
+      `DELETE FROM ai_connections WHERE id = ANY($1::uuid[])
+          AND NOT EXISTS (SELECT 1 FROM ai_harness_bindings WHERE connection_id = ai_connections.id)`,
+      [absorbedIds],
+    );
+  });
+}
+
 /** Hard-delete an orphan connection. Refused while a binding still names it. */
 export async function deleteConnection(connectionId) {
   const { rows } = await query('SELECT 1 FROM ai_harness_bindings WHERE connection_id = $1 LIMIT 1', [connectionId]);

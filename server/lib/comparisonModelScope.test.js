@@ -108,14 +108,22 @@ describe('providerCatalogSlugs', () => {
     const inventory = Object.values(providers.providers).map(provider => ({ models: provider.models || [] }));
     // Both provider ids and observations can carry gateway/vendor namespaces,
     // version spellings, or free-tier suffixes. Compare the canonical identity
-    // on both sides; the PortOS seed is intentionally a small sourced set, not
-    // the retired external benchmark catalog's 30+ model inventory.
+    // on both sides. The public calibration cohort also includes models that
+    // are not in the shipped provider defaults.
     const known = new Set(catalog.observations.map(row => catalogSlugForProviderModel(row.model)).filter(Boolean));
     const matched = [...providerCatalogSlugs(inventory)].filter(slug => known.has(slug));
     expect(known.size).toBeGreaterThan(0);
-    expect(matched.sort()).toEqual([...known].sort());
+    expect(matched.length).toBeGreaterThan(20);
     // Keep coverage anchored across a subscription model and a free provider.
     expect(matched).toContain('grok-4.7');
     expect(matched).toContain('muse-spark-1.3');
   });
+});
+
+it('preserves release identities, dated snapshots, and Bedrock weight aliases', () => {
+  for (const id of ['qwen3-max', 'qwen3-max-thinking', 'kimi-k2-thinking', 'sonar-reasoning', 'ling-3.0-flash-fin', 'gpt-4o-2024-08-06']) expect(catalogSlugForProviderModel(id)).toBe(id);
+  expect(catalogSlugForProviderModel('qwen3-max-high')).toBe('qwen3-max');
+  expect(catalogSlugForProviderModel('amazon-bedrock/us.meta.llama4-maverick-17b-instruct-v1:0')).toBe('llama-4-maverick');
+  expect(catalogSlugForProviderModel('amazon-bedrock/nvidia.nemotron-super-3-120b')).toBe('nemotron-3-super-120b-a12b');
+  expect(catalogSlugForProviderModel('gpt-oss:20b')).toBe('gpt-oss-20b');
 });

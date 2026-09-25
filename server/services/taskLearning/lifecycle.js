@@ -9,7 +9,7 @@
 
 import { cosEvents, emitLog } from './store.js';
 import { recordTaskCompletion, recalculateModelTierMetrics } from './metrics.js';
-import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
+import { declaresNoCommitCriterion, isClaimFlowDispatch } from '../taskTypeHooks.js';
 import { isAgentHandoff } from '../../lib/agentOutcome.js';
 
 // A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
@@ -25,8 +25,16 @@ import { isAgentHandoff } from '../../lib/agentOutcome.js';
 // backfill also drops the fossil off a tracker-filing run (`worktreeChangesExpected: false`,
 // e.g. a reference-watch run on a github-tracker app) — the identical artifact, just carried
 // on a per-task flag instead of the static type set (#3273).
+//
+// CLAIM flows (plan-task / claim-issue / claim-issue-gitlab / claim-issue-jira /
+// claim-work) carry the same fossil for the same reason: their commits land in the
+// claim/<item> worktree the agent cuts, so the parent-workspace probe stamped
+// `validationPassed: false` on successful runs. Keyed on `isClaimFlowDispatch`
+// (not declaresNoCommitCriterion, which claim flows deliberately do NOT satisfy)
+// so a backfill re-recording an archived claim run drops the fossil instead of
+// restoring the poisoned bucket the claim-flow purge migration removed.
 function withoutStaleCoordinatorVerdict(agent, task) {
-  if (!declaresNoCommitCriterion(task)) return agent;
+  if (!declaresNoCommitCriterion(task) && !isClaimFlowDispatch(task)) return agent;
   if (typeof agent?.result?.validationPassed !== 'boolean') return agent;
   return { ...agent, result: { ...agent.result, validationPassed: null } };
 }
@@ -57,8 +65,12 @@ export function initTaskLearning() {
     // the SAME task type is a local diagnostic signal. A coordinator is parked
     // immediately; Layered Intelligence decides later whether it supports a
     // concrete planned fix.
-    const { observeAgentChurn } = await import('../agentChurn.js');
-    await observeAgentChurn(agent, task).catch(err => {
+    const churnModule = await import('../agentChurn.js').catch(() => {
+      console.error('❌ 🔁 TaskLearning/CoS churn: Failed to load churn observer');
+      return null;
+    });
+    if (!churnModule) return;
+    await churnModule.observeAgentChurn(agent, task).catch(err => {
       console.error(`❌ 🔁 CoS churn: Failed to observe completion: ${err.message}`);
     });
   });

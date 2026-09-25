@@ -294,6 +294,17 @@ const identityKey = ({ kind, transports, credentials }) => JSON.stringify([
 ]);
 
 /**
+ * Whether a route of backend kind `routeKind` may sit on a connection of
+ * `connectionKind`. Equal kinds, plus one widening: a direct `api` record reads
+ * back as kind `api` even when its endpoint IS a hosted gateway's (the shipped
+ * `nvidia-nim` record holds the key its OpenCode wrappers use), so a `gateway:`
+ * service instance may hold it. The transport and credential checks below still
+ * have to pass — the kind alone never places a route.
+ */
+const routeKindFitsConnection = (routeKind, connectionKind) => routeKind === connectionKind
+  || (routeKind === 'api' && typeof connectionKind === 'string' && connectionKind.startsWith('gateway:'));
+
+/**
  * Whether a stored connection still CONTAINS the backend a route describes.
  *
  * A provider record names exactly one endpoint, so a route's profile always
@@ -306,7 +317,8 @@ const identityKey = ({ kind, transports, credentials }) => JSON.stringify([
  *
  * Containment, precisely:
  *
- *   - `kind` matches exactly — a route never migrates between backend kinds.
+ *   - `kind` matches — a route never migrates between backend kinds, save a
+ *     direct `api` record on a `gateway:` instance ({@link routeKindFitsConnection}).
  *   - The route's transport protocol is DECLARED by the connection at the same
  *     `baseUrl`. A route declaring no transport at all matches only a
  *     connection that declares none either: "names no endpoint" must never
@@ -324,7 +336,7 @@ const identityKey = ({ kind, transports, credentials }) => JSON.stringify([
  * reconciliation pass will judge it by.
  */
 export function routeBelongsOnConnection(profile, connection) {
-  if (!connection || profile.kind !== connection.kind) return false;
+  if (!connection || !routeKindFitsConnection(profile.kind, connection.kind)) return false;
   const declared = connection.transports || {};
   const transports = Object.entries(profile.transports || {});
   if (transports.length === 0) return Object.keys(declared).length === 0;

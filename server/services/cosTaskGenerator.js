@@ -508,6 +508,7 @@ export async function buildClaimWorkTask(app, {
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
       claimCommentGate: promptTaskType === 'claim-issue',
+      enforceIsolation: promptTaskType.startsWith('claim-issue'),
     });
 
   // Mirror the scheduler: inherit the delegated flow's isolation posture so the
@@ -559,7 +560,7 @@ async function resolveClaimReviewerPrompt(app) {
     csv,
     taskMetadata: reviewerConfigMetadata(config),
     effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels),
-    localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts),
+    localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
   };
 }
 
@@ -945,10 +946,12 @@ export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, ad
  * autonomous action budget.
  */
 async function spawnPriority0OnDemand(ctx) {
-  const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
+  const { state, availableSlots, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
   const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => tasksToSpawn.length >= availableSlots,
+    projectCapacityExhausted: (appId) =>
+      (spawnProjectCounts[appId || '_self'] || 0) >= perProjectLimit,
     canSpawn: (task) => canSpawnTask(task),
     emitSpawn: (task) => {
       tasksToSpawn.push(task);

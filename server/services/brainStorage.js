@@ -456,8 +456,7 @@ export async function create(type, recordData) {
   // Fresh uuid → no read-modify-write; saveOne queues per-id internally.
   await store.saveOne(id, record);
   brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendChange('create', type, id, record, originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for create ${type}/${id}: ${err.message}`));
+  await brainSyncLog.appendLocalChanges([{ op: 'create', type, id, record, originInstanceId }]);
 
   console.log(`🧠 Created ${type} record: ${id}`);
   return { id, ...record };
@@ -489,8 +488,7 @@ export async function update(type, id, updates) {
 
     await store.saveOneNow(id, record);
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
 
     console.log(`🧠 Updated ${type} record: ${id}`);
     return { id, ...record };
@@ -538,8 +536,7 @@ export async function updateWith(type, id, fn) {
 
     await store.saveOneNow(id, record);
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
 
     console.log(`🧠 Updated ${type} record: ${id}`);
     return { id, ...record };
@@ -594,8 +591,7 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true, cre
       // A suppressed per-record event still has to reach derived projections.
       emitRecordChanged(type, id);
     }
-    await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: live ? 'update' : 'create', type, id, record, originInstanceId }]);
 
     console.log(`🧠 Upserted ${type} record: ${id}`);
     return { id, ...record };
@@ -640,8 +636,7 @@ export async function updateMany(type, updates) {
     // leave earlier successes local-only.
     applied.push({ id, record });
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
   }
   if (applied.length === 0) return [];
   console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
@@ -686,13 +681,13 @@ async function updateManyWithBatchLog(type, updates) {
   }
 
   if (applied.length > 0) {
-    await brainSyncLog.appendChanges(applied.map(({ id, record }) => ({
+    await brainSyncLog.appendLocalChanges(applied.map(({ id, record }) => ({
       op: 'update',
       type,
       id,
       record,
       originInstanceId: record.originInstanceId,
-    }))).catch(err => console.error(`⚠️ Sync log batch append failed for ${type}: ${err.message}`));
+    })));
   }
 
   if (failures.length > 0) throw failures[0].reason;
@@ -727,8 +722,7 @@ export async function remove(type, id) {
     // Wire format unchanged: the sync-log delete entry still carries only
     // { updatedAt } so an older peer (no tombstone support) applies it as a
     // plain hard delete exactly as before.
-    await brainSyncLog.appendChange('delete', type, id, { updatedAt: ts }, originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for delete ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'delete', type, id, record: { updatedAt: ts }, originInstanceId }]);
 
     console.log(`🧠 Deleted ${type} record: ${id}`);
     return true;
@@ -1322,7 +1316,28 @@ export const deleteThread = (id) => remove('threads', id);
 // signal (see emitRecordChanged) — it never leaves this instance.
 
 /**
- * Apply a remote record to a store (last-writer-wins by updatedAt)
+ * The LWW rejection for an incoming op whose clock is not newer than ours.
+ *
+ * `local_current` means we already hold exactly the state the op carries — same
+ * LWW clock, same delete-ness — so the op is ALREADY APPLIED here (an echo, or a
+ * delta re-pulled after a crash between our save and our relay append). The
+ * wire-shape of our copy rides along so the caller can relay it if our sync log
+ * lacks it (#8316). Anything else is `local_newer`: a genuinely stale op.
+ */
+function rejectedAgainst(existing, record, incomingIsDelete) {
+  if (existing.updatedAt !== record.updatedAt || isTombstone(existing) !== incomingIsDelete) {
+    return { applied: false, reason: 'local_newer' };
+  }
+  const current = isTombstone(existing)
+    ? { updatedAt: existing.updatedAt, originInstanceId: existing.originInstanceId }
+    : { ...existing };
+  return { applied: false, reason: 'local_current', current };
+}
+
+/**
+ * Apply a remote record to a store (last-writer-wins by updatedAt).
+ * Rejections carry `reason` `local_newer` (stale op) or `local_current` (op
+ * already applied — `current` is our copy in wire shape); see rejectedAgainst.
  */
 export async function applyRemoteRecord(type, id, record, op) {
   const store = storeFor(type);
@@ -1347,7 +1362,7 @@ export async function applyRemoteRecord(type, id, record, op) {
       // new as the incoming delete. The tombstone-vs-tombstone case makes a
       // repeated delete idempotent → not relayed → the echo loop converges.
       if (existing && existing.updatedAt >= record.updatedAt) {
-        return { applied: false, reason: 'local_newer' };
+        return rejectedAgainst(existing, record, true);
       }
       // Tombstone in place even when no local record exists. A delete that
       // arrives before we ever saw a create still leaves a marker, so a later
@@ -1369,7 +1384,7 @@ export async function applyRemoteRecord(type, id, record, op) {
       // resurrection loop. A genuinely newer create (later updatedAt than the
       // tombstone) still wins and legitimately revives the record.
       if (existing && existing.updatedAt >= record.updatedAt) {
-        return { applied: false, reason: 'local_newer' };
+        return rejectedAgainst(existing, record, record._deleted === true);
       }
       // Defense-in-depth: a create carrying `_deleted` (a future peer, or a
       // direct caller bypassing brainSync's reroute) must persist as a proper

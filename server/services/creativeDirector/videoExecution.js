@@ -2,6 +2,7 @@
 import { randomUUID } from 'crypto';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorValidation.js';
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
 
@@ -301,7 +302,12 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId: result.jobId });
     return { ...result, attemptId: attempt.id };
   } catch (error) {
-    const uncertain = error.code !== 'VIDEO_DISPATCH_BLOCKED';
+    // A refused queue admission — a failed snapshot (#8325) or a full queue
+    // (#8326) — created no job, so nothing was submitted: as certain a failure
+    // as a blocked dispatch, and Resume may retry it without charging twice.
+    // (The predicate lives in the queue's light admission module; importing the
+    // queue itself would close a static cycle with its dynamic import of us.)
+    const uncertain = error.code !== 'VIDEO_DISPATCH_BLOCKED' && !isMediaAdmissionRefusal(error);
     await settleVideoAttempt(project.id, attempt.id, { status: uncertain ? 'uncertain' : 'failed' });
     await pauseVideoExecution(project.id, uncertain ? 'Submission could not be confirmed. Reconcile the queue or explicitly authorize retry; it may charge again.' : error.message);
     throw new ServerError(error.message, { status: 409, code: uncertain ? 'VIDEO_SUBMISSION_UNCERTAIN' : error.code });

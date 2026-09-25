@@ -463,6 +463,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_refs (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (ingredient_id, ref_kind, ref_id, role)
 );
@@ -485,6 +486,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (from_id, to_id, kind)
 );
@@ -568,6 +570,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so detaches propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (ingredient_id, media_key, kind)
 );
@@ -671,11 +674,18 @@ CREATE TRIGGER trg_catalog_source_sync_seq
 -- path would update `deleted`/`deleted_at` but leave sync_sequence at the
 -- original INSERT value — peers past that cursor would never see the change
 -- and their "Appears in" panels would stay stale forever.
+-- #8347: also stamps `updated_at` (unless the caller already set an explicit
+-- value — a peer apply carrying the sender's own clock) so the revival guard
+-- in `upsertRefFromPeer` has a change-clock that moves on BOTH a delete and a
+-- revival, unlike `deleted_at` which resets to NULL.
 CREATE OR REPLACE FUNCTION update_catalog_ref_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_refs', 'sync_sequence'));
   END IF;
   RETURN NEW;
@@ -691,11 +701,15 @@ CREATE TRIGGER trg_catalog_ref_sync_seq
 -- Relation UPDATE bumps sync_sequence on soft-delete or revival so peers pick
 -- up the tombstone (or the un-delete) on their next pull — same rationale as
 -- the ref trigger above.
+-- #8347: same `updated_at` change-clock stamp as the ref trigger above.
 CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
   END IF;
   RETURN NEW;
@@ -712,6 +726,7 @@ CREATE TRIGGER trg_catalog_relation_sync_seq
 -- field (role/caption) changes, so peers receive the edit (or the tombstone)
 -- on their next pull. Unlike refs/relations, media rows carry editable
 -- metadata, so the change-detector also watches role + caption + provenance.
+-- #8347: same `updated_at` change-clock stamp as the ref/relation triggers.
 CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -720,6 +735,9 @@ BEGIN
      OR NEW.role IS DISTINCT FROM OLD.role
      OR NEW.caption IS DISTINCT FROM OLD.caption
      OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
   END IF;
   RETURN NEW;
@@ -1370,8 +1388,9 @@ CREATE TABLE IF NOT EXISTS privacy_vault_records (
 );
 -- Type is the primary list filter (all addresses, all emails, ...).
 CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type);
--- Explicit consent audit rows (v1 subject is always 'self'); the broker
--- opt-out engine builds on this trail. Append-only.
+-- Explicit consent audit rows, one per (subject, purpose) grant. The scan and
+-- opt-out engines require an ACTIVE row of the exact purpose scope; revoking a
+-- broker purpose stamps revoked_at instead of deleting the row (#8332).
 CREATE TABLE IF NOT EXISTS privacy_consents (
   id UUID PRIMARY KEY,
   subject TEXT NOT NULL DEFAULT 'self',
@@ -1379,7 +1398,8 @@ CREATE TABLE IF NOT EXISTS privacy_consents (
   scope TEXT NOT NULL,
   method TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
-  granted_at TIMESTAMPTZ DEFAULT NOW()
+  granted_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
 );
 
 -- Privacy Center: Trusted Organizations registry (issue #2141, epic #2138).
@@ -1454,9 +1474,11 @@ CREATE INDEX IF NOT EXISTS idx_privacy_brokers_enabled ON privacy_brokers (enabl
 CREATE INDEX IF NOT EXISTS idx_privacy_brokers_cluster_parent ON privacy_brokers (cluster_parent);
 -- Per-broker exposure/opt-out case ledger with a service-enforced state machine.
 -- `state` is validated app-side (privacyBrokers.js); every write stamps
--- `next_recheck_at` (state-dependent backoff). `evidence` holds listing URLs /
--- match basis / screenshot refs — NOT plaintext PII. A broker delete cascades
--- its cases.
+-- `next_recheck_at` (state-dependent backoff). `evidence` holds match basis /
+-- lane / screenshot refs in the clear; the identity-bearing fields (matched
+-- name + location, search/listing URLs) are sealed under
+-- `evidence.sealed_identity` with the vault key (#8333). A broker delete
+-- cascades its cases.
 CREATE TABLE IF NOT EXISTS privacy_broker_cases (
   id UUID PRIMARY KEY,
   subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
@@ -1504,8 +1526,8 @@ CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_subject ON privacy_vault_re
 CREATE INDEX IF NOT EXISTS idx_privacy_orgs_subject ON privacy_orgs (subject_id);
 CREATE INDEX IF NOT EXISTS idx_privacy_change_events_subject ON privacy_change_events (subject_id);
 CREATE INDEX IF NOT EXISTS idx_privacy_consents_subject ON privacy_consents (subject_id);
--- `self` always consents — the install owner IS the self subject, so the
--- engine's no-consent-no-action guard must never refuse them (#3658).
+-- `self` always holds local-vault consent — the install owner IS the self
+-- subject (#3658). Broker purposes are never seeded, even for `self` (#8332).
 INSERT INTO privacy_consents (id, subject_id, scope, method, note, granted_at)
 SELECT gen_random_uuid(), '00000000-0000-4000-8000-000000000001', 'pii_vault', 'self',
        'seeded: the install owner is the self subject', NOW()
@@ -2148,3 +2170,76 @@ CREATE TABLE IF NOT EXISTS deck_cards (
   );
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards (deck_id, position);
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks (deleted, updated_at DESC);
+
+-- ============================================================================
+-- Commit-ordered federation change feed (#8315)
+-- ============================================================================
+-- Peers page memories and the catalog tables by a feed POSITION drawn at
+-- COMMIT (deferred constraint triggers serialized by a transaction-scoped
+-- advisory lock), not by the row-write-time sync_sequence, so a transaction
+-- that commits late can never land below a cursor a peer already advanced
+-- past. Positions start at 1e15 so a legacy sync_sequence cursor replays the
+-- whole feed once. Rationale: server/lib/db/schema/syncFeed.js (mirrored there
+-- for existing installs; parity-locked by db.ddlParity.test.js).
+CREATE TABLE IF NOT EXISTS sync_feed (
+  stream TEXT NOT NULL,
+  row_sequence BIGINT NOT NULL,
+  position BIGINT NOT NULL,
+  PRIMARY KEY (stream, row_sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_feed_position ON sync_feed (stream, position);
+CREATE SEQUENCE IF NOT EXISTS memories_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_scraps_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredients_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_sources_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_refs_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_relations_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_tags_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_media_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE OR REPLACE FUNCTION sync_feed_capture()
+RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(8315001);
+  IF TG_OP <> 'INSERT' THEN
+    DELETE FROM sync_feed WHERE stream = TG_TABLE_NAME AND row_sequence = OLD.sync_sequence;
+  END IF;
+  IF TG_OP <> 'DELETE' THEN
+    INSERT INTO sync_feed (stream, row_sequence, position)
+    VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(format('%I', TG_TABLE_NAME || '_sync_feed_seq')::regclass))
+    ON CONFLICT (stream, row_sequence) DO UPDATE SET position = EXCLUDED.position;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_memories_sync_feed ON memories;
+CREATE CONSTRAINT TRIGGER trg_memories_sync_feed AFTER INSERT OR DELETE ON memories DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_memories_sync_feed_update ON memories;
+CREATE CONSTRAINT TRIGGER trg_memories_sync_feed_update AFTER UPDATE ON memories DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_scraps_sync_feed ON catalog_scraps;
+CREATE CONSTRAINT TRIGGER trg_catalog_scraps_sync_feed AFTER INSERT OR DELETE ON catalog_scraps DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_scraps_sync_feed_update ON catalog_scraps;
+CREATE CONSTRAINT TRIGGER trg_catalog_scraps_sync_feed_update AFTER UPDATE ON catalog_scraps DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredients_sync_feed ON catalog_ingredients;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredients_sync_feed AFTER INSERT OR DELETE ON catalog_ingredients DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredients_sync_feed_update ON catalog_ingredients;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredients_sync_feed_update AFTER UPDATE ON catalog_ingredients DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_sources_sync_feed ON catalog_ingredient_sources;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_sources_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_sources DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_sources_sync_feed_update ON catalog_ingredient_sources;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_sources_sync_feed_update AFTER UPDATE ON catalog_ingredient_sources DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_refs_sync_feed ON catalog_ingredient_refs;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_refs_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_refs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_refs_sync_feed_update ON catalog_ingredient_refs;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_refs_sync_feed_update AFTER UPDATE ON catalog_ingredient_refs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_relations_sync_feed ON catalog_ingredient_relations;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_relations_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_relations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_relations_sync_feed_update ON catalog_ingredient_relations;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_relations_sync_feed_update AFTER UPDATE ON catalog_ingredient_relations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_tags_sync_feed ON catalog_tags;
+CREATE CONSTRAINT TRIGGER trg_catalog_tags_sync_feed AFTER INSERT OR DELETE ON catalog_tags DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_tags_sync_feed_update ON catalog_tags;
+CREATE CONSTRAINT TRIGGER trg_catalog_tags_sync_feed_update AFTER UPDATE ON catalog_tags DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredient_media;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();

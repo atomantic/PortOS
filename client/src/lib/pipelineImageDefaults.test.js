@@ -17,6 +17,20 @@ describe('readPipelineImageSettings', () => {
       pipeline: { imageGen: { mode: 'local' } },
     }).mode).toBe(IMAGE_GEN_MODE.LOCAL);
   });
+
+  it('uses the install-wide local image model when the pipeline has no saved model choice', () => {
+    expect(readPipelineImageSettings({
+      imageGen: { local: { modelId: 'qwen-image-2.1' } },
+      pipeline: { imageGen: { mode: 'local' } },
+    }).modelId).toBe('qwen-image-2.1');
+    expect(readPipelineImageSettings({ pipeline: { imageGen: { mode: 'local' } } }).modelId)
+      .toBe('qwen-image-2.1');
+  });
+
+  it('keeps Qwen-Image 2.1 as the unresolved local form default', () => {
+    expect(PIPELINE_IMAGE_DEFAULTS.modelId).toBe('qwen-image-2.1');
+    expect(readPipelineImageSettings(null).modelId).toBe('qwen-image-2.1');
+  });
 });
 
 describe('pipelineImageCfgToRenderOpts', () => {

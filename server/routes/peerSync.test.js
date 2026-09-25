@@ -76,6 +76,7 @@ describe('peer-sync routes', () => {
       });
       const res = await request(buildApp())
         .post('/api/peer-sync/push')
+        .set('X-PortOS-Peer-Sync-Token', 'synthetic-pair-secret-32-characters-long')
         .send({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
@@ -87,7 +88,7 @@ describe('peer-sync routes', () => {
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'universe',
         sourceInstanceId: 'peer-a',
-      }));
+      }), { peerToken: 'synthetic-pair-secret-32-characters-long' });
     });
 
     it('accepts a FableLoom push with scene-media assets', async () => {
@@ -111,7 +112,7 @@ describe('peer-sync routes', () => {
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'fableLoom',
         record: expect.objectContaining({ id: 'loom-1' }),
-      }));
+      }), { peerToken: undefined });
     });
 
     it('accepts a universe push that bundles a linkedCollection (Stage 5 media-collections sync)', async () => {
@@ -132,7 +133,7 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         linkedCollection: expect.objectContaining({ id: 'col-1' }),
-      }));
+      }), { peerToken: undefined });
     });
 
     it('accepts a series push with bundled issues', async () => {
@@ -149,7 +150,7 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         issues: expect.any(Array),
-      }));
+      }), { peerToken: undefined });
     });
 
     it('accepts a series push that bundles a manuscriptReview (Finish-the-draft comment set)', async () => {
@@ -173,7 +174,7 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(200);
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         manuscriptReview: expect.objectContaining({ comments: expect.any(Array) }),
-      }));
+      }), { peerToken: undefined });
     });
 
     it('accepts a writersRoomWork push that bundles draft and bible manifests', async () => {
@@ -199,7 +200,7 @@ describe('peer-sync routes', () => {
         kind: 'writersRoomWork',
         draftBodyManifest: expect.any(Array),
         bibleManifest: expect.any(Array),
-      }));
+      }), { peerToken: undefined });
     });
 
     it('400s when a universe push carries manuscriptReview (series-only field, no side-channel)', async () => {

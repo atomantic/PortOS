@@ -47,6 +47,10 @@ export const FAL_DEFAULT_IMAGE_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-
 const FAL_SUBMIT_TIMEOUT_MS = 30_000;
 const FAL_POLL_TIMEOUT_MS = 15_000;
 const FAL_POLL_INTERVAL_MS = 3000;
+// A transient status-fetch failure (network blip, fal.ai 5xx) gets this many
+// additional attempts — on the same FAL_POLL_INTERVAL_MS cadence, never
+// resubmitting the paid generation — before the run is abandoned (#8340).
+const FAL_MAX_STATUS_RETRIES = 2;
 // Bounds the WHOLE download — headers and every byte of the video — now that
 // `fetchWithTimeout` holds its deadline through body consumption. It used to
 // bound only the headers, which left the multi-MB transfer itself with no
@@ -87,6 +91,28 @@ export function resolveFalApiKey(settings) {
   return fromEnv || null;
 }
 
+// Best-effort, idempotent cancellation of the remote fal.ai request — shared
+// by explicit user cancellation (cancel()/cancelAll()) and every local
+// abandonment path (exhausted status retries, the render deadline) so an
+// already-known cancel_url is never left unsent (#8340). A caught failure is
+// logged for diagnosis but never rethrown: the local job still finalizes as
+// failed/canceled either way. Guarded so it never re-sends once fired, and
+// never fires once the remote request already reached a fal-reported
+// terminal state (COMPLETED/ERROR) — there is nothing left to cancel there.
+async function cancelFalRequest(entry) {
+  if (!entry || entry.canceledRemote || entry.remoteTerminal || !entry.cancelUrl || !entry.apiKey) return;
+  entry.canceledRemote = true;
+  try {
+    const res = await fetchWithTimeout(entry.cancelUrl, {
+      method: 'PUT',
+      headers: { Authorization: `Key ${entry.apiKey}` },
+    }, FAL_POLL_TIMEOUT_MS);
+    if (!res.ok) console.error(`❌ fal.ai cancellation request failed: HTTP ${res.status}`);
+  } catch (err) {
+    console.error(`❌ fal.ai cancellation request failed: ${err?.message || err}`);
+  }
+}
+
 export const cancel = (jobId) => {
   if (!jobId) {
     throw new Error("videoGen/fal.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
@@ -94,12 +120,7 @@ export const cancel = (jobId) => {
   const entry = activeRequests.get(jobId);
   if (!entry) return false;
   entry.aborted = true;
-  if (entry.cancelUrl && entry.apiKey) {
-    fetchWithTimeout(entry.cancelUrl, {
-      method: 'PUT',
-      headers: { Authorization: `Key ${entry.apiKey}` },
-    }, FAL_POLL_TIMEOUT_MS).catch(() => {});
-  }
+  cancelFalRequest(entry);
   return true;
 };
 
@@ -225,7 +246,9 @@ export async function generateVideo({
 }
 
 async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta }) {
-  const entry = { apiKey, aborted: false, cancelUrl: null };
+  const entry = {
+    apiKey, aborted: false, cancelUrl: null, canceledRemote: false, remoteTerminal: false,
+  };
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
@@ -236,12 +259,29 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     const statusUrl = submitted.status_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/status`;
     const responseUrl = submitted.response_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}`;
 
+    let statusFailures = 0;
     while (Date.now() < deadline) {
       if (entry.aborted) return finalizeCanceled(job, jobId);
       videoGenEvents.emit('activity', { generationId: jobId });
-      const status = await pollFalStatus({ statusUrl, apiKey });
-      if (status.status === 'COMPLETED') break;
+      let status;
+      try {
+        status = await pollFalStatus({ statusUrl, apiKey });
+      } catch (err) {
+        statusFailures += 1;
+        if (statusFailures > FAL_MAX_STATUS_RETRIES) {
+          await cancelFalRequest(entry);
+          return finalizeJobFailure(job, jobId, null, `fal.ai status checks failed ${statusFailures} times in a row: ${err?.message || err}`);
+        }
+        await new Promise((r) => setTimeout(r, FAL_POLL_INTERVAL_MS));
+        continue;
+      }
+      statusFailures = 0;
+      if (status.status === 'COMPLETED') {
+        entry.remoteTerminal = true;
+        break;
+      }
       if (status.status === 'ERROR') {
+        entry.remoteTerminal = true;
         return finalizeJobFailure(job, jobId, null, `fal.ai render failed: ${status.error || 'unknown error'}`);
       }
       // fal's own queue maps to SUBMIT rather than to the queued step: the
@@ -253,6 +293,7 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
     if (Date.now() >= deadline) {
+      await cancelFalRequest(entry);
       return finalizeJobFailure(job, jobId, null, `fal.ai did not finish within ${Math.round(FAL_RENDER_TIMEOUT_MS / 1000)}s`);
     }
 
@@ -275,12 +316,20 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
+    // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the
+    // download) may still leave the remote render queued or running — cancel
+    // it before finalizing. `cancelFalRequest` already no-ops once
+    // entry.remoteTerminal is set (fal reported COMPLETED/ERROR) or the
+    // request was never submitted (no cancelUrl yet), so this never sends a
+    // stray cancel for a job that already finished on fal.ai's side (#8340).
+    //
     // finalizeGeneratedVideo marks job.status='complete' BEFORE its async
     // post-processing (faststart/thumbnail/history), and the request slot is
     // already released above — a throw there must still surface as a terminal
     // failure or the queue's job stays 'running' until the watchdog and the
     // client never gets a terminal frame. Force past the idempotence guard,
     // same as videoGen/grok.js's post-exit catch and reactor.js's catch-all (#6831).
+    await cancelFalRequest(entry);
     finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`, { force: true });
   }
 }

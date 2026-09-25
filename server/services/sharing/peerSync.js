@@ -713,7 +713,7 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   }
 
   console.log(`🔄 peerSync: pull-record ${recordKind}/${recordId} ← ${peer.name || peerId}`);
-  const result = await applyIncomingPush(parsed.data);
+  const result = await applyIncomingPush(parsed.data, { pullPeerId: peer.id });
   return { pulled: true, missingAssets: result?.missingAssets?.length ?? 0 };
 }
 

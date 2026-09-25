@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const enqueueJob = vi.fn(() => ({ jobId: 'job-1', position: 1, status: 'queued' }));
+const enqueueJob = vi.fn(async () => ({ jobId: 'job-1', position: 1, status: 'queued' }));
 const getSettings = vi.fn();
 const getDeck = vi.fn();
 const markCardsRenderQueued = vi.fn(async () => ({}));
 const resolveLocalImageModel = vi.fn(() => ({ pythonPath: '/py', selectedModel: { id: 'flux2-klein-4b' } }));
-vi.mock('./mediaJobQueue/index.js', () => ({ enqueueJob }));
+const assertMediaQueueRoom = vi.fn();
+vi.mock('./mediaJobQueue/index.js', async () => ({
+  enqueueJob,
+  assertMediaQueueRoom,
+  partialBatchAdmissionError: (await import('./mediaJobQueue/admission.js')).partialBatchAdmissionError,
+}));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./decks.js', () => ({ getDeck, markCardsRenderQueued }));
 vi.mock('./imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
@@ -66,6 +71,23 @@ describe('renderDeckCards', () => {
     });
     expect(markCardsRenderQueued).toHaveBeenCalledTimes(1);
     expect(markCardsRenderQueued).toHaveBeenCalledWith('d1', [{ cardId: 'a', render: expect.objectContaining({ jobId: 'job-1', status: 'queued', mode: 'local', model: 'flux2-klein-4b' }) }]);
+  });
+
+  // #8326: another producer can fill the queue between the batch preflight and
+  // the last enqueue. The cards that DID queue must still be stamped, and the
+  // error must say how many landed rather than read as a total failure.
+  it('stamps the queued cards and reports the partial batch when the queue fills mid-batch', async () => {
+    resolveRenderTargetConfig.mockReturnValue({ mode: 'local', cloud: null });
+    enqueueJob.mockImplementationOnce(async () => ({ jobId: 'job-1', position: 1, status: 'queued' }))
+      .mockImplementationOnce(async () => {
+        throw Object.assign(new Error('The media queue is full'), { status: 429, code: 'MEDIA_QUEUE_FULL' });
+      });
+    await expect(renderDeckCards('d1', {})).rejects.toMatchObject({
+      status: 429, code: 'MEDIA_QUEUE_FULL', message: 'Queued 1 of 2 card renders — The media queue is full',
+      context: { admitted: 1, total: 2 },
+    });
+    expect(assertMediaQueueRoom).toHaveBeenCalledWith(2);
+    expect(markCardsRenderQueued).toHaveBeenCalledWith('d1', [{ cardId: 'a', render: expect.objectContaining({ jobId: 'job-1' }) }]);
   });
 
   it('spreads the cloud job params under the card params and threads the resolved model', async () => {

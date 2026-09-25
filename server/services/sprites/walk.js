@@ -1084,8 +1084,14 @@ async function startWalkGenerationImpl(recordId, body) {
     // Queued AFTER the record is durable. Nothing here awaits the render: the
     // boot-registered completion hook stages the clip and runs the attach, which
     // is what lets a render outlive this request, the client, and a restart.
-    const jobId = enqueueLocalAnimationRender({
+    // A refused admission (#8325) must not strand the run at `rendering`
+    // with no job behind it — settle it as an error before surfacing.
+    const jobId = await enqueueLocalAnimationRender({
       plan: localPlan, canvas, prompt, inputAbs, recordId, runId, track: WALK_TRACK, direction,
+    }).catch(async (err) => {
+      Object.assign(run, { status: 'error', postprocessError: err.message, completedAt: new Date().toISOString() });
+      await saveRunRecord(recordId, run);
+      throw err;
     });
     // Stamped in a SECOND write so a failure here cannot strand the job: the
     // hook already has everything it needs from the job's own params, and a run

@@ -15,7 +15,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -102,18 +102,21 @@ async function withCursors(fn) {
 // it outright (#5663). `peerFetch` also carries the peer HTTPS agent, so a
 // self-signed tailnet peer no longer fails TLS validation on these pulls.
 //
-// The timeout bounds the peerFetch call and nothing after it, so the JSON
-// decode of an already-received body can't be aborted — the same shape
-// `fetchWithTimeout` had here. (Over HTTPS the budget does still cover the
-// download itself, because the insecure-agent shim buffers the whole body
-// before it resolves; that is a property of that transport, not of this call.)
-// Contract is unchanged: null on transport failure, non-2xx, or bad JSON.
+// Headers retain their 15s budget. HTTP body reads get a separate 60s idle
+// deadline so large, progressing downloads may finish; HTTPS is already
+// buffered within the request budget. Body stalls must reach the cycle's
+// failure path instead of becoming a successful no-op.
+function handlePeerBodyError(error) {
+  if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
+  return null;
+}
+
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
   const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
     .catch(() => null);
   if (!res?.ok) return null;
-  return res.json().catch(() => null);
+  return readPeerBody(res, 'json').catch(handlePeerBodyError);
 }
 
 /**
@@ -132,18 +135,17 @@ async function syncImageFromPeer(peer, avatarPath) {
   if (exists) return;
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
-  // Same `peerFetch` hop and the same timeout scope as fetchPeer. Non-critical
-  // either way: a failure just retries next cycle.
+  // Use the same request and body-idle budgets as JSON snapshots.
   const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
     .catch(() => null);
   if (!res?.ok) return;
-  await res.arrayBuffer()
+  await readPeerBody(res, 'arrayBuffer')
     .then(async (bytes) => {
       await ensureDir(PATHS.images);
       await writeFileGuarded(localPath, Buffer.from(bytes));
       console.log(`🔄 Synced avatar image: ${filename}`);
     })
-    .catch(() => {});
+    .catch(handlePeerBodyError);
 }
 
 // --- Status ---
@@ -295,9 +297,12 @@ async function syncMemoryFromPeer(peer, cursor) {
   return { memorySeq, totalApplied };
 }
 
-// The seven INDEPENDENT BIGSERIAL cursors the catalog sync envelope tracks.
-// Each table advances its own sequence, so the receiver carries seven cursors
-// (not one) — see catalogSync.js for the protocol rationale.
+// The seven INDEPENDENT feed-position cursors the catalog sync envelope tracks.
+// Each table is its own commit-ordered feed stream (#8315), so the receiver
+// carries seven cursors (not one) — see catalogSync.js for the protocol
+// rationale. A pre-#8315 cursor (a write-time sync_sequence) is below every
+// feed position, so the first pull after a peer upgrades replays each stream
+// once; a cursor above a downgraded peer's maximum rewinds via the reset check.
 const CATALOG_CURSOR_KINDS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
 // Build the `?since[scraps]=A&since[ingredients]=B&...` query string the
@@ -319,7 +324,7 @@ function catalogSinceQuery(catalogSeqs) {
  * — but the catalog is a multi-table relational store, so the cursor is the
  * per-kind `maxSequences` object the peer returns, not a single scalar.
  *
- * A schema-version-ahead peer (newer `catalog` schema) makes applyRemoteChanges
+ * A schema-version-mismatched peer (older or newer `catalog` schema) makes applyRemoteChanges
  * throw CatalogSyncVersionMismatchError; we record the gap on the peer record
  * (same surfacing as the snapshot categories) and stop draining so we don't
  * loop on a payload we can't safely apply.
@@ -367,7 +372,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
     firstFetch = false;
 
     // Forward the sender's portosMeta so applyRemoteChanges runs the schema
-    // gate BEFORE merging — a sender ahead on `catalog` throws and we persist
+    // gate BEFORE merging — a sender mismatched on `catalog` throws and we persist
     // the gap rather than corrupting local state.
     let stats;
     try {
@@ -376,8 +381,9 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
       if (err?.code === 'CATALOG_SCHEMA_VERSION_AHEAD') {
         blockedBySchema = err.diff;
         const ahead = Array.isArray(err.diff?.ahead) ? err.diff.ahead : [];
+        const behind = Array.isArray(err.diff?.behind) ? err.diff.behind : [];
         await recordPeerSchemaGap(peerId, 'catalog', {
-          ahead, behind: [], senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
+          ahead, behind, senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
         }).catch((e) => logFailureWithStack('⚠️ syncOrchestrator: persist catalog schema gap failed', e));
         break;
       }
@@ -424,7 +430,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
 }
 
 /**
- * Safely parse a value to BigInt for BIGSERIAL comparison.
+ * Safely parse a value to BigInt for feed-position comparison.
  * Returns 0n for invalid/empty/negative inputs.
  */
 function safeBigInt(value) {
@@ -465,7 +471,7 @@ function detectCursorReset(cursor, peer) {
     }
   }
 
-  // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
+  // Memory: BigInt comparison (BIGINT positions can exceed Number.MAX_SAFE_INTEGER)
   // Only check when peer reports a numeric memorySeq (null means non-Postgres peer)
   const remoteMemRaw = remote.memorySeq;
   const hasNumericRemoteMem = remoteMemRaw != null && (
@@ -997,6 +1003,10 @@ function hasAnySyncEnabled(peer) {
  * Sync with all online peers
  */
 export async function syncAllPeers() {
+  // Local brain writes whose sync-log append failed wait in an in-memory queue
+  // (#8351); retry them every cycle so they reach the log a peer pulls from
+  // even when no further local write comes along. Never rejects.
+  await brainSyncLog.retryPendingAppends();
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 

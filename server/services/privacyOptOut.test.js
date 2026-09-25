@@ -336,7 +336,7 @@ describe('getOptOutDigest', () => {
   it('aggregates human-task + blocked cases with playbook + reason', async () => {
     listBrokerCases.mockImplementation(async ({ state } = {}) => {
       if (state === 'human_task_queued') return [{ id: 'h1', brokerId: 'wp', brokerName: 'Whitepages', state, allowedTransitions: ['submitted', 'not_found', 'human_task_queued'], reason: 'auto_submit_disabled', evidence: { optout_url: 'https://wp/o', playbook: ['call back'] } }];
-      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', evidence: { search_url: 'https://rad/p/Jane/Doe/' } }];
+      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', evidence: { match_basis: 'antibot_wall' }, identity: { search_url: 'https://rad/p/Jane/Doe/' } }];
       return [];
     });
     const digest = await getOptOutDigest();
@@ -348,8 +348,12 @@ describe('getOptOutDigest', () => {
     // same as the drawer (issue #2417).
     expect(digest.items[0].allowedTransitions).toEqual(['submitted', 'not_found', 'human_task_queued']);
     expect(digest.items[1].allowedTransitions).toEqual(['found', 'not_found', 'human_task_queued']);
-    // Blocked items surface the filled search URL for a manual browser check.
+    // Blocked items surface the filled search URL for a manual browser check —
+    // decrypted from the case's sealed identity evidence, never read from the
+    // plain evidence projection (#8333).
     expect(digest.items[1].searchUrl).toBe('https://rad/p/Jane/Doe/');
+    expect(digest.items[0].searchUrl).toBe(null);
+    expect(listBrokerCases).toHaveBeenCalledWith(expect.objectContaining({ state: 'blocked', includeIdentity: true }));
   });
 });
 
@@ -357,9 +361,13 @@ describe('getOptOutDigest', () => {
 // NO CONSENT, NO ACTION — carried verbatim from unbroker. The refusal is at the
 // SERVICE layer, so a cron / direct API / agent caller is refused exactly like a
 // hidden UI button would be. Asserted here, NOT only in a UI test.
-describe('consent gate — engine-enforced (#3658)', () => {
+describe('consent gate — engine-enforced (#3658, #8332)', () => {
+  // Scope-aware stand-in for the real gate: the subject holds the local-vault
+  // AND read-only scan grants but NOT broker_optout — neither may unlock a
+  // submission or its verification probes.
   const refuse = () => {
-    assertSubjectConsentMock.mockImplementation(async () => {
+    assertSubjectConsentMock.mockImplementation(async (id, { scope }) => {
+      if (scope === 'pii_vault' || scope === 'broker_scan') return { id };
       const err = new Error('no consent');
       err.status = 403;
       err.code = 'SUBJECT_CONSENT_REQUIRED';
@@ -367,7 +375,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
     });
   };
 
-  it('runOptOutPass refuses a subject with no consent, before reading the vault', async () => {
+  it('runOptOutPass refuses a subject without broker_optout consent, before reading the vault', async () => {
     refuse();
     const vault = await import('./privacyVault.js');
     await expect(runOptOutPass({ subjectId: 'subject-2' }))
@@ -378,7 +386,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
     expect(createDraft).not.toHaveBeenCalled();
   });
 
-  it('runVerificationPass refuses a subject with no consent, before reading the ledger', async () => {
+  it('runVerificationPass refuses a subject without broker_optout consent, before reading the ledger', async () => {
     refuse();
     await expect(runVerificationPass({ subjectId: 'subject-2' }))
       .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
@@ -389,7 +397,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
   it('passes the resolved subject through to the guard and the ledger reads', async () => {
     listBrokerCases.mockResolvedValue([]);
     await runVerificationPass({ subjectId: 'subject-2' });
-    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { action: 'opt-out verification pass' });
+    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { scope: 'broker_optout', action: 'opt-out verification pass' });
     expect(listBrokerCases).toHaveBeenCalledWith({ subjectId: 'subject-2' });
   });
 });

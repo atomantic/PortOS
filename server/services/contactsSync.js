@@ -524,11 +524,6 @@ export async function searchContacts({ q, limit } = {}) {
   return out;
 }
 
-export async function getContactById(id) {
-  const { contacts } = await readContactCache();
-  return contacts.find((c) => c.id === id || c.uniqueId === id) || null;
-}
-
 /**
  * Load contacts + build index. Cached in-process for the duration of a request
  * batch via the returned object (caller holds it).

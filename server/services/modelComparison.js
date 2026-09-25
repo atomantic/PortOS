@@ -9,16 +9,24 @@ import { modelComparisonCatalogSchema, modelComparisonImportSchema } from '../li
 
 const queueWrite = createFileWriteQueue();
 const catalogPath = () => join(PATHS.data, 'model-comparison.json');
-const retiredExternalBenchmark = row => /^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i.test(row?.benchmark || '')
-  || /^(?:aa-v\d|swebench-)/i.test(row?.id || '');
 const isPortosBenchmarkObservation = row => row?.id?.startsWith('portos:')
   || /^PortOS Task Bench v\d+\b/.test(row?.benchmark || '');
 const hasPortosRunSource = row => [
   row?.quality, row?.costPerTask, row?.inputPerMillion, row?.outputPerMillion,
   row?.reasoningPerMillion, row?.responseSeconds, row?.tokensPerSecond,
-  row?.tokensPerRun, row?.inputTokens, row?.outputTokens, row?.apiEquivalentCost,
+  row?.tokensPerRun, row?.inputTokens, row?.outputTokens, row?.apiEquivalentCost, row?.quota,
 ].some(metric => typeof metric?.source?.url === 'string'
   && /^portos:\/\/model-comparison\/[0-9a-f-]{36}$/i.test(metric.source.url));
+
+// This shipped label was clarified without changing the benchmark's dataset or
+// scoring. Normalize the exact legacy name at read/import boundaries so upgrades
+// retain stable observation ids without relaxing semantic identity checks.
+const normalizeCatalog = catalog => ({
+  ...catalog,
+  observations: catalog.observations.map(row => row.benchmark === 'LiveCodeBench (generation, pass@1, 2023-05-08 to 2025-04-07)'
+    ? { ...row, benchmark: 'LiveCodeBench generation pass@1 (1,055 problems; 2023-05-08 to 2025-04-07)' }
+    : row),
+});
 
 export async function getModelComparison() {
   const raw = await readFile(catalogPath(), 'utf8').catch(error => {
@@ -27,18 +35,18 @@ export async function getModelComparison() {
   });
   // A malformed or future-version catalog must surface an error, never be
   // replaced with an empty store by the next import.
-  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
-  return { ...catalog, observations: catalog.observations.filter(row => !retiredExternalBenchmark(row)) };
+  const catalog = normalizeCatalog(modelComparisonCatalogSchema.parse(JSON.parse(raw)));
+  return catalog;
 }
 
 /** Public comparison data always comes from the shipped catalog, never local files. */
 export async function getShippedModelComparison() {
   const raw = await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8');
-  const catalog = modelComparisonCatalogSchema.parse(JSON.parse(raw));
+  const catalog = normalizeCatalog(modelComparisonCatalogSchema.parse(JSON.parse(raw)));
   return {
     ...catalog,
     observations: catalog.observations.filter(row =>
-      !retiredExternalBenchmark(row) && !isPortosBenchmarkObservation(row) && !hasPortosRunSource(row)),
+      !isPortosBenchmarkObservation(row) && !hasPortosRunSource(row)),
   };
 }
 
@@ -52,8 +60,8 @@ export async function getPortosModelBenchmarkObservations() {
 }
 
 async function mergeModelComparison(incoming) {
-  const current = await getModelComparison();
-  const rows = new Map(current.observations.map(row => [row.id, row]));
+  const [current, publicCatalog] = await Promise.all([getModelComparison(), getPublicModelComparison()]);
+  const rows = new Map([...current.observations, ...publicCatalog.observations].map(row => [row.id, row]));
   for (const row of incoming.observations) {
     const prior = rows.get(row.id);
     if (prior) {
@@ -74,10 +82,7 @@ async function mergeModelComparison(incoming) {
 }
 
 export function importModelComparison(input) {
-  const incoming = modelComparisonImportSchema.parse(input);
-  if (incoming.observations.some(retiredExternalBenchmark)) {
-    throw new ServerError('Artificial Analysis and SWE-bench imports have been retired; use PortOS-run benchmark results.', { status: 410 });
-  }
+  const incoming = normalizeCatalog(modelComparisonImportSchema.parse(input));
   if (incoming.observations.some(row => isPortosBenchmarkObservation(row) || hasPortosRunSource(row))) {
     throw new ServerError('PortOS benchmark observations can only be created by the explicit benchmark run.', { status: 400 });
   }
@@ -90,4 +95,25 @@ export function recordPortosModelBenchmark(observation) {
     throw new ServerError('Invalid PortOS benchmark observation.', { status: 400 });
   }
   return queueWrite(() => mergeModelComparison(incoming));
+}
+
+/** Merge release evidence with researched local evidence without exposing run history. */
+export async function getPublicModelComparison() {
+  const [shipped, local] = await Promise.all([getShippedModelComparison(), getModelComparison()]);
+  const rows = new Map(shipped.observations.map(row => [row.id, row]));
+  for (const row of local.observations) {
+    if (isPortosBenchmarkObservation(row) || hasPortosRunSource(row)) continue;
+    const prior = rows.get(row.id);
+    if (!prior) { rows.set(row.id, row); continue; }
+    for (const key of ['provider', 'model', 'effort', 'configuration', 'billing', 'benchmark']) {
+      if (row[key] !== prior[key]) throw new ServerError(`Observation identity changed: ${row.id}`, { status: 409 });
+    }
+    const merged = { ...prior };
+    for (const key of Object.keys(row)) {
+      if (row[key]?.source && (!prior[key]?.source || Date.parse(row[key].source.retrievedAt) >= Date.parse(prior[key].source.retrievedAt))) merged[key] = row[key];
+    }
+    if (Object.keys(row).some(key => merged[key] === row[key] && row[key]?.source && merged[key] !== prior[key])) merged.notes = row.notes;
+    rows.set(row.id, merged);
+  }
+  return { schemaVersion: 1, observations: [...rows.values()] };
 }

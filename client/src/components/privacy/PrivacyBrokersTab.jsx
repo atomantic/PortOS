@@ -8,6 +8,7 @@ import {
   getPrivacyScanStatus, getPrivacyBrokerCases, getPrivacyBrokers, getPrivacyOptOutDigest,
   getPrivacyOptOutSchedule, updatePrivacyOptOutSchedule, runPrivacyScan, runPrivacyOptOut,
   refreshPrivacyBrokers, recheckPrivacyCase, transitionPrivacyCase, setPrivacyBrokerEnabled,
+  getPrivacyCaseEvidence, erasePrivacyCaseEvidence,
 } from '../../services/api';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import toast from '../ui/Toast';
@@ -15,10 +16,11 @@ import { timeAgo, formatDateShort } from '../../utils/formatters';
 import BrokerCaseDrawer from './BrokerCaseDrawer';
 import {
   CASE_STATES, CASE_STATE_TONE, EXPOSURE_MAP_STATES, BROKER_SOURCES, BROKER_CONFIDENCE,
-  ACTION_TONES, manualCaseActions, labelFor,
+  ACTION_TONES, BROKER_CONSENT_PURPOSES, CONSENT_SCOPES, manualCaseActions, labelFor,
 } from './constants';
 import { isHttpUrl } from '../../utils/urlNormalize';
 import CronSchedulePicker from '../CronSchedulePicker';
+import Banner from '../ui/Banner';
 
 // Digest action icon by descriptor `icon` token (positive resolution vs dismiss).
 const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
@@ -33,7 +35,7 @@ function StatChip({ label, count, tone }) {
   );
 }
 
-export default function PrivacyBrokersTab({ subjectId }) {
+export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageConsent }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const openCaseId = searchParams.get('case');
 
@@ -85,27 +87,52 @@ export default function PrivacyBrokersTab({ subjectId }) {
     return times.length ? times[times.length - 1] : null;
   }, [cases]);
 
+  // Broker purposes this subject has no active grant for. `consentScopes` is
+  // undefined until the parent's subject list loads — unknown is not "none
+  // granted", so no warning until the grants are actually known.
+  const missingPurposes = Array.isArray(consentScopes)
+    ? BROKER_CONSENT_PURPOSES.filter((p) => !consentScopes.includes(p.id))
+    : [];
+
   const visibleCases = stateFilter ? cases.filter((c) => c.state === stateFilter) : cases;
   const openCase = openCaseId ? cases.find((c) => c.id === openCaseId) : null;
 
+  // Sealed identity evidence (#8333) is not in the case list — the drawer
+  // reveals it for the one open case. Keyed by case id so a stale response for
+  // a previously-open case never renders under the current one.
+  const [revealed, setRevealed] = useState(null);
+  const openCaseSealed = Boolean(openCase?.identityEvidence?.sealed);
+  const openCaseRowId = openCase?.id;
+  // A re-scan/transition while the drawer is open bumps updatedAt → re-reveal.
+  const openCaseUpdatedAt = openCase?.updatedAt;
+  useEffect(() => {
+    if (!openCaseRowId || !openCaseSealed) return undefined;
+    let active = true;
+    getPrivacyCaseEvidence(openCaseRowId)
+      .then((r) => { if (active) setRevealed(r); })
+      .catch(() => { if (active) setRevealed(null); });
+    return () => { active = false; };
+  }, [openCaseRowId, openCaseSealed, openCaseUpdatedAt]);
+  const openCaseIdentity = openCaseSealed && revealed?.caseId === openCaseRowId ? revealed.evidence : null;
+
   // ── Run controls (synchronous passes — gate both while either runs) ─────────
-  // The engine refuses to scan or submit for a subject with no active consent
-  // row (403 SUBJECT_CONSENT_REQUIRED). Its raw message names the subject UUID,
+  // The engine refuses to scan (`broker_scan`) or submit (`broker_optout`) for
+  // a subject without an active grant of that exact purpose (403
+  // SUBJECT_CONSENT_REQUIRED, #8332). Its raw message names the subject UUID,
   // so restate it as the action the user can actually take — the fix is
-  // recording consent, not retrying.
+  // granting that purpose under Household, not retrying.
   // Restate, don't replace: the code/status ride along so a future surface can
-  // act on the refusal (deep-link to Household, disable the button) instead of
-  // re-parsing a sentence.
-  const runPass = (fn) => fn({ silent: true, subjectId }).catch((err) => {
+  // act on the refusal instead of re-parsing a sentence.
+  const runPass = (fn, scope) => fn({ silent: true, subjectId }).catch((err) => {
     if (err?.code !== 'SUBJECT_CONSENT_REQUIRED') throw err;
-    const friendly = new Error('No consent on record for this person — add it under Household first');
+    const friendly = new Error(`No active consent for ${labelFor(CONSENT_SCOPES, scope).toLowerCase()} for this person — grant it under Household first`);
     friendly.code = err.code;
     friendly.status = err.status;
     throw friendly;
   });
 
   const [scanNow, scanRunning] = useAsyncAction(async () => {
-    const r = await runPass(runPrivacyScan);
+    const r = await runPass(runPrivacyScan, 'broker_scan');
     load();
     const verdicts = Object.entries(r?.verdicts || {}).map(([k, v]) => `${v} ${labelFor(CASE_STATES, k).toLowerCase()}`).join(', ');
     toast.success(r?.reason === 'no_scan_vectors'
@@ -115,7 +142,7 @@ export default function PrivacyBrokersTab({ subjectId }) {
   }, { errorMessage: 'Scan failed' });
 
   const [optOutNow, optOutRunning] = useAsyncAction(async () => {
-    const r = await runPass(runPrivacyOptOut);
+    const r = await runPass(runPrivacyOptOut, 'broker_optout');
     load();
     toast.success(r?.reason === 'no_disclosure_identity'
       ? 'Add a scan-eligible name to the vault to run an opt-out pass'
@@ -171,6 +198,14 @@ export default function PrivacyBrokersTab({ subjectId }) {
     else toast.error('Transition not allowed');
   };
 
+  const doEraseEvidence = async (kase) => {
+    setCaseBusy(true);
+    const r = await erasePrivacyCaseEvidence(kase.id, { silent: true }).catch(() => null);
+    setCaseBusy(false);
+    if (r) { setRevealed(null); toast.success('Identity evidence erased'); load(); }
+    else toast.error('Failed to erase identity evidence');
+  };
+
   const openDrawer = (id) => { searchParams.set('case', id); setSearchParams(searchParams, { replace: false }); };
   const closeDrawer = () => { searchParams.delete('case'); setSearchParams(searchParams, { replace: false }); };
 
@@ -208,6 +243,24 @@ export default function PrivacyBrokersTab({ subjectId }) {
       {/* ── Run controls ── */}
       <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
         <h2 className="text-sm font-semibold text-white">Run controls</h2>
+        {missingPurposes.length > 0 && (
+          <Banner
+            tone="warning"
+            icon={AlertTriangle}
+            actions={onManageConsent && (
+              <button
+                onClick={onManageConsent}
+                className="px-2.5 py-1 text-xs rounded border border-port-warning/40 hover:bg-port-warning/10"
+              >
+                Manage consent
+              </button>
+            )}
+          >
+            No active consent for {missingPurposes.map((p) => p.label.toLowerCase()).join(' or ')} for this person
+            — {missingPurposes.length === 1 ? 'that purpose is' : 'those purposes are'} refused, including on the automatic
+            schedule, until granted under Household.
+          </Banner>
+        )}
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => scanNow()}
@@ -241,7 +294,7 @@ export default function PrivacyBrokersTab({ subjectId }) {
               />
               <span className="text-sm text-gray-200">Automatic recheck schedule</span>
               {schedule.enabled && (
-                <span className="text-[11px] text-gray-500">runs a scan + opt-out pass on the cron below</span>
+                <span className="text-[11px] text-gray-500">runs a scan + opt-out pass on the cron below for each person with that consent</span>
               )}
             </label>
 
@@ -348,7 +401,7 @@ export default function PrivacyBrokersTab({ subjectId }) {
           <div className="space-y-1.5">
             {visibleCases.map((c) => {
               const broker = brokerById.get(c.brokerId);
-              const listingCount = Array.isArray(c.evidence?.listing_urls) ? c.evidence.listing_urls.length : 0;
+              const listingCount = c.identityEvidence?.listingCount ?? 0;
               return (
                 <button
                   key={c.id}
@@ -427,6 +480,8 @@ export default function PrivacyBrokersTab({ subjectId }) {
         onClose={closeDrawer}
         onRecheck={doRecheck}
         onTransition={doTransition}
+        identity={openCaseIdentity}
+        onEraseEvidence={doEraseEvidence}
         busy={caseBusy}
       />
     </div>

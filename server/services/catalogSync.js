@@ -13,10 +13,12 @@
  *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[media]=G&limit=100
  *   → { scraps[], ingredients[], sources[], refs[], relations[], tags[], media[], maxSequences, hasMore }
  *
- * The BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
- * sources.sync_sequence=50 isn't comparable to ingredients.sync_sequence=50.
- * The receiver therefore tracks one cursor per kind and `since` is `{ scraps,
- * ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
+ * Each kind is its own feed stream with its own commit-ordered positions
+ * (`sync_feed`, #8315 — drawn at COMMIT, so a late-committing transaction can
+ * never land below a cursor a peer already advanced past). Positions of
+ * different kinds are INDEPENDENT — sources position P isn't comparable to
+ * ingredients position P. The receiver therefore tracks one cursor per kind
+ * and `since` is `{ scraps, ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
  * back-compat / one-shot pulls and is applied uniformly to all four kinds.
  * `hasMore` is true when ANY of the four tables had more than `limit` rows
  * past its respective cursor — drain by re-pulling with the maxSequences from
@@ -46,7 +48,7 @@ import {
   upsertMediaFromPeer,
   normalizeTags,
 } from './catalogDB.js';
-import { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { compareSchemaVersions, scopeVersionDiff, formatVersionGap, catalogEnvelopeHasLiveRows, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../lib/catalogUniverseTags.js';
 import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../lib/catalogTypes.js';
 import { readUserTypes as readUserTypeSlice, writeUserTypes } from './catalogUserTypes/store.js';
@@ -93,8 +95,8 @@ export async function getChangesSince(since = '0', limit = 100) {
   // True per-table maxima, INDEPENDENT of the inbound cursor. `maxSequences`
   // (below) falls back to the inbound cursor on a quiet kind, so it can't be
   // used to detect a peer rebuild/restore — it would just echo the caller's
-  // cursor. `tableMaxSequences` reports the real MAX(sync_sequence) so the
-  // receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
+  // cursor. `tableMaxSequences` reports each stream's real max feed position so
+  // the receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
   const tableMaxSequences = await getMaxSequences();
 
   // User-defined type definitions ride EVERY envelope (not sequence-tracked —
@@ -131,8 +133,9 @@ export async function getChangesSince(since = '0', limit = 100) {
 
 export class CatalogSyncVersionMismatchError extends Error {
   constructor(diff) {
-    super(`catalog sync rejected: sender ahead on ${diff.ahead.map((g) => `${g.category} (v${g.senderV} vs v${g.receiverV})`).join(', ')}`);
+    super(`catalog sync rejected: ${formatVersionGap(diff)}`);
     this.name = 'CatalogSyncVersionMismatchError';
+    // Keep the established wire code so existing callers recognize the gap.
     this.code = 'CATALOG_SCHEMA_VERSION_AHEAD';
     this.status = 412;
     this.diff = diff;
@@ -140,14 +143,13 @@ export class CatalogSyncVersionMismatchError extends Error {
 }
 
 export async function applyRemoteChanges(envelope = {}) {
-  // Schema-version gate: a peer running a newer `catalog` schema would push
-  // forward-shaped data this install can't safely interpret. Match the
-  // memorySync pattern — reject ahead-mismatches with a 412.
+  // Whole-row LWW from an older sanitizer can erase new payload fields. Live
+  // catalog rows require equal versions; tombstones and empty pages are safe
+  // at any version. Scan all row blocks, including future envelope kinds.
   const senderVersions = envelope?.portosMeta?.schemaVersions || {};
-  const diff = compareSchemaVersions(senderVersions, PORTOS_SCHEMA_VERSIONS);
-  const aheadOnCatalog = diff.ahead.filter((g) => g.category === 'catalog');
-  if (aheadOnCatalog.length > 0) {
-    throw new CatalogSyncVersionMismatchError({ ahead: aheadOnCatalog, behind: [] });
+  const diff = scopeVersionDiff(compareSchemaVersions(senderVersions, PORTOS_SCHEMA_VERSIONS), ['catalog']);
+  if (catalogEnvelopeHasLiveRows(envelope) && !diff.compatible) {
+    throw new CatalogSyncVersionMismatchError(diff);
   }
 
   const stats = {
@@ -425,6 +427,6 @@ export function countAppliedFromStats(stats = {}) {
 }
 
 // Per-kind cursor view for the federation orchestrator. The previous scalar
-// `getMaxSequence` collapsed the four BIGSERIALs into one max — that lied
-// about the protocol (one cursor can't represent four independent sequences).
+// `getMaxSequence` collapsed the independent per-kind cursors into one max —
+// that lied about the protocol (one cursor can't represent four independent sequences).
 export { getMaxSequences };
