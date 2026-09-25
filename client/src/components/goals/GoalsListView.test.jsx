@@ -159,6 +159,10 @@ describe('handleOrganize apply-failure path', () => {
 
     await clickOrganize(user);
 
+    expect(createGoal).not.toHaveBeenCalled();
+    expect(updateGoal).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Apply Changes' }));
+
     // The apply helper stays silent so this handler is the only toast source.
     expect(createGoal).toHaveBeenCalledWith(expect.objectContaining({ goalType: 'apex' }), { silent: true });
     expect(applyGoalOrganization).not.toHaveBeenCalled();
@@ -177,11 +181,25 @@ describe('handleOrganize apply-failure path', () => {
     const onRefresh = await renderList();
 
     await clickOrganize(user);
+    expect(createGoal).not.toHaveBeenCalled();
+    expect(updateGoal).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Apply Changes' }));
 
     expect(toastError).not.toHaveBeenCalled();
     expect(toastSuccess).toHaveBeenCalledWith('Goal hierarchy applied');
     expect(onRefresh).toHaveBeenCalled();
   });
+});
+
+it('dismisses the suggestion without changing goals', async () => {
+  const user = userEvent.setup();
+  organizeGoals.mockResolvedValue(NEW_APEX_SUGGESTION);
+  await renderList();
+  await clickOrganize(user);
+  await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(screen.queryByText('Goal Organization')).not.toBeInTheDocument();
+  expect(createGoal).not.toHaveBeenCalled();
+  expect(updateGoal).not.toHaveBeenCalled();
 });
 
 // #4121: which goal is open lives in the URL, never in local state — so a specific goal is
