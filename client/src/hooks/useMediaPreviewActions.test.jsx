@@ -11,6 +11,10 @@ vi.mock('../services/apiImageVideo', () => ({
   removeImageWatermark: vi.fn(),
   getGalleryImages: vi.fn(),
   getVideoHistoryItem: vi.fn(),
+  // Hydration tries this first (mediaDetail.js's `fetchImageVariantGroup`,
+  // #8341); an empty group falls back to `getGalleryImages` exactly like the
+  // "not indexed" case the tests below exercise.
+  listImageVariants: vi.fn(async () => ({ items: [] })),
 }));
 
 import { removeImageWatermark, cleanGalleryImage, extractLastFrame, getGalleryImages, getVideoHistoryItem } from '../services/apiImageVideo';

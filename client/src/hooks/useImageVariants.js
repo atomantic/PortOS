@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listImageVariants } from '../services/apiImageVideo';
+import { fetchImageVariantGroup } from '../components/media/mediaDetail';
 import { normalizeImage } from '../components/media/normalize';
 
 /**
@@ -33,18 +33,19 @@ export default function useImageVariants(item) {
     && (fetched?.filename === filename || !!fetched?.items?.some((variant) => variant.filename === filename));
   useEffect(() => {
     if (!filename || holds) return undefined;
-    // Abort saves the server the work; `cancelled` guards the state write,
-    // because `request()` reports an abort as an ordinary failure and a late
-    // rejection would otherwise overwrite the next image's result.
+    // `fetchImageVariantGroup` (mediaDetail.js) de-dupes this read against
+    // `useHydratedPreviewRoute` hydrating the SAME filename at the same
+    // moment (#8341) — no AbortController here, because aborting would also
+    // cancel the other caller's share of the in-flight request. `cancelled`
+    // alone guards the state write against a stale response.
     let cancelled = false;
-    const controller = new AbortController();
-    listImageVariants(filename, { signal: controller.signal })
-      .then((result) => {
-        if (!cancelled) setFetched({ filename, items: Array.isArray(result?.items) ? result.items.map(normalizeImage) : null });
+    fetchImageVariantGroup(filename)
+      .then((items) => {
+        if (!cancelled) setFetched({ filename, items: Array.isArray(items) ? items.map(normalizeImage) : null });
       })
       // Non-fatal: `items: null` hands the answer back to the caller's list.
       .catch(() => { if (!cancelled) setFetched({ filename, items: null }); });
-    return () => { cancelled = true; controller.abort(); };
+    return () => { cancelled = true; };
   }, [filename, holds]);
   return holds ? fetched.items : null;
 }

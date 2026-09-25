@@ -65,6 +65,10 @@ describe('isolated fixture using real collection routes and storage', () => {
         headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filenames: [image.filename] }) });
       expect(lookup.status).toBe(200);
       expect((await lookup.json())[0].prompt.length).toBeGreaterThanOrEqual(8192);
+      // The lazy-detail read the lightbox actually makes on open (#8341): the
+      // group always carries the opened filename's own full record.
+      const variants = await get('/api/image-gen/' + encodeURIComponent(image.filename) + '/variants');
+      expect(variants.items.some(item => item.filename === image.filename && item.prompt.length >= 8192)).toBe(true);
       const video = compact.items.find(item => item.kind === 'video').data;
       expect((await get('/api/video-gen/history/' + video.id)).prompt.length).toBeGreaterThanOrEqual(8192);
       const inbox = await get('/api/messages/inbox?limit=11&offset=20&summary=true');

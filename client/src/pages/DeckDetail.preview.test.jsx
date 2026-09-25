@@ -27,6 +27,10 @@ vi.mock('../services/api', () => ({
 vi.mock('../services/apiImageVideo', () => ({
   getGalleryImages: (...a) => getGalleryImages(...a),
   getVideoHistoryItem: (...a) => getVideoHistoryItem(...a),
+  // Hydration tries this first (mediaDetail.js's `fetchImageVariantGroup`,
+  // #8341); an empty group falls back to `getGalleryImages` below exactly
+  // like the "not indexed" case these tests exercise.
+  listImageVariants: vi.fn(async () => ({ items: [] })),
 }));
 vi.mock('../components/media/MediaPreview', () => ({
   default: (props) => { previewProps = props; return null; },

@@ -44,7 +44,7 @@ async function scenario(route) {
       if (url.origin !== fixture.url) return;
       const endpoint = endpointFor(response.url());
       const responsePhase = phase;
-      if (endpoint !== listEndpoint && !['/api/messages/:account/:message', '/api/video-gen/history/:record', '/api/image-gen/gallery/lookup'].includes(endpoint)) return;
+      if (endpoint !== listEndpoint && !['/api/messages/:account/:message', '/api/video-gen/history/:record', '/api/image-gen/:record/variants'].includes(endpoint)) return;
       const inspect = (async () => {
         if (response.status() !== 200) {
           failures.push({ endpoint, reason: 'collection-http-status', count: response.status(), bytes: 0 }); return;
@@ -61,7 +61,13 @@ async function scenario(route) {
           failures.push(...inspected.failures);
         } else {
           details++;
-          if (responsePhase !== 'detail' || (media ? !((Array.isArray(payload) ? payload[0]?.prompt : payload.prompt)?.length >= fixture.cardinalities.detailCharacters) : payload.bodyText?.length !== fixture.cardinalities.detailCharacters)) {
+          // Media detail now arrives as the variants group ({ items: [...] },
+          // the opened filename's own record among them) rather than the
+          // retired gallery/lookup array (#8341); an object payload (video
+          // history) still carries `prompt` directly.
+          const mediaPrompt = Array.isArray(payload) ? payload[0]?.prompt
+            : Array.isArray(payload?.items) ? payload.items[0]?.prompt : payload.prompt;
+          if (responsePhase !== 'detail' || (media ? !(mediaPrompt?.length >= fixture.cardinalities.detailCharacters) : payload.bodyText?.length !== fixture.cardinalities.detailCharacters)) {
             failures.push({ endpoint, reason: 'lazy-detail-contract', bytes: body.length });
           }
         }
