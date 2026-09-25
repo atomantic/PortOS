@@ -88,7 +88,7 @@ export default function InfoTooltip({
         <div
           id={panelId}
           role="tooltip"
-          className={`absolute ${placementClass} ${alignClass} z-50 rounded-lg border border-port-border bg-gray-800 px-3 py-2 text-xs text-gray-300 shadow-lg ${panelClassName}`}
+          className={`port-opaque-surface absolute ${placementClass} ${alignClass} z-50 rounded-lg border border-port-border bg-gray-800 px-3 py-2 text-xs text-gray-300 shadow-lg ${panelClassName}`}
         >
           {children}
         </div>
