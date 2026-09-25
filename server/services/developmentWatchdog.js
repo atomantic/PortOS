@@ -12,6 +12,27 @@ const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
 const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
 
+function reviewFollowUpPrNumber(task, target) {
+  const metadata = task?.metadata || {};
+  if (metadata.reviewLoopFollowUp !== true && metadata.reviewLoopFollowUp !== 'true') return null;
+  let url;
+  try { url = new URL(metadata.reviewLoopPRUrl || metadata.prUrl); } catch { return null; }
+  const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/);
+  if (!match || !['https:', 'http:'].includes(url.protocol)) return null;
+  const host = url.hostname.toLowerCase();
+  const expectedHost = String(target.webHost || target.apiHost || '').toLowerCase();
+  if (expectedHost && host !== expectedHost) return null;
+  if (metadata.reviewLoopPRHost && String(metadata.reviewLoopPRHost).toLowerCase() !== host) return null;
+  const fullName = `${match[1]}/${match[2]}`.toLowerCase();
+  const expectedName = String(target.fullName || '').toLowerCase();
+  if (expectedName && fullName !== expectedName) return null;
+  const urlNumber = Number(match[3]);
+  const metadataNumber = Number(metadata.reviewLoopPRNumber);
+  if (metadata.reviewLoopPRNumber != null && metadata.reviewLoopPRNumber !== ''
+      && (!Number.isSafeInteger(metadataNumber) || metadataNumber !== urlNumber)) return null;
+  return Number.isSafeInteger(urlNumber) && urlNumber > 0 ? urlNumber : null;
+}
+
 function authorized(state, appId, write = false) {
   const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
   const caps = normalizePersistentMindCapabilities(state.config?.persistentMindCapabilities);
@@ -52,7 +73,7 @@ async function participatingPeerTasks() {
   return { tasks, blockers };
 }
 
-async function inspectApp(app, tasks) {
+async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds = new Set()) {
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { listAppPullRequests } = await import('./appPullRequests.js');
   const { detectActionableWork, listConfiguredForgeIssues, issueNumberFromRef } = await import('./perpetualWork.js');
@@ -62,7 +83,10 @@ async function inspectApp(app, tasks) {
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
   const { execGit } = await import('../lib/execGit.js');
   const { tracker, target } = await resolveAppForgeTarget(app);
-  const row = { appId: app.id, repository: target?.fullName || null, complete: false, blockers: [], pullRequests: [], issues: [], eligibleCount: 0 };
+  const row = {
+    appId: app.id, repository: target?.fullName || null, complete: false, blockers: [],
+    pullRequests: [], issues: [], terminalReviewFollowUps: [], retiredReviewFollowUps: [], eligibleCount: 0,
+  };
   // Other forge support remains explicit rather than silently using GitHub semantics.
   if (tracker !== 'github' || !target?.repoSpec) { row.blockers.push('unsupported-forge'); return row; }
   const account = target.fullName?.split('/')[0]?.toLowerCase() === 'atomantic' ? 'atomantic' : app.forgeAccount;
@@ -109,6 +133,26 @@ async function inspectApp(app, tasks) {
     row.pullRequests.push({ number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
       reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? 'external-claim-owner-unverified' : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
   }
+  if (localReviewTasks.length) {
+    const { getPullRequestState } = await import('./github.js');
+    const openNumbers = new Set(row.pullRequests.map(pr => Number(pr.number)));
+    const candidates = localReviewTasks.filter(task => task.status === 'pending'
+      && task.metadata?.app === app.id && !activeAgentTaskIds.has(task.id))
+      .map(task => ({ task, number: reviewFollowUpPrNumber(task, target) }))
+      .filter(candidate => candidate.number && !openNumbers.has(candidate.number));
+    const states = new Map();
+    for (const candidate of candidates) {
+      if (!states.has(candidate.number)) {
+        states.set(candidate.number, await getPullRequestState(String(candidate.number), {
+          cwd: app.repoPath, env: exec.env,
+        }).catch(() => null));
+      }
+      const state = states.get(candidate.number);
+      if (state?.status === 'known' && ['MERGED', 'CLOSED'].includes(state.state)) {
+        row.terminalReviewFollowUps.push({ taskId: candidate.task.id, prNumber: candidate.number, prState: state.state });
+      }
+    }
+  }
   row.eligibleCount = backlog.count || 0;
   const externalClaims = new Set([
     ...branches.stdout.split('\n').map(line => line.trim().split(/\s+/).at(-1)?.replace(/^refs\/heads\//, '')),
@@ -126,6 +170,24 @@ async function inspectApp(app, tasks) {
   }
   row.complete = true;
   return row;
+}
+
+async function retireTerminalReviewFollowUps(app, row) {
+  if (!row.terminalReviewFollowUps?.length) return;
+  const { updateTask } = await import('./cosTaskStore.js');
+  const activeAgentStatuses = new Set(['running', 'queued', 'finalizing', 'paused']);
+  for (const followUp of row.terminalReviewFollowUps) {
+    const current = await loadState();
+    if (!authorized(current, app.id, true)) return;
+    const hasAgent = Object.values(current.agents || {}).some(agent => agent.taskId === followUp.taskId
+      && activeAgentStatuses.has(agent.status));
+    if (hasAgent) continue;
+    const reason = followUp.prState === 'MERGED' ? 'pull-request-merged-before-follow-up' : 'pull-request-closed-before-follow-up';
+    const result = await updateTask(followUp.taskId, {
+      status: 'completed', metadata: { reviewLoopRetiredReason: reason },
+    }, 'internal', { expectedStatus: 'pending', suppressDequeue: true });
+    if (result?.status === 'completed') row.retiredReviewFollowUps.push({ ...followUp, reason });
+  }
 }
 
 async function dispatch(app, decision) {
@@ -226,12 +288,18 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
   } else {
     const { getActiveApps } = await import('./apps.js');
     const { getAllTasks } = await import('./cosTaskStore.js');
-    const tasks = tasksFrom(await getAllTasks());
+    const taskSources = await getAllTasks();
+    const tasks = tasksFrom(taskSources);
+    const localReviewTasks = taskSources.cos?.tasks || [];
     const peers = await participatingPeerTasks();
     const allTasks = [...tasks, ...peers.tasks];
     const agents = Object.values(state.agents || {});
     // Include finalization and queued ownership, not only live subprocesses.
     const activeAgents = agents.filter(agent => ['running', 'queued', 'finalizing', 'paused'].includes(agent.status));
+    const activeAgentTaskIds = new Set([
+      ...activeAgents.map(agent => agent.taskId),
+      ...allTasks.filter(task => ['queued', 'running', 'in_progress', 'finalizing', 'paused'].includes(task.status)).map(task => task.id),
+    ].filter(Boolean));
     for (const agent of activeAgents) {
       const task = tasks.find(t => t.id === agent.taskId);
       if (task) allTasks.push({ ...task, status: 'running' });
@@ -249,8 +317,13 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
       const app = apps.find(item => item.id === id);
       if (!app || !authorized(state, id)) { receipt.apps.push({ appId: id, complete: false, blockers: ['app-unavailable-or-not-granted'], pullRequests: [], issues: [] }); continue; }
       let row;
-      try { row = await inspectApp(app, allTasks); }
+      try { row = await inspectApp(app, allTasks, localReviewTasks, activeAgentTaskIds); }
       catch { row = { appId: id, complete: false, blockers: ['source-unavailable'], pullRequests: [], issues: [] }; }
+      if (row.complete && !dryRun && !peers.blockers.length && authorized(state, id, true)) {
+        await retireTerminalReviewFollowUps(app, row).catch(err => {
+          console.error(`❌ Development watchdog could not retire a completed PR follow-up: ${err.message}`);
+        });
+      }
       for (const pr of row.pullRequests) {
         const previous = state.developmentWatchdog?.dispatches?.[`${id}:pr:${pr.number}`];
         if (pr.disposition === 'eligible' && previous?.fingerprint === pr.fingerprint) {
