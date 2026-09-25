@@ -375,9 +375,17 @@ async function cutoffForKind(recordKind, { peers, subs, now, graceMs }) {
 // `sweepTombstones` and `getSweepStatus` read these once and thread them
 // through the pure helpers, so the orchestrator's 60s loop hits the file
 // system twice per cycle instead of six times.
+//
+// getPeers() rejects only when the registry file exists but can't be read
+// (jsonIo's `strict: true`); a genuinely absent instances.json resolves to
+// an empty peer list instead. Do NOT swallow that rejection here — an empty
+// peer list widens every cutoff to "prune everything older than the grace
+// window", so a transient/corrupt read must fail the sweep, not fail open
+// into an unbounded prune. Callers (runTombstoneSweep, the manual sweep
+// route) already handle and log a rejected loadState().
 async function loadState() {
   const [peers, subs] = await Promise.all([
-    getPeers().catch(() => []),
+    getPeers(),
     listPeerSubscriptions(),
   ]);
   return { peers, subs };
