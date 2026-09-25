@@ -20,7 +20,7 @@ export async function authorizeIncomingPush(payload, { peerToken, pullPeerId } =
   const localPull = peer && typeof pullPeerId === 'string' && pullPeerId.length > 0
     && pullPeerId === peer.id && typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32;
   if (!localPull && !peerSyncTokenMatches(peer, peerToken)) {
-    throw new ServerError('Configure the same peer sync secret on both instances before pushing records', {
+    throw new ServerError('Pair this peer from its Instances page before pushing records', {
       status: 401, code: 'PEER_SYNC_AUTH_REQUIRED',
     });
   }

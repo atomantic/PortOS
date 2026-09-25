@@ -19,6 +19,8 @@ import * as tailcatPeer from '../services/tailcatPeer.js';
 import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { isPeerBasicBootstrapRequest } from '../lib/apiAccessPolicy.js';
 
 const router = Router();
 
@@ -31,7 +33,16 @@ router.use(asyncHandler(async (req, _res, next) => {
   // Vite and other private transports can forward a remote request over a
   // loopback socket. Neither that socket nor supplied Origin/Host proves the
   // operator's identity. Verify the existing session even when auth is off.
-  if (!isCrossOrigin(req) && await verifySession(extractToken(req))) return next();
+  if (!isCrossOrigin(req) && await verifySession(extractToken(req))) {
+    req.peerSettingsOperator = true;
+    return next();
+  }
+  // The pairing callback is the only peer-settings mutation accepted with
+  // Basic auth. It is bound to the caller's existing peer identity below and
+  // installs only a peer-scoped secret; peer tokens still cannot reach it.
+  if (req.portosAuthContext?.authenticated === true
+    && req.portosAuthContext.method === 'basic'
+    && isPeerBasicBootstrapRequest(req.method, `/api/instances${req.path.toLowerCase()}`)) return next();
   throw new ServerError('Sign in with an operator session to change peer settings', {
     status: 403, code: 'PEER_SETTINGS_OPERATOR_REQUIRED',
   });
@@ -109,6 +120,8 @@ const reciprocalSyncSchema = z.object({
   // older peers (they reciprocate via the all-on syncCategories map instead).
   fullSync: z.boolean().optional()
 });
+
+const pairSecretSchema = z.object({ syncSecret: z.string().min(32).max(256) });
 
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
@@ -344,6 +357,13 @@ router.put('/peers/:id', asyncHandler(async (req, res) => {
   res.json(instances.sanitizePeerForClient(peer));
 }));
 
+// POST /api/instances/peers/:id/pair-secret — generate and provision a pair
+// secret on this peer and the remote instance without exposing it to the UI.
+router.post('/peers/:id/pair-secret', asyncHandler(async (req, res) => {
+  const peer = await instances.pairPeerSyncSecret(req.params.id);
+  res.json(instances.sanitizePeerForClient(peer));
+}));
+
 // DELETE /api/instances/peers/:id — remove peer
 router.delete('/peers/:id', asyncHandler(async (req, res) => {
   const removed = await instances.removePeer(req.params.id);
@@ -372,6 +392,29 @@ router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
   // (username + hasPassword) for reaching them across the peer boundary, the
   // same leak the /announce route guards against with redactPeerForWire.
   res.json({ applied: changed });
+}));
+
+// POST /api/instances/peers/pair-secret — one-time setup using the instance
+// password, bound to the caller's already-registered peer identity. The raw
+// secret is persisted locally and never returned to the caller.
+router.post('/peers/pair-secret', asyncHandler(async (req, res) => {
+  if (req.peerSettingsOperator !== true
+    && !(req.portosAuthContext?.authenticated === true
+      && req.portosAuthContext.method === 'basic')) {
+    throw new ServerError('Pairing requires an operator session or the peer’s saved instance password.', {
+      status: 403, code: 'PEER_PAIR_OPERATOR_REQUIRED',
+    });
+  }
+  const { syncSecret } = validateRequest(pairSecretSchema, req.body || {});
+  const instanceId = req.get(PEER_INSTANCE_HEADER);
+  if (!z.string().uuid().safeParse(instanceId).success) {
+    throw new ServerError('A valid peer instance identity is required for pairing.', {
+      status: 400, code: 'PEER_IDENTITY_REQUIRED',
+    });
+  }
+  const peer = await instances.acceptPeerSyncSecretFromPeer(instanceId, syncSecret);
+  if (!peer) throw new ServerError('This instance is not registered as a peer here.', { status: 404, code: 'PEER_NOT_FOUND' });
+  res.json({ paired: true });
 }));
 
 // POST /api/instances/peers/:id/reciprocate — explicit "make all enabled

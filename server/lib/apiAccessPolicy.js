@@ -17,7 +17,8 @@ export const isAlwaysPublicApiPath = (path) => alwaysPublicPathSet.has(path);
 
 // The federation surface a paired peer's scoped credential (`method: 'peer'`,
 // #8356) may reach. Everything else — agent spawns, app lifecycle, git/file
-// routes, settings writes — needs an operator session (#8387). Each entry
+// routes, settings writes — needs an operator session (#8387), except the
+// separately listed one-time Basic-auth pair bootstrap. Each entry
 // matches one `path` exactly (a trailing `/` is ignored) or every path under
 // `prefix`; `methods: null` admits any method. This list IS the peer contract
 // across versions: dropping an entry makes an older peer that still calls it
@@ -61,6 +62,13 @@ export const PEER_API_SURFACE = Object.freeze([
   { prefix: '/data/writers-room/works/', methods: READ },
 ]);
 
+// One explicit, Basic-authenticated bootstrap operation provisions a generated
+// pair secret onto the caller's existing peer record. It is deliberately not
+// in PEER_API_SURFACE: a scoped peer token cannot change local peer settings.
+export const PEER_BASIC_BOOTSTRAP_SURFACE = Object.freeze([
+  { path: '/api/instances/peers/pair-secret', methods: Object.freeze(['POST']) },
+]);
+
 // Dot segments and empty segments never appear in a URL a peer builds; refusing
 // them keeps a prefix match from being argued past by a path that a later layer
 // might normalize differently.
@@ -73,4 +81,12 @@ export const isPeerApiRequestAllowed = (method, path) => {
   const exact = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
   return PEER_API_SURFACE.some((rule) => (rule.methods === ANY_METHOD || rule.methods.includes(verb))
     && (rule.path ? rule.path === exact : path.startsWith(rule.prefix) && path.length > rule.prefix.length));
+};
+
+/** Whether a path is reserved for a caller verified with instance-password Basic auth. */
+export const isPeerBasicBootstrapRequest = (method, path) => {
+  if (typeof path !== 'string' || typeof method !== 'string' || hasAmbiguousSegment(path)) return false;
+  const verb = method.toUpperCase();
+  const exact = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+  return PEER_BASIC_BOOTSTRAP_SURFACE.some((rule) => rule.methods.includes(verb) && rule.path === exact);
 };

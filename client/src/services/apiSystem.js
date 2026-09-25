@@ -456,6 +456,7 @@ export const startTailcatServe = (data) => request('/instances/peers/tailcat/ser
 export const retryTailcatServe = () => request('/instances/peers/tailcat/serve/retry', { method: 'POST' });
 export const stopTailcatServe = () => request('/instances/peers/tailcat/serve', { method: 'DELETE' });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const pairPeerSyncSecret = (id, options) => request(`/instances/peers/${id}/pair-secret`, { method: 'POST', ...options });
 export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'DELETE' });
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });
 export const reciprocatePeer = (id, options) => request(`/instances/peers/${id}/reciprocate`, { method: 'POST', ...options });
