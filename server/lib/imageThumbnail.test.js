@@ -8,12 +8,17 @@ const sharpCalls = vi.hoisted(() => ({ count: 0 }));
 vi.mock('./fileUtils.js', async (original) => makePathsProxy(await original(), { dataRoot: tempRoot }));
 vi.mock('sharp', async (original) => {
   const real = (await original()).default;
-  return { default: (...args) => { sharpCalls.count += 1; return real(...args); } };
+  const wrapped = (...args) => { sharpCalls.count += 1; return real(...args); };
+  wrapped.cache = (...args) => real.cache(...args);
+  return { default: wrapped };
 });
 
 const { default: sharp } = await import('sharp');
 const { ensureImageThumbnail } = await import('./imageThumbnail.js');
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+afterAll(() => {
+  sharp.cache({ files: 0 });
+  rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 beforeEach(() => { sharpCalls.count = 0; });
 
 async function source(name) {
@@ -34,6 +39,9 @@ describe('image thumbnails', () => {
     const info = await sharp(target).metadata();
     expect(info.format).toBe('webp');
     expect(info.width).toBe(683);
+    // libvips may keep a metadata-read input file open in its cache. Release it
+    // before testing a Windows rewrite of that same derivative.
+    sharp.cache({ files: 0 });
     sharpCalls.count = 0;
     expect(await ensureImageThumbnail('example.webp')).toBe(true);
     expect(sharpCalls.count).toBe(0);

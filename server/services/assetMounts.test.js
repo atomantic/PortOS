@@ -28,7 +28,10 @@ const tempRoot = createTempDataRoot('portos-asset-mounts-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
 ));
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+afterAll(() => {
+  sharp.cache({ files: 0 });
+  rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 
 // Dynamic, not a static import: the `vi.mock` factory above closes over
 // `tempRoot`, and a static import would be hoisted above that binding.
