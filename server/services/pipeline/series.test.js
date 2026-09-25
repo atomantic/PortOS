@@ -304,6 +304,64 @@ describe('pipeline series service', () => {
     await expect(svc.updateSeries('ser-nope', { name: 'x' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  // Mutator-form coverage (issue #8453) — mirrors updateUniverse's mutator
+  // tests in server/services/universeBuilder.test.js. commitImport needs this
+  // overload so a read-modify-write that straddles a slow LLM call (the
+  // importer's cleanupFormatting pass) merges against the freshest persisted
+  // series instead of a snapshot taken before the call.
+  it('updateSeries accepts a mutator(latest) callback that runs inside the queue', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', logline: 'before' });
+    const mutator = vi.fn(async (latest) => {
+      expect(latest.id).toBe(s.id);
+      return { logline: `${latest.logline} → after` };
+    });
+    const patched = await svc.updateSeries(s.id, mutator);
+    expect(mutator).toHaveBeenCalledTimes(1);
+    expect(patched.logline).toBe('before → after');
+  });
+
+  it('updateSeries short-circuits with no write when the mutator returns null', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run' });
+    const beforeUpdatedAt = s.updatedAt;
+    const patched = await svc.updateSeries(s.id, async () => null);
+    expect(patched.updatedAt).toBe(beforeUpdatedAt);
+    expect(patched.id).toBe(s.id);
+  });
+
+  it('updateSeries mutator that throws propagates without writing', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', logline: 'untouched' });
+    await expect(
+      svc.updateSeries(s.id, async () => { throw new Error('mutator boom'); }),
+    ).rejects.toThrow('mutator boom');
+    const fresh = await svc.getSeries(s.id);
+    expect(fresh.logline).toBe('untouched');
+  });
+
+  it('updateSeries mutator returning a non-object value throws ERR_VALIDATION', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run' });
+    await expect(
+      svc.updateSeries(s.id, async () => 'not-an-object'),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(
+      svc.updateSeries(s.id, async () => []),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it('updateSeries mutator sees a concurrent write that landed before it ran (queued)', async () => {
+    const s = await svc.createSeries({ name: 'Salt Run', seasons: [{ number: 1, title: 'Foundry' }] });
+    // A concurrent literal-patch write races the mutator; the write queue
+    // serializes them so the mutator observes whichever landed first.
+    const [, mutated] = await Promise.all([
+      svc.updateSeries(s.id, { seasons: [{ number: 1, title: 'Foundry' }, { number: 2, title: 'Concurrent' }] }),
+      svc.updateSeries(s.id, async (latest) => ({ seasons: [...latest.seasons, { number: 3, title: 'Mutator-added' }] })),
+    ]);
+    const numbers = mutated.seasons.map((season) => season.number).sort();
+    // Whichever write the queue ran first, the mutator's own write always
+    // carries season 3 forward — the regression this covers is losing it to
+    // a merge against a stale pre-queue snapshot.
+    expect(numbers).toContain(3);
+  });
+
   it('updateSeries rejects clearing universeId once a series is linked (hierarchy invariant)', async () => {
     const s = await svc.createSeries({ name: 'Linked', universeId: 'u-1' });
     await expect(svc.updateSeries(s.id, { universeId: '' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });

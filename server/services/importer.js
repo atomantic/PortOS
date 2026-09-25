@@ -1024,9 +1024,16 @@ export async function commitImport({
     throw makeErr('At least one issue is required', ERR_VALIDATION);
   }
 
-  // Re-fetch under the universe + series lock window so we apply the merge
-  // against the freshest persisted state — the user may have edited the
-  // universe canon in another tab between analyze and commit.
+  // Read for validation (universeId/seriesId linkage, lock checks, the
+  // arcPosition/season-number gates below) and for the up-front counts used
+  // to size auto-assigned positions and the additive issue-count target.
+  // NOT the source of truth the universe/series writes below merge against —
+  // `cleanupFormatting` can spend minutes in per-issue LLM calls after this
+  // read, so a concurrent edit to universe canon or series seasons could
+  // land in that window. The actual canon/season merges use the mutator form
+  // of `updateUniverse`/`updateSeries`, which re-reads the freshest persisted
+  // record inside the write queue (issue #8453) — this snapshot is stale by
+  // the time those writes run.
   const universe = await getUniverse(universeId);
   const series = await getSeries(seriesId);
 
@@ -1266,23 +1273,33 @@ export async function commitImport({
   // Only merge kinds the user actually supplied entries for — calling
   // mergeExtractedBible with an empty list still rebuilds the array and
   // re-stamps timestamps, churning the file write for no behavior change.
-  const universePatch = Object.fromEntries(
-    KIND_MAP
-      .filter(([selectionKey]) => (canonSelections[selectionKey] || []).length > 0)
-      .map(([selectionKey, kind, storageKey]) => [
-        storageKey,
-        mergeExtractedBible(
-          universe[storageKey] || [],
-          canonSelections[selectionKey],
-          kind,
-          { source: 'imported' },
-        ),
-      ]),
-  );
+  // Selection kinds are fixed by `canonSelections` (the AI-extraction output),
+  // not by anything on `universe`, so this gate is safe to evaluate against
+  // the up-front snapshot even though the write below re-reads fresh state.
+  const selectedKindMap = KIND_MAP
+    .filter(([selectionKey]) => (canonSelections[selectionKey] || []).length > 0);
   // If the user supplied no canon at all (arc-only import), skip the
   // updateUniverse round-trip entirely.
-  const updatedUniverse = Object.keys(universePatch).length > 0
-    ? await updateUniverse(universe.id, universePatch)
+  //
+  // Mutator form (issue #8453): `cleanupFormatting` above can spend minutes
+  // in per-issue LLM calls between the up-front `getUniverse` read and this
+  // write. Merging against the stale `universe` snapshot here would silently
+  // drop any canon edit a concurrent tab/job made to the SAME array during
+  // that window (mergeExtractedBible rebuilds the whole array from its base
+  // list). Merging against `latest` — the freshest persisted record, read
+  // inside updateUniverse's write queue — closes that race.
+  const updatedUniverse = selectedKindMap.length > 0
+    ? await updateUniverse(universe.id, (latest) => Object.fromEntries(
+        selectedKindMap.map(([selectionKey, kind, storageKey]) => [
+          storageKey,
+          mergeExtractedBible(
+            latest[storageKey] || [],
+            canonSelections[selectionKey],
+            kind,
+            { source: 'imported' },
+          ),
+        ]),
+      ))
     : universe;
 
   const sanitizedArc = sanitizeArc(arc);
@@ -1325,20 +1342,40 @@ export async function commitImport({
       ...biblePatch,
     });
   } else if (sanitizedArc || seasons.length > 0 || Object.keys(biblePatch).length > 0) {
-    // Only build + persist a seasons array when the caller actually sent
-    // some — otherwise an arc-only re-import on a series that already has
-    // seasons rewrites the array byte-for-byte identical (just to bump
-    // sanitizeSeasonList's normalization), a wasted disk write.
-    const seasonsPatch = seasons.length > 0
-      ? { seasons: sanitizeSeasonList(mergeSeasons(
-          Array.isArray(series.seasons) ? series.seasons : [],
-          seasons,
-        )) }
-      : {};
-    updatedSeries = await updateSeries(series.id, {
-      ...(sanitizedArc ? { arc: sanitizedArc } : {}),
-      ...seasonsPatch,
-      ...biblePatch,
+    // Mutator form (issue #8453): same race as the universe write above —
+    // `cleanupFormatting` can run for minutes before this write, during which
+    // a concurrent tab/job may add or edit a season on this series.
+    // `mergeSeasons` rebuilds the whole array from its base list, so merging
+    // against the stale `series` snapshot captured before that window would
+    // silently drop the concurrent edit. Recompute the seasons merge and the
+    // empty-field fill-ins against `latest` — the freshest persisted record,
+    // read inside updateSeries's write queue.
+    updatedSeries = await updateSeries(series.id, (latest) => {
+      // Only build + persist a seasons array when the caller actually sent
+      // some — otherwise an arc-only re-import on a series that already has
+      // seasons rewrites the array byte-for-byte identical (just to bump
+      // sanitizeSeasonList's normalization), a wasted disk write.
+      const seasonsPatch = seasons.length > 0
+        ? { seasons: sanitizeSeasonList(mergeSeasons(
+            Array.isArray(latest.seasons) ? latest.seasons : [],
+            seasons,
+          )) }
+        : {};
+      const latestBiblePatch = {};
+      if (arcLogline && !(latest.logline || '').trim()) latestBiblePatch.logline = arcLogline;
+      if (arcPremise && !(latest.premise || '').trim()) latestBiblePatch.premise = arcPremise;
+      // Additive: target the POST-import total (issues already on the series
+      // plus the ones being added), not just this batch — adding 3 issues to
+      // a series that already has 2 should target 5, not 3. `existingIssues`
+      // is the up-front count; the issue-create loop below still runs
+      // sequentially against `latest`'s state, so this total stays accurate.
+      const additiveTotal = existingIssues.length + issueCount;
+      if (additiveTotal > 0 && !(latest.issueCountTarget > 0)) latestBiblePatch.issueCountTarget = additiveTotal;
+      return {
+        ...(sanitizedArc ? { arc: sanitizedArc } : {}),
+        ...seasonsPatch,
+        ...latestBiblePatch,
+      };
     });
   }
 
