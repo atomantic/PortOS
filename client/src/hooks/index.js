@@ -245,3 +245,4 @@ export * from './useAccountSyncStatus.js';
 export * from './useActionQueue.js';
 
 export * from './usePagedCollection.js';
+export * from './useGoalOrganize.js';
