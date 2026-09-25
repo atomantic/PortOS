@@ -19,7 +19,7 @@ import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
-import usePreviewRoute from '../hooks/usePreviewRoute';
+import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import {
   deleteVideoHistoryItem, stitchVideos, deleteImage,
@@ -48,7 +48,11 @@ export default function MediaHistory() {
   }, [saveAnnotation]);
   const toggleStar = useCallback(item => item?.key && updateAnnotation(item.key, { starred: !annotations[item.key]?.starred }), [annotations, updateAnnotation]);
   const annotationRevision = favoritesOnly ? JSON.stringify(Object.entries(annotations).map(([key, value]) => [key, value.starred, value.updatedAt]).sort()) : '';
-  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true }, { media: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
+  // Visible rows only, as compact cards (#8292): the full record — prompt,
+  // negative prompt, settings — is read when a card is opened or handed to a
+  // generator, never for the whole page. Search and counts stay server-side
+  // over the full metadata.
+  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true, hidden: false, compact: true }, { media: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
   const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
   const setItems = useCallback(updater => page.setItems(previous => {
@@ -58,7 +62,7 @@ export default function MediaHistory() {
   }), [page.setItems]);
   const filtered = items;
   const visibleItems = items;
-  const [preview, setPreview] = usePreviewRoute(items);
+  const [preview, setPreview] = useHydratedPreviewRoute(items);
   useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh });
 
   const toggleSelect = useCallback((videoId) => {

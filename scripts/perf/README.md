@@ -128,12 +128,18 @@ Run deterministic accounting and regression-gate tests from `server/`:
 npm test -- ../scripts/perf/collectionTraffic.test.js
 ~~~
 
-### Initial findings
+### Findings
 
 The initial synthetic run identified media contract failures tracked in #8292:
 full prompt fields in the first 60-row response (511,086 decoded bytes), totals
-including hidden records, and no lazy media detail read. These remain hard
-failures, not an accepted baseline. Inbox summary/detail and Contacts idle gates
-passed, including a full idle minute with zero HTTP transfer and four bytes of
-socket heartbeat payload. Completing #8292 is necessary before this audit can
-report an overall pass. This runner does not claim all #8232 contracts are met.
+including hidden records, and no lazy media detail read. #8292 moved Media
+History to visible-only compact rows (`hidden=false&compact=true`) with
+single-record hydration on open; the fixture serves the same bounded image
+lookup and video-history record readers the migrated UI calls. The media
+scenario now passes with a 32,212-byte first page, visible/hidden totals of
+3,240/360, no cold detail reads, and exactly one detail read when a row opens.
+Image variant lineage (`/api/image-gen/:filename/variants`) remains outside the
+fixture and is counted as unavailable. Inbox summary/detail and Contacts idle
+gates passed, including a full idle minute with zero HTTP transfer and four
+bytes of socket heartbeat payload. This runner does not claim all #8232
+contracts are met.

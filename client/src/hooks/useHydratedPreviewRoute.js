@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import usePreviewRoute from './usePreviewRoute';
-import { getGalleryImages, getVideoHistoryItem } from '../services/apiImageVideo';
-import { normalizeImage, normalizeVideo } from '../components/media/normalize';
+import { fetchMediaRecord, mediaRecordRef, mergeMediaRecord } from '../components/media/mediaDetail';
 
 /**
  * `usePreviewRoute` plus lazy hydration of the OPEN item from its gallery
@@ -35,20 +34,27 @@ import { normalizeImage, normalizeVideo } from '../components/media/normalize';
  * annotation lookup both match on it, so a key that drifted from the list would
  * silently disable both.
  *
+ * A compact list item (`item.compact`, #8292) carries only a prompt preview,
+ * so for it a failed or empty lookup is not a quiet miss: the returned preview
+ * stays `compact` and gains `detailError: true`, and closing then reopening it
+ * retries. The lightbox withholds prompt editing while an item is compact.
+ *
  * Same `[preview, setPreview]` shape as `usePreviewRoute`; `options` passes
  * straight through (`paramName`, `resolveItem`).
  */
 export default function useHydratedPreviewRoute(items, options) {
   const [preview, setPreview] = usePreviewRoute(items, options);
-  // What the record is looked up BY: images by filename, videos by history id.
-  // An item with neither (a synthetic entry backed by no gallery record) has
-  // nothing to hydrate from and passes through untouched.
+  // An item with no filename/id (a synthetic entry backed by no gallery
+  // record) has nothing to hydrate from and passes through untouched.
   const kind = preview?.kind;
-  const ref = (kind === 'image' && preview.filename) || (kind === 'video' && preview.id) || null;
+  const ref = mediaRecordRef(preview);
+  const compact = !!preview?.compact;
   // Cache the fetched records, not the merged items: the host's item identity
   // can change between opens (a re-render rebuilding the list) while the record
   // for a given filename/id does not.
   const [records, setRecords] = useState(() => new Map());
+  // Compact items whose lookup failed or found nothing — cleared on retry.
+  const [failed, setFailed] = useState(() => new Set());
   // Every key already ATTEMPTED — hits and misses alike, so a legacy render
   // that has no record, or one whose lookup 404s, is asked for once rather than
   // on every reopen. Held in a ref so the effect can read it without taking the
@@ -60,45 +66,37 @@ export default function useHydratedPreviewRoute(items, options) {
     const lookupKey = `${kind}:${ref}`;
     if (!ref || attemptedRef.current.has(lookupKey)) return undefined;
     let cancelled = false;
+    setFailed((prev) => (prev.has(lookupKey) ? withoutKey(prev, lookupKey) : prev));
     const settle = (record) => {
       if (cancelled) return;
-      attemptedRef.current.add(lookupKey);
-      if (record) setRecords((prev) => new Map(prev).set(lookupKey, record));
+      if (record) {
+        attemptedRef.current.add(lookupKey);
+        setRecords((prev) => new Map(prev).set(lookupKey, record));
+      } else if (compact) {
+        // Left unattempted so a reopen asks again.
+        setFailed((prev) => new Set(prev).add(lookupKey));
+      } else {
+        // A full host item settles a failed lookup as a miss: non-fatal, and
+        // the host's own label stands in for it.
+        attemptedRef.current.add(lookupKey);
+      }
     };
-    // A failed lookup settles as a miss: non-fatal, and the host's own label
-    // stands in for it.
-    fetchRecord(kind, ref).then(settle, () => settle(null));
+    fetchMediaRecord(kind, ref).then(settle, () => settle(null));
     return () => { cancelled = true; };
-  }, [kind, ref]);
+  }, [kind, ref, compact]);
 
   const hydrated = useMemo(() => {
-    const record = ref ? records.get(`${kind}:${ref}`) : null;
-    return record ? mergeRecord(preview, record) : preview;
-  }, [preview, kind, ref, records]);
+    const lookupKey = `${kind}:${ref}`;
+    const record = ref ? records.get(lookupKey) : null;
+    if (record) return mergeMediaRecord(preview, record);
+    return preview?.compact && failed.has(lookupKey) ? { ...preview, detailError: true } : preview;
+  }, [preview, kind, ref, records, failed]);
 
   return [hydrated, setPreview];
 }
 
-function fetchRecord(kind, ref) {
-  if (kind === 'video') return getVideoHistoryItem(ref, { silent: true });
-  return getGalleryImages([ref], { silent: true })
-    .then((list) => (Array.isArray(list) ? list : []).find((i) => i?.filename === ref) || null);
-}
-
-function mergeRecord(item, record) {
-  const normalize = item.kind === 'video' ? normalizeVideo : normalizeImage;
-  // `prompt` is the whole point, and it is the one fallback that has to happen
-  // BEFORE normalize — which would otherwise substitute its own '(no prompt)'
-  // for a record that carries none, burying the host's label under it.
-  const merged = normalize({ ...record, prompt: record.prompt || item.prompt });
-  return {
-    ...merged,
-    key: item.key,
-    negativePrompt: merged.negativePrompt || item.negativePrompt || null,
-    // A host may point at a file the normalizer can't address from the record
-    // alone — a video-history entry with no thumbnail still has the host's
-    // job-scoped poster.
-    previewUrl: merged.previewUrl || item.previewUrl || null,
-    downloadUrl: merged.downloadUrl || item.downloadUrl || null,
-  };
+function withoutKey(set, key) {
+  const next = new Set(set);
+  next.delete(key);
+  return next;
 }

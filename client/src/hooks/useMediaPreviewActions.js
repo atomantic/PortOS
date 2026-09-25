@@ -3,6 +3,18 @@ import { useNavigate } from 'react-router';
 import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
+import { hydrateMediaItem } from '../components/media/mediaDetail';
+
+// Handoffs that copy a record's prompt/settings into a generator form read the
+// FULL record: a compact gallery item (#8292) only holds a prompt preview, so
+// it is hydrated first, and a failed lookup stops the action with a toast
+// instead of silently sending the truncated text. Resolves null on failure.
+async function withFullDetail(item) {
+  return hydrateMediaItem(item).catch((err) => {
+    toast.error(err.message || 'Could not load full media details');
+    return null;
+  });
+}
 
 // Common image render-setting params shared by the image branch of Remix and by
 // Send-to-image-to-image — both open /media/image with these fields prefilled.
@@ -82,7 +94,9 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // filename, rather than maintaining a second field-by-field restore path.
   // The destination resolves the record and reuses its in-page restore logic.
   // Filename-less images and id-less videos keep their legacy bundles for
-  // compatibility; those bundles are not extended.
+  // compatibility; those bundles are not extended. A compact gallery item
+  // always carries its filename/id, so it takes the reference path and never
+  // needs hydrating here.
   const handleRemix = useCallback((item) => {
     if (!item) return;
     if (item.kind === 'video') {
@@ -128,8 +142,10 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // ImageGen page resolves `?initImageFile=<basename>` against the gallery and
   // nudges to an i2i-capable backend. Deliberately omits the `remix` param so it
   // reads as a distinct intent from plain Remix.
-  const handleSendToImage = useCallback((item) => {
-    if (!item?.filename || item.kind === 'video') return;
+  const handleSendToImage = useCallback(async (source) => {
+    if (!source?.filename || source.kind === 'video') return;
+    const item = await withFullDetail(source);
+    if (!item) return;
     const params = buildImageGenParams(item);
     // Drop modelId: i2i is image-driven and the page may auto-switch the user to
     // a different (i2i-capable) backend, so the source's model — often a
@@ -144,8 +160,10 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
 
   // Send to Video: open the Video Gen page with the image queued as the
   // i2v source.
-  const handleSendToVideo = useCallback((item) => {
-    if (!item?.filename) return;
+  const handleSendToVideo = useCallback(async (source) => {
+    if (!source?.filename) return;
+    const item = await withFullDetail(source);
+    if (!item) return;
     const params = buildVideoGenParams(item);
     params.set('sourceImageFile', item.filename);
     navigate(`/media/video?${params}`);
@@ -166,8 +184,11 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // Takes the NORMALIZED item (normalizeVideo) — buildVideoGenParams reads the
   // prompt/negative off that shape, so a raw history record must be normalized
   // by the caller rather than passed through.
-  const handleContinue = useCallback(async (item) => {
-    if (!item?.id) return;
+  const handleContinue = useCallback(async (source) => {
+    if (!source?.id) return;
+    // Before extracting, so a failed lookup leaves no orphaned frame behind.
+    const item = await withFullDetail(source);
+    if (!item) return;
     const { filename } = await extractLastFrame(item.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
       return {};

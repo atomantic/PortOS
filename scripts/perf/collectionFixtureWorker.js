@@ -82,6 +82,7 @@ async function start() {
 
   phase = 'routes';
   const { createImageGalleryHandlers } = await import('../../server/routes/imageGalleryRead.js');
+  const { createVideoHistoryItemRead } = await import('../../server/routes/videoHistoryRead.js');
   const { messageInboxRead, messageDetailRead } = await import('../../server/routes/messageInboxRead.js');
   const { listAccounts } = await import('../../server/services/messageAccounts.js');
   const { errorMiddleware, asyncHandler } = await import('../../server/lib/errorHandler.js');
@@ -102,7 +103,11 @@ async function start() {
   gallery.get('/gallery/collections', galleryReads.collections);
   gallery.get('/gallery/facets', galleryReads.facets);
   gallery.get('/gallery', galleryReads.list);
-  app.use('/api/image-gen', (req, res, next) => req.method === 'GET' ? next() : res.sendStatus(405), gallery);
+  // Bounded record hydration the migrated Media History detail view uses.
+  // Lookup is a POST read; every other non-GET image-gen call stays refused.
+  gallery.post('/gallery/lookup', express.json({ limit: '64kb' }), galleryReads.lookup);
+  app.use('/api/image-gen', (req, res, next) => req.method === 'GET' || req.path === '/gallery/lookup' ? next() : res.sendStatus(405), gallery);
+  app.get('/api/video-gen/history/:id', createVideoHistoryItemRead());
   const messages = express.Router();
   messages.get('/accounts', asyncHandler(async (_req, res) => res.json(await listAccounts())));
   messages.get('/inbox', messageInboxRead);

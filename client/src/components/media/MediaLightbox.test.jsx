@@ -317,3 +317,21 @@ describe('MediaLightbox render-time row', () => {
     expect(screen.queryByText('Render time')).toBeNull();
   });
 });
+
+// A compact gallery row (#8292) holds a prompt preview until the host hydrates
+// its record: editing or refining it would treat the truncation as the prompt.
+describe('MediaLightbox compact preview item', () => {
+  it('withholds prompt editing and refine until the full record arrives, and reports a failed load', () => {
+    const onPromptChange = vi.fn();
+    const compact = { ...imageItem, compact: true, prompt: 'a cat port…' };
+    const { rerender } = render(<MediaLightbox item={compact} onClose={() => {}} onPromptChange={onPromptChange} />);
+    expect(screen.queryByLabelText('Prompt')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Refine Prompt' })).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading full details');
+    rerender(<MediaLightbox item={{ ...compact, detailError: true }} onClose={() => {}} onPromptChange={onPromptChange} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be loaded');
+    rerender(<MediaLightbox item={imageItem} onClose={() => {}} onPromptChange={onPromptChange} />);
+    expect(screen.getByLabelText('Prompt')).toHaveValue('a cat portrait');
+    expect(screen.getByRole('button', { name: 'Refine Prompt' })).toBeInTheDocument();
+  });
+});
