@@ -57,8 +57,8 @@ export function initTaskLearning() {
     // the SAME task type is a local diagnostic signal. A coordinator is parked
     // immediately; Layered Intelligence decides later whether it supports a
     // concrete planned fix.
-    const churnModule = await import('../agentChurn.js').catch(err => {
-      console.error(`❌ 🔁 TaskLearning/CoS churn: Failed to load churn observer: ${err.message}`);
+    const churnModule = await import('../agentChurn.js').catch(() => {
+      console.error('❌ 🔁 TaskLearning/CoS churn: Failed to load churn observer');
       return null;
     });
     if (!churnModule) return;
