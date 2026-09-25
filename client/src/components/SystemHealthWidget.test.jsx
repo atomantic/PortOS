@@ -73,6 +73,19 @@ describe('SystemHealthWidget', () => {
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 
+  it('keeps failed disk and CoS probes visible without offering dismissal', () => {
+    const warnings = [
+      { type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false },
+      { type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false },
+    ];
+    renderWidget({ health: { ...HEALTH, warnings, system: { ...HEALTH.system, disk: null }, cos: null }, refetchHealth: vi.fn() });
+
+    expect(screen.getByLabelText('Disk status unavailable')).toHaveTextContent('Unavailable');
+    expect(screen.getByText('Chief of Staff').parentElement).toHaveTextContent('Unavailable');
+    expect(screen.queryByRole('button', { name: /Dismiss warning:/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Stopped')).not.toBeInTheDocument();
+  });
+
   it('keeps memory neutral while honoring configured disk thresholds', () => {
     const health = {
       ...HEALTH,

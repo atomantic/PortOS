@@ -1635,9 +1635,8 @@ export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
 });
 
-// System health dashboard warnings — see server/routes/systemHealth.js. The
-// `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
-// keep the two lists in sync.
+// Dismissible system health warnings — see server/routes/systemHealth.js.
+// Probe failures are intentionally excluded: a missing measurement cannot be dismissed.
 export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review', 'health-settings'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });

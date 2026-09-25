@@ -157,6 +157,35 @@ describe('System Health Routes', () => {
     expect(response.body).toHaveProperty('overallHealth');
   });
 
+  it('reports failed disk and CoS probes without exposing their errors or hiding healthy measurements', async () => {
+    const diskError = 'private disk probe detail';
+    const cosError = 'private CoS probe detail';
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(statfs).mockRejectedValueOnce(new Error(diskError));
+    getStatus.mockRejectedValueOnce(new Error(cosError));
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+
+    try {
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.status).toBe(200);
+      expect(response.body.overallHealth).toBe('warning');
+      expect(response.body.system.disk).toBeNull();
+      expect(response.body.cos).toBeNull();
+      expect(response.body.warnings).toEqual([
+        { type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false },
+        { type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false }
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain(diskError);
+      expect(JSON.stringify(response.body)).not.toContain(cosError);
+      expect(errorSpy).toHaveBeenCalledTimes(2);
+
+      const dismiss = await request(app).post('/api/system/health/warnings/probe-unavailable/dismiss').send({ message: 'Disk status unavailable' });
+      expect(dismiss.status).toBe(400);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('serves the running build on its own route (#4694)', async () => {
     const response = await request(app).get('/api/system/build');
 
