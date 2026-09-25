@@ -73,9 +73,14 @@ const sessions = new Map();
 // burst of concurrent verifySession calls after a restart can't observe an
 // empty Map while the first call is still reading auth-sessions.json.
 let loadPromise = null;
-// mtime of auth-sessions.json at last read/write — used to pick up tokens
-// minted out-of-process (see mergeSessionsFromDisk).
-let sessionsFileMtimeMs = 0;
+// Identity of auth-sessions.json at last read/write — used to pick up tokens
+// minted out-of-process (see mergeSessionsFromDisk). mtime alone is not enough:
+// file timestamps are kernel-tick coarse, so an out-of-process write landing in
+// the same tick as ours looked "unchanged" and its token stayed invisible.
+// atomicWrite renames a fresh inode over the file on every write, so inode +
+// size + mtime changes on any rewrite.
+let sessionsFileStamp = null;
+const fileStamp = (st) => `${st.ino}:${st.size}:${st.mtimeMs}`;
 
 const now = () => Date.now();
 
@@ -100,7 +105,7 @@ const readSessions = async () => {
     sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt, label, id });
   }
   try {
-    sessionsFileMtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+    sessionsFileStamp = fileStamp(await stat(SESSIONS_FILE));
   } catch {
     // leave prior stamp; miss path will retry
   }
@@ -113,7 +118,7 @@ const writeSessions = async () => {
   }
   await atomicWrite(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
   try {
-    sessionsFileMtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+    sessionsFileStamp = fileStamp(await stat(SESSIONS_FILE));
   } catch {
     // next miss will refresh
   }
@@ -136,13 +141,13 @@ const ensureLoaded = async () => {
 // was enabled. On a miss, merge any newer disk records into the live Map;
 // never drop in-memory entries a racing disk write might have omitted.
 const mergeSessionsFromDisk = async () => {
-  let mtimeMs = 0;
+  let stamp;
   try {
-    mtimeMs = (await stat(SESSIONS_FILE)).mtimeMs;
+    stamp = fileStamp(await stat(SESSIONS_FILE));
   } catch {
     return;
   }
-  if (mtimeMs <= sessionsFileMtimeMs) return;
+  if (stamp === sessionsFileStamp) return;
   await readSessions();
 };
 
