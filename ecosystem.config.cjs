@@ -240,7 +240,14 @@ module.exports = {
       // force-exit so the app always controls its own exit. (The graceful path now
       // completes in ~1s — the double-close hang it used to stall on is fixed in
       // server/index.js's shutdown() — so this ceiling is a backstop, not the norm.)
-      kill_timeout: 12000
+      kill_timeout: 12000,
+      // Exponential backoff restart delay when the server exits repeatedly (e.g.
+      // when Postgres is slow to start on boot). PM2 starts at 1s, doubles after
+      // each restart, and resets on a stable run (stays up longer than min_uptime,
+      // default 1s). This prevents a crash loop that monopolizes the CPU and starves
+      // slow database startup. The DB gate (gateOnDatabase) retries for ~120s before
+      // exiting, so this delay kicks in only after that window is exhausted.
+      exp_backoff_restart_delay: 1000
       // NOTE: do NOT set `treekill: false` here to protect long media jobs from
       // restart-SIGINT. Tried 2026-06-14: pm2 then fails to reap the old node
       // process on restart, so it lingers holding :5555 and the new instance
