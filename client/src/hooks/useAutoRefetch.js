@@ -20,6 +20,15 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * Don't call it from effects that fire on mount/route change without a
  * visibility gate, or the "pauses while hidden" guarantee leaks.
  *
+ * Each hook instance is single-flight: at most one `fetchFn` call is pending
+ * at a time, so a slow response can never land after (and overwrite) a newer
+ * one, and a stalled request can't pile up a new request per tick. Interval
+ * and visibility ticks that arrive while a fetch is pending are dropped. A
+ * `refetch()` that arrives while a fetch is pending queues ONE trailing fetch
+ * (the pending one may predate the caller's mutation); every `refetch()` made
+ * during that window shares the trailing fetch's promise. Unmounting drops a
+ * queued trailing fetch — its promise resolves `undefined` without fetching.
+ *
  * @param {Function} fetchFn - async; returns the new data, or any value if
  *   used purely for its side effects (see `pollOnly`).
  * @param {number} intervalMs - poll cadence; changing restarts the interval.
@@ -59,6 +68,13 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
   const [error, setError] = useState(null);
   const fetchRef = useRef(fetchFn);
   const compareRef = useRef(compare);
+  // The pending fetch (`{ promise, owner }`) or null. `owner` is the poll
+  // effect's cancellation token for a tick-started fetch, or null for a manual
+  // one — see `startFetch`.
+  const inFlightRef = useRef(null);
+  // A `refetch()` that arrived mid-flight: `{ promise, resolve }`, or null.
+  const trailingRef = useRef(null);
+  const disposedRef = useRef(false);
 
   useEffect(() => {
     fetchRef.current = fetchFn;
@@ -80,25 +96,67 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
     });
   }, [pollOnly]);
 
+  // Runs one fetch as the instance's single in-flight request. A tick-started
+  // fetch carries its poll effect's token as `owner`, so a result landing after
+  // that effect was torn down (unmount, or `enabled` flipped off) is dropped —
+  // unless a newer poll effect adopted it (see `loadData`). A manual fetch has
+  // no owner and applies unless the hook unmounted. When it settles, a queued
+  // trailing refetch starts, or is abandoned if the hook unmounted meanwhile.
+  const startFetch = useCallback(function runFetch(owner) {
+    const run = { owner, promise: null };
+    const shouldApply = () => !disposedRef.current && !run.owner?.cancelled;
+    // Claimed before the call: a fetchFn that throws synchronously settles
+    // (and runs `finally`) before the IIFE returns.
+    inFlightRef.current = run;
+    run.promise = (async () => {
+      try {
+        const result = await fetchRef.current();
+        if (shouldApply()) {
+          applyResult(result);
+          if (!pollOnly) setLoading(false);
+        }
+        return result;
+      } catch (err) {
+        console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
+        if (shouldApply() && !pollOnly) {
+          setLoading(false);
+          setError(toFetchError(err));
+        }
+        return undefined;
+      } finally {
+        inFlightRef.current = null;
+        const trailing = trailingRef.current;
+        trailingRef.current = null;
+        if (trailing) trailing.resolve(disposedRef.current ? undefined : runFetch(null).promise);
+      }
+    })();
+    return run;
+  }, [applyResult, pollOnly]);
+
   // Stable, unconditional refetch for callers (Refresh buttons, post-mutation
   // refresh paths, and key-change effects that need an immediate fetch with
   // the new closure). Bypasses the visibility short-circuit — when a user
   // clicks Refresh the tab is by definition visible.
-  const refetch = useCallback(async () => {
-    try {
-      const result = await fetchRef.current();
-      applyResult(result);
-      if (!pollOnly) setLoading(false);
-      return result;
-    } catch (err) {
-      console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
-      if (!pollOnly) {
-        setLoading(false);
-        setError(toFetchError(err));
-      }
-      return undefined;
+  const refetch = useCallback(() => {
+    if (!inFlightRef.current) return startFetch(null).promise;
+    if (!trailingRef.current) {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      trailingRef.current = { promise, resolve };
     }
-  }, [applyResult, pollOnly]);
+    return trailingRef.current.promise;
+  }, [startFetch]);
+
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      // Drop a queued follow-up now rather than when the pending fetch
+      // settles, so nothing fires after unmount.
+      trailingRef.current?.resolve(undefined);
+      trailingRef.current = null;
+    };
+  }, []);
 
   const loadOnVisibleRef = useRef(null);
 
@@ -108,22 +166,19 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       return undefined;
     }
 
-    let cancelled = false;
+    const token = { cancelled: false };
 
-    const loadData = async () => {
+    const loadData = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      try {
-        const result = await fetchRef.current();
-        if (cancelled) return;
-        applyResult(result);
-        if (!pollOnly) setLoading(false);
-      } catch (err) {
-        console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
-        if (!cancelled && !pollOnly) {
-          setLoading(false);
-          setError(toFetchError(err));
-        }
+      const pending = inFlightRef.current;
+      if (pending) {
+        // Coalesce: never stack a second request. A tick-started fetch owned
+        // by a torn-down poll effect (StrictMode remount, interval change,
+        // enabled re-toggle) is adopted so its result still lands.
+        if (pending.owner) pending.owner = token;
+        return;
       }
+      startFetch(token);
     };
 
     loadOnVisibleRef.current = loadData;
@@ -131,11 +186,11 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
     const interval = setInterval(loadData, intervalMs);
 
     return () => {
-      cancelled = true;
+      token.cancelled = true;
       clearInterval(interval);
       loadOnVisibleRef.current = null;
     };
-  }, [intervalMs, enabled, immediate, applyResult, pollOnly]);
+  }, [intervalMs, enabled, immediate, startFetch]);
 
   useVisibilityEvent((state) => {
     if (state === 'visible') loadOnVisibleRef.current?.();

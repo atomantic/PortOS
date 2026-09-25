@@ -9,13 +9,15 @@ const ServeContext = createContext(null);
 export function TailcatServeProvider({ children }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const operation = useRef({ busy: false, generation: 0, read: 0 });
+  // useAutoRefetch is single-flight, so polls never overlap each other; the
+  // generation only has to fence a poll against a mutation that started while
+  // it was pending.
+  const operation = useRef({ busy: false, generation: 0 });
   const load = useCallback(async () => {
     if (operation.current.busy) return;
     const generation = operation.current.generation;
-    const read = ++operation.current.read;
     const data = await getTailcatServe({ silent: true });
-    if (!operation.current.busy && generation === operation.current.generation && read === operation.current.read) setStatus(data);
+    if (!operation.current.busy && generation === operation.current.generation) setStatus(data);
   }, []);
   useAutoRefetch(load, 10_000, { pollOnly: true });
 
