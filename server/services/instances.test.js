@@ -1341,6 +1341,26 @@ describe('instances.js', () => {
       expect(result.authRequired).toBe(false);
     });
 
+    it('latches the receiver confirmation of the pair token, and drops it on an auth failure (#8356)', async () => {
+      const peer = makePeer({ syncSecret: 'example-pair-secret-0123456789-abcdef' });
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      const health = (body) => ({ ok: true, json: () => Promise.resolve({ instanceId: 'r-id', ...body }) });
+
+      // An older receiver never answers: the sender keeps presenting Basic.
+      fetch.mockResolvedValueOnce(health({})).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(false);
+
+      fetch.mockResolvedValueOnce(health({ peerAuth: { version: 1, accepted: true } }))
+        .mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(true);
+
+      // A timeout keeps the confirmation; a 401 (lost pairing, downgrade) clears it.
+      fetch.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(true);
+      fetch.mockResolvedValueOnce({ ok: false, status: 401 }).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      expect((await probePeer(peer)).peerAuthAccepted).toBe(false);
+    });
+
     it('should auto-update name from hostname when name is an IP', async () => {
       const peer = makePeer({ name: '10.0.0.1' });
       const peers = [peer];

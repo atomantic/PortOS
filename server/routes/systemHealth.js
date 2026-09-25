@@ -20,6 +20,7 @@ import { getActiveProcessing } from '../services/activeProcessing.js';
 import { getMediaCapacity } from '../services/mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
 // for older clients, but no longer generate warnings or degrade health.
@@ -406,6 +407,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     instanceId: self?.instanceId ?? null,
     version,
     overallHealth,
+    // Peer credential handshake (#8356): `accepted` tells the probing peer that
+    // THIS request authenticated with its pair token, so it can stop sending
+    // the instance password. Older receivers omit the field; senders keep Basic.
+    peerAuth: {
+      version: PORTOS_SCHEMA_VERSIONS.peerAuth,
+      accepted: req.portosAuthContext?.method === 'peer',
+    },
     warnings,
     system: {
       uptime,

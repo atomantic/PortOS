@@ -370,12 +370,12 @@ so our peer list and routing policy would ride federation with it — exactly wh
 
 Every request requires both:
 
-- `Authorization: Basic …`, verified against the provider instance password by the global auth gate; browser session and Bearer authentication are deliberately rejected for this peer-only surface.
+- A peer credential verified by the global auth gate: the paired peer token (`X-PortOS-Peer-Auth`, see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md#peer-credentials-are-not-operator-authority)) or, for an unpaired or older consumer, `Authorization: Basic …` with the provider instance password. Browser session and Bearer authentication are deliberately rejected for this peer-only surface.
 - `X-PortOS-Instance-Id: <consumer-instance-id>`, resolving to an enabled peer registered on the provider.
 
-Use `peerFetch` for PortOS-to-PortOS calls; it already attaches the configured Basic credential and local instance id. The instance-id header identifies the registered peer, while the Basic credential authenticates access to this PortOS install.
+Use `peerFetch` for PortOS-to-PortOS calls; it already attaches the peer credential and local instance id. The instance-id header identifies the registered peer, while the credential authenticates access to this PortOS install.
 
-As with existing peer sync, the instance-id header is self-asserted. Basic authentication proves access to the provider install; it does not cryptographically bind that credential to one peer row. Owner-scoped job lookup is therefore a least-disclosure boundary for cooperating peers on the trusted network, not protection from another holder of the same instance password spoofing a registered id.
+With the paired peer token the instance id is bound to the pair secret, so it is no longer self-asserted. With legacy Basic authentication it is: Basic proves access to the provider install; it does not cryptographically bind that credential to one peer row. Owner-scoped job lookup is therefore a least-disclosure boundary for cooperating peers on the trusted network, not protection from another holder of the same instance password spoofing a registered id.
 
 ## Wire v1
 

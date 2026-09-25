@@ -1,5 +1,6 @@
 // Federation HTTP/Socket.IO client — TLS validation off (Tailnet is the trust boundary).
 import https from 'node:https';
+import { createHmac } from 'node:crypto';
 import { insecureFetch } from './httpClient.js';
 
 const peerHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
@@ -33,6 +34,44 @@ export function peerAuthHeaders(peer) {
   return { Authorization: `Basic ${token}` };
 }
 
+/**
+ * Peer-scoped credential (#8356). A paired peer (both machines hold the same
+ * `syncSecret`) proves its identity with an HMAC of that secret bound to its
+ * own instance id, instead of presenting this install's instance password over
+ * HTTP Basic. The receiver maps it to `method: 'peer'`, which authenticates
+ * ordinary federation reads and pushes but never operator authority: it cannot
+ * pass `requireHostControl`, and because it is not the password it cannot be
+ * exchanged for a session at `/api/auth/login`. The token is directional
+ * (the sender's id is in the MAC), so the receiver's matching token toward the
+ * sender is a different value, and the pair secret itself never crosses the wire
+ * except on the record-push endpoint below.
+ */
+export const PEER_AUTH_HEADER = 'X-PortOS-Peer-Auth';
+export const PEER_INSTANCE_HEADER = 'X-PortOS-Instance-Id';
+
+export function derivePeerAuthToken(syncSecret, senderInstanceId) {
+  return createHmac('sha256', syncSecret).update(`portos-peer-auth:v1:${senderInstanceId}`).digest('hex');
+}
+
+/**
+ * Credential headers for one outbound hop. A paired peer gets the peer token;
+ * the stored Basic password rides along only until the receiver has confirmed
+ * (through the probe's `peerAuth.accepted` answer, persisted as
+ * `peer.peerAuthAccepted`) that it verifies the token. An older receiver, or
+ * one whose side of the pair secret is missing or different, never confirms, so
+ * it keeps receiving Basic and federation continues unchanged.
+ */
+function peerCredentialHeaders(peer, selfInstanceId) {
+  if (!peer) return {};
+  const paired = typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32 && Boolean(selfInstanceId);
+  if (!paired) return peerAuthHeaders(peer);
+  return {
+    [PEER_INSTANCE_HEADER]: selfInstanceId,
+    [PEER_AUTH_HEADER]: derivePeerAuthToken(peer.syncSecret, selfInstanceId),
+    ...(peer.peerAuthAccepted === true ? {} : peerAuthHeaders(peer)),
+  };
+}
+
 // Our own federation instance id, memoized after the first successful read.
 // Resolved through a dynamic import of the identity leaf (#6836): harmless to
 // static-import now (services/instanceIdentity.js is a leaf with no edge back
@@ -42,13 +81,13 @@ export function peerAuthHeaders(peer) {
 // `UNKNOWN_INSTANCE_ID` sentinel, so a receiver sees "unidentified" instead of
 // a bogus id it would then fail to resolve in its peer registry.
 let cachedSelfInstanceId = null;
-async function selfInstanceHeader() {
+async function selfInstanceId() {
   if (!cachedSelfInstanceId) {
     const instanceIdentity = await import('../services/instanceIdentity.js').catch(() => null);
     const id = await instanceIdentity?.getInstanceId?.().catch(() => null);
     if (typeof id === 'string' && id && id !== instanceIdentity?.UNKNOWN_INSTANCE_ID) cachedSelfInstanceId = id;
   }
-  return cachedSelfInstanceId ? { 'X-PortOS-Instance-Id': cachedSelfInstanceId } : {};
+  return cachedSelfInstanceId;
 }
 
 /** Test-support: drop the memoized instance id. */
@@ -60,13 +99,14 @@ export function __resetSelfInstanceIdForTests() {
  * Fetch a peer URL. Every hop identifies this install with
  * `X-PortOS-Instance-Id` so the receiver can apply the user's per-peer sharing
  * config to PULL requests (#3659) the way it already does to pushes. Pass the
- * `peer` record (third arg) so a stored Basic-auth credential is attached too;
- * explicit `options.headers` still win over both injected headers (they never
- * collide in practice). The `peer` arg is optional so existing two-arg callers
+ * `peer` record (third arg) so its credential is attached too (the pair token
+ * and/or stored Basic credential, see peerCredentialHeaders); explicit
+ * `options.headers` still win over the injected headers. The `peer` arg is optional so existing two-arg callers
  * keep working.
  */
 export async function peerFetch(url, options = {}, peer = null) {
   const callerHeaders = normalizeHeaders(options.headers);
+  const selfId = await selfInstanceId();
   // Scope the pair credential to the record-push endpoint; never disclose it
   // to general peer queries, redirects, assets, or announcement responses.
   const syncHeaders = peer?.syncSecret && new URL(url).pathname === '/api/peer-sync/push'
@@ -75,7 +115,11 @@ export async function peerFetch(url, options = {}, peer = null) {
     ...options,
     ...(Object.keys(syncHeaders).length ? { redirect: 'error' } : {}),
     headers: {
-      ...dropOverridden({ ...await selfInstanceHeader(), ...(peer ? peerAuthHeaders(peer) : {}), ...syncHeaders }, callerHeaders),
+      ...dropOverridden({
+        ...(selfId ? { [PEER_INSTANCE_HEADER]: selfId } : {}),
+        ...peerCredentialHeaders(peer, selfId),
+        ...syncHeaders,
+      }, callerHeaders),
       ...callerHeaders,
     },
   };
@@ -146,13 +190,15 @@ function dropOverridden(injected, callerHeaders) {
 }
 
 /**
- * Socket.IO client options for a peer connection, with the peer's Basic-auth
- * credential injected as `extraHeaders` so the handshake survives a 401-gating
- * proxy. In Node both the polling and `ws` websocket transports honor
- * `extraHeaders`, so the relay authenticates regardless of which transport wins.
+ * Socket.IO client options for a peer connection, with the same credential
+ * headers as `peerFetch` injected as `extraHeaders`. In Node both the polling
+ * and `ws` websocket transports honor `extraHeaders`, so the relay
+ * authenticates regardless of which transport wins. Synchronous, so it reads
+ * the memoized instance id: the relay connects only after a successful probe,
+ * which has already resolved it; a cold cache degrades to the Basic credential.
  */
 export function peerSocketOptionsFor(peer) {
-  const authHeaders = peerAuthHeaders(peer);
+  const authHeaders = peerCredentialHeaders(peer, cachedSelfInstanceId);
   if (Object.keys(authHeaders).length === 0) return peerSocketOptions;
   return { ...peerSocketOptions, extraHeaders: authHeaders };
 }
