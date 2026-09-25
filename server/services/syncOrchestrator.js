@@ -15,7 +15,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT } from '../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT, PEER_BODY_DEFAULT_MAX_BYTES } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -105,7 +105,12 @@ async function withCursors(fn) {
 // Headers retain their 15s budget. HTTP body reads get a separate 60s idle
 // deadline so large, progressing downloads may finish; HTTPS is already
 // buffered within the request budget. Body stalls must reach the cycle's
-// failure path instead of becoming a successful no-op.
+// failure path instead of becoming a successful no-op. Bodies are also capped
+// while streaming (a chunked body carries no Content-Length to pre-check), so an
+// endless peer response fails this pull (null) instead of exhausting the heap.
+// Avatar images share the per-asset pull cap (ASSET_PULL_MAX_BYTES).
+const AVATAR_IMAGE_MAX_BYTES = 100 * 1024 * 1024;
+
 function handlePeerBodyError(error) {
   if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
   return null;
@@ -113,10 +118,12 @@ function handlePeerBodyError(error) {
 
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+  // maxBytes caps the HTTPS shim; readPeerBody caps a native-fetch stream.
+  const maxBytes = PEER_BODY_DEFAULT_MAX_BYTES;
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal, maxBytes }, peer))
     .catch(() => null);
   if (!res?.ok) return null;
-  return readPeerBody(res, 'json').catch(handlePeerBodyError);
+  return readPeerBody(res, 'json', { maxBytes }).catch(handlePeerBodyError);
 }
 
 /**
@@ -136,10 +143,11 @@ async function syncImageFromPeer(peer, avatarPath) {
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
   // Use the same request and body-idle budgets as JSON snapshots.
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) =>
+    peerFetch(url, { signal, maxBytes: AVATAR_IMAGE_MAX_BYTES }, peer))
     .catch(() => null);
   if (!res?.ok) return;
-  await readPeerBody(res, 'arrayBuffer')
+  await readPeerBody(res, 'arrayBuffer', { maxBytes: AVATAR_IMAGE_MAX_BYTES })
     .then(async (bytes) => {
       await ensureDir(PATHS.images);
       await writeFileGuarded(localPath, Buffer.from(bytes));
