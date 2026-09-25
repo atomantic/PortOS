@@ -136,13 +136,14 @@ export default function AgentsTab({ completedRevision = 0, agents, onRefresh, li
   // fetches the rest itself if the reader expands it.
   const handleRelaunchClick = useCallback((agent) => setRelaunchingAgent(agent), []);
 
-  const handleFeedbackChange = useCallback((updatedAgent) => {
+  const handleFeedbackChange = useCallback((updatedAgent, previousAgent) => {
     if (updatedAgent?.id && updatedAgent.feedback) {
       setFeedbackUpdates(prev => ({ ...prev, [updatedAgent.id]: updatedAgent.feedback }));
     }
-    if (!needsAgentFeedback(updatedAgent)) setPendingFeedbackCount(count => count == null ? count : Math.max(0, count - 1));
-    refresh();
-  }, [refresh]);
+    if (needsAgentFeedback(previousAgent) && !needsAgentFeedback(updatedAgent)) {
+      setPendingFeedbackCount(count => count == null ? count : Math.max(0, count - 1));
+    }
+  }, []);
 
   // A PAUSED agent resumes IN PLACE (see `resumeAgent` in agentManagement.js):
   // the server requeues that agent's own task on the worktree its run left behind.
