@@ -36,10 +36,11 @@ import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
+import { useSseProgress } from '../hooks/useSseProgress';
 import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
   deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
-  renderDeckCard, renderDeckCards, updateDeck, updateDeckCard,
+  renderDeckCard, renderDeckCards, updateDeck, updateDeckCard, deckPromptsProgressUrl,
 } from '../services/api';
 
 const TABS = [{ id: 'cards', label: 'Cards' }, { id: 'style', label: 'Style & samples' }];
@@ -65,6 +66,13 @@ function DeckEditor({ id }) {
   const [generating, setGenerating] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [savingCard, setSavingCard] = useState(false);
+  const [promptProgressUrl, setPromptProgressUrl] = useState(null);
+  const lastChunkSeen = useRef(0);
+  // Live prompt-writing progress. The URL is set for the duration of one
+  // generate call. The server reserves the channel on POST arrival and retains
+  // each frame until attach, so starting the POST before React's EventSource
+  // effect runs cannot drop progress.
+  const { frames: promptFrames } = useSseProgress(promptProgressUrl, { enabled: !!promptProgressUrl });
   const loadSeqRef = useRef(0);
   // Resolved once for the page: the render bar names these options, the grid's
   // per-card re-render button renders on them, and both stand down together on
@@ -169,16 +177,69 @@ function DeckEditor({ id }) {
 
   const generatePrompts = async ({ overwrite }) => {
     setGenerating(true);
+    lastChunkSeen.current = 0;
+    // Start the advisory progress stream alongside the POST. The server
+    // reserves the channel at POST arrival and replays late frames.
+    setPromptProgressUrl(null);
+    if (typeof EventSource !== 'undefined') setPromptProgressUrl(deckPromptsProgressUrl(id));
     const result = await generateDeckPrompts(id, { overwrite }, { silent: true }).catch((err) => {
       toast.error(`Prompt generation failed: ${err.message}`);
       return null;
     });
     if (!mountedRef.current) return;
+    // Close the stream once the POST has settled — frames stay rendered until
+    // the next run, when the chunk counter is reset above.
+    setPromptProgressUrl(null);
     setGenerating(false);
     if (!result) return;
     setDeck(result.deck);
     toast.success(`${result.written} prompt${result.written === 1 ? '' : 's'} written${result.cast ? `, ${result.cast} cards cast from the universe` : ''}`);
   };
+
+  // Each persisted chunk refetches the deck so freshly written prompts land
+  // in the grid while the run is still going — not just when the POST
+  // settles. The server persists every chunk before emitting its frame, so a
+  // refetch on that frame always has something new to show.
+  useEffect(() => {
+    if (!generating || !promptFrames.length) return undefined;
+    const latest = promptFrames[promptFrames.length - 1];
+    if (latest?.type !== 'chunk' || promptFrames.length <= lastChunkSeen.current) return undefined;
+    lastChunkSeen.current = promptFrames.length;
+    let active = true;
+    getDeck(id, { silent: true }).then((data) => {
+      if (active && mountedRef.current && data) setDeck(data);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [promptFrames, generating, id, mountedRef]);
+
+  // One live line for step 1 while a run is in flight: which phase, how many
+  // prompts are written of how many requested, and which batch just landed.
+  // Null when idle — the step note then falls back to the deck counts.
+  const generatingStatus = useMemo(() => {
+    if (!generating) return null;
+    let phaseLabel = null;
+    let written = null;
+    let requested = null;
+    let chunk = null;
+    let chunks = null;
+    for (const f of promptFrames) {
+      if (f?.type === 'phase' && f.label) phaseLabel = f.label;
+      else if (f?.type === 'start') {
+        if (Number.isFinite(f.requested)) requested = f.requested;
+        if (Number.isFinite(f.chunks)) chunks = f.chunks;
+      } else if (f?.type === 'chunk') {
+        if (Number.isFinite(f.written)) written = f.written;
+        if (Number.isFinite(f.requested)) requested = f.requested;
+        if (Number.isFinite(f.chunk)) chunk = f.chunk;
+        if (Number.isFinite(f.chunks)) chunks = f.chunks;
+      }
+    }
+    // Casting runs before the first prompt chunk — name the phase, not a 0/N.
+    if (written === null && phaseLabel) return phaseLabel;
+    if (written === null || requested === null) return 'Writing prompts…';
+    const batch = chunk !== null && chunks !== null ? ` · batch ${chunk} of ${chunks}` : '';
+    return `Writing prompts… ${written} of ${requested}${batch}`;
+  }, [generating, promptFrames]);
 
   const saveCard = async (patch) => {
     if (!selectedCard) return;
@@ -306,6 +367,7 @@ function DeckEditor({ id }) {
         onRenderMissing={() => renderBatch({ onlyMissing: true }, 'Render missing')}
         onRenderAll={() => renderBatch({}, 'Render whole deck')}
         generating={generating}
+        generatingStatus={generatingStatus}
         rendering={rendering}
       />
 

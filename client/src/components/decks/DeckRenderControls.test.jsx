@@ -181,3 +181,29 @@ describe('DeckRenderControls local runtime', () => {
     expect(screen.getByRole('button', { name: /^Render all/ })).toBeEnabled();
   });
 });
+
+// A prompt run over a 79-card tarot deck takes minutes across several LLM
+// calls. The step-1 note is the live progress line while it runs — phase,
+// written/requested, and which batch just landed — instead of a bare spinner.
+describe('DeckRenderControls prompt progress', () => {
+  it('shows the live written/requested counts and batch while a run is in flight', async () => {
+    await renderControls({
+      generating: true,
+      generatingStatus: 'Writing prompts… 24 of 79 · batch 2 of 7',
+    });
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Writing prompts… 24 of 79 · batch 2 of 7');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('names the casting phase before the first prompt chunk lands', async () => {
+    await renderControls({ generating: true, generatingStatus: 'Casting the universe onto the cards…' });
+    expect(screen.getByText('Casting the universe onto the cards…')).toBeInTheDocument();
+  });
+
+  it('falls back to the spinner copy with no status line', async () => {
+    await renderControls({ generating: true, generatingStatus: null });
+    // The button carries the same copy — pin the step note paragraph.
+    expect(screen.getByText('Writing prompts…', { selector: 'p' })).toBeInTheDocument();
+  });
+});

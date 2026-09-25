@@ -35,7 +35,7 @@ const SIZE_BOUNDS = { min: DECK_CARD_SIZE_MIN, max: DECK_CARD_SIZE_MAX, step: 8 
  */
 export default function DeckRenderControls({
   deck, completion, renderTarget, onPatch, onGeneratePrompts, onRenderMissing, onRenderAll,
-  generating = false, rendering = false,
+  generating = false, generatingStatus = null, rendering = false,
 }) {
   const { backends, size, summary: renderSummary, localRuntime, blocked: runtimeBlocked } = renderTarget;
   const total = completion?.total || 0;
@@ -100,7 +100,7 @@ export default function DeckRenderControls({
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Step step="1" title="Prompts" note={promptNote({ generating, unprompted, total })}>
+        <Step step="1" title="Prompts" note={promptNote({ generating, generatingStatus, unprompted, total })} live={generating}>
           {(noteId) => (<>
             <button
               type="button"
@@ -202,9 +202,11 @@ function CardSize({ kind, size, onPatch }) {
   );
 }
 
-// What step 1's buttons will do, or why they can't.
-const promptNote = ({ generating, unprompted, total }) => {
-  if (generating) return 'Writing prompts…';
+// What step 1's buttons will do, or why they can't. While a run is in flight
+// the note is the live progress line (phase + written/requested + batch), so
+// a 79-card tarot run that takes minutes names where it is.
+const promptNote = ({ generating, generatingStatus, unprompted, total }) => {
+  if (generating) return generatingStatus || 'Writing prompts…';
   if (unprompted) return `${unprompted} of ${pluralize(total, 'card')} still need a prompt.`;
   return `All ${pluralize(total, 'card')} have a prompt — rewrite to replace them.`;
 };
@@ -228,7 +230,7 @@ const renderNote = ({ prompted, rendering, missing, inFlight, runtimeBlocked }) 
 // carry it. The note is real page text rather than a `title`: a disabled button
 // is neither focusable nor hoverable on touch, so a tooltip on it reaches
 // nobody.
-function Step({ step, title, note, children }) {
+function Step({ step, title, note, live = false, children }) {
   const noteId = useId();
   return (
     <section className="rounded border border-port-border/60 bg-port-bg/30 p-2.5 space-y-2" aria-label={`Step ${step}: ${title}`}>
@@ -236,7 +238,12 @@ function Step({ step, title, note, children }) {
         <span className="text-port-accent">{step}</span> · {title}
       </h3>
       <div className="flex items-center gap-2 flex-wrap">{children(noteId)}</div>
-      <p id={noteId} className="text-[11px] leading-snug text-gray-400">{note}</p>
+      <p
+        id={noteId}
+        className="text-[11px] leading-snug text-gray-400"
+        role={live ? 'status' : undefined}
+        aria-live={live ? 'polite' : undefined}
+      >{note}</p>
     </section>
   );
 }
