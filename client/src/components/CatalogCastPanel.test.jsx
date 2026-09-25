@@ -46,6 +46,31 @@ describe('CatalogCastPanel', () => {
     expect(screen.getByText(/for Test Series/i)).toBeTruthy();
   });
 
+  it('shows list-read failures separately and retries the same record', async () => {
+    listCatalogIngredientsForRef
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce([
+        {
+          ingredient: { id: 'i-3', name: 'Example Character', type: 'character', payload: {} },
+          role: 'cast-character',
+        },
+      ]);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load linked catalog ingredients.")).toBeTruthy();
+    });
+    expect(screen.queryByText(/No catalog ingredients linked yet/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Example Character')).toBeTruthy();
+    });
+    expect(listCatalogIngredientsForRef).toHaveBeenNthCalledWith(1, 'series', 'series-1', { silent: true });
+    expect(listCatalogIngredientsForRef).toHaveBeenNthCalledWith(2, 'series', 'series-1', { silent: true });
+  });
+
   it('renders rows from the fetched list', async () => {
     listCatalogIngredientsForRef.mockResolvedValue([
       {
