@@ -400,7 +400,27 @@ describe('render loop guard (#8348)', () => {
     renderConfig({ config: { ...config, embeddingProviderId: 'codex', embeddingModel: 'gpt-5' } });
     await screen.findByText('Waiting for the next wake');
 
-    const settledCount = providerHook.renderCount;
+    // "Waiting for the next wake" landing only proves the persistent-mind
+    // fetch resolved — the config-panel's OWN provider/model resync effect
+    // (re-run on every unstable setter identity) and the independent budget-
+    // usage fetch can each still have one more no-op flush in flight. Treat
+    // render count as settled only once two consecutive flushes agree,
+    // bounded so a genuine reintroduced loop (#8348) fails loudly here
+    // instead of silently accepting a runaway climb (see also the mocked
+    // hook's own >25 hard cap above).
+    let settledCount = providerHook.renderCount;
+    let settled = false;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop -- sequential settle-detection, not parallelizable
+      await act(async () => {});
+      const nextCount = providerHook.renderCount;
+      if (nextCount === settledCount) {
+        settled = true;
+        break;
+      }
+      settledCount = nextCount;
+    }
+    expect(settled).toBe(true);
     expect(settledCount).toBeLessThan(20);
 
     // One more flush: a real loop keeps climbing here, a settled component does not.
