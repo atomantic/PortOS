@@ -23,6 +23,7 @@ const store = {
   relinkBinding: vi.fn().mockResolvedValue(undefined),
   deleteConnection: vi.fn(),
   detachBindingToConnection: vi.fn().mockResolvedValue(undefined),
+  mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('./providerGraphStore.js', () => store);

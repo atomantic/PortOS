@@ -37,6 +37,7 @@ const store = {
   relinkBinding: vi.fn().mockResolvedValue(undefined),
   deleteConnection: vi.fn(),
   detachBindingToConnection: vi.fn().mockResolvedValue(undefined),
+  mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
   saveRouteModelMap: vi.fn().mockResolvedValue(undefined),

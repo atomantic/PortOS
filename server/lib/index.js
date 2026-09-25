@@ -528,6 +528,7 @@ export * from './providerConnections.js';
 export * from './providerGraphPreview.js';
 export * from './providerGraphRecords.js';
 export * from './providerServiceInstances.js';
+export * from './providerServiceMerge.js';
 export * from './providerModelAliases.js';
 export * from './providerModePairing.js';
 export * from './providerPresets.js';
