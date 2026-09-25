@@ -743,6 +743,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `kilo.js` | Kilo Code command identity (`kilo`/`kilocode`), `run` headless argv, `--auto` approval posture, and TUI arguments. |
 | `openchamber.js` | OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and `--dir`/`--prompt` spawn-time delivery. |
 | `layaMlx.js` | Pinned Laya-MLX experiment model, request validation and probability normalization; entropy confidence stays distinct from entailment. |
+| `layeredIntelligenceSources.js` | `LAYERED_INTELLIGENCE_SOURCE_KEYS` — the ordered list of built-in Layer-1 telemetry sources the self-improvement loop can gather. Used by server schema and client UI to build source lists from one canonical definition. Pure leaf: no Node built-in, nothing outside `server/lib`. Re-exported by `client/src/lib/layeredIntelligenceSources.js`. |
 
 | `persistentMindMaintainer.js` | Machine-local maintainer intent, inference allowance schema, normalization and additive wake charter; never grants authority. |
 

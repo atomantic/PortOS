@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs, describeLastRun } from './LayeredIntelligenceTab';
+import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from '../../lib/layeredIntelligenceSources.js';
+import LayeredIntelligenceTab, { LI_SOURCE_FIELDS, buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs, describeLastRun } from './LayeredIntelligenceTab';
 
 const baseline = {
   enabled: false,
@@ -292,5 +293,11 @@ describe('LayeredIntelligenceTab (render)', () => {
     render(<LayeredIntelligenceTab {...props} li={li} onChange={onChange} />);
     fireEvent.change(screen.getByLabelText(/Custom source 1 type/i), { target: { value: 'http' } });
     expect(onChange).toHaveBeenCalledWith({ sources: expect.objectContaining({ custom: [{ type: 'http', url: '', label: 'notes' }] }) });
+  });
+});
+
+describe('LI_SOURCE_FIELDS', () => {
+  it('has exactly one toggle per server source key, in order', () => {
+    expect(LI_SOURCE_FIELDS.map(f => f.key)).toEqual(LAYERED_INTELLIGENCE_SOURCE_KEYS);
   });
 });

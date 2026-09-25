@@ -13,6 +13,7 @@ export const gitDeleteBranchBodySchema = z.object({
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
+import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSources.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
@@ -166,28 +167,9 @@ export const layeredIntelligenceConfigSchema = z.object({
   providerId: providerRefSchema.nullable().optional(),
   model: z.string().nullable().optional(),
   sources: z.object({
-    goals: z.boolean().optional(),
-    // The app's own success/performance metrics doc (METRICS.md in the app repo).
-    // Default on: the primary signal for judging a managed app against its goals.
-    appMetrics: z.boolean().optional(),
-    cosMetrics: z.boolean().optional(),
-    healthReport: z.boolean().optional(),
-    planMd: z.boolean().optional(),
-    openIssues: z.boolean().optional(),
-    // The committed backlog (#2698): `plan`-labeled tracker issues / the
-    // prioritized Jira backlog / PLAN.md's unchecked items, fed in so the reasoner
-    // can suppress a proposal that overlaps work already in scope. Default on.
-    plannedWork: z.boolean().optional(),
-    // PortOS-only product-success signals (POST engagement and creative
-    // commission feedback). Managed apps use appMetrics/custom sources.
-    productMetrics: z.boolean().optional(),
-    // Feedback loop (#2428): feed past LI proposals + their tracker outcomes back
-    // into the reasoning prompt. Default on for PortOS, off for managed apps.
-    outcomes: z.boolean().optional(),
-    // Self-evaluation (#2700): fold LI's own merge rate, already-filed proposal
-    // count, and agent-run health back into the prompt so the loop can judge its
-    // proposal quality before filing. Default on for PortOS, off for managed apps.
-    selfEval: z.boolean().optional(),
+    // One optional toggle per built-in Layer-1 source; the ordered key list (and
+    // what each source means) lives in layeredIntelligenceSources.js.
+    ...Object.fromEntries(LAYERED_INTELLIGENCE_SOURCE_KEYS.map(key => [key, z.boolean().optional()])),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
     // `label`. gatherSources also re-enforces the file confinement + the

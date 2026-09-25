@@ -8,6 +8,7 @@
 export {
   DEFAULT_CADENCE_DAYS,
   SOON_WINDOW_DAYS,
+  DEFAULT_RING_CADENCE,
   cadenceStatus,
   daysSinceDate,
 } from '../../../server/lib/tribeCadence.js';
