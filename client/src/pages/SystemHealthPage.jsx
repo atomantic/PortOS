@@ -271,7 +271,7 @@ function SystemHealthOverview() {
             pct={Math.min(100, health.system.cpu.usagePercent)}
             sub={`${health.system.cpu.cores} cores · ${health.system.cpu.loadAvg1m.toFixed(2)} load`}
           />
-          {health.system.disk && (
+          {health.system.disk ? (
             <ResourceCard
               icon={Database}
               label="Disk"
@@ -280,7 +280,12 @@ function SystemHealthOverview() {
               critical={t.diskCritical}
               sub={`${health.system.disk.usedFormatted} / ${health.system.disk.totalFormatted}`}
             />
-          )}
+          ) : health.warnings?.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk') ? (
+            <div className="bg-port-card border border-port-border rounded-xl p-4" aria-label="Disk status unavailable">
+              <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">Disk</div>
+              <div className="text-3xl font-bold text-port-warning">Unavailable</div>
+            </div>
+          ) : null}
         </section>
 
         <MediaCapacityPanel media={health.media} />

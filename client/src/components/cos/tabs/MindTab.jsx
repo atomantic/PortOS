@@ -1,57 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { AlertTriangle, ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, ListChecks, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
-import { Link } from 'react-router';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import useMounted from '../../../hooks/useMounted';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
 import * as api from '../../../services/api';
-import { formatCount, formatDateTime, timeUntil } from '../../../utils/formatters';
-import BrailleSpinner from '../../BrailleSpinner';
-import Drawer from '../../Drawer';
-import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
-import Banner from '../../ui/Banner';
-import FilePickerButton from '../../ui/FilePickerButton';
-import TabPills from '../../ui/TabPills';
-import PersistentMindContextPanel from '../PersistentMindContextPanel';
-import PersistentMindJournalPanel from '../PersistentMindJournalPanel';
-import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
-import PersistentMindPortabilityPanel from '../PersistentMindPortabilityPanel';
-import PersistentMindProfileControls from '../PersistentMindProfileControls';
-import PersistentMindRoutePanel from '../PersistentMindRoutePanel';
-import PersistentMindRuntimePanel, { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
-import PersistentMindSessions from '../PersistentMindSessions';
-import PersistentMindTemporaryRoute from '../PersistentMindTemporaryRoute';
-import PersistentMindThinkingRequests from '../PersistentMindThinkingRequests';
-import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
-import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
-import PersistentMindTools from '../../../pages/PersistentMindTools';
+import { readFileAsBase64, validateImageFile } from '../../../utils/fileUpload';
 import { findMindThinkingPreset } from '../../../lib/mindThinkingPresets.js';
-import { describeMindTurnProgress, mindTurnHeadline, mindTurnRuntimeSnapshot } from '../../../lib/mindTurnProgress.js';
-import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../../../utils/fileUpload';
+import { describeMindTurnProgress } from '../../../lib/mindTurnProgress.js';
+import MindHeader from './MindHeader.jsx';
+import MindConversationPanel from './MindConversationPanel.jsx';
+import MindStateSidebar from './MindStateSidebar.jsx';
+import MindWorkspaceDrawers from './MindWorkspaceDrawers.jsx';
+import { eventText, MAX_MESSAGE_IMAGES } from './MindPanelParts.jsx';
 
 const PAGE_LIMIT = 200;
 const MAX_BACKFILL_PAGES = 5;
 const MAX_VISIBLE_EVENTS = PAGE_LIMIT * MAX_BACKFILL_PAGES;
-const MAX_MESSAGE_IMAGES = 8;
 const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024;
 // Stable empties: these feed child props and effect dependencies, so a fresh
 // literal on every render would re-fire work that has nothing new to do.
 const NO_PRESETS = Object.freeze([]);
 const NO_TURN_EXECUTIONS = Object.freeze([]);
 const MIND_PANELS = new Set(['context', 'journal', 'memories', 'maintenance', 'tools', 'models', 'settings']);
-const MIND_PANEL_TABS = [
-  { id: 'context', label: 'Context', icon: Brain },
-  { id: 'journal', label: 'Journal', icon: ListChecks },
-  { id: 'memories', label: 'Memories', icon: Database },
-  { id: 'maintenance', label: 'Cleanup', icon: Eraser },
-  { id: 'tools', label: 'Tools', icon: Wrench },
-  { id: 'models', label: 'Models', icon: Cpu },
-  { id: 'settings', label: 'Settings', icon: Settings2 },
-];
-
 // Bookkeeping the conversation does not need. `mind.summary` is the rollup that
 // compacts older trajectory into context — it recaps the mind's own history, so
 // rendering it as a bubble makes every wake open with a wall of recap. It stays
@@ -60,108 +32,12 @@ const ACTIVITY_KINDS = new Set([
   'mind.wake', 'mind.model.request', 'mind.model.result', 'mind.turn.completed', 'mind.summary',
 ]);
 
-const EVENT_LABELS = {
-  'mind.message.accepted': 'User input',
-  'mind.annotation.accepted': 'Annotation',
-  'mind.summary': 'Mind summary',
-  'mind.model.result': 'Mind summary',
-  'mind.turn.completed': 'Mind summary',
-  'mind.thought': 'Working note',
-  'mind.reply': 'Chief of Staff',
-  'mind.memory.candidate': 'Memory proposal',
-  'mind.memory.created': 'Memory created',
-  'mind.memory.failed': 'Memory save failed',
-  'mind.capability.request': 'Action request',
-  'mind.capability.result': 'Action outcome',
-  'mind.memory.promoted': 'Memory promoted',
-  'mind.maintenance.completed': 'Mindspace cleaned',
-};
-
-const eventLabel = (kind) => EVENT_LABELS[kind] || 'System state';
-const eventText = (event) => {
-  const data = event?.data || {};
-  if (typeof data.displayText === 'string') return data.displayText;
-  if (typeof data.summaryText === 'string') return data.summaryText;
-  if (event?.kind === 'mind.failed') return data.status === 'interrupted'
-    ? 'The previous wake was interrupted'
-    : 'The provider was unavailable or the wake failed';
-  if (event?.kind === 'mind.paused') return data.status === 'idle'
-    ? 'The persistent mind was stopped'
-    : 'The persistent mind was paused';
-  if (event?.kind === 'mind.capability.request' && typeof data.capabilityId === 'string') {
-    return `Capability request ${data.capabilityId}`;
-  }
-  if (typeof data.status === 'string') return data.status;
-  return null;
-};
-
-const safeMessageImages = (event) => (Array.isArray(event?.data?.images) ? event.data.images : [])
-  .filter((image) => (
-    typeof image?.attachmentId === 'string'
-    && typeof image?.path === 'string'
-    && image.path.startsWith('/api/screenshots/')
-    && typeof image?.originalName === 'string'
-  ))
-  .slice(0, MAX_MESSAGE_IMAGES);
-
 const imageCapability = (mind) => {
   const capability = mind?.imageCapability;
   const status = ['supported', 'unsupported', 'unknown'].includes(capability?.status)
     ? capability.status
     : 'unknown';
   return { status, guidance: typeof capability?.guidance === 'string' ? capability.guidance : null };
-};
-
-// The chat header's live turn readout. Three bouncing dots alone said only
-// "not idle", so a cold model load, a wedged turn, and a quota autopause were
-// indistinguishable from healthy inference; the phase decides which of those
-// the user is looking at, and the stage/elapsed text says how far in it is.
-const MindTurnIndicator = ({ progress }) => {
-  if (progress.phase === 'idle') return null;
-  const detail = [progress.stage, progress.detail].filter(Boolean).join(' · ');
-
-  if (progress.phase === 'thinking') {
-    // Stage only: it changes when the turn genuinely moves on, while the
-    // elapsed/heartbeat text re-renders on every 10s poll and would otherwise
-    // re-announce the same state endlessly.
-    const typingLabel = progress.stage ? `Chief of Staff is typing — ${progress.stage}` : 'Chief of Staff is typing';
-    return (
-      <span
-        data-testid="mind-typing-indicator"
-        data-phase={progress.phase}
-        role="status"
-        aria-label={typingLabel}
-        className="inline-flex min-w-0 items-center gap-1.5 text-port-text-muted"
-      >
-        <span className="inline-flex items-center gap-0.5 text-port-accent">
-          {[0, 1, 2].map((index) => (
-            <span
-              key={index}
-              aria-hidden="true"
-              className="h-1.5 w-1.5 animate-bounce rounded-full bg-current motion-reduce:animate-none"
-              style={{ animationDelay: `${index * 120}ms` }}
-            />
-          ))}
-        </span>
-        {detail && <span aria-hidden="true" className="truncate text-[11px] font-normal">{detail}</span>}
-      </span>
-    );
-  }
-
-  const label = [mindTurnHeadline(progress, timeUntil), progress.phase === 'stalled' ? detail : null]
-    .filter(Boolean).join(' · ');
-
-  return (
-    <span
-      data-testid="mind-turn-indicator"
-      data-phase={progress.phase}
-      role="status"
-      className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-port-warning/60 bg-port-warning/10 px-2 py-0.5 text-[11px] font-normal text-port-warning"
-    >
-      <AlertTriangle size={12} aria-hidden="true" className="shrink-0" />
-      <span className="truncate" title={label}>{label}</span>
-    </span>
-  );
 };
 
 const mergeEvents = (previous, incoming) => {
@@ -744,482 +620,147 @@ export default function MindTab() {
     return next;
   });
 
+  const prepareRepair = (workspace) => {
+    changeMessageText(`${messageText ? `${messageText}\n\n` : ''}Investigate workspace diagnostics for ${workspace.appName} (app ID: ${workspace.appId}). Use a CoS agent task to diagnose and resolve the reported setup issues: ${(workspace.preflight?.warnings || []).map((warning) => warning.message).join(' ')} Do not require the failing checks before queueing the repair itself. Preserve local changes and verify the required checks after repair.`);
+    closePanel();
+    document.getElementById('mind-input-text')?.focus();
+  };
+  const refreshContext = () => setContextRefreshKey((current) => current + 1);
+  const updateCapabilities = (capabilities) => setMind((current) => current ? { ...current, capabilities } : current);
+  const saveThinkingRequests = (capabilities) => setMind((current) => ({ ...current, capabilities }));
+  const cancelThinkingRequest = () => setMind((current) => ({ ...current, thinkingRequests: { ...current.thinkingRequests, pending: null } }));
+  const saveThinkingPresets = (presets) => setMind((current) => current ? { ...current, thinkingPresets: presets } : current);
+  const saveProfile = (profile) => setMind((current) => current ? { ...current, profile } : current);
+
   return (
     <section aria-labelledby="mind-heading" className="mx-auto flex h-full min-h-0 w-full max-w-[100rem] flex-col gap-4 pb-4 xl:pb-0">
-      <header className="flex shrink-0 flex-wrap items-center gap-3 rounded-2xl border border-port-border bg-port-card/70 p-3 sm:p-4">
-        <div className="flex min-w-0 flex-[1_0_min(100%,20rem)] items-center gap-3">
-          <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-port-accent ring-1 ring-port-accent/30">
-            <Brain size={23} aria-hidden="true" />
-            <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-port-card ${state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-widest text-port-text-muted">Persistent Mind</p>
-            <h2 id="mind-heading" aria-live="polite" className="break-words text-3xl font-semibold tracking-tight text-port-accent sm:text-4xl [overflow-wrap:anywhere]">
-              {mind ? mind.identity?.name || 'Name not yet chosen' : 'Loading identity…'}
-            </h2>
-            {mind && !mind.identity?.name && <p className="text-xs text-port-text-muted">A name to choose on the next enabled wake. Free to change later.</p>}
-            <p className="truncate text-xs text-port-text-muted">
-              {mind ? `${mind.profile?.model || 'No model'} · ${mind.profile?.providerId || 'No provider'} · machine-local` : 'Loading profile…'}
-            </p>
-          </div>
-        </div>
-        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2" role="group" aria-label="Persistent mind lifecycle">
-          <PersistentMindThoughtStatus
-            state={state}
-            progress={turnProgress}
-            model={mindTurnRuntimeSnapshot(state, runtime)?.model || mind?.profile?.model}
-          />
-          {!state?.started && <ActionButton label={profileReady ? 'Start' : 'Configure'} icon={profileReady ? CirclePlay : Settings2} pending={profileReady && lifecyclePending === 'start'} disabled={loading || setupSaving} onClick={() => (profileReady ? runLifecycle('start') : openPanel('settings'))} />}
-          <ActionButton label="Wake now" icon={CirclePlay} pending={lifecyclePending === 'wake'} disabled={loading || setupSaving || !profileReady || Boolean(lifecyclePending) || Boolean(state?.activeTurn)} onClick={() => runLifecycle('wake')} />
-          {state?.started && !isPaused && <ActionButton label="Pause" icon={CirclePause} pending={lifecyclePending === 'pause'} onClick={() => runLifecycle('pause')} />}
-          {state?.started && isPaused && <ActionButton label="Resume" icon={CirclePlay} pending={lifecyclePending === 'resume'} onClick={() => runLifecycle('resume')} />}
-          {state?.started && <ActionButton label="Stop" icon={Square} pending={lifecyclePending === 'stop'} onClick={() => runLifecycle('stop')} />}
-          <ActionButton label="Settings" icon={Settings2} onClick={() => openPanel('settings')} />
-          <ActionButton label="Tools & permissions" icon={Wrench} onClick={() => openPanel('tools')} />
-          <ActionButton label="Reload" icon={RefreshCw} pending={loading || runtimeLoading || visibilityLoading} onClick={() => {
-            void loadHistory({ reset: true });
-            void loadRuntime();
-            void loadVisibility({ refresh: true });
-          }} />
-        </div>
-      </header>
-
-      {callState?.active && (
-        <Banner
-          tone="info"
-          icon={PhoneCall}
-          title="On a FaceTime Audio call"
-          actions={
-            <button
-              type="button"
-              onClick={hangUpCall}
-              disabled={hangingUp}
-              className="flex min-h-[36px] items-center gap-1.5 rounded border border-port-border px-3 text-xs text-port-text hover:bg-port-border/50 disabled:opacity-50"
-            >
-              <PhoneOff size={14} aria-hidden="true" />{hangingUp ? 'Hanging up…' : 'Hang up'}
-            </button>
-          }
-        >
-          {callState.turns > 0 ? `${callState.turns} turn${callState.turns === 1 ? '' : 's'} so far.` : 'Just connected.'}
-        </Banner>
-      )}
-
-      {gap && <Banner tone="warning" title="History gap detected">The saved cursor is no longer retained. The visible trace was reloaded from the newest bounded snapshot.</Banner>}
-      {loadError && <Banner tone="error" title="Conversation unavailable">{loadError}. Existing messages are preserved; retry when the connection recovers.</Banner>}
-      {lifecycleError && <Banner tone="error" title="Action failed">{lifecycleError}</Banner>}
-
+      <MindHeader
+        state={state}
+        isPaused={isPaused}
+        mind={mind}
+        turnProgress={turnProgress}
+        runtime={runtime}
+        profileReady={profileReady}
+        lifecyclePending={lifecyclePending}
+        loading={loading}
+        setupSaving={setupSaving}
+        runLifecycle={runLifecycle}
+        openPanel={openPanel}
+        runtimeLoading={runtimeLoading}
+        visibilityLoading={visibilityLoading}
+        loadHistory={loadHistory}
+        loadRuntime={loadRuntime}
+        loadVisibility={loadVisibility}
+        callState={callState}
+        hangUpCall={hangUpCall}
+        hangingUp={hangingUp}
+        gap={gap}
+        loadError={loadError}
+        lifecycleError={lifecycleError}
+      />
       <div className="grid min-h-0 flex-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
-        <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
-          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
-            <h3 className="flex min-w-0 items-center gap-2 text-sm font-medium text-port-text"><span className="shrink-0">Conversation</span> <MindTurnIndicator progress={turnProgress} /></h3>
-            <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">
-              <input id="mind-show-activity" type="checkbox" checked={showActivity} onChange={(event) => setShowActivity(event.target.checked)} className="accent-port-accent" /> Activity
-            </label>
-          </header>
-
-          <div ref={messageListRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-5 sm:px-5" aria-label="Persistent mind conversation">
-            {loading && events === null ? (
-              <div className="flex h-full items-center justify-center"><BrailleSpinner text="Loading mind history" /></div>
-            ) : conversationItems.length === 0 && !loadError ? (
-              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-                <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-port-accent/10 text-port-accent"><MessageCircle size={26} aria-hidden="true" /></span>
-                <p className="text-sm font-medium text-port-text">Start the conversation</p>
-                <p className="mt-1 max-w-sm text-xs text-port-text-muted">Send a message below. This thread stays on this machine and carries forward across wakes.</p>
-              </div>
-            ) : (
-              <ol className="space-y-3">
-                {conversationItems.map((item) => (
-                  <ConversationItem
-                    key={item.event.eventId}
-                    {...item}
-                    selectedEventId={selectedEventId}
-                    onSelect={selectEvent}
-                  />
-                ))}
-              </ol>
-            )}
-          </div>
-
-          <form onSubmit={submitMessage} className="shrink-0 border-t border-port-border bg-port-card/95 px-2.5 pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-2.5 sm:px-4">
-            {submitError && <p role="alert" className="mt-2 text-sm text-port-error">{submitError} — Retry uses the same id, so it will not duplicate the input.</p>}
-            {messageImageError && <p role="alert" className="mt-2 text-sm text-port-error">{messageImageError}</p>}
-            {imageAttachmentsUnavailable && (
-              <p className="mt-2 text-xs text-port-text-muted">
-                Image attachments are unavailable for this Mind profile. {imageCapabilityGuidance || 'Choose a vision-capable provider or model in'}{' '}
-                <Link to="/settings?tab=providers" className="text-port-accent underline">Settings</Link>.
-              </p>
-            )}
-            {messageImages.length > 0 && (
-              <ul aria-label="Attached images" className="mt-2 flex flex-wrap gap-2">
-                {messageImages.map((image) => (
-                  <li key={image.attachmentId} className="relative h-16 w-16 overflow-hidden rounded-lg border border-port-border bg-port-bg">
-                    <MindImage image={image} className="h-full w-full object-cover" />
-                    <button type="button" onClick={() => void removeMessageImage(image)} disabled={submitting || messageImagesUploading} aria-label={`Remove ${image.originalName}`} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-1 top-1 rounded-full bg-port-bg/90 p-1 text-port-text shadow disabled:opacity-50">
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <PersistentMindTemporaryRoute
-              presets={thinkingPresets}
-              providers={providers}
-              selectedPresetId={selectedPresetId}
-              onSelectPreset={selectPreset}
-              onManagePresets={() => openPanel('models')}
-              disabled={submitting}
-              paused={isPaused}
-              imageCount={messageImages.length}
-            />
-            <div className="flex items-end gap-2 rounded-[1.35rem] border border-port-border bg-port-bg p-1.5 pl-3 focus-within:border-port-accent/70 focus-within:ring-1 focus-within:ring-port-accent/30">
-              <FilePickerButton
-                accept={UPLOAD_IMAGE_ACCEPT}
-                multiple
-                onChange={(event) => uploadMessageImages(event.target.files)}
-                disabled={submitting || messageImagesUploading || imageAttachmentsUnavailable || messageImages.length >= MAX_MESSAGE_IMAGES}
-                ariaLabel="Attach images"
-                title={imageAttachmentsUnavailable ? 'Image attachments are unavailable for this profile' : 'Attach images'}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-port-text-muted hover:bg-port-border/50 hover:text-port-text"
-              >
-                {messageImagesUploading ? <RefreshCw size={17} className="animate-spin" aria-hidden="true" /> : <ImagePlus size={18} aria-hidden="true" />}
-              </FilePickerButton>
-              <label htmlFor="mind-input-text" className="sr-only">Message</label>
-              <AutoSizeTextarea id="mind-input-text" value={messageText} onChange={(event) => changeMessageText(event.target.value)} onKeyDown={handleMessageKeyDown} maxLength={8000} rows={1} className="min-h-[36px] max-h-[40vh] flex-1 overflow-y-auto bg-transparent py-2 text-sm leading-5 text-port-text outline-none placeholder:text-port-text-muted" placeholder="Message Persistent Mind" />
-              <button type="submit" disabled={(!messageText.trim() && messageImages.length === 0) || submitting || messageImagesUploading} aria-label={submitting ? 'Sending message' : submitError ? 'Retry' : selectedPreset ? `Send with ${selectedPreset.label}` : 'Send message'} title={selectedPreset ? `Send this one message with ${selectedPreset.label}` : undefined} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-port-border disabled:text-port-text-muted ${selectedPreset ? 'bg-port-warning hover:bg-port-warning/85' : 'bg-port-accent hover:bg-port-accent/85'}`}>
-                {submitting ? <RefreshCw size={17} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={19} strokeWidth={2.5} aria-hidden="true" />}
-              </button>
-            </div>
-          </form>
-        </section>
-
-        <aside aria-labelledby="mind-state-heading" className="space-y-3 xl:min-h-0 xl:overflow-y-auto">
-          <section className="rounded-2xl border border-port-border bg-port-card p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-port-text-muted">Live workspace</p>
-                <h3 id="mind-state-heading" className="mt-1 text-base font-semibold text-port-text">Mind state</h3>
-              </div>
-              <span className={`h-2.5 w-2.5 rounded-full ${turnProgress.phase === 'stalled' || turnProgress.phase === 'blocked' ? 'bg-port-warning' : turnProgress.phase === 'thinking' ? 'animate-pulse bg-port-accent' : state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
-            </div>
-            <p className="mt-3 text-sm text-port-text-muted">
-              {turnProgress.phase === 'stalled' ? 'No heartbeat from the current turn — checking whether it is still alive.'
-                : turnProgress.phase === 'blocked' ? (state?.contextBudgetBlocked
-                  ? `${turnProgress.reason || 'Local context window is too small for this wake'}. Raise provider numCtx under Settings → AI providers (or shrink Context), then Resume.`
-                  : `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`)
-                  : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
-                    : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
-            </p>
-            {state?.contextBudgetBlocked && (
-              <div data-testid="mind-context-budget-actions" className="mt-2 flex flex-wrap gap-2 text-xs">
-                <button
-                  type="button"
-                  onClick={() => openPanel('context')}
-                  className="rounded-lg border border-port-border px-2.5 py-1 font-medium text-port-text hover:border-port-accent hover:text-port-accent"
-                >
-                  Open Context
-                </button>
-                <a
-                  href="/settings?tab=providers"
-                  className="rounded-lg border border-port-border px-2.5 py-1 font-medium text-port-text hover:border-port-accent hover:text-port-accent"
-                >
-                  AI providers (numCtx)
-                </a>
-              </div>
-            )}
-            {turnProgress.detail && (
-              <p data-testid="mind-turn-progress-detail" className={`mt-1 text-xs ${turnProgress.phase === 'stalled' || turnProgress.phase === 'blocked' ? 'text-port-warning' : 'text-port-text-muted'}`}>
-                {turnProgress.detail}
-              </p>
-            )}
-            {turnProgress.retryAt && (
-              <p className="mt-1 text-xs text-port-warning">
-                Next retry <time dateTime={turnProgress.retryAt} className="font-medium">{formatDateTime(turnProgress.retryAt)}</time> · {timeUntil(turnProgress.retryAt)}
-              </p>
-            )}
-            {state?.queuedMessageCount > 0 && <p className="mt-2 text-xs font-medium text-port-accent">{state.queuedMessageCount} queued message{state.queuedMessageCount === 1 ? '' : 's'}</p>}
-            {state?.started && state?.nextWakeAt && (
-              <button
-                type="button"
-                onClick={() => openPanel('settings')}
-                aria-label="Configure wake cadence"
-                className="mt-2 block rounded text-left text-xs text-port-text-muted hover:text-port-accent focus:outline-none focus:ring-2 focus:ring-port-accent/50"
-              >
-                Next wake <time dateTime={state.nextWakeAt} className="font-medium text-port-text">{formatDateTime(state.nextWakeAt)}</time> · {timeUntil(state.nextWakeAt)}
-              </button>
-            )}
-          </section>
-
-          <PersistentMindRoutePanel
-            profile={mind?.profile}
-            state={state}
-            providers={providers}
-            presets={thinkingPresets}
-            turnExecutions={turnExecutions}
-            selectedPresetId={selectedPresetId}
-            onReturnToDefault={() => selectPreset(null)}
-            onCancelSession={() => runLifecycle('pause')}
-            cancelPending={lifecyclePending === 'pause'}
-            onInspectSession={inspectSession}
-          />
-
-          <div className="grid grid-cols-2 gap-2">
-            <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${formatCount(runtime.context.approximateTokens)} tokens`} detail={`${formatCount(runtime?.context?.chars)} characters`} onClick={() => openPanel('context')} />
-            <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${formatCount(runtime.context.memoryCount)} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
-            <MindStateButton icon={Eraser} label="Cleanup" value={mind?.capabilities?.manageMind ? 'Self-maintenance on' : 'User controlled'} detail="Memories, history, and context" onClick={() => openPanel('maintenance')} />
-            <MindStateButton icon={Wrench} label="Tools" value={grantedCapabilityCount > 0 ? `${grantedCapabilityCount} grant${grantedCapabilityCount === 1 ? '' : 's'} enabled` : 'No grants'} detail="Narrow, typed authority" onClick={() => openPanel('tools')} />
-
-          </div>
-
-          <section aria-label="Mind environment" className="rounded-2xl border border-port-border bg-port-card p-3 text-xs text-port-text-muted">
-            <p className="font-medium text-port-text">Eidoverse · {visibility?.orientation?.eidoverse?.status || 'Unknown'}</p>
-            <p className="mt-1">World building {mind?.capabilities?.manageEidoverse ? 'enabled' : 'off'} · Release {visibility?.orientation?.release?.version || 'unknown'}</p>
-            <div className="mt-2 flex flex-wrap gap-3">
-              <Link to="/eidoverse" className="text-port-accent hover:underline">Open world</Link>
-              <button type="button" onClick={() => openPanel('tools')} className="text-port-accent hover:underline">World permissions</button>
-              <button type="button" onClick={() => openPanel('context')} className="text-port-accent hover:underline">Environment details</button>
-            </div>
-          </section>
-
-          {(runtimeError || visibilityError) && <p role="status" className="rounded-xl border border-port-warning/40 bg-port-warning/10 p-3 text-xs text-port-warning">Some live status is delayed. The last successful snapshot remains visible.</p>}
-        </aside>
+        <MindConversationPanel
+          turnProgress={turnProgress}
+          showActivity={showActivity}
+          setShowActivity={setShowActivity}
+          messageListRef={messageListRef}
+          loading={loading}
+          events={events}
+          conversationItems={conversationItems}
+          loadError={loadError}
+          selectedEventId={selectedEventId}
+          selectEvent={selectEvent}
+          submitMessage={submitMessage}
+          submitError={submitError}
+          messageImageError={messageImageError}
+          imageAttachmentsUnavailable={imageAttachmentsUnavailable}
+          imageCapabilityGuidance={imageCapabilityGuidance}
+          messageImages={messageImages}
+          removeMessageImage={removeMessageImage}
+          submitting={submitting}
+          messageImagesUploading={messageImagesUploading}
+          thinkingPresets={thinkingPresets}
+          providers={providers}
+          selectedPresetId={selectedPresetId}
+          selectPreset={selectPreset}
+          openPanel={openPanel}
+          isPaused={isPaused}
+          uploadMessageImages={uploadMessageImages}
+          messageText={messageText}
+          changeMessageText={changeMessageText}
+          handleMessageKeyDown={handleMessageKeyDown}
+          selectedPreset={selectedPreset}
+        />
+        <MindStateSidebar
+          turnProgress={turnProgress}
+          state={state}
+          isPaused={isPaused}
+          openPanel={openPanel}
+          mind={mind}
+          providers={providers}
+          thinkingPresets={thinkingPresets}
+          turnExecutions={turnExecutions}
+          selectedPresetId={selectedPresetId}
+          selectPreset={selectPreset}
+          runLifecycle={runLifecycle}
+          lifecyclePending={lifecyclePending}
+          inspectSession={inspectSession}
+          runtime={runtime}
+          grantedCapabilityCount={grantedCapabilityCount}
+          visibility={visibility}
+          runtimeError={runtimeError}
+          visibilityError={visibilityError}
+        />
       </div>
-
-      <Drawer
-        open={Boolean(activePanel)}
-        onClose={closePanel}
-        title="Mind workspace"
-        subtitle="Inspect and configure the state available to Persistent Mind"
-        size="xl"
-        closeLabel="Close mind workspace"
-        closeOnEsc={false}
-        closeOnBackdrop={false}
-      >
-        <div className="mb-4">
-          <TabPills tabs={MIND_PANEL_TABS} activeTab={activePanel || 'context'} onChange={openPanel} variant="pills" size="sm" mobileCompact ariaLabel="Mind workspace sections" />
-        </div>
-        {(visitedPanels.has('context') || activePanel === 'context') && <div hidden={activePanel !== 'context'} className="space-y-4">
-          <PersistentMindRuntimePanel runtime={runtime} error={runtimeError} loading={runtimeLoading} />
-          <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} onPrepareRepair={(workspace) => {
-            changeMessageText(`${messageText ? `${messageText}\n\n` : ''}Investigate workspace diagnostics for ${workspace.appName} (app ID: ${workspace.appId}). Use a CoS agent task to diagnose and resolve the reported setup issues: ${(workspace.preflight?.warnings || []).map((warning) => warning.message).join(' ')} Do not require the failing checks before queueing the repair itself. Preserve local changes and verify the required checks after repair.`);
-            closePanel();
-            document.getElementById('mind-input-text')?.focus();
-          }} />
-          <PersistentMindContextPanel view="context" refreshKey={contextRefreshKey} />
-        </div>}
-        {(visitedPanels.has('journal') || activePanel === 'journal') && <div hidden={activePanel !== 'journal'}>
-          <PersistentMindJournalPanel refreshKey={contextRefreshKey} />
-        </div>}
-        {(visitedPanels.has('memories') || activePanel === 'memories') && <div hidden={activePanel !== 'memories'}>
-          <PersistentMindContextPanel view="memories" refreshKey={contextRefreshKey} onMemoriesChanged={() => setContextRefreshKey((current) => current + 1)} />
-        </div>}
-        {(visitedPanels.has('maintenance') || activePanel === 'maintenance') && <div hidden={activePanel !== 'maintenance'}>
-          <PersistentMindMaintenancePanel
-            selfCleanupEnabled={mind?.capabilities?.manageMind === true}
-            onOpenTools={() => openPanel('tools')}
-            onCleaned={handleMindspaceCleaned}
-          />
-        </div>}
-        {(visitedPanels.has('tools') || activePanel === 'tools') && <div hidden={activePanel !== 'tools'}>
-          <PersistentMindTools onCapabilitiesChange={(capabilities) => setMind((current) => current ? { ...current, capabilities } : current)} onSavingChange={setCapabilitiesSaving} />
-        </div>}
-        {(visitedPanels.has('models') || activePanel === 'models') && <div hidden={activePanel !== 'models'} className="space-y-6">
-          <PersistentMindThinkingRequests
-            catalog={mind?.thinkingRequests}
-            capabilities={mind?.capabilities}
-            onSaved={(capabilities) => setMind((current) => ({ ...current, capabilities }))}
-            onCancelled={() => setMind((current) => ({ ...current, thinkingRequests: { ...current.thinkingRequests, pending: null } }))}
-          />
-          <PersistentMindThinkingPresets
-            presets={thinkingPresets}
-            disabled={!mind}
-            editingPresetId={editingPresetId}
-            onEditPreset={(id) => setMindParam('presetEdit', id)}
-            onSaved={(presets) => setMind((current) => current ? { ...current, thinkingPresets: presets } : current)}
-            onSavingChange={setPresetsSaving}
-          />
-          <PersistentMindSessions
-            turnExecutions={turnExecutions}
-            providers={providers}
-            selectedTurnId={selectedTurnId}
-            onSelectTurn={(turnId) => setMindParam('turn', turnId)}
-          />
-        </div>}
-        {(visitedPanels.has('settings') || activePanel === 'settings') && <section hidden={activePanel !== 'settings'} aria-labelledby="mind-profile-heading" className="rounded border border-port-border bg-port-card p-4">
-          <div className="mb-3">
-            <h3 id="mind-profile-heading" className="text-sm font-semibold text-port-text">AI profile</h3>
-            <p className="mt-1 text-xs text-port-text-muted">Pin the provider, model, effort, and wake cadence. Changes apply to the next wake and never silently fall back to another model.</p>
-          </div>
-          <PersistentMindProfileControls
-            profile={mind?.profile}
-            disabled={!mind}
-            onSaved={(profile) => setMind((current) => current ? { ...current, profile } : current)}
-            onSavingChange={setProfileSaving}
-          />
-          <div className="mt-6 border-t border-port-border pt-4">
-            <h3 className="text-sm font-semibold text-port-text">Portability</h3>
-            <p className="mt-1 mb-3 text-xs text-port-text-muted">Carry this Mind to another PortOS install as one encrypted file you download and keep.</p>
-            <PersistentMindPortabilityPanel />
-          </div>
-          {!state?.started && (
-            <div className="mt-4 flex flex-col gap-2 border-t border-port-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs text-port-text-muted">{setupSaving ? 'Saving persistent mind settings…' : profileReady ? 'The saved AI profile is ready.' : 'Enable the profile and select both an AI provider and model to start.'}</p>
-              <ActionButton label="Start persistent mind" icon={CirclePlay} pending={lifecyclePending === 'start'} disabled={loading || setupSaving || !profileReady} onClick={() => runLifecycle('start')} />
-            </div>
-          )}
-        </section>}
-      </Drawer>
-
-      <Drawer
-        open={Boolean(selectedEventId)}
-        onClose={closeSelectedEvent}
-        title={selectedEvent ? eventLabel(selectedEvent.kind) : 'Event details'}
-        subtitle={selectedEvent?.at ? formatDateTime(selectedEvent.at) : undefined}
-        size="sm"
-        closeLabel="Close event details"
-      >
-        {selectedEvent ? (
-          <div className="space-y-5">
-            <section aria-labelledby="mind-event-content-heading">
-              <h3 id="mind-event-content-heading" className="text-xs font-semibold uppercase tracking-wide text-port-accent">Message</h3>
-              {eventText(selectedEvent) && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-port-text">{eventText(selectedEvent)}</p>}
-              <MessageImages images={safeMessageImages(selectedEvent)} />
-              {!eventText(selectedEvent) && safeMessageImages(selectedEvent).length === 0 && <p className="mt-2 text-sm text-port-text">{selectedEvent.kind}</p>}
-            </section>
-
-            <section aria-labelledby="mind-event-metadata-heading" className="space-y-2 border-t border-port-border pt-4">
-              <h3 id="mind-event-metadata-heading" className="text-xs font-semibold uppercase tracking-wide text-port-accent">Event metadata</h3>
-              <p className="break-all font-mono text-xs text-port-text-muted">{selectedEvent.eventId}</p>
-              <p className="text-xs text-port-text-muted">Sequence {selectedEvent.sequence}{selectedEvent.turnId ? ` · turn ${selectedEvent.turnId}` : ''}</p>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-port-border bg-port-bg p-3 text-[11px] text-port-text-muted">{JSON.stringify(selectedEvent.data || {}, null, 2)}</pre>
-            </section>
-
-            <div className="flex flex-wrap gap-2 border-t border-port-border pt-4">
-              {selectedEvent.kind === 'mind.capability.request' && <ActionButton label="Acknowledge" icon={Check} pending={eventActionPending === selectedEvent.eventId} onClick={() => acknowledge(selectedEvent)} />}
-              {['mind.summary', 'mind.reply', 'mind.thought', 'mind.memory.candidate'].includes(selectedEvent.kind) && (
-                <ActionButton label="Promote to memory" icon={Upload} pending={eventActionPending === selectedEvent.eventId} disabled={!eventText(selectedEvent)} onClick={() => promote(selectedEvent)} />
-              )}
-            </div>
-
-            <form onSubmit={submitAnnotation} className="space-y-3 border-t border-port-border pt-4">
-              <div>
-                <label htmlFor="mind-annotation-text" className="flex items-center gap-2 text-sm font-medium text-port-text"><StickyNote size={15} aria-hidden="true" /> Add a note</label>
-                <p className="mt-1 text-xs text-port-text-muted">Attach context to this event without starting a new turn.</p>
-              </div>
-              <textarea id="mind-annotation-text" value={annotationText} onChange={(event) => changeAnnotationText(event.target.value)} maxLength={8000} rows={4} className="w-full resize-y rounded-xl border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text focus:border-port-accent focus:outline-none" placeholder="Add context or an idea…" />
-              {annotationError && <p role="alert" className="text-sm text-port-error">{annotationError} — Retry uses the same id.</p>}
-              <button type="submit" disabled={!annotationText.trim() || annotationSubmitting} className="rounded-full bg-port-accent px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">{annotationSubmitting ? 'Adding note…' : annotationError ? 'Retry note' : 'Add note'}</button>
-            </form>
-          </div>
-        ) : (
-          <p className="text-sm text-port-text-muted">This event is no longer available in the retained conversation history.</p>
-        )}
-      </Drawer>
+      <MindWorkspaceDrawers
+        activePanel={activePanel}
+        closePanel={closePanel}
+        visitedPanels={visitedPanels}
+        openPanel={openPanel}
+        runtime={runtime}
+        runtimeError={runtimeError}
+        runtimeLoading={runtimeLoading}
+        visibility={visibility}
+        visibilityError={visibilityError}
+        visibilityLoading={visibilityLoading}
+        loadVisibility={loadVisibility}
+        prepareRepair={prepareRepair}
+        contextRefreshKey={contextRefreshKey}
+        refreshContext={refreshContext}
+        mind={mind}
+        handleMindspaceCleaned={handleMindspaceCleaned}
+        updateCapabilities={updateCapabilities}
+        setCapabilitiesSaving={setCapabilitiesSaving}
+        thinkingPresets={thinkingPresets}
+        editingPresetId={editingPresetId}
+        setMindParam={setMindParam}
+        setPresetsSaving={setPresetsSaving}
+        saveThinkingRequests={saveThinkingRequests}
+        cancelThinkingRequest={cancelThinkingRequest}
+        saveThinkingPresets={saveThinkingPresets}
+        turnExecutions={turnExecutions}
+        providers={providers}
+        selectedTurnId={selectedTurnId}
+        setProfileSaving={setProfileSaving}
+        saveProfile={saveProfile}
+        state={state}
+        setupSaving={setupSaving}
+        profileReady={profileReady}
+        lifecyclePending={lifecyclePending}
+        loading={loading}
+        runLifecycle={runLifecycle}
+        selectedEventId={selectedEventId}
+        closeSelectedEvent={closeSelectedEvent}
+        selectedEvent={selectedEvent}
+        eventActionPending={eventActionPending}
+        acknowledge={acknowledge}
+        promote={promote}
+        submitAnnotation={submitAnnotation}
+        annotationText={annotationText}
+        changeAnnotationText={changeAnnotationText}
+        annotationError={annotationError}
+        annotationSubmitting={annotationSubmitting}
+      />
     </section>
-  );
-}
-
-function MindStateButton({ icon: Icon, label, value, detail, onClick }) {
-  return (
-    <button type="button" aria-label={label} onClick={onClick} className="group rounded-2xl border border-port-border bg-port-card p-3 text-left transition-colors hover:border-port-accent/60 hover:bg-port-accent/5">
-      <span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-port-text-muted group-hover:text-port-accent">
-        <Icon size={14} aria-hidden="true" /> {label}
-      </span>
-      <span className="mt-2 block text-sm font-semibold text-port-text">{value}</span>
-      <span className="mt-0.5 block truncate text-xs text-port-text-muted">{detail}</span>
-    </button>
-  );
-}
-
-function ConversationItem({ event, thoughts, thoughtOnly, selectedEventId, onSelect }) {
-  const outgoing = event.kind === 'mind.message.accepted';
-  const incoming = thoughtOnly || ['mind.reply', 'mind.summary'].includes(event.kind);
-  const selected = event.eventId === selectedEventId;
-  const content = thoughtOnly ? 'Thoughts from this turn' : eventText(event) || event.kind;
-
-  if (!outgoing && !incoming) {
-    return (
-      <li className="flex justify-center px-2">
-        <button
-          type="button"
-          onClick={() => onSelect(event.eventId)}
-          aria-current={selected ? 'true' : undefined}
-          aria-label={`${eventLabel(event.kind)} · ${formatDateTime(event.at)}`}
-          className={`max-w-[92%] rounded-full border border-port-border bg-port-bg/70 px-3 py-1.5 text-center text-xs text-port-text-muted transition-colors hover:bg-port-border/30 ${selected ? 'ring-2 ring-port-accent/70' : ''}`}
-        >
-          <span className="font-medium text-port-text">{eventLabel(event.kind)}</span>
-          {eventText(event) && <><span aria-hidden="true"> · </span><span>{eventText(event)}</span></>}
-        </button>
-      </li>
-    );
-  }
-
-  return (
-    <li className={`flex flex-col ${outgoing ? 'items-end' : 'items-start'}`}>
-      {!outgoing && <span className="mb-1 ml-2 text-[11px] font-medium text-port-text-muted">Chief of Staff</span>}
-      <div className={`max-w-[86%] overflow-hidden ${outgoing ? 'rounded-[1.25rem] rounded-br-md bg-port-accent text-white' : 'rounded-[1.25rem] rounded-bl-md bg-port-border/55 text-port-text'} ${selected ? 'ring-2 ring-port-accent/80 ring-offset-2 ring-offset-port-card' : ''}`}>
-        <button
-          type="button"
-          onClick={() => onSelect(event.eventId)}
-          aria-current={selected ? 'true' : undefined}
-          aria-label={`${eventLabel(event.kind)} · ${formatDateTime(event.at)}`}
-          className="block w-full whitespace-pre-wrap break-words px-3.5 py-2.5 text-left text-[15px] leading-5"
-        >
-          {content}
-        </button>
-        <MessageImages images={safeMessageImages(event)} compact />
-        {thoughts.length > 0 && (
-          <details className={`border-t ${outgoing ? 'border-white/20' : 'border-port-text/10'}`}>
-            <summary className="cursor-pointer px-3.5 py-2 text-xs font-medium opacity-75 hover:opacity-100">
-              {thoughts.length} {thoughts.length === 1 ? 'thought' : 'thoughts'}
-            </summary>
-            <div className={`space-y-1.5 border-t px-2 py-2 ${outgoing ? 'border-white/20' : 'border-port-text/10'}`}>
-              {thoughts.map((thought) => (
-                <button
-                  key={thought.eventId}
-                  type="button"
-                  onClick={() => onSelect(thought.eventId)}
-                  aria-current={thought.eventId === selectedEventId ? 'true' : undefined}
-                  aria-label={`${eventLabel(thought.kind)} · ${formatDateTime(thought.at)}`}
-                  className={`block w-full rounded-xl px-2 py-1.5 text-left text-xs leading-5 opacity-75 hover:bg-black/10 hover:opacity-100 ${thought.eventId === selectedEventId ? 'ring-1 ring-current' : ''}`}
-                >
-                  {eventText(thought) || thought.kind}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
-      </div>
-      <time className={`mt-1 px-2 text-[10px] text-port-text-muted ${outgoing ? 'text-right' : 'text-left'}`} dateTime={event.at}>{formatDateTime(event.at)}</time>
-    </li>
-  );
-}
-
-function MindImage({ image, className = '' }) {
-  const [missing, setMissing] = useState(false);
-  if (missing || !image?.path) {
-    return <span role="img" aria-label={`${image?.originalName || 'Image'} is unavailable`} className={`flex items-center justify-center bg-port-bg p-1 text-center text-[10px] text-port-text-muted ${className}`}>Image unavailable</span>;
-  }
-  return <img src={image.path} alt={image.originalName || 'Attached image'} onError={() => setMissing(true)} className={className} />;
-}
-
-function MessageImages({ images, compact = false }) {
-  if (images.length === 0) return null;
-  return (
-    <ul aria-label={`${images.length} attached image${images.length === 1 ? '' : 's'}`} className={`flex flex-wrap gap-2 ${compact ? 'border-t border-white/20 px-3.5 py-2.5' : 'mt-3'}`}>
-      {images.map((image) => (
-        <li key={image.attachmentId} className={compact ? 'h-20 w-20 overflow-hidden rounded-lg bg-port-bg/20' : 'overflow-hidden rounded-lg border border-port-border bg-port-bg'}>
-          <MindImage image={image} className={compact ? 'h-full w-full object-cover' : 'max-h-64 max-w-full object-contain'} />
-          {!compact && <p className="border-t border-port-border px-2 py-1 text-xs text-port-text-muted">{image.originalName}</p>}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ActionButton({ label, icon: Icon, pending = false, disabled = false, onClick }) {
-  return (
-    <button type="button" disabled={pending || disabled} onClick={onClick} className="flex min-h-[36px] items-center gap-2 rounded border border-port-border px-3 py-1.5 text-sm text-port-text hover:bg-port-border/30 disabled:cursor-not-allowed disabled:opacity-50">
-      <Icon size={16} className={pending ? 'animate-spin' : ''} aria-hidden="true" /> {pending ? `${label}…` : label}
-    </button>
   );
 }

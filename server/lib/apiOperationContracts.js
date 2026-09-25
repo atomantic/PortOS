@@ -9,6 +9,7 @@ import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './p
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
+import { gitDeleteBranchBodySchema } from './validation.js';
 
 const jsonBody = (schema, required = true) => ({
   required,
@@ -16,6 +17,16 @@ const jsonBody = (schema, required = true) => ({
 });
 
 export const API_OPERATION_CONTRACTS = Object.freeze({
+  '/api/git/delete-branch': {
+    post: {
+      summary: 'Delete a Git branch locally, remotely, or both',
+      requestBody: jsonBody(gitDeleteBranchBodySchema),
+      responses: {
+        200: { description: 'Branch deletion result' },
+        400: { description: 'Invalid branch deletion request', 'x-portos-error-codes': ['VALIDATION_ERROR'] },
+      },
+    },
+  },
   '/api/api-docs/openapi.json': {
     get: { summary: 'Read exposed OpenAPI document', responses: { 200: { description: 'OpenAPI 3.0.3 document for currently exposed external APIs' } } },
   },

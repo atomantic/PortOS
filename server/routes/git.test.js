@@ -252,6 +252,31 @@ describe('git routes — active agent branch exclusion', () => {
   });
 
   describe('POST /api/git/delete-branch — active agent branches are excluded', () => {
+    it.each([
+      { local: 'false', remote: 'false' },
+      { local: 1, remote: false },
+      { local: false, remote: 1 },
+    ])('rejects non-boolean deletion flags: %j', async (flags) => {
+      const res = await request(makeApp()).post('/api/git/delete-branch')
+        .send({ path: WORKSPACE, branch: 'feature/x', ...flags });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(gitService.deleteBranch).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { local: true, remote: false },
+      { local: false, remote: true },
+      { local: true, remote: true },
+    ])('passes boolean deletion flags: %j', async (flags) => {
+      const res = await request(makeApp()).post('/api/git/delete-branch')
+        .send({ path: WORKSPACE, branch: 'feature/x', ...flags });
+      expect(res.status).toBe(200);
+      expect(gitService.deleteBranch).toHaveBeenCalledWith(
+        WORKSPACE, 'feature/x', expect.objectContaining(flags)
+      );
+    });
+
     it('passes the active agent branches as excludeBranches to deleteBranch', async () => {
       cosAgentLifecycleService.getAgents.mockResolvedValue([
         { status: 'running', metadata: { worktreeBranch: 'feature/agent-active' } },
