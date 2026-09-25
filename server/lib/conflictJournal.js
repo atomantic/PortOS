@@ -126,9 +126,12 @@ const HASH_FIELDS = Object.freeze({
   // cares about, and vice versa).
   // v4: concept, the user-authored creative brief used by resumable music
   // designer drafts.
+  // v7 (#8376): waveSketch/waveSketchPrompt, the Music Designer's drawn wave
+  // sketch — hashed only for bases stamped at v7+.
   track: Object.freeze({
     3: Object.freeze(['chiptuneScore', 'chiptunePrompt']),
     4: Object.freeze(['concept']),
+    7: Object.freeze(['waveSketch', 'waveSketchPrompt']),
   }),
 });
 
@@ -504,8 +507,9 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // `chiptuneScore`/`chiptunePrompt` (#2911) are also restorable and, as of
   // #2912, DO participate in the content hash via the version-gated HASH_FIELDS
   // mechanism (see above) — a base hash predating the field just compares at
-  // its own stored version until the next sync re-stamps it.
-  track: ['title', 'albumId', 'artistId', 'artist', 'concept', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders', 'chiptuneScore', 'chiptunePrompt'],
+  // its own stored version until the next sync re-stamps it. Same for
+  // `waveSketch`/`waveSketchPrompt` (#8376, hashed from v7).
+  track: ['title', 'albumId', 'artistId', 'artist', 'concept', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders', 'chiptuneScore', 'chiptunePrompt', 'waveSketch', 'waveSketchPrompt'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /
   // structural fields are excluded deliberately — `number` is renumber-managed,

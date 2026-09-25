@@ -7,6 +7,7 @@ const musicDir = await mkdtemp(join(tmpdir(), 'waveform-music-'));
 
 vi.mock('./tracks/index.js', () => ({
   getTrack: vi.fn(),
+  updateTrack: vi.fn(async (id, patch) => ({ id, ...patch })),
   appendActiveTake: vi.fn(async (id, take, patch) => ({ id, ...take, ...patch })),
 }));
 
@@ -29,7 +30,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 
 const tracks = await import('./tracks/index.js');
 const promptRunner = await import('./promptRunner.js');
-const { drawWaveSketch, renderWaveSketchToTrack } = await import('./musicWaveform.js');
+const { drawWaveSketch, drawWaveSketchForTrack, renderWaveSketchToTrack } = await import('./musicWaveform.js');
+const { normalizeWaveSketch } = await import('../lib/waveSketch.js');
 
 const drawnSketch = () => ({
   version: 1,
@@ -81,11 +83,44 @@ describe('drawWaveSketch', () => {
   });
 });
 
-describe('renderWaveSketchToTrack', () => {
-  it('renders the drawing into the music library as the active waveform take', async () => {
+describe('drawWaveSketchForTrack', () => {
+  it('persists the drawing and its description on the track', async () => {
     tracks.getTrack.mockResolvedValue(baseTrack());
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(drawnSketch()), model: 'model-x' });
 
-    const result = await renderWaveSketchToTrack({ trackId: 'track-1', sketch: drawnSketch(), prompt: 'glassy', title: 'Glass Tide' });
+    const result = await drawWaveSketchForTrack({ trackId: 'track-1', description: 'glassy tidal ambient', revise: true });
+
+    // No stored drawing yet, so "revise" still draws fresh.
+    expect(promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt).not.toContain('CURRENT SKETCH');
+    expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', {
+      waveSketch: normalizeWaveSketch(drawnSketch()), waveSketchPrompt: 'glassy tidal ambient',
+    });
+    expect(result.sketch).toEqual(normalizeWaveSketch(drawnSketch()));
+    expect(result.track).toMatchObject({ id: 'track-1', waveSketchPrompt: 'glassy tidal ambient' });
+  });
+
+  it('revises the STORED drawing, and only when asked', async () => {
+    tracks.getTrack.mockResolvedValue(baseTrack({ waveSketch: normalizeWaveSketch(drawnSketch()) }));
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(drawnSketch()) });
+
+    await drawWaveSketchForTrack({ trackId: 'track-1', description: 'x', revise: true });
+    expect(promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt).toContain('CURRENT SKETCH');
+    await drawWaveSketchForTrack({ trackId: 'track-1', description: 'x' });
+    expect(promptRunner.runPromptThroughProvider.mock.calls[1][0].prompt).not.toContain('CURRENT SKETCH');
+  });
+
+  it('404s on a missing track without calling the provider', async () => {
+    tracks.getTrack.mockResolvedValue(null);
+    await expect(drawWaveSketchForTrack({ trackId: 'gone', description: 'x' })).rejects.toMatchObject({ status: 404 });
+    expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderWaveSketchToTrack', () => {
+  it('renders the stored drawing into the music library as the active waveform take', async () => {
+    tracks.getTrack.mockResolvedValue(baseTrack({ waveSketch: normalizeWaveSketch(drawnSketch()), waveSketchPrompt: 'drawn from this' }));
+
+    const result = await renderWaveSketchToTrack({ trackId: 'track-1', prompt: 'glassy', title: 'Glass Tide' });
 
     expect(result.filename).toMatch(/^music-.+\.wav$/);
     expect(await readdir(musicDir)).toContain(result.filename);
@@ -97,12 +132,18 @@ describe('renderWaveSketchToTrack', () => {
     expect(result.track).toMatchObject({ engine: 'waveform', title: 'Glass Tide' });
   });
 
-  it('400s on an empty drawing and 404s on a missing track', async () => {
-    tracks.getTrack.mockResolvedValue(baseTrack());
-    await expect(renderWaveSketchToTrack({ trackId: 'track-1', sketch: { voices: [] } }))
+  it('defaults the take prompt to the description the drawing came from', async () => {
+    tracks.getTrack.mockResolvedValue(baseTrack({ waveSketch: normalizeWaveSketch(drawnSketch()), waveSketchPrompt: 'drawn from this' }));
+    await renderWaveSketchToTrack({ trackId: 'track-1' });
+    expect(tracks.appendActiveTake.mock.calls[0][1]).toMatchObject({ prompt: 'drawn from this' });
+  });
+
+  it('400s when the track has no drawing and 404s on a missing track', async () => {
+    tracks.getTrack.mockResolvedValue(baseTrack({ waveSketch: null }));
+    await expect(renderWaveSketchToTrack({ trackId: 'track-1' }))
       .rejects.toMatchObject({ status: 400, code: 'WAVEFORM_EMPTY' });
     tracks.getTrack.mockResolvedValue(null);
-    await expect(renderWaveSketchToTrack({ trackId: 'gone', sketch: drawnSketch() }))
+    await expect(renderWaveSketchToTrack({ trackId: 'gone' }))
       .rejects.toMatchObject({ status: 404 });
     expect(tracks.appendActiveTake).not.toHaveBeenCalled();
   });

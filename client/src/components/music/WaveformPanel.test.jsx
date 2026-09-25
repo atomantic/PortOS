@@ -4,7 +4,8 @@ import WaveformPanel from './WaveformPanel';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api', () => ({
-  drawWaveform: vi.fn(),
+  drawTrackWaveform: vi.fn(),
+  getTrack: vi.fn(),
   renderTrackWaveform: vi.fn(),
 }));
 
@@ -57,20 +58,27 @@ describe('<WaveformPanel>', () => {
     window.localStorage.clear();
     audio.sources = [];
     vi.stubGlobal('AudioContext', FakeAudioContext);
-    api.drawWaveform.mockResolvedValue({ sketch: drawn, llm: { provider: 'provider-a', model: 'model-a' } });
+    // The server stores what it drew; getTrack serves it back (a reload).
+    const stored = new Map();
+    api.drawTrackWaveform.mockImplementation(async (trackId) => {
+      stored.set(trackId, drawn);
+      return { sketch: drawn, llm: { provider: 'provider-a', model: 'model-a' }, track: { id: trackId, waveSketch: drawn } };
+    });
+    api.getTrack.mockImplementation(async (trackId) => ({ id: trackId, waveSketch: stored.get(trackId) ?? null }));
     api.renderTrackWaveform.mockResolvedValue({ track: { id: 'track-1' }, filename: 'music-x.wav', durationSec: 1 });
   });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-  it('draws from the description with the chosen provider, shows the drawing, and remembers it', async () => {
-    renderPanel();
+  it('draws from the description with the chosen provider, stores it on the track, and reloads it', async () => {
+    const onTrackUpdate = vi.fn();
+    renderPanel({ onTrackUpdate });
     expect(screen.getByText(/Nothing drawn yet/)).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Drawing guidance (optional)'), { target: { value: 'lots of glide' } });
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
 
     await screen.findByText('Glass Tide');
-    expect(api.drawWaveform).toHaveBeenCalledWith({
+    expect(api.drawTrackWaveform).toHaveBeenCalledWith('track-1', {
       description: 'glassy tidal ambient',
       lyrics: undefined,
       guidance: 'lots of glide',
@@ -81,17 +89,26 @@ describe('<WaveformPanel>', () => {
     }, { silent: true });
     expect(screen.getByTestId('waveform-shapes').textContent).toContain('glass');
     expect(screen.getByText(/2 voices · 2 strokes/)).toBeTruthy();
+    expect(onTrackUpdate).toHaveBeenCalledWith({ id: 'track-1', waveSketch: drawn });
 
-    // A remount (reload) of the same draft restores the drawing without a call.
+    // A remount (reload) of the same draft loads the stored drawing — no LLM call.
     cleanup();
     renderPanel();
-    expect(screen.getByText('Glass Tide')).toBeTruthy();
-    expect(api.drawWaveform).toHaveBeenCalledTimes(1);
+    await screen.findByText('Glass Tide');
+    expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1);
 
     // …but a different draft starts blank.
     cleanup();
     renderPanel({ trackId: 'track-2' });
+    await waitFor(() => expect(api.getTrack).toHaveBeenCalledWith('track-2', { silent: true }));
     expect(screen.getByText(/Nothing drawn yet/)).toBeTruthy();
+  });
+
+  it('opens on the host track\'s stored drawing without fetching', () => {
+    renderPanel({ track: { id: 'track-1', waveSketch: drawn } });
+    expect(screen.getByText('Glass Tide')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Revise drawing/ })).toBeTruthy();
+    expect(api.getTrack).not.toHaveBeenCalled();
   });
 
   it('sends the typed length, clamped to the supported range', async () => {
@@ -100,21 +117,23 @@ describe('<WaveformPanel>', () => {
     fireEvent.change(length, { target: { value: '1' } });
     fireEvent.change(length, { target: { value: '12' } });
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
-    await waitFor(() => expect(api.drawWaveform).toHaveBeenCalledTimes(1));
-    expect(api.drawWaveform.mock.calls[0][0].durationSec).toBe(12);
+    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1));
+    expect(api.drawTrackWaveform.mock.calls[0][1].durationSec).toBe(12);
 
     fireEvent.change(length, { target: { value: '999' } });
     fireEvent.click(await screen.findByRole('button', { name: /Draw from scratch/ }));
-    await waitFor(() => expect(api.drawWaveform).toHaveBeenCalledTimes(2));
-    expect(api.drawWaveform.mock.calls[1][0].durationSec).toBe(60);
+    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(2));
+    expect(api.drawTrackWaveform.mock.calls[1][1].durationSec).toBe(60);
   });
 
-  it('revises by sending the current drawing back', async () => {
+  it('revises the stored drawing (the server holds it, so only the intent is sent)', async () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Revise drawing/ }));
-    await waitFor(() => expect(api.drawWaveform).toHaveBeenCalledTimes(2));
-    expect(api.drawWaveform.mock.calls[1][0].current).toEqual(drawn);
+    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(2));
+    expect(api.drawTrackWaveform.mock.calls[0][1].revise).toBeUndefined();
+    expect(api.drawTrackWaveform.mock.calls[1][1]).toMatchObject({ revise: true });
+    expect(api.drawTrackWaveform.mock.calls[1][1].current).toBeUndefined();
   });
 
   it('plays and stops the synthesized drawing', async () => {
@@ -132,7 +151,7 @@ describe('<WaveformPanel>', () => {
     expect(screen.getByRole('button', { name: /Play drawing/ })).toBeTruthy();
   });
 
-  it('saves the drawing as a take, titled from the drawing when the user gave none', async () => {
+  it('saves the stored drawing as a take, titled from the drawing when the user gave none', async () => {
     const onRendered = vi.fn();
     renderPanel({ onRendered });
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
@@ -140,7 +159,7 @@ describe('<WaveformPanel>', () => {
 
     await waitFor(() => expect(onRendered).toHaveBeenCalledWith({ id: 'track-1' }));
     expect(api.renderTrackWaveform).toHaveBeenCalledWith('track-1', {
-      sketch: drawn, prompt: 'glassy tidal ambient', title: 'Glass Tide',
+      prompt: 'glassy tidal ambient', title: 'Glass Tide',
     }, { silent: true });
   });
 });

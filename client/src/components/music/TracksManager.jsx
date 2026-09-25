@@ -6,7 +6,8 @@
  * and an audio file. Audio is stored in the shared music library; the editor
  * uploads a file or attaches an existing library track, and plays it inline.
  *
- * The editor hosts both on-device audio generation and LLM-composed chiptunes.
+ * The editor hosts on-device audio generation, LLM-composed chiptunes, and —
+ * for a track that carries one — the Music Designer's LLM-drawn wave sketch.
  * It can also save the open form and hand the same persisted track to the
  * stepped MusicDesigner workflow. Mirrors the Authors/Artists master-detail
  * pattern.
@@ -26,6 +27,7 @@ import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
 import ChiptunePanel from './ChiptunePanel';
+import TrackWaveformHost from './TrackWaveformHost';
 import TrackRenderCard from './TrackRenderCard';
 import TrackRenderModal from './TrackRenderModal';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
@@ -55,6 +57,13 @@ const formFromTrack = (t) => ({
   audioFilename: t.audioFilename || '',
 });
 
+// The generator a freshly selected track opens on: its drawing when the active
+// take was drawn from it, else its chiptune score, else the audio models.
+const initialGenMode = (track) => {
+  if (track.engine === 'waveform' && track.waveSketch) return 'drawn';
+  return track.chiptuneScore ? 'chiptune' : 'audio';
+};
+
 export default function TracksManager() {
   const navigate = useNavigate();
   // Selection lives in the URL (`/music/tracks/:id`, `/music/tracks/new`) so it's
@@ -79,9 +88,11 @@ export default function TracksManager() {
   // Music Video projects, for the MIDI read-through: MuScriptor transcriptions
   // are stored on the MV project that links a track, not on the track itself.
   const [mvProjects, setMvProjects] = useState([]);
-  // Which generator the editor shows: the on-device audio models or the
-  // LLM-composed chiptune score (#2911). Seeded per selection below — a track
-  // that already carries a score opens on the chiptune panel.
+  // Which generator the editor shows: the on-device audio models, the
+  // LLM-composed chiptune score (#2911), or the LLM-drawn wave sketch (#8376,
+  // offered only for a track that already carries one). Seeded per selection
+  // below — a track whose active take is drawn opens on its drawing, and one
+  // that carries a score opens on the chiptune panel.
   const [genMode, setGenMode] = useState('audio');
   const remixNonceRef = useRef(0);
   // Mirrors `selectedId` so async audio handlers can detect a selection change
@@ -161,7 +172,7 @@ export default function TracksManager() {
       // Skip the derivation exactly once for the track `handleSave` just made,
       // so the pre-save choice survives the create → navigate hydration.
       if (justCreatedIdRef.current === selectionKey) justCreatedIdRef.current = null;
-      else setGenMode(selected.chiptuneScore ? 'chiptune' : 'audio');
+      else setGenMode(initialGenMode(selected));
     }
   }, [selectionKey, isCreate, selected, loading]);
 
@@ -171,6 +182,22 @@ export default function TracksManager() {
       return exists ? prev.map((t) => (t.id === track.id ? track : t)) : [...prev, track];
     });
   };
+
+  // A chiptune/drawn generator updated the persisted track (score, drawing, or
+  // a new take): refresh the list and mirror the active audio pointer onto the
+  // open form without touching the user's unsaved edits.
+  const applyGeneratorUpdate = (updated) => {
+    upsertLocal(updated); // list update is id-keyed → always safe
+    if (selectedIdRef.current === updated.id) {
+      setForm((f) => ({ ...f, audioFilename: updated.audioFilename || f.audioFilename }));
+    }
+  };
+
+  const genModes = [
+    ['audio', 'Audio model'],
+    ['chiptune', 'Chiptune score'],
+    ...(persisted?.waveSketch ? [['drawn', 'Drawn waveform']] : []),
+  ];
 
   const persistForm = async () => {
     const title = form.title.trim();
@@ -348,8 +375,15 @@ export default function TracksManager() {
       setChiptuneRemix({ prompt: render.prompt || '', nonce: remixNonceRef.current });
       return;
     }
-    // A drawn-waveform take has no audio-model engine to seed — reopen it in the
-    // Music Designer's drawn engine on this track, where its drawing lives.
+    // A drawn-waveform take remixes in the editor's drawn mode, on the track's
+    // stored sketch, seeded with the description the take was rendered from.
+    if (render.engine === 'waveform' && persisted?.waveSketch) {
+      setGenMode('drawn');
+      if (render.prompt) setForm((f) => ({ ...f, prompt: render.prompt }));
+      return;
+    }
+    // A drawn take from before the sketch was stored on the track (#8376) has
+    // nothing to reopen here — send it to the Music Designer's drawn engine.
     if (render.engine === 'waveform' && persisted) {
       navigate(`/music/generate/render?trackId=${encodeURIComponent(persisted.id)}&engine=drawn`);
       return;
@@ -517,15 +551,16 @@ export default function TracksManager() {
                 />
               </Field>
 
-              {/* Generation — two modes: the on-device audio models
-                  (MusicGen/AudioLDM2/ACE-Step) and the LLM-composed looping
-                  chiptune score (#2911).
+              {/* Generation — the on-device audio models (MusicGen/AudioLDM2/
+                  ACE-Step), the LLM-composed looping chiptune score (#2911),
+                  and, for a track drawn in the Music Designer, its stored wave
+                  sketch (#8376) to revise and re-render.
 
                   Audio-model generation can create a standalone track directly;
                   chiptune composition still needs a persisted score record. */}
               <div className="space-y-2">
                 <div className="inline-flex rounded-lg border border-port-border overflow-hidden text-sm" role="group" aria-label="Generation mode">
-                  {[['audio', 'Audio model'], ['chiptune', 'Chiptune score']].map(([mode, label]) => (
+                  {genModes.map(([mode, label]) => (
                     <button
                       key={mode}
                       type="button"
@@ -541,18 +576,21 @@ export default function TracksManager() {
                   <p className="text-xs text-gray-500">
                     Save the track first, then generate a chiptune score.
                   </p>
+                ) : genMode === 'drawn' && persisted?.waveSketch ? (
+                  <TrackWaveformHost
+                    track={persisted}
+                    description={form.prompt}
+                    lyrics={form.lyrics}
+                    title={form.title}
+                    onTrackUpdate={applyGeneratorUpdate}
+                  />
                 ) : genMode === 'chiptune' ? (
                   <ChiptunePanel
                     track={persisted}
                     sourcePrompt={form.prompt}
                     sourceLyrics={form.lyrics}
                     remix={chiptuneRemix}
-                    onTrackUpdate={(updated) => {
-                      upsertLocal(updated); // list update is id-keyed → always safe
-                      if (selectedIdRef.current === updated.id) {
-                        setForm((f) => ({ ...f, audioFilename: updated.audioFilename || f.audioFilename }));
-                      }
-                    }}
+                    onTrackUpdate={applyGeneratorUpdate}
                   />
                 ) : (
                   <MusicGenPanel

@@ -15,6 +15,12 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, PATHS: { ...actual.PATHS, music: musicDir } };
 });
+// The drawn-waveform draw route runs one LLM call — stub the provider seam.
+vi.mock('../services/promptRunner.js', async () => ({
+  ...(await vi.importActual('../services/promptRunner.js')),
+  resolveProviderAndModel: vi.fn(async () => ({ provider: { id: 'prov-1', type: 'api' }, selectedModel: 'model-x' })),
+  runPromptThroughProvider: vi.fn(),
+}));
 vi.mock('../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn().mockResolvedValue(null),
   runFfmpegProcess: vi.fn(),
@@ -85,6 +91,7 @@ import * as albums from '../services/albums/index.js';
 import { TRACK_IDS_MAX } from '../services/albums/logic.js';
 import * as ytImport from '../services/trackYoutubeImport.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import * as promptRunner from '../services/promptRunner.js';
 import tracksRoutes from './tracks.js';
 
 function makeApp() {
@@ -414,6 +421,41 @@ describe('tracks routes', () => {
       tracks.getTrack.mockResolvedValue(null);
       const r = await post(multipart(wav));
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('drawn waveform (#8376)', () => {
+    const sketch = {
+      version: 1, title: 'Glass Tide', durationSec: 2,
+      shapes: { glass: [0, 0.8, 1, 0.3, 0, -0.5, -1, -0.2] },
+      voices: [{ name: 'lead', shape: 'glass', notes: [{ t: 0, d: 1, pitch: 'A4' }] }],
+    };
+
+    it('POST /:id/waveform/draw persists the drawing on the track', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+      promptRunner.runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(sketch) });
+      const r = await request(app).post('/api/tracks/track-1/waveform/draw')
+        .send({ description: 'glassy tidal ambient', durationSec: 12, revise: true, providerId: '' });
+      expect(r.status).toBe(200);
+      expect(r.body.sketch).toMatchObject({ title: 'Glass Tide' });
+      expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({
+        waveSketch: expect.objectContaining({ title: 'Glass Tide' }), waveSketchPrompt: 'glassy tidal ambient',
+      }));
+      expect(r.body.track.waveSketchPrompt).toBe('glassy tidal ambient');
+    });
+
+    it('POST /:id/waveform/draw requires a description', async () => {
+      const r = await request(app).post('/api/tracks/track-1/waveform/draw').send({});
+      expect(r.status).toBe(400);
+      expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
+    });
+
+    it('POST /:id/waveform/render renders the stored drawing, never a client-supplied one', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [], waveSketch: null });
+      const r = await request(app).post('/api/tracks/track-1/waveform/render').send({ sketch });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('WAVEFORM_EMPTY');
+      expect(tracks.appendActiveTake).not.toHaveBeenCalled();
     });
   });
 });
