@@ -269,7 +269,7 @@ describe('ingestHealthData', () => {
       date: '2024-01-15',
       metrics: {
         step_count: [
-          { date: '2024-01-15 08:00:00 -0800', qty: 9000 },
+          { date: '2024-01-15 08:00:00 -0800', qty: 9000, origin: 'hae' },
         ],
       },
       updated: originalTime,
@@ -296,6 +296,42 @@ describe('ingestHealthData', () => {
     expect(result.recordsSkipped).toBe(1); // counted as dupe
   });
 
+  it('re-stamps a legacy point (no origin) as an update exactly once, then treats it as a dupe (#8450)', async () => {
+    const dayPath = join(PATHS.health, '2024-01-16.json');
+    await writeFile(dayPath, JSON.stringify({
+      date: '2024-01-16',
+      metrics: {
+        step_count: [
+          { date: '2024-01-16 08:00:00 -0800', qty: 9000 }, // pre-#8450: no origin stamp
+        ],
+      },
+      updated: new Date('2024-01-01T00:00:00Z').toISOString(),
+    }), 'utf-8');
+
+    const payload = {
+      data: {
+        metrics: [
+          { name: 'step_count', data: [{ date: '2024-01-16 08:00:00 -0800', qty: 9000 }] },
+        ],
+      },
+    };
+
+    // First re-sync after upgrading: same value, but ingestHealthData now
+    // stamps origin, so the stored point differs from the legacy one and is
+    // counted as an update (self-healing one-time migration).
+    const first = await ingestHealthData(payload);
+    expect(first.recordsIngested).toBe(0);
+    expect(first.recordsUpdated).toBe(1);
+    expect(first.recordsSkipped).toBe(0);
+
+    // Second re-sync: the stored point now carries origin: 'hae' too, so it's
+    // a true dupe again.
+    const second = await ingestHealthData(payload);
+    expect(second.recordsIngested).toBe(0);
+    expect(second.recordsUpdated).toBe(0);
+    expect(second.recordsSkipped).toBe(1);
+  });
+
   it('mixes additions, updates, and dupes in one ingest', async () => {
     const dayPath = join(PATHS.health, '2024-01-15.json');
     const originalTime = new Date('2024-01-01T00:00:00Z').toISOString();
@@ -303,8 +339,8 @@ describe('ingestHealthData', () => {
       date: '2024-01-15',
       metrics: {
         step_count: [
-          { date: '2024-01-15 08:00:00 -0800', qty: 300 },    // will be updated
-          { date: '2024-01-15 12:00:00 -0800', qty: 400 },    // will be skipped (dupe)
+          { date: '2024-01-15 08:00:00 -0800', qty: 300, origin: 'hae' },    // will be updated
+          { date: '2024-01-15 12:00:00 -0800', qty: 400, origin: 'hae' },    // will be skipped (dupe)
         ],
       },
       updated: originalTime,

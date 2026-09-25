@@ -131,7 +131,7 @@ export function normalizeXmlRecord(node) {
       : 0;
     const valueLower = value?.toLowerCase() ?? '';
     const stage = SLEEP_STAGE_MAP[valueLower] ?? value ?? 'unknown';
-    const dataPoint = { date: startdate, stage, durationHours };
+    const dataPoint = { date: startdate, stage, durationHours, src: sourcename ?? null, origin: 'xml' };
     return { metricName, dateStr, dataPoint };
   }
 
@@ -145,6 +145,7 @@ export function normalizeXmlRecord(node) {
       unit: unit ?? null,
       src: sourcename ?? null,
       end: enddate ?? null,
+      origin: 'xml',
     };
     return { metricName, dateStr, dataPoint };
   }
@@ -157,6 +158,7 @@ export function normalizeXmlRecord(node) {
     qty: parsed,
     unit: unit ?? null,
     src: sourcename ?? null,
+    origin: 'xml',
   };
   return { metricName, dateStr, dataPoint };
 }
@@ -164,41 +166,70 @@ export function normalizeXmlRecord(node) {
 // === Aggregation ===
 
 /**
- * Aggregate step_count entries in a day bucket — sum all qty values into a single total.
- * Apple Health emits per-activity step records; we want the daily total.
+ * Group data points by their `src` (source device name), preserving insertion order.
  *
- * @param {Array} points - Array of step_count data points
- * @returns {Array} Single-element array with aggregated total
+ * @param {Array} points - Data points, each optionally carrying `src`
+ * @returns {Map<string|null, Array>} Points grouped by src
  */
-function aggregateStepCount(points) {
-  if (!points.length) return points;
-  const total = points.reduce((sum, p) => sum + (p.qty || 0), 0);
-  // Use first point's date for the aggregated entry
-  return [{ date: points[0].date, qty: total, unit: points[0].unit ?? null }];
+function groupBySrc(points) {
+  const bySrc = new Map();
+  for (const p of points) {
+    const src = p.src ?? null;
+    if (!bySrc.has(src)) bySrc.set(src, []);
+    bySrc.get(src).push(p);
+  }
+  return bySrc;
 }
 
 /**
- * Aggregate sleep_analysis entries in a day bucket — sum duration by stage per day.
+ * Aggregate step_count entries in a day bucket into one total PER SOURCE DEVICE.
+ * Apple Health emits per-activity step records, often from multiple devices
+ * (iPhone + Watch) covering the same walk — summing across sources would
+ * double-count, so this keeps one aggregate per `src` and defers picking the
+ * single source of truth to read time (see `pickDaySumPoints` in appleHealthQuery.js).
+ *
+ * @param {Array} points - Array of step_count data points
+ * @returns {Array} One aggregated entry per source device
+ */
+function aggregateStepCount(points) {
+  if (!points.length) return points;
+  return Array.from(groupBySrc(points).entries()).map(([src, pts]) => ({
+    date: pts[0].date,
+    qty: pts.reduce((sum, p) => sum + (p.qty || 0), 0),
+    unit: pts[0].unit ?? null,
+    src,
+    origin: 'xml',
+  }));
+}
+
+/**
+ * Aggregate sleep_analysis entries in a day bucket into one summary PER SOURCE DEVICE.
+ * Multiple sleep sources (Watch, iPhone, third-party trackers) can record the
+ * same night — summing across sources would double-count, so this keeps one
+ * summary per `src` and defers picking the single source of truth to read
+ * time (see `pickDaySumPoints` in appleHealthQuery.js).
  *
  * @param {Array} points - Array of sleep_analysis data points with stage/durationHours
- * @returns {Object} Aggregated sleep summary { date, totalSleep, deep, rem, core, awake, inBed, asleep }
+ * @returns {Array} One aggregated summary per source device: { date, totalSleep, deep, rem, core, awake, inBed, asleep, src, origin }
  */
 function aggregateSleepAnalysis(points) {
   if (!points.length) return points;
-  const summary = { date: points[0].date, totalSleep: 0, deep: 0, rem: 0, core: 0, awake: 0, inBed: 0, asleep: 0 };
-  for (const p of points) {
-    const stage = p.stage;
-    const dur = p.durationHours || 0;
-    if (stage === 'deep') summary.deep += dur;
-    else if (stage === 'rem') summary.rem += dur;
-    else if (stage === 'core') summary.core += dur;
-    else if (stage === 'awake') summary.awake += dur;
-    else if (stage === 'inBed') summary.inBed += dur;
-    else if (stage === 'asleep') summary.asleep += dur;
-  }
-  // totalSleep = meaningful sleep stages (deep + rem + core)
-  summary.totalSleep = summary.deep + summary.rem + summary.core;
-  return [summary];
+  return Array.from(groupBySrc(points).entries()).map(([src, pts]) => {
+    const summary = { date: pts[0].date, totalSleep: 0, deep: 0, rem: 0, core: 0, awake: 0, inBed: 0, asleep: 0, src, origin: 'xml' };
+    for (const p of pts) {
+      const stage = p.stage;
+      const dur = p.durationHours || 0;
+      if (stage === 'deep') summary.deep += dur;
+      else if (stage === 'rem') summary.rem += dur;
+      else if (stage === 'core') summary.core += dur;
+      else if (stage === 'awake') summary.awake += dur;
+      else if (stage === 'inBed') summary.inBed += dur;
+      else if (stage === 'asleep') summary.asleep += dur;
+    }
+    // totalSleep = meaningful sleep stages (deep + rem + core)
+    summary.totalSleep = summary.deep + summary.rem + summary.core;
+    return summary;
+  });
 }
 
 // === Main Export ===

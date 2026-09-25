@@ -169,7 +169,11 @@ export async function ingestHealthData(payload) {
     const dataPoints = metric.data ?? [];
     metricsProcessed++;
 
-    // Group data points by extracted day string
+    // Group data points by extracted day string, stamping origin so the
+    // read side can pick a single source of truth per metric-day and avoid
+    // double-counting against XML-imported points for the same day (#8450).
+    // HealthKit has already deduplicated across devices before Health Auto
+    // Export sends this payload.
     const byDay = new Map();
     for (const point of dataPoints) {
       const dateStr = extractDateStr(point.date);
@@ -178,7 +182,7 @@ export async function ingestHealthData(payload) {
         continue;
       }
       if (!byDay.has(dateStr)) byDay.set(dateStr, []);
-      byDay.get(dateStr).push(point);
+      byDay.get(dateStr).push({ ...point, origin: 'hae' });
     }
 
     // Merge each day's points into the corresponding day file
