@@ -42,10 +42,10 @@ export async function applyRemoteChanges(changes) {
   // An op our state already reflects: relay OUR copy (the state a pulling peer
   // should converge to). The skipLogged append drops it when the log already
   // carries it — the common echo case — so this never amplifies.
-  const relayIfCurrent = (result, op, type, id) => {
+  const relayIfCurrent = (result, op, type, id, originInstanceId) => {
     if (result.reason !== 'local_current') return;
     const { current } = result;
-    relayBatch.push({ op, type, id, record: current, originInstanceId: current.originInstanceId });
+    relayBatch.push({ op, type, id, record: current, originInstanceId: current.originInstanceId ?? originInstanceId });
   };
 
   for (const change of changes) {
@@ -76,7 +76,7 @@ export async function applyRemoteChanges(changes) {
         appliedRecords.push({ type, id });
       } else {
         skipped++;
-        relayIfCurrent(result, op, type, id);
+        relayIfCurrent(result, op, type, id, originInstanceId);
       }
     } else if (op === 'create' || op === 'update') {
       if (!record) { skipped++; continue; }
@@ -88,7 +88,7 @@ export async function applyRemoteChanges(changes) {
         appliedRecords.push({ type, id });
       } else {
         skipped++;
-        relayIfCurrent(result, op, type, id);
+        relayIfCurrent(result, op, type, id, originInstanceId);
       }
     } else {
       skipped++;
