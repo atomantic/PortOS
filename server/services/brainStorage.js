@@ -456,8 +456,7 @@ export async function create(type, recordData) {
   // Fresh uuid → no read-modify-write; saveOne queues per-id internally.
   await store.saveOne(id, record);
   brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-  await brainSyncLog.appendChange('create', type, id, record, originInstanceId)
-    .catch(err => console.error(`⚠️ Sync log append failed for create ${type}/${id}: ${err.message}`));
+  await brainSyncLog.appendLocalChanges([{ op: 'create', type, id, record, originInstanceId }]);
 
   console.log(`🧠 Created ${type} record: ${id}`);
   return { id, ...record };
@@ -489,8 +488,7 @@ export async function update(type, id, updates) {
 
     await store.saveOneNow(id, record);
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
 
     console.log(`🧠 Updated ${type} record: ${id}`);
     return { id, ...record };
@@ -538,8 +536,7 @@ export async function updateWith(type, id, fn) {
 
     await store.saveOneNow(id, record);
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
 
     console.log(`🧠 Updated ${type} record: ${id}`);
     return { id, ...record };
@@ -594,8 +591,7 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true, cre
       // A suppressed per-record event still has to reach derived projections.
       emitRecordChanged(type, id);
     }
-    await brainSyncLog.appendChange(live ? 'update' : 'create', type, id, record, originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for upsert ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: live ? 'update' : 'create', type, id, record, originInstanceId }]);
 
     console.log(`🧠 Upserted ${type} record: ${id}`);
     return { id, ...record };
@@ -640,8 +636,7 @@ export async function updateMany(type, updates) {
     // leave earlier successes local-only.
     applied.push({ id, record });
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
-    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'update', type, id, record, originInstanceId: record.originInstanceId }]);
   }
   if (applied.length === 0) return [];
   console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
@@ -686,13 +681,13 @@ async function updateManyWithBatchLog(type, updates) {
   }
 
   if (applied.length > 0) {
-    await brainSyncLog.appendChanges(applied.map(({ id, record }) => ({
+    await brainSyncLog.appendLocalChanges(applied.map(({ id, record }) => ({
       op: 'update',
       type,
       id,
       record,
       originInstanceId: record.originInstanceId,
-    }))).catch(err => console.error(`⚠️ Sync log batch append failed for ${type}: ${err.message}`));
+    })));
   }
 
   if (failures.length > 0) throw failures[0].reason;
@@ -727,8 +722,7 @@ export async function remove(type, id) {
     // Wire format unchanged: the sync-log delete entry still carries only
     // { updatedAt } so an older peer (no tombstone support) applies it as a
     // plain hard delete exactly as before.
-    await brainSyncLog.appendChange('delete', type, id, { updatedAt: ts }, originInstanceId)
-      .catch(err => console.error(`⚠️ Sync log append failed for delete ${type}/${id}: ${err.message}`));
+    await brainSyncLog.appendLocalChanges([{ op: 'delete', type, id, record: { updatedAt: ts }, originInstanceId }]);
 
     console.log(`🧠 Deleted ${type} record: ${id}`);
     return true;

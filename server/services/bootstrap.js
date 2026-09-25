@@ -129,6 +129,7 @@ import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
+import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, flushMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
@@ -928,6 +929,9 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
       backfillOriginInstanceId,
+      // Relay any brain record whose current state never reached the sync log
+      // (a crash or failed append on a previous run) — #8351.
+      relayUnloggedBrainRecords: relayUnloggedRecords,
       startPolling: () => {
         startPolling();
         // Best-effort: re-attach tailcat forwards persisted across restarts.

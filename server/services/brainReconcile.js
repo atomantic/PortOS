@@ -181,7 +181,15 @@ export async function getBrainSnapshot() {
  *
  * Applied changes are relayed to OUR sync log so they propagate onward to other
  * peers and our delta cursor stays meaningful — mirroring `brainSync`'s relay,
- * and gated the same way (only APPLIED ops relay, so an echo can't amplify).
+ * and gated the same way: only APPLIED ops relay, plus ops our state already
+ * reflects (`local_current`), relayed as OUR copy and deduplicated against the
+ * log so an echo can't amplify. A stale (`local_newer`) op never relays.
+ *
+ * Crash safety (#8351, mirroring #8316): the record saves and the relay append
+ * are separate writes. A rejected append THROWS (after `sync:applied` fires for
+ * the saved records), so `syncBrainFromPeer` fails and never caches the peer
+ * checksum — the next cycle fetches the snapshot again, sees each record as
+ * `local_current`, and relays whatever the log still lacks, exactly once.
  *
  * @returns {Promise<{inserted:number, updated:number, deleted:number, skipped:number}>}
  */
@@ -193,6 +201,7 @@ export async function applyBrainSnapshot(snapshot) {
   // is correct either way.
   let inserted = 0, updated = 0, deleted = 0, skipped = 0;
   const relayBatch = [];
+  const appliedRecords = [];
 
   const records = snapshot?.records;
   if (!records || typeof records !== 'object') {
@@ -218,27 +227,74 @@ export async function applyBrainSnapshot(snapshot) {
         ? { updatedAt: record.updatedAt, originInstanceId: record.originInstanceId }
         : record;
       const result = await brainStorage.applyRemoteRecord(type, id, applyRecord, op);
-      if (!result.applied) { skipped++; continue; }
-      if (op === 'delete') deleted++;
-      else updated++;
-      relayBatch.push({ op, type, id, record: applyRecord, originInstanceId: record.originInstanceId });
+      if (result.applied) {
+        if (op === 'delete') deleted++;
+        else updated++;
+        relayBatch.push({ op, type, id, record: applyRecord, originInstanceId: record.originInstanceId });
+        appliedRecords.push({ type, id });
+        continue;
+      }
+      skipped++;
+      // Already reflected here — possibly saved by an earlier apply whose relay
+      // append failed or was cut off by a crash. Relay our copy; the skipLogged
+      // append drops it when the log already carries this op.
+      if (result.reason === 'local_current') {
+        const { current } = result;
+        relayBatch.push({ op, type, id, record: current, originInstanceId: current.originInstanceId ?? record.originInstanceId });
+      }
     }
   }
 
+  let appendError = null;
   if (relayBatch.length > 0) {
-    await brainSyncLog.appendChanges(relayBatch)
-      .catch(err => console.error(`⚠️ Brain reconcile relay append failed (${relayBatch.length} entries): ${err.message}`));
+    await brainSyncLog.appendChanges(relayBatch, { skipLogged: true }).catch((err) => {
+      appendError = err;
+      console.error(`❌ Brain reconcile relay append failed (${relayBatch.length} entries): ${err.message}`);
+    });
+  }
+  if (appliedRecords.length > 0) {
     // Local-only signal so the memory bridge re-vectorizes reconciled records
     // (issue #1080) — same mechanism as brainSync.applyRemoteChanges. Anti-
     // entropy snapshot merges are exactly the case where a record can change
     // without ever flowing through a per-record event, so the bridge would
     // otherwise never learn of the reconciled state. Local embedding only,
-    // never re-fed to the sync log (no #1077 echo).
-    brainEvents.emit('sync:applied', {
-      records: relayBatch.map(({ type, id }) => ({ type, id })),
-    });
+    // never re-fed to the sync log (no #1077 echo). Newly applied records only.
+    brainEvents.emit('sync:applied', { records: appliedRecords });
   }
+  // The records are saved (and re-embedded above), but not relayed — fail so
+  // the caller keeps its cached checksum stale and retries the snapshot.
+  if (appendError) throw appendError;
 
   console.log(`🔄 Brain reconcile applied: ${updated} upserted, ${deleted} deleted, ${skipped} skipped`);
   return { inserted, updated, deleted, skipped };
+}
+
+/**
+ * Boot-time relay sweep (#8351): append a sync-log entry for every stored
+ * record — live or tombstoned — whose current state (`updatedAt` + delete-ness)
+ * the log does not already carry.
+ *
+ * Covers the relays a crash or a failed append stranded on the local-write
+ * path (whose in-memory retry queue a restart loses) and on the snapshot path.
+ * The skipLogged append IS the "is this op logged" check, made under the log's
+ * lock so it cannot race a concurrent write into a duplicate. The first run
+ * after upgrade may add one entry per record that predates the sync log or
+ * lost its entry to an old failure; every later run finds them logged.
+ *
+ * @returns {Promise<number>} entries appended
+ */
+export async function relayUnloggedRecords() {
+  let relayed = 0;
+  for (const type of BRAIN_ENTITY_TYPES) {
+    const records = await brainStorage.getRawRecords(type);
+    const entries = Object.entries(records)
+      .filter(([, record]) => record?.updatedAt)
+      .map(([id, record]) => (record._deleted === true
+        // Same wire shape as a local remove(): a delete carries only its clock.
+        ? { op: 'delete', type, id, record: { updatedAt: record.updatedAt }, originInstanceId: record.originInstanceId }
+        : { op: 'update', type, id, record, originInstanceId: record.originInstanceId }));
+    relayed += (await brainSyncLog.appendChanges(entries, { skipLogged: true })).length;
+  }
+  if (relayed > 0) console.log(`🔄 Brain relay sweep appended ${relayed} unlogged records to the sync log`);
+  return relayed;
 }

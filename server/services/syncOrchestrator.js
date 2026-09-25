@@ -1003,6 +1003,10 @@ function hasAnySyncEnabled(peer) {
  * Sync with all online peers
  */
 export async function syncAllPeers() {
+  // Local brain writes whose sync-log append failed wait in an in-memory queue
+  // (#8351); retry them every cycle so they reach the log a peer pulls from
+  // even when no further local write comes along. Never rejects.
+  await brainSyncLog.retryPendingAppends();
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
