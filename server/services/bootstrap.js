@@ -114,6 +114,7 @@ import { startImageRefsGc } from './imageRefsGc.js';
 import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
 import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
+import { startTribePurge } from './tribePurge.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
@@ -564,6 +565,10 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // bytes, so it is NOT gated on the ingestion toggle: turning scheduled sync
   // off does not make an over-budget mirror stop being over budget.
   startBeeperAttachmentGc();
+  // Erase Tribe people deleted more than 30 days ago — with their touchpoints,
+  // identities, memory links and audit snapshots — and expire older tribe audit
+  // snapshots (#8459). Deleting a contact must eventually erase a third party's data.
+  startTribePurge();
   // Warm the catalog user-type registry from the user-type store (Postgres as of
   // #1001; the settings.json slice under the escape hatch) before any catalog
   // request can land, so user-defined types validate + mint ids immediately on

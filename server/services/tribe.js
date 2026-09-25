@@ -373,6 +373,17 @@ export async function updatePerson(id, updates) {
   return result.rows[0] ? rowToPerson(result.rows[0]) : null;
 }
 
+// Days a deleted person stays recoverable before `purgeDeletedPeople` erases
+// them for good. It is also the retention for the `record_audit` snapshots of
+// the tribe tables: a third party's contact details and conversation summaries
+// must not outlive the user's delete, and the audit log copies the full row
+// (#8459).
+export const DELETED_PERSON_RETENTION_DAYS = 30;
+const TRIBE_AUDITED_TABLES = ['tribe_people', 'tribe_touchpoints', 'tribe_identities'];
+
+// Soft delete. The row keeps every field until `purgeDeletedPeople` hard-deletes
+// it DELETED_PERSON_RETENTION_DAYS later. Tribe is machine-local, so the
+// tombstone is never needed for sync — it is only a short recovery window.
 export async function deletePerson(id) {
   await ensureReady();
   const result = await query(
@@ -383,6 +394,54 @@ export async function deletePerson(id) {
     [id],
   );
   return result.rowCount > 0;
+}
+
+/**
+ * Erase people deleted more than `olderThanDays` ago, and expire the tribe
+ * tables' `record_audit` snapshots on the same window (#8459).
+ *
+ * The hard delete cascades to touchpoints, identities and memory links, and
+ * sets `beeper_participants.tribe_person_id` to NULL. The audit trigger writes a
+ * `hard_delete` snapshot for every row the cascade removes; those are erased in
+ * the same transaction, together with the person's earlier tombstone snapshot.
+ * Audit rows for the creative tables are never touched — there the log is the
+ * data-loss recovery source.
+ *
+ * Returns counts only, so callers can log without naming anyone.
+ */
+export async function purgeDeletedPeople({ olderThanDays = DELETED_PERSON_RETENTION_DAYS } = {}) {
+  if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
+    throw new ServerError('olderThanDays must be a non-negative integer', { status: 400, code: 'BAD_REQUEST' });
+  }
+  await ensureReady();
+  return withTransaction(async (client) => {
+    const purged = await client.query(
+      `DELETE FROM tribe_people
+       WHERE deleted = TRUE AND deleted_at < NOW() - make_interval(days => $1::int)
+       RETURNING id`,
+      [olderThanDays],
+    );
+    const ids = purged.rows.map((row) => String(row.id));
+    let auditRows = 0;
+    if (ids.length > 0) {
+      const snapshots = await client.query(
+        `DELETE FROM record_audit
+         WHERE (table_name = 'tribe_people' AND record_id = ANY($1::text[]))
+            OR (table_name IN ('tribe_touchpoints', 'tribe_identities')
+                AND row_snapshot->>'person_id' = ANY($1::text[]))`,
+        [ids],
+      );
+      auditRows += snapshots.rowCount;
+    }
+    const expired = await client.query(
+      `DELETE FROM record_audit
+       WHERE table_name = ANY($1::text[])
+         AND occurred_at < NOW() - make_interval(days => $2::int)`,
+      [TRIBE_AUDITED_TABLES, olderThanDays],
+    );
+    auditRows += expired.rowCount;
+    return { people: ids.length, auditRows };
+  });
 }
 
 export async function listTouchpoints(personId, limit = 50) {
