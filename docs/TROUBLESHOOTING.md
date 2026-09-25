@@ -369,11 +369,11 @@ pm2 stop ecosystem.config.cjs
 
 **Solution**:
 ```bash
-# Restart to pick up changes
-npm run pm2:restart
+# Development: restart all dev apps, including Vite on :5554
+npm run dev
 
-# For frontend changes, Vite hot-reload should work
-# For server changes, PM2 watch mode can help (if enabled)
+# Production: rebuild the client and restart production apps
+npm start
 ```
 
 ## Database/Data Issues
