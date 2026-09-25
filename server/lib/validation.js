@@ -1,6 +1,15 @@
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
 import { z } from 'zod';
+
+export const gitDeleteBranchBodySchema = z.object({
+  path: z.string().min(1),
+  branch: z.string().min(1),
+  local: z.boolean().default(false),
+  remote: z.boolean().default(false),
+}).refine(({ local, remote }) => local || remote, {
+  message: 'at least one of local or remote must be true',
+});
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
