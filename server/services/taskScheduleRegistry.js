@@ -177,7 +177,7 @@ const fileIssuesAuditInterval = () => ({
   taskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
 });
 
-export const DEFAULT_TASK_INTERVALS = {
+const TASK_INTERVAL_DEFAULTS = {
   [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -422,6 +422,18 @@ export const DEFAULT_TASK_INTERVALS = {
   'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', depth: 'full', maxEntries: 10 } },
   'universe-bible-images':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', maxEntries: 10, requireDescribed: false } }
 };
+
+// Every catalog audit is displayed as a `better-*` quality task. Give all of
+// them the current issue inventory by default so they can avoid filing work
+// that is already tracked. Preserve other configured inputs such as PRs.
+export const DEFAULT_TASK_INTERVALS = Object.fromEntries(
+  Object.entries(TASK_INTERVAL_DEFAULTS).map(([taskType, interval]) => [
+    taskType,
+    isAuditTaskType(taskType)
+      ? { ...interval, dataInputs: [...new Set([...(interval.dataInputs || []), 'open-issues'])] }
+      : interval
+  ])
+);
 
 // Agent-options that a task manages internally — UI locks the toggle, and
 // loadSchedule/updateTaskInterval enforce the default value regardless of
