@@ -34,7 +34,8 @@
  * `merge` is called uniformly as `desc.merge(records, { source,
  * senderSchemaVersions })` — every merger destructures at least `{ source }`;
  * the dozen that don't also use `senderSchemaVersions` simply ignore the
- * extra key (only `mergeUniversesFromSync` and `mergeLoomsFromSync` read it).
+ * extra key (only `mergeUniversesFromSync`, `mergeLoomsFromSync` and
+ * `mergeCommissionsFromSync` read it).
  */
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';

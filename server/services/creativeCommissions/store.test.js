@@ -696,6 +696,55 @@ describe('commission BRIEF federation (#2686)', () => {
     expect(next.assignment.providerId).toBe('claude');
   });
 
+  // A behind sender's sanitizer strips the brief fields its version predates,
+  // so its winning brief omits them for lack of a slot — not as a clear (#8414).
+  describe('additive brief fields from a behind sender (#8414)', () => {
+    const LOCAL_TS = '2026-01-01T00:00:00.000Z';
+    const REMOTE_TS = '2026-06-06T00:00:00.000Z';
+    const musicTaste = { source: 'digital-twin', anchorCount: 4, explorationPercent: 40 };
+    const localRecord = (overrides) => sanitizeCommission({
+      id: 'commission-x', name: 'Local', updatedAt: LOCAL_TS,
+      schedule: { kind: 'DAILY', atLocalTime: '02:00' }, runs: [{ id: 'run-1', status: 'ok' }],
+      assignment: { providerId: 'claude', model: 'opus' },
+      ...overrides,
+    });
+    const merge = (local, remote, version) => mergeCommissionRecord(
+      local, { ...remote, id: 'commission-x', name: 'Renamed on peer', updatedAt: REMOTE_TS },
+      { senderSchemaVersions: { creativeCommissions: version } },
+    );
+
+    it('keeps brief.musicTaste from a v3 sender but applies a v4 clear', () => {
+      const local = localRecord({ targetAbility: 'music', brief: { intent: 'ambient', musicTaste } });
+      const remote = { targetAbility: 'music', brief: { intent: 'ambient drone' } };
+
+      const behind = merge(local, remote, 3);
+      expect(behind.remoteWins).toBe(true);
+      expect(behind.next.brief.intent).toBe('ambient drone');
+      expect(behind.next.brief.musicTaste).toEqual(local.brief.musicTaste);
+      // Machine-local fields still carry forward exactly as before.
+      expect(behind.next.schedule.atLocalTime).toBe('02:00');
+      expect(behind.next.runs).toHaveLength(1);
+      expect(behind.next.assignment.providerId).toBe('claude');
+
+      expect(merge(local, remote, 4).next.brief.musicTaste).toBeUndefined();
+    });
+
+    it('keeps the generation backend pin from a v2 sender but applies a v3 reset', () => {
+      const local = localRecord({
+        targetAbility: 'image',
+        generation: { imageCount: 2, imageMode: 'codex', imageModelId: 'img-model-a' },
+      });
+      const remote = { targetAbility: 'image', generation: { imageCount: 4 } };
+
+      const behind = merge(local, remote, 2).next;
+      expect(behind.generation).toMatchObject({ imageCount: 4, imageMode: 'codex', imageModelId: 'img-model-a' });
+      expect(behind.assignment.providerId).toBe('claude');
+
+      const current = merge(local, remote, 3).next;
+      expect(current.generation).toMatchObject({ imageCount: 4, imageMode: 'auto', imageModelId: null });
+    });
+  });
+
   it('a stale remote loses to a newer local (no clobber)', () => {
     const local = sanitizeCommission({ id: 'commission-x', name: 'Newer', updatedAt: '2026-09-09T00:00:00.000Z' });
     const remote = { id: 'commission-x', name: 'Older', updatedAt: '2020-01-01T00:00:00.000Z' };

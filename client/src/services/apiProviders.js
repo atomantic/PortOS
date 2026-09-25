@@ -22,10 +22,13 @@ const listenForProviderChanges = () => {
   listenersInstalled = true;
 };
 
-const providerMutation = (path, options) => request(path, options).then(result => {
+// Chained onto each mutation's own `request('/providers…')` call (rather than
+// wrapping `request` in a path-taking helper) so every mutation path stays a
+// literal the client↔server route-parity scan can check.
+const invalidateAfter = (result) => {
   invalidateProviders();
   return result;
-});
+};
 
 // The shared request has no caller's signal: aborting one picker must not
 // cancel another. Toasting remains per caller, including mixed silent callers.
@@ -62,28 +65,28 @@ export const getProviders = (options = {}) => {
   });
 };
 export const getActiveProvider = () => request('/providers/active');
-export const setActiveProvider = (id) => providerMutation('/providers/active', {
+export const setActiveProvider = (id) => request('/providers/active', {
   method: 'PUT',
   body: JSON.stringify({ id })
-});
-export const createProvider = (data) => providerMutation('/providers', {
+}).then(invalidateAfter);
+export const createProvider = (data) => request('/providers', {
   method: 'POST',
   body: JSON.stringify(data)
-});
-export const updateProvider = (id, data, options = {}) => providerMutation(`/providers/${id}`, {
+}).then(invalidateAfter);
+export const updateProvider = (id, data, options = {}) => request(`/providers/${id}`, {
   method: 'PUT',
   body: JSON.stringify(data),
   ...options,
-});
-export const deleteProvider = (id) => providerMutation(`/providers/${id}`, { method: 'DELETE' });
+}).then(invalidateAfter);
+export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' }).then(invalidateAfter);
 // Mint the TUI half of an existing CLI provider's harness. No body: the sibling
 // is built from the stored record plus the harness recipe's interactive argv,
 // so the connection details never get retyped (and never get retyped WRONG,
 // which would leave two unrelated routes instead of one CLI / TUI card).
-export const addProviderTuiMode = (id, options = {}) => providerMutation(`/providers/${id}/modes/tui`, {
+export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id}/modes/tui`, {
   method: 'POST',
   ...options,
-});
+}).then(invalidateAfter);
 export const getSampleProviders = () => request('/providers/samples');
 // The composition catalog (#7564/#7566): harnesses with enablement, service
 // instances, bootstrap apps, per-harness (and per-model) effort ladders, the
@@ -95,19 +98,19 @@ export const getProviderCatalog = (options) => request('/providers/catalog', opt
 // Presets (#7565): "Convert to derived preset" stamps a legacy record with the
 // service it already runs on — refused (409) when re-deriving it would change
 // how it runs.
-export const deriveProviderPreset = (id, options = {}) => providerMutation(`/providers/${encodeURIComponent(id)}/derive`, {
+export const deriveProviderPreset = (id, options = {}) => request(`/providers/${encodeURIComponent(id)}/derive`, {
   method: 'POST',
   ...options,
-});
+}).then(invalidateAfter);
 // "Save as preset" (#7565/#7566): the compose popover's own wrapper — turn the
 // composite id (plus the model/effort the user picked while composing) into a
 // stored, enabled derived preset. A 400 names the composite's own ineligibility
 // code/reason; never a stored record that cannot run.
-export const createProviderPreset = (body, options) => providerMutation('/providers/presets', {
+export const createProviderPreset = (body, options) => request('/providers/presets', {
   method: 'POST',
   body: JSON.stringify(body),
   ...options,
-});
+}).then(invalidateAfter);
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 
 // --- the composed axes the AI Providers page manages (#7567, epic #7561) -----
@@ -119,56 +122,56 @@ export const testProvider = (id) => request(`/providers/${id}/test`, { method: '
 // and toggling are local reads and writes.
 
 /** The user's word on one harness. `direct` cannot be switched off; the server refuses it. */
-export const setProviderHarnessEnabled = (harnessId, enabled, options) => providerMutation(
+export const setProviderHarnessEnabled = (harnessId, enabled, options) => request(
   `/providers/harnesses/${encodeURIComponent(harnessId)}`,
   { method: 'PUT', body: JSON.stringify({ enabled }), ...options },
-);
+).then(invalidateAfter);
 
 /** The credential-bootstrap table, keyed by slug — command lines included, for the editor. */
 export const getProviderBootstraps = (options) => request('/providers/bootstraps', options);
 /** Replace the whole table. Saving never spawns anything. */
-export const saveProviderBootstraps = (bootstraps, options) => providerMutation('/providers/bootstraps', {
+export const saveProviderBootstraps = (bootstraps, options) => request('/providers/bootstraps', {
   method: 'PUT', body: JSON.stringify({ bootstraps }), ...options,
-});
+}).then(invalidateAfter);
 
 /** Every `SERVICE_DEFINITIONS` row an "Add service" flow may instantiate. */
 export const getProviderServiceDefinitions = (options) => request('/providers/service-definitions', options);
 /** Every service instance, sanitized. */
 export const getProviderServices = (options) => request('/providers/services', options);
 /** Create an instance from a definition. Nothing is probed; the catalog starts `unknown`. */
-export const createProviderService = (body, options) => providerMutation('/providers/services', {
+export const createProviderService = (body, options) => request('/providers/services', {
   method: 'POST', body: JSON.stringify(body), ...options,
-});
+}).then(invalidateAfter);
 /**
  * Edit one instance: label, endpoints, credential, plan, enabled. `expectedRevision`
  * is required; a 409 means the row moved. Omit a credential key to preserve it,
  * send `null` to clear it — never send back the redacted placeholder.
  */
-export const updateProviderService = (slug, body, options) => providerMutation(
+export const updateProviderService = (slug, body, options) => request(
   `/providers/services/${encodeURIComponent(slug)}`,
   { method: 'PATCH', body: JSON.stringify(body), ...options },
-);
+).then(invalidateAfter);
 /** Delete an instance no preset uses. Refused with a 409 while one still does. */
-export const deleteProviderService = (slug, options) => providerMutation(
+export const deleteProviderService = (slug, options) => request(
   `/providers/services/${encodeURIComponent(slug)}`,
   { method: 'DELETE', ...options },
-);
+).then(invalidateAfter);
 /** List the instance's models through its definition's strategy — an explicit discovery request. */
-export const refreshProviderServiceCatalog = (slug, options) => providerMutation(
+export const refreshProviderServiceCatalog = (slug, options) => request(
   `/providers/services/${encodeURIComponent(slug)}/refresh-catalog`,
   { method: 'POST', ...options },
-);
-export const refreshProviderModels = (id, options) => providerMutation(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
+).then(invalidateAfter);
+export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options }).then(invalidateAfter);
 // Stored model pins naming a model their provider no longer lists (#7315).
 // Derived on read, so it reflects a pin cleared a moment ago without a refresh.
 export const getModelPinWarnings = (options) => request('/providers/model-pins', options);
 // Clear ONE stale pin back to "inherit". PortOS never rewrites a user's pin on
 // its own — it surfaces the retirement and this is the user's one-click undo.
-export const clearModelPin = (pinId, options) => providerMutation('/providers/model-pins/clear', {
+export const clearModelPin = (pinId, options) => request('/providers/model-pins/clear', {
   method: 'POST',
   body: JSON.stringify({ pinId }),
   ...options,
-});
+}).then(invalidateAfter);
 
 // Which provider runtimes (claude, codex, opencode, …) are runnable on this
 // host, and which of them PortOS can install for you. Installs happen only

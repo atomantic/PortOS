@@ -260,9 +260,9 @@ export async function applyIncomingPush(payload, authorization) {
   // every PEER_SUBSCRIBABLE_KINDS entry has a descriptor (the registry guard
   // in recordKinds.test.js enforces it), so `desc` is never null here.
   // `senderSchemaVersions` rides every merge call uniformly: only
-  // mergeUniversesFromSync (gates the moodBoardId omitted-vs-cleared
-  // disambiguation, #4188) and mergeLoomsFromSync read it — every other
-  // merger ignores the extra key. The 12 kinds with no extra per-kind
+  // mergeUniversesFromSync, mergeCommissionsFromSync (both gate the
+  // omitted-vs-cleared disambiguation of additive fields, #4188/#8414) and
+  // mergeLoomsFromSync read it — every other merger ignores the extra key. The 12 kinds with no extra per-kind
   // behavior need nothing further; the three genuinely special kinds below
   // add their bundled-doc handling on top of this single call.
   const mergeResult = await desc.merge([record], { source, senderSchemaVersions });

@@ -8,7 +8,9 @@
  * re-exports this module so existing import paths keep working.
  */
 
-import { preserveLegacyCharacterFields } from '../../lib/storyBible.js';
+import {
+  isLegacyAbsentValue, preserveLegacyCharacterFields, preserveLegacyObjectFields,
+} from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash, withBaseHashFlushBatch,
@@ -36,6 +38,45 @@ async function cascadeDeleteSideEffects(id) {
   emitRecordDeleted('universe', id);
 }
 
+// Additive universe-level fields an older peer's sanitizer cannot represent,
+// keyed by the `universes` wire version that introduced each one. The version
+// gate only rejects AHEAD senders, so a behind (or no-meta) sender's record
+// flows through the LWW merge with these fields already sanitized away — its
+// omission means "my code has no slot for this", not "the author cleared it".
+// A sender at or above the version omitting the field IS a clear. The next
+// additive universe field is a one-line addition here.
+const ADDITIVE_UNIVERSE_FIELD_VERSIONS = Object.freeze({
+  // v8 — shared, user-selected visual references.
+  styleReferences: 8,
+  // v9 — linked mood board (#4188).
+  moodBoardId: 9,
+  // v12 — factual/fiction axis (#7616). Persisted only when true.
+  factual: 12,
+});
+
+/**
+ * Carry the local copy's additive fields onto a remote universe that won LWW
+ * from a sender too old to represent them — universe-level fields plus the
+ * per-entry character and object fields (#8414). A version-aware sender's
+ * omission passes through as the intentional clear it is. Pure: returns a new
+ * record (or `remote` itself when nothing needed restoring).
+ */
+export function preserveLegacyUniverseFields(remote, local, senderUniversesVersion) {
+  if (!remote || !local) return remote;
+  const sender = Number(senderUniversesVersion) || 0;
+  const out = { ...remote };
+  for (const [field, since] of Object.entries(ADDITIVE_UNIVERSE_FIELD_VERSIONS)) {
+    if (sender < since && isLegacyAbsentValue(out[field]) && !isLegacyAbsentValue(local[field])) {
+      out[field] = local[field];
+    }
+  }
+  // Only touch the lists the remote carries — a raw share-bucket record may
+  // omit one, and an `undefined`-valued key would clobber it in a patch merge.
+  if ('characters' in out) out.characters = preserveLegacyCharacterFields(out.characters, local.characters, sender);
+  if ('objects' in out) out.objects = preserveLegacyObjectFields(out.objects, local.objects, sender);
+  return out;
+}
+
 /**
  * Sync-orchestrator entry point. Merges a remote peer's universe array into
  * local state INSIDE the store's per-id write queue, so each remote record's
@@ -54,10 +95,6 @@ async function cascadeDeleteSideEffects(id) {
  * post-merge count — so callers summing across categories don't over-report.
  */
 export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 'sync', peerId: null }, senderSchemaVersions = null } = {}) {
-  // Whether the sender's sanitizer knows `moodBoardId` (universes v9, #4188).
-  // The version gate only rejects AHEAD senders — a behind/no-meta sender's
-  // record flows through this merge, and its sanitized form omits the field.
-  const senderKnowsMoodBoardId = (Number(senderSchemaVersions?.universes) || 0) >= 9;
   const senderUniversesVersion = Number(senderSchemaVersions?.universes) || 0;
   if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
   // Records that transitioned to deleted via this merge get their orphan
@@ -142,20 +179,13 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         // set, so absent-locally stays absent).
         if (local.imageMode) sanitized.imageMode = local.imageMode;
         if (local.imageModelId) sanitized.imageModelId = local.imageModelId;
-        // `moodBoardId` (#4188) rides the wire, but absent-on-wire is
-        // ambiguous: a v9-aware sender omits it to mean "cleared", while a
-        // pre-v9 (or no-meta) sender omits it because its sanitizer strips
-        // the field. Only honor the omission as a clear from a v9-aware
-        // sender; otherwise preserve the local link so a behind peer's
-        // unrelated edit can't LWW-strip it.
-        if (!sanitized.moodBoardId && local.moodBoardId && !senderKnowsMoodBoardId) {
-          sanitized.moodBoardId = local.moodBoardId;
-        }
-        sanitized.characters = preserveLegacyCharacterFields(
-          sanitized.characters,
-          local.characters,
-          senderUniversesVersion,
-        );
+        // Additive fields (moodBoardId, factual, styleReferences, character
+        // and object links, …) ride the wire, but absent-on-wire is
+        // ambiguous: a version-aware sender omits one to mean "cleared",
+        // while a behind (or no-meta) sender omits it because its sanitizer
+        // strips the field. Restore only the latter so a behind peer's
+        // unrelated edit can't LWW-strip them.
+        Object.assign(sanitized, preserveLegacyUniverseFields(sanitized, local, senderUniversesVersion));
         // Non-blocking conflict journal: archive the about-to-be-lost local
         // version when BOTH sides diverged from the last synced base. Always
         // advances the base hash (clean or conflict) so the next snapshot

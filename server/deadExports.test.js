@@ -42,16 +42,24 @@ function deadExports(files, candidateNames = null) {
     ![...(mentionedBy.get(name) || [])].some(other => other !== file));
 }
 
+// Export names a unified diff introduces. A name the diff also removes is an
+// existing export whose declaration line changed (a new parameter, a move) —
+// not an addition, so a legacy test-only export stays grandfathered.
+function addedExportNamesFromDiff(diff) {
+  const added = new Set();
+  const removed = new Set();
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    const match = /^([+-])export (?:async )?function ([A-Za-z_$][\w$]*)\b/.exec(line);
+    if (match) (match[1] === '+' ? added : removed).add(match[2]);
+  }
+  return new Set([...added].filter(name => !removed.has(name)));
+}
+
 function addedExportNames() {
   const base = process.env.CI_BASE_SHA || execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: ROOT, encoding: 'utf8' }).trim();
   const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: ROOT, encoding: 'utf8' });
-  const names = new Set();
-  for (const line of diff.split('\n')) {
-    if (!line.startsWith('+') || line.startsWith('+++')) continue;
-    const match = /^\+export (?:async )?function ([A-Za-z_$][\w$]*)\b/.exec(line);
-    if (match) names.add(match[1]);
-  }
-  return names;
+  return addedExportNamesFromDiff(diff);
 }
 
 function trackedFiles() {
@@ -69,6 +77,17 @@ describe('server dead exports', () => {
       ['server/routes/example.js', 'used();\n'],
     ]);
     expect(deadExports(files)).toEqual([{ file: 'server/services/example.js', name: 'orphan' }]);
+  });
+
+  it('counts only exports the diff introduces, not re-declared existing ones', () => {
+    const diff = [
+      '--- a/server/services/example.js',
+      '+++ b/server/services/example.js',
+      '-export function reshaped(a) {',
+      '+export function reshaped(a, options = {}) {',
+      '+export async function brandNew() {',
+    ].join('\n');
+    expect([...addedExportNamesFromDiff(diff)]).toEqual(['brandNew']);
   });
 
   it('keeps newly added server function exports reachable', () => {

@@ -37,13 +37,12 @@ import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
 import { mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
-import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
+import { insertUniverseWithId, updateUniverse, getUniverse, preserveLegacyUniverseFields } from '../universeBuilder.js';
 import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
-import { preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 import { isStr } from '../../lib/textUtils.js';
@@ -578,14 +577,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
         record = { ...record, arcRole: 'climax' };
       }
       if (kind === 'universe') {
-        record = {
-          ...record,
-          characters: preserveLegacyCharacterFields(
-            record.characters,
-            existing.characters,
-            senderUniversesVersion,
-          ),
-        };
+        record = preserveLegacyUniverseFields(record, existing, senderUniversesVersion);
       }
       // Non-blocking conflict journal for every synced record kind — a
       // share-bucket import that LWW-overwrites a locally-diverged record
