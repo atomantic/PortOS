@@ -20,7 +20,7 @@ const mflux = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', hardwareCompatib
 beforeEach(() => {
   vi.clearAllMocks();
   models.value = [mflux];
-  settings.value = { imageGen: { local: { pythonPath: '/test/python3' } } };
+  settings.value = { imageGen: { local: { modelId: 'dev', pythonPath: '/test/python3' } } };
 });
 
 // Every unavailable verdict has to name the ONE action that fixes it, or the UI
