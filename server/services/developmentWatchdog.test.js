@@ -142,6 +142,50 @@ it('retires a pending review follow-up when the forge confirms its PR is already
   }]);
 });
 
+it('retires a blocked review follow-up when the forge confirms its PR is already terminal', async () => {
+  const task = {
+    id: 'sys-rl-blocked', status: 'blocked',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '7', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/7',
+    },
+  };
+  m.tasks = [task];
+  m.prStates['7'] = { status: 'known', state: 'MERGED' };
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(m.updates).toEqual([expect.objectContaining({
+    id: task.id,
+    updates: { status: 'completed', metadata: { reviewLoopRetiredReason: 'pull-request-merged-before-follow-up' } },
+    type: 'internal', options: { expectedStatus: 'blocked', suppressDequeue: true },
+  })]);
+  expect(task.status).toBe('completed');
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([{
+    taskId: task.id, prNumber: 7, prState: 'MERGED', reason: 'pull-request-merged-before-follow-up',
+  }]);
+});
+
+it('keeps a blocked follow-up when its PR is still open', async () => {
+  const task = {
+    id: 'sys-rl-still-open', status: 'blocked',
+    metadata: {
+      app: 'app', reviewLoopFollowUp: true, reviewLoopPRNumber: '8', reviewLoopPRHost: 'github.com',
+      reviewLoopPROwner: 'atomantic', reviewLoopPRRepo: 'example',
+      reviewLoopPRUrl: 'https://github.com/atomantic/example/pull/8',
+    },
+  };
+  m.tasks = [task];
+  m.prStates['8'] = { status: 'known', state: 'OPEN' };
+
+  const receipt = await runDevelopmentWatchdog({ force: true });
+
+  expect(task.status).toBe('blocked');
+  expect(m.updates).toEqual([]);
+  expect(receipt.apps[0].retiredReviewFollowUps).toEqual([]);
+});
+
 it('keeps a pending review follow-up when the PR state is unavailable', async () => {
   const task = {
     id: 'sys-rl-unavailable', status: 'pending',

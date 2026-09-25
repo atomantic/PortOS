@@ -265,6 +265,38 @@ describe('Review Hub queue-card triage (#3282)', () => {
     ));
   });
 
+  it('shows linked app and blocked task context with a direct PR link', async () => {
+    const item = {
+      id: 'threads:pr-follow-up',
+      source: 'threads',
+      sourceLabel: 'Brain commitments',
+      title: 'PR follow-up needs attention',
+      summary: 'Fix the merge follow-up or merge the PR manually. Still blocked: Repository path is unavailable.',
+      timestamp: '2026-09-24T20:00:00.000Z',
+      drillTo: '/brain/threads?thread=pr-follow-up',
+      operations: [{ id: 'complete', label: 'Complete', available: true }],
+      meta: {
+        localStatus: 'open',
+        taskStatus: 'blocked',
+        blockedCategory: 'app-unresolved',
+        appLabel: 'Example Repo',
+        reviewLoopPRUrl: 'https://github.com/example-org/example-repo/pull/9',
+      },
+    };
+    api.getReviewQueue.mockResolvedValueOnce({ items: [item], sources: {}, partial: false });
+
+    render(<Review />);
+
+    expect(await screen.findByText(item.summary)).toBeInTheDocument();
+    expect(screen.getByText('App: Example Repo')).toBeInTheDocument();
+    expect(screen.getByText('Task: blocked')).toBeInTheDocument();
+    expect(screen.getByText('Block: app-unresolved')).toBeInTheDocument();
+    const openPr = screen.getByRole('link', { name: 'Open pull request' });
+    expect(openPr).toHaveAttribute('href', item.meta.reviewLoopPRUrl);
+    expect(openPr).toHaveAttribute('target', '_blank');
+    expect(openPr).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
   it('shows durable snooze and recommendation-dismiss controls', async () => {
     api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
 

@@ -136,7 +136,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   if (localReviewTasks.length) {
     const { getPullRequestState } = await import('./github.js');
     const openNumbers = new Set(row.pullRequests.map(pr => Number(pr.number)));
-    const candidates = localReviewTasks.filter(task => task.status === 'pending'
+    const candidates = localReviewTasks.filter(task => ['pending', 'blocked'].includes(task.status)
       && task.metadata?.app === app.id && !activeAgentTaskIds.has(task.id))
       .map(task => ({ task, number: reviewFollowUpPrNumber(task, target) }))
       .filter(candidate => candidate.number && !openNumbers.has(candidate.number));
@@ -149,7 +149,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
       }
       const state = states.get(candidate.number);
       if (state?.status === 'known' && ['MERGED', 'CLOSED'].includes(state.state)) {
-        row.terminalReviewFollowUps.push({ taskId: candidate.task.id, prNumber: candidate.number, prState: state.state });
+        row.terminalReviewFollowUps.push({ taskId: candidate.task.id, prNumber: candidate.number, prState: state.state, status: candidate.task.status });
       }
     }
   }
@@ -185,8 +185,15 @@ async function retireTerminalReviewFollowUps(app, row) {
     const reason = followUp.prState === 'MERGED' ? 'pull-request-merged-before-follow-up' : 'pull-request-closed-before-follow-up';
     const result = await updateTask(followUp.taskId, {
       status: 'completed', metadata: { reviewLoopRetiredReason: reason },
-    }, 'internal', { expectedStatus: 'pending', suppressDequeue: true });
-    if (result?.status === 'completed') row.retiredReviewFollowUps.push({ ...followUp, reason });
+    }, 'internal', { expectedStatus: followUp.status, suppressDequeue: true });
+    if (result?.status === 'completed') {
+      row.retiredReviewFollowUps.push({
+        taskId: followUp.taskId,
+        prNumber: followUp.prNumber,
+        prState: followUp.prState,
+        reason,
+      });
+    }
   }
 }
 
