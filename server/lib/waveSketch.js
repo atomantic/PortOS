@@ -75,7 +75,8 @@ const round = (n, places = 4) => Math.round(n * 10 ** places) / 10 ** places;
 function normalizePoints(raw, { min, max, lo, hi }) {
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.points) ? raw.points : null;
   if (!list) return null;
-  const points = list.filter(isNum).slice(0, max).map((n) => round(clamp(n, lo, hi)));
+  // Slice BEFORE scanning so an oversized array costs O(cap), not O(length).
+  const points = list.slice(0, max).filter(isNum).map((n) => round(clamp(n, lo, hi)));
   return points.length >= min ? points : null;
 }
 
@@ -114,8 +115,11 @@ export function normalizeWaveSketch(raw) {
 
   const shapes = {};
   const rawShapes = raw.shapes && typeof raw.shapes === 'object' && !Array.isArray(raw.shapes) ? raw.shapes : {};
-  for (const [name, points] of Object.entries(rawShapes)) {
-    if (Object.keys(shapes).length >= L.SHAPES_MAX) break;
+  let shapeBudget = L.SHAPES_MAX * 4; // bounded scan of a hostile key count
+  for (const name in rawShapes) {
+    if (!Object.hasOwn(rawShapes, name)) continue;
+    if (Object.keys(shapes).length >= L.SHAPES_MAX || (shapeBudget -= 1) < 0) break;
+    const points = rawShapes[name];
     if (!NAME_RE.test(name) || name === WAVE_SKETCH_NOISE) continue;
     const normalized = normalizePoints(points, { min: L.SHAPE_POINTS_MIN, max: L.SHAPE_POINTS_MAX, lo: -1, hi: 1 });
     if (normalized) shapes[name] = normalized;
@@ -124,7 +128,7 @@ export function normalizeWaveSketch(raw) {
 
   const rawVoices = Array.isArray(raw.voices) ? raw.voices.slice(0, L.VOICES_MAX) : [];
   // An absent/invalid duration is derived from the strokes themselves.
-  const lastEnd = rawVoices.flatMap((v) => (Array.isArray(v?.notes) ? v.notes : []))
+  const lastEnd = rawVoices.flatMap((v) => (Array.isArray(v?.notes) ? v.notes.slice(0, L.NOTES_PER_VOICE_MAX) : []))
     .reduce((end, n) => (isNum(n?.t) && isNum(n?.d) ? Math.max(end, n.t + n.d) : end), 0);
   const durationSec = round(clamp(isNum(raw.durationSec) ? raw.durationSec : lastEnd, L.DURATION_MIN_SEC, L.DURATION_MAX_SEC), 3);
 
@@ -136,7 +140,7 @@ export function normalizeWaveSketch(raw) {
     const isNoise = shape === WAVE_SKETCH_NOISE;
     if (!isNoise && !shapeNames.has(shape)) continue;
     const notes = [];
-    for (const rawNote of (Array.isArray(rawVoice.notes) ? rawVoice.notes : [])) {
+    for (const rawNote of (Array.isArray(rawVoice.notes) ? rawVoice.notes.slice(0, L.NOTES_PER_VOICE_MAX * 2) : [])) {
       if (notes.length >= L.NOTES_PER_VOICE_MAX || noteBudget <= 0) break;
       const note = normalizeNote(rawNote, { durationSec, isNoise, shapeNames });
       if (!note || note.d > secondsBudget) continue;

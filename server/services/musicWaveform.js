@@ -137,6 +137,6 @@ export async function renderWaveSketchToTrack({ trackId, sketch, prompt, title }
     audioFilename: filename, prompt: prompt || track.prompt, engine: WAVEFORM_ENGINE, durationSec,
   }, title ? { title } : {});
   if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
-  console.log(`〰️ Rendered drawn waveform for track ${trackId} → ${filename} (${durationSec}s)`);
+  console.log(`〰️ Rendered drawn waveform take (${durationSec}s)`);
   return { track: updated, filename, durationSec };
 }

@@ -57,6 +57,9 @@ export function buildRenderAppend(track, renderInput) {
   return { render, renders: [...(track?.renders || []), render] };
 }
 
+// Per-track tail of in-flight take appends (see appendActiveTake).
+const takeTails = new Map();
+
 /**
  * Record a freshly rendered audio file as the track's ACTIVE take: re-read the
  * track (so the append lands on the freshest history), append the render, and
@@ -64,11 +67,18 @@ export function buildRenderAppend(track, renderInput) {
  * engine updates alongside (e.g. a title). Resolves to the updated track, or
  * null when the track is gone. Shared by the offline LLM-music renderers.
  */
-export async function appendActiveTake(trackId, { audioFilename, engine, prompt, durationSec }, patch = {}) {
-  const current = await getTrack(trackId);
-  if (!current) return null;
-  const { renders } = buildRenderAppend(current, { audioFilename, prompt, engine, durationSec });
-  return updateTrack(trackId, { ...patch, audioFilename, engine, modelId: '', durationSec, renders });
+export function appendActiveTake(trackId, { audioFilename, engine, prompt, durationSec }, patch = {}) {
+  // Serialized per track: two renders finishing together would otherwise both
+  // read the same history and the later write would drop the other's take.
+  const run = (takeTails.get(trackId) || Promise.resolve()).catch(() => null).then(async () => {
+    const current = await getTrack(trackId);
+    if (!current) return null;
+    const { renders } = buildRenderAppend(current, { audioFilename, prompt, engine, durationSec });
+    return updateTrack(trackId, { ...patch, audioFilename, engine, modelId: '', durationSec, renders });
+  });
+  takeTails.set(trackId, run);
+  run.finally(() => { if (takeTails.get(trackId) === run) takeTails.delete(trackId); }).catch(() => {});
+  return run;
 }
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */

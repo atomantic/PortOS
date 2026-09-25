@@ -74,6 +74,13 @@ describe('normalizeWaveSketch', () => {
     expect(voiced).toBeLessThanOrEqual(WAVE_SKETCH_LIMITS.NOTE_SECONDS_MAX);
   });
 
+  it('bounds its work by the caps, not by the size of an oversized input', () => {
+    const huge = new Array(2_000_000).fill(0.5);
+    const sketch = normalizeWaveSketch(sketchOf([{ shape: 'sine', notes: [{ t: 0, d: 1, pitch: 'A4', env: huge }] }], { shapes: { sine: huge } }));
+    expect(sketch.shapes.sine).toHaveLength(WAVE_SKETCH_LIMITS.SHAPE_POINTS_MAX);
+    expect(sketch.voices[0].notes[0].env).toHaveLength(WAVE_SKETCH_LIMITS.ENV_POINTS_MAX);
+  });
+
   it('is idempotent, so a sketch round-trips through the client unchanged', () => {
     const once = normalizeWaveSketch(sketchOf([
       { name: 'lead', shape: 'sine', notes: [{ t: 0.1234567, d: 0.5, pitch: 'F#4', glideTo: 'B4', env: [0, 1, 0.3, 0] }] },
