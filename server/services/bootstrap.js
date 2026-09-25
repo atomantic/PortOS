@@ -22,7 +22,7 @@
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
-import { isTestRunner } from '../lib/runtimeEnv.js';
+import { isTestRunner, isSmokeBoot } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -52,7 +52,8 @@ import {
   runDbAndCatalogMigrations,
   warmMandatoryStores,
   initCosAfterSpawner,
-  armCommissionScheduler
+  armCommissionScheduler,
+  gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
 import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
@@ -232,7 +233,13 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
 
   // The ORDER these run in is `runPreRouteSequence`'s contract (see
   // bootstrapSequence.js); this object is only the "what".
-  return runPreRouteSequence({
+  //
+  // Under the boot smoke (#8343) the steps that would start local-LLM backends,
+  // the auto-fixer, or the CoS spawner (runner connection + agent recovery) are
+  // no-ops — see SMOKE_BOOT_DISABLED_STEPS.
+  const smokeBoot = isSmokeBoot();
+  if (smokeBoot) console.log('🧪 Smoke boot: startup jobs, agent recovery, and external integrations are disabled');
+  return runPreRouteSequence(gateStepsForSmokeBoot({
     // Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
     // and providers.json. Without this, a plain pull-and-restart (no update.sh)
     // leaves new prompt stages and other shipped data changes unregistered —
@@ -357,7 +364,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // The CoS agent spawner (event wiring + orphan cleanup), initialized
     // explicitly now that the runner registration + task learning are ready.
     startSpawner: initSpawner
-  });
+  }, 'preRoute', smokeBoot));
 };
 
 /**
@@ -861,7 +868,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
  * the background and any fatal step exits the process itself).
  */
 export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled, port, host, spawnerReady }) =>
-  runPostRouteSequence({
+  runPostRouteSequence(gateStepsForSmokeBoot({
     startBackgroundServices: () => startBackgroundServices({ spawnerReady, io }),
 
     // Instance identity + sync log come up before requests are accepted, so a
@@ -915,7 +922,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // that won't load is a real breakage) but never the backfill itself.
     loadSeriesCoverBackfill: async () => (await import('../scripts/backfillSeriesCoverImages.js')).backfillSeriesCoverImages,
 
-    startListening: () => httpServer.listen(port, host, () => runPostListenSequence({
+    startListening: () => httpServer.listen(port, host, () => runPostListenSequence(gateStepsForSmokeBoot({
       announceListening: () => announceListening({ io, httpServer, localHttpServer, httpsEnabled, port }),
       // Process-level safety net, wired with the io instance so unhandled
       // failures also surface in the UI.
@@ -932,8 +939,8 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
       initSyncOrchestrator
-    }))
-  });
+    }, 'postListen', isSmokeBoot())))
+  }, 'postRoute', isSmokeBoot()));
 
 // Run an async close but resolve anyway after `ms` — so a close that never
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a

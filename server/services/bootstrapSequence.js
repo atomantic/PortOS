@@ -33,6 +33,38 @@ const logFailure = (label) => (err) => console.error(`❌ ${label}: ${err?.messa
 const logFailureWithStack = (label) => (err) => console.error(`❌ ${label}: ${err?.stack ?? err}`);
 
 /**
+ * Steps the server boot smoke (`scripts/smoke-boot.js`, #8343) replaces with
+ * no-ops, per phase. The smoke proves boot survives; these are the steps that
+ * would make it DO something — arm schedulers, spawn or recover CoS agents,
+ * replay crash recovery, watch share buckets, poll or sync peers, start a local
+ * LLM backend. Everything else (migrations, toolkit construction, store
+ * checks, the media queue, the DB gate, listen) still runs, because a throw in
+ * any of those is exactly what the smoke exists to catch.
+ */
+export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
+  preRoute: Object.freeze(['ensureLocalLlmBackend', 'initAutoFixer', 'startSpawner']),
+  postRoute: Object.freeze([
+    'startBackgroundServices',
+    'recoverStuckClassifications',
+    'recoverInterruptedRepoClones',
+    'initSharing',
+    'recoverCreativeDirectorProjects'
+  ]),
+  postListen: Object.freeze(['startPolling', 'initSyncOrchestrator'])
+});
+
+/**
+ * Return `steps` with the phase's smoke-disabled steps swapped for no-ops when
+ * `smokeBoot` is set; otherwise `steps` unchanged.
+ */
+export const gateStepsForSmokeBoot = (steps, phase, smokeBoot) => {
+  if (!smokeBoot) return steps;
+  const disabled = SMOKE_BOOT_DISABLED_STEPS[phase];
+  if (!disabled) throw new Error(`Unknown boot phase: ${phase}`);
+  return { ...steps, ...Object.fromEntries(disabled.map((name) => [name, () => undefined])) };
+};
+
+/**
  * Pre-route boot ordering (`bootstrapServices`).
  *
  * Load-bearing points, in order:

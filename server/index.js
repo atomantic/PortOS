@@ -10,6 +10,7 @@ import { certPaths } from '../lib/certPaths.js';
 import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 import { getBuildIdentity } from './lib/buildIdentity.js';
 import { PORTS } from './lib/ports.js';
+import { isSmokeBoot } from './lib/runtimeEnv.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -523,6 +524,9 @@ getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed
 runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, host: HOST, spawnerReady });
 
 // Opt-in listener only: restores host configuration without generating tokens.
-import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
-  .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
+// The boot smoke (#8343) opens no listener beyond the API server it probes.
+if (!isSmokeBoot()) {
+  import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
+    .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
+}
 registerShutdownHandlers({ io, httpServer, localHttpServer });

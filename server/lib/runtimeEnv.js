@@ -39,8 +39,8 @@ export function isTestRunner() {
  * escape hatch (see AGENTS.md "Storage backend policy"), and `scripts/
  * smoke-boot.js` sets it on the real `server/index.js` boot specifically so
  * CI can smoke-test the server without Postgres. That smoke-booted server
- * legitimately writes its own runtime files into the real `data/` tree — the
- * exact thing `lib/testDataIsolation.js`'s write guard exists to catch a
+ * legitimately writes its own runtime files into its (disposable, #8343)
+ * `data/` tree — the exact thing `lib/testDataIsolation.js`'s write guard exists to catch a
  * *test suite* doing. Only `process.env.VITEST` (set by every Vitest worker,
  * never by a bare `node` invocation) tells the two apart, so the write guard
  * gates on this, not `isTestRunner()`.
@@ -49,4 +49,23 @@ export function isTestRunner() {
  */
 export function isVitestRunner() {
   return process.env.VITEST != null;
+}
+
+/** Env var `scripts/smoke-boot.js` sets on the server it boots (#8343). */
+export const SMOKE_BOOT_ENV = 'PORTOS_SMOKE_BOOT';
+
+/**
+ * Is this process the server boot smoke?
+ *
+ * The smoke proves `server/index.js` boots and stays up; it must not DO
+ * anything while up. Boot consults this to skip the autonomous work a real
+ * install arms at startup — schedulers, CoS agent spawning/recovery, crash
+ * recovery passes, peer polling/sync, share watchers, local-LLM backend
+ * startup, the fleet model host. `NODE_ENV=test` cannot carry that meaning:
+ * it only selects the file storage backend.
+ *
+ * @returns {boolean}
+ */
+export function isSmokeBoot() {
+  return process.env[SMOKE_BOOT_ENV] === '1';
 }

@@ -15,11 +15,25 @@
  * worktree-rooted process so callers (boot migrations) can skip work that
  * assumes the real install tree instead of crashing.
  */
+import { existsSync } from 'fs';
 import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 /** Env var a real launch sets to pin the install root (see ecosystem.config.cjs). */
 export const DATA_ROOT_ENV = 'PORTOS_DATA_ROOT';
+
+/**
+ * Marker file that declares an install root DISPOSABLE — a throwaway tree a
+ * harness created for one process (the server boot smoke, #8343) and deletes
+ * afterwards. Such a root holds no live data, so it is the one pin a
+ * worktree-executing process may honor: the leak-safety rule below exists to
+ * keep worktree code off the LIVE install, and a live install never carries
+ * this marker.
+ */
+export const DISPOSABLE_ROOT_MARKER = '.portos-disposable-root';
+
+/** True when `rootDir` carries the disposable-root marker. */
+export const isDisposableRoot = (rootDir) => existsSync(join(rootDir, DISPOSABLE_ROOT_MARKER));
 
 /**
  * The executing checkout's root, derived from a caller's `import.meta.url`
@@ -69,19 +83,22 @@ export function resolveInstallRoot(fallbackRoot) {
   // data. When the fallback (the executing location) is itself a worktree, ignore
   // the override and stay on the worktree path — where the migration backstop
   // safely skips and PATHS.data points at the worktree's own (empty) tree.
-  if (isWorktreeRoot(fallbackRoot)) return fallbackRoot;
+  //
+  // The single exception is a pin to a DISPOSABLE root (marker file above): it
+  // holds no live data by construction, so honoring it from a worktree is what
+  // lets `npm run smoke` stay hermetic there too instead of writing into the
+  // worktree's own `data/`.
   const override = process.env[DATA_ROOT_ENV];
-  if (typeof override === 'string' && override.trim() !== '') {
-    const trimmed = override.trim();
-    const resolved = isAbsolute(trimmed) ? trimmed : resolvePath(trimmed);
-    // Symmetric leak-safety: never let the data root resolve INTO a worktree,
-    // whether the worktree path came from the executing location (above) or a
-    // misconfigured override. A worktree has no runtime data/ tree, so honoring
-    // such an override would strand the real process on an empty tree.
-    if (isWorktreeRoot(resolved)) return fallbackRoot;
-    return resolved;
-  }
-  return fallbackRoot;
+  if (typeof override !== 'string' || override.trim() === '') return fallbackRoot;
+  const trimmed = override.trim();
+  const resolved = isAbsolute(trimmed) ? trimmed : resolvePath(trimmed);
+  // Symmetric leak-safety: never let the data root resolve INTO a worktree,
+  // whether the worktree path came from the executing location (below) or a
+  // misconfigured override. A worktree has no runtime data/ tree, so honoring
+  // such an override would strand the real process on an empty tree.
+  if (isWorktreeRoot(resolved)) return fallbackRoot;
+  if (isWorktreeRoot(fallbackRoot) && !isDisposableRoot(resolved)) return fallbackRoot;
+  return resolved;
 }
 
 /**

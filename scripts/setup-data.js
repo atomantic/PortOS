@@ -4,7 +4,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { md5, buildPromptDriftTables } from './migrations/_lib.js';
-import { MIGRATION_OWNED_PATHS } from './lib/migrationOwnedPaths.js';
+import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
 import { mergeJsonStarter } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
@@ -19,9 +19,7 @@ const referenceDir = join(rootDir, 'data.reference');
 // present, no-op, and leave shipped defaults where the user's settings were.
 // See scripts/migrations/340-cos-config-seed-repair.js for the case that
 // prompted it.
-const migrationOwnedSeeds = new Set(
-  [...MIGRATION_OWNED_PATHS].map((relPath) => join(referenceDir, ...relPath.split('/'))),
-);
+const isSeedable = isSeedableReferencePath(referenceDir);
 
 console.log('📁 Setting up data directory...');
 
@@ -59,7 +57,7 @@ const rewritePortosRootPlaceholder = () => {
 if (!existsSync(dataDir)) {
   console.log('📁 Creating data directory from data.reference...');
   mkdirSync(dataDir, { recursive: true });
-  cpSync(referenceDir, dataDir, { recursive: true, filter: (src) => !migrationOwnedSeeds.has(src) });
+  cpSync(referenceDir, dataDir, { recursive: true, filter: isSeedable });
   rewritePortosRootPlaceholder();
   console.log('✅ Data directory created');
 } else {
@@ -68,7 +66,7 @@ if (!existsSync(dataDir)) {
     const items = readdirSync(srcDir);
     for (const item of items) {
       const srcPath = join(srcDir, item);
-      if (migrationOwnedSeeds.has(srcPath)) continue;
+      if (!isSeedable(srcPath)) continue;
       const destPath = join(destDir, item);
       const stat = statSync(srcPath);
 
