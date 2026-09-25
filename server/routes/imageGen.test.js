@@ -525,7 +525,7 @@ describe('Image Gen Routes', () => {
       expect(response.body.path).toBe('/data/images/queued-job-001.png');
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'image',
-        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3', modelId: 'dev' }),
+        params: expect.objectContaining({ prompt: 'a fox in a forest', pythonPath: '/usr/bin/python3', modelId: 'qwen-image-2.1' }),
       }));
       // Synchronous generateImage MUST NOT be called in local mode — the
       // queue takes ownership of the job lifecycle.
@@ -770,15 +770,15 @@ describe('Image Gen Routes', () => {
       });
     });
 
-    // Local mode without a configured pythonPath now rejects up-front (400)
-    // rather than enqueueing a job that can never run. The queue is meant to
-    // serialize concurrent renders, not to absorb hard configuration errors.
-    it('local mode with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
+    // An explicit mflux model without a configured pythonPath rejects up-front
+    // (400) rather than enqueueing a job that can never run. The new Qwen
+    // default uses the shared diffusers runtime and does not require this path.
+    it('mflux model with missing pythonPath returns 400 IMAGE_GEN_NOT_CONFIGURED', async () => {
       getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no `local.pythonPath`
 
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'a fox in a forest' });
+        .send({ prompt: 'a fox in a forest', modelId: 'dev' });
 
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/not configured/i);
