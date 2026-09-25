@@ -21,6 +21,7 @@ describe('InfoTooltip', () => {
     fireEvent.focus(btn);
     const panel = screen.getByRole('tooltip');
     expect(panel).toHaveTextContent('Keyboard reachable');
+    expect(panel.className).toContain('port-opaque-surface');
     expect(btn.getAttribute('aria-describedby')).toBe(panel.getAttribute('id'));
     // Blur (tabbing away) dismisses the focus-revealed tooltip.
     fireEvent.blur(btn);
