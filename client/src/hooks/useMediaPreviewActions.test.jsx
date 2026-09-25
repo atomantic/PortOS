@@ -9,9 +9,13 @@ vi.mock('../services/apiImageVideo', () => ({
   cleanGalleryImage: vi.fn(),
   extractLastFrame: vi.fn(),
   removeImageWatermark: vi.fn(),
+  getGalleryImages: vi.fn(),
+  getVideoHistoryItem: vi.fn(),
 }));
 
-import { removeImageWatermark, cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
+import { removeImageWatermark, cleanGalleryImage, extractLastFrame, getGalleryImages, getVideoHistoryItem } from '../services/apiImageVideo';
+import toast from '../components/ui/Toast';
+import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 
 const parseNav = () => {
   const url = navigate.mock.calls.at(-1)?.[0] || '';
@@ -142,9 +146,9 @@ describe('useMediaPreviewActions.handleRemix', () => {
 describe('useMediaPreviewActions.handleSendToImage', () => {
   beforeEach(() => navigate.mockReset());
 
-  it('navigates to /media/image with the image queued as init + settings carried', () => {
+  it('navigates to /media/image with the image queued as init + settings carried', async () => {
     const { result } = renderHook(() => useMediaPreviewActions());
-    result.current.handleSendToImage({
+    await result.current.handleSendToImage({
       kind: 'image', filename: 'cat.png', prompt: 'a cat', negativePrompt: 'blurry',
       modelId: 'flux2', width: 1024, height: 768, seed: 7, steps: 8, guidance: 3.5, quantize: '8',
     });
@@ -162,18 +166,18 @@ describe('useMediaPreviewActions.handleSendToImage', () => {
     expect(params.get('remix')).toBeNull();
   });
 
-  it('skips the (no prompt) placeholder so it does not seed the next render', () => {
+  it('skips the (no prompt) placeholder so it does not seed the next render', async () => {
     const { result } = renderHook(() => useMediaPreviewActions());
-    result.current.handleSendToImage({ kind: 'image', filename: 'x.png', prompt: '(no prompt)' });
+    await result.current.handleSendToImage({ kind: 'image', filename: 'x.png', prompt: '(no prompt)' });
     const { params } = parseNav();
     expect(params.get('initImageFile')).toBe('x.png');
     expect(params.get('prompt')).toBeNull();
   });
 
-  it('is a no-op for videos and for items without a filename', () => {
+  it('is a no-op for videos and for items without a filename', async () => {
     const { result } = renderHook(() => useMediaPreviewActions());
-    result.current.handleSendToImage({ kind: 'video', filename: 'clip.mp4' });
-    result.current.handleSendToImage({ kind: 'image' });
+    await result.current.handleSendToImage({ kind: 'video', filename: 'clip.mp4' });
+    await result.current.handleSendToImage({ kind: 'image' });
     expect(navigate).not.toHaveBeenCalled();
   });
 });
@@ -203,6 +207,52 @@ describe('useMediaPreviewActions.handleContinue', () => {
     const { params } = parseNav();
     expect(params.get('sourceImageFile')).toBe('last.png');
     expect(params.get('prompt')).toBeNull();
+  });
+});
+
+// A compact gallery row (#8292) carries only a prompt preview; every handoff
+// that copies prompt/settings must read the stored record instead.
+describe('useMediaPreviewActions with compact gallery items', () => {
+  const fullPrompt = 'a lighthouse at dusk, '.repeat(40) + 'ending detail';
+  beforeEach(() => {
+    navigate.mockReset(); extractLastFrame.mockReset(); getGalleryImages.mockReset();
+    getVideoHistoryItem.mockReset(); toast.error.mockReset();
+  });
+
+  it('hands the full stored prompt and settings to Send to Video and Send to image', async () => {
+    getGalleryImages.mockResolvedValue([{ filename: 'tower.png', prompt: fullPrompt, negativePrompt: 'fog', width: 832, height: 1216, seed: 9 }]);
+    const item = normalizeImage({ compact: true, filename: 'tower.png', prompt: 'a lighthouse at dusk…' });
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await result.current.handleSendToVideo(item);
+    let { params } = parseNav();
+    expect(getGalleryImages).toHaveBeenCalledWith(['tower.png'], { silent: true });
+    expect(params.get('prompt')).toBe(fullPrompt);
+    expect(params.get('negativePrompt')).toBe('fog');
+    expect(params.get('w')).toBe('832');
+    await result.current.handleSendToImage(item);
+    ({ params } = parseNav());
+    expect(params.get('prompt')).toBe(fullPrompt);
+    expect(params.get('seed')).toBe('9');
+  });
+
+  it('stops with an error instead of sending the preview when the record cannot be read', async () => {
+    getGalleryImages.mockResolvedValue([]);
+    getVideoHistoryItem.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await result.current.handleSendToVideo(normalizeImage({ compact: true, filename: 'gone.png', prompt: 'preview…' }));
+    await result.current.handleContinue(normalizeVideo({ compact: true, id: 'vid-9', filename: 'v.mp4', prompt: 'preview…' }));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(extractLastFrame).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues a compact clip with its full prompt', async () => {
+    getVideoHistoryItem.mockResolvedValue({ id: 'vid-3', filename: 'v.mp4', prompt: fullPrompt, width: 768, height: 512 });
+    extractLastFrame.mockResolvedValue({ filename: 'last.png' });
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await result.current.handleContinue(normalizeVideo({ compact: true, id: 'vid-3', filename: 'v.mp4', prompt: 'preview…' }));
+    expect(getVideoHistoryItem).toHaveBeenCalledWith('vid-3', { silent: true });
+    expect(parseNav().params.get('prompt')).toBe(fullPrompt);
   });
 });
 

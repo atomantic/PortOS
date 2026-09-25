@@ -53,6 +53,20 @@ describe('indexed gallery page', () => {
     expect(params.slice(-2)).toEqual([1, 1]);
   });
 
+  it('projects compact mixed rows after the indexed query without changing counts', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    loadHistory.mockResolvedValue([]);
+    const video = { id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', prompt: 'x'.repeat(8192), stitchedFrom: ['a', 'b'], guidanceScale: 3 };
+    query.mockResolvedValue({ rows: [{ items: [{ kind: 'video', data: video }], total: '9', hiddenTotal: '2', image: '4', video: '5' }] });
+    const page = await listGalleryPage({ kind: 'all', media: true, summary: true, hidden: false, compact: true, limit: 60 });
+    expect(page).toMatchObject({ total: 9, hiddenTotal: 2, counts: { image: 4, video: 5, all: 9 } });
+    expect(page.items).toEqual([{ kind: 'video', data: {
+      compact: true, id: 'clip-1', filename: 'clip.mp4', thumbnail: 'clip.png', stitchedFrom: ['a', 'b'], prompt: 'x'.repeat(240) + '…',
+    } }]);
+  });
+
   it('does not turn an index failure into a full disk scan', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);

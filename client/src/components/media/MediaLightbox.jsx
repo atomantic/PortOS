@@ -443,11 +443,14 @@ export default function MediaLightbox({
             regenAvailable={regenAvailable}
             regenBounds={regenBounds}
             copy={copy}
-            onRefine={() => setRefineOpen(true)}
+            // A compact list item holds a prompt PREVIEW until its record is
+            // hydrated (#8292) — refining or editing it would treat the
+            // truncation as the saved prompt.
+            onRefine={item.compact ? undefined : () => setRefineOpen(true)}
             onPromptFrom={() => setPromptFromOpen(true)}
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
-            onPromptChange={onPromptChange}
+            onPromptChange={item.compact ? undefined : onPromptChange}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
           />
@@ -638,7 +641,15 @@ function SettingsPane({
       </header>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
-        {onPromptChange ? (
+        {item.compact ? (
+          <div>
+            <span className="block mb-1 text-gray-500 uppercase tracking-wide">Prompt</span>
+            <p className="text-gray-400 whitespace-pre-wrap">{item.prompt}</p>
+            {item.detailError
+              ? <p role="alert" className="mt-1 text-port-error">Full details could not be loaded. Close and reopen to retry.</p>
+              : <p role="status" className="mt-1 text-gray-500">Loading full details…</p>}
+          </div>
+        ) : onPromptChange ? (
           <div>
             <div className="flex items-center justify-between mb-1">
               <label htmlFor="media-prompt" className="text-gray-500 uppercase tracking-wide">Prompt</label>

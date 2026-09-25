@@ -240,6 +240,31 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    // #8292: migrated consumers opt into compact card rows; search and visible
+    // counts still read the full stored metadata, and older callers keep full records.
+    it('projects compact visible rows on request while searching the full prompt', async () => {
+      const longPrompt = 'harbor at dawn '.repeat(60) + 'lighthouse';
+      const items = [
+        { filename: 'a.png', prompt: longPrompt, negativePrompt: 'blur '.repeat(200), path: '/data/images/a.png', seed: 3, width: 64, height: 64, cfgScale: 4, cleanedFrom: 'root.png' },
+        { filename: 'b.png', prompt: 'short', hidden: true },
+      ];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      const compact = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false&summary=true&compact=true&q=lighthouse');
+      expect(compact.status).toBe(200);
+      expect(compact.body).toMatchObject({ total: 1, hiddenTotal: 0 });
+      const [row] = compact.body.items;
+      expect(row).toMatchObject({ compact: true, filename: 'a.png', path: '/data/images/a.png', seed: 3, width: 64, cleanedFrom: 'root.png' });
+      expect(row.prompt.length).toBeLessThanOrEqual(241);
+      expect(longPrompt.startsWith(row.prompt.slice(0, -1))).toBe(true);
+      expect(row).not.toHaveProperty('negativePrompt');
+      expect(row).not.toHaveProperty('cfgScale');
+      const visible = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false&summary=true&compact=true');
+      expect(visible.body).toMatchObject({ total: 1, hiddenTotal: 1 });
+      const full = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false');
+      expect(full.body.items).toEqual([items[0]]);
+      expect((await request(app).get('/api/image-gen/gallery?compact=yes')).status).toBe(400);
+    });
+
     it('hydrates only requested filenames and rejects an oversized reference batch', async () => {
       const items = [{ filename: 'a.png', prompt: 'first' }, { filename: 'b.png', prompt: 'second' }];
       imageGen.local.listGallery.mockResolvedValue(items);

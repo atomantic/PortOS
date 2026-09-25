@@ -56,6 +56,17 @@ describe('isolated fixture using real collection routes and storage', () => {
       expect(page.items.every(item => !item.data.hidden)).toBe(true);
       const next = await get('/api/image-gen/gallery?limit=7&offset=7&media=true&kind=all&hidden=false');
       expect(next.items.map(item => item.data.filename).some(name => page.items.some(item => item.data.filename === name))).toBe(false);
+      const compact = await get('/api/image-gen/gallery?limit=60&offset=0&media=true&kind=all&summary=true&hidden=false&compact=true');
+      expect(compact).toMatchObject({ total: 3240, hiddenTotal: 360 });
+      expect(Buffer.byteLength(JSON.stringify(compact))).toBeLessThan(60 * 2048);
+      expect(compact.items.every(item => item.data.compact && item.data.prompt.length <= 512)).toBe(true);
+      const image = compact.items.find(item => item.kind === 'image').data;
+      const lookup = await fetch(fixture.url + '/api/image-gen/gallery/lookup', { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filenames: [image.filename] }) });
+      expect(lookup.status).toBe(200);
+      expect((await lookup.json())[0].prompt.length).toBeGreaterThanOrEqual(8192);
+      const video = compact.items.find(item => item.kind === 'video').data;
+      expect((await get('/api/video-gen/history/' + video.id)).prompt.length).toBeGreaterThanOrEqual(8192);
       const inbox = await get('/api/messages/inbox?limit=11&offset=20&summary=true');
       expect(inbox.total).toBe(4000);
       expect(inbox.messages).toHaveLength(11);
