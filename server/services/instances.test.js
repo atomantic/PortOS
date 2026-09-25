@@ -68,6 +68,8 @@ import {
   peerLogLabel,
   removePeer,
   updatePeer,
+  pairPeerSyncSecret,
+  acceptPeerSyncSecretFromPeer,
   probePeer,
   probeAllPeers,
   queryPeer,
@@ -1989,6 +1991,72 @@ describe('instances.js', () => {
       await flush();
       expect(logged('Instance polling started')).toBe(true);
       stopPolling();
+    });
+  });
+
+  describe('automatic peer sync pairing', () => {
+    const selfId = '191aaece-a492-41ee-a66d-d4661eadc132';
+    const peerId = '9f131a42-3103-4a68-9ad7-5f58d7926c1e';
+    const makePeer = (overrides = {}) => ({
+      id: 'peer-record', instanceId: peerId, address: '192.0.2.20', port: 5555,
+      enabled: true, status: 'online', syncEnabled: true, directions: ['outbound'],
+      auth: { username: '', password: 'synthetic-instance-password' },
+      ...overrides,
+    });
+
+    it('generates one secret, provisions it remotely with Basic auth, then stores it locally', async () => {
+      const peer = makePeer();
+      readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
+      fetch.mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ paired: true }) });
+
+      const updated = await pairPeerSyncSecret(peer.id);
+      const pairCall = fetch.mock.calls.find(([url]) => url.endsWith('/api/instances/peers/pair-secret'));
+      expect(pairCall).toBeDefined();
+      const [, options] = pairCall;
+      const headers = Object.fromEntries(Object.entries(options.headers).map(([key, value]) => [key.toLowerCase(), value]));
+      const generatedSecret = JSON.parse(options.body).syncSecret;
+      expect(generatedSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(updated.syncSecret).toBe(generatedSecret);
+      expect(peer.syncSecret).toBe(generatedSecret);
+      expect(options.redirect).toBe('error');
+      expect(headers).toMatchObject({
+        authorization: expect.stringMatching(/^Basic /),
+        'x-portos-instance-id': expect.any(String),
+        'x-portos-peer-auth': '',
+      });
+    });
+
+    it('reuses an unconfirmed local secret when remote provisioning needs a retry', async () => {
+      const secret = 'synthetic-pair-secret-32-characters-long';
+      const peer = makePeer({ syncSecret: secret, peerAuthAccepted: false });
+      readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
+      fetch.mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ paired: true }) });
+
+      await pairPeerSyncSecret(peer.id);
+
+      const pairCall = fetch.mock.calls.find(([url]) => url.endsWith('/api/instances/peers/pair-secret'));
+      expect(JSON.parse(pairCall[1].body).syncSecret).toBe(secret);
+    });
+
+    it('does not store a newly generated secret when the peer rejects pairing', async () => {
+      const peer = makePeer();
+      readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
+      fetch.mockResolvedValue({ ok: false, status: 404, json: vi.fn().mockResolvedValue({}) });
+
+      await expect(pairPeerSyncSecret(peer.id)).rejects.toMatchObject({ code: 'PEER_PAIR_REJECTED' });
+      expect(peer).not.toHaveProperty('syncSecret');
+    });
+
+    it('accepts a generated secret only for one registered peer and preserves sync consent', async () => {
+      const peer = makePeer({ syncEnabled: false, syncCategories: { universe: false } });
+      readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
+      const accepted = await acceptPeerSyncSecretFromPeer(peerId, 'synthetic-pair-secret-32-characters-long');
+
+      expect(accepted.syncSecret).toBe('synthetic-pair-secret-32-characters-long');
+      expect(accepted.directions).toEqual(['outbound', 'inbound']);
+      expect(accepted.syncEnabled).toBe(false);
+      expect(disconnectFromPeer).toHaveBeenCalledWith(peer.id);
+      expect(await acceptPeerSyncSecretFromPeer('unknown-peer', 'synthetic-pair-secret-32-characters-long')).toBeNull();
     });
   });
 });
