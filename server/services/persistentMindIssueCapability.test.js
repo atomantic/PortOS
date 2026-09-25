@@ -247,6 +247,26 @@ describe('persistent mind issue capability', () => {
       expect(ghArgsFor('issue')).toHaveLength(0);
     });
 
+    // #8460 — the same mind can hold portos.read, so a calendar attendee or a
+    // peer hostname can reach its prose; the shared scrubber redacts both.
+    it('redacts emails and network hosts, and dedupes on the redacted title', async () => {
+      mocks.listAppIssues.mockResolvedValue(okList([
+        openIssue({ number: 13, title: 'Invite to <email> bounces' }),
+      ]));
+      expect(await filePersistentMindIssue(fileRequest({
+        title: 'Invite to alice@example.com bounces',
+      }))).toMatchObject({ ok: true, duplicate: true, number: 13 });
+
+      mocks.listAppIssues.mockResolvedValue(okList([]));
+      await filePersistentMindIssue(fileRequest({
+        title: 'Invite to alice@example.com bounces',
+        body: 'Seen on host-1.example.ts.net.',
+      }));
+      const [args] = ghArgsFor('issue');
+      expect(argValue(args, '--title')).toBe('Invite to <email> bounces');
+      expect(argValue(args, '--body')).toBe('Seen on <host>.');
+    });
+
     it('leaves ordinary prose, repo-relative paths and short ids untouched', async () => {
       const body = 'server/services/sync.js drops job 4f2a on retry — see PR #118.';
       await filePersistentMindIssue(fileRequest({ title: 'Sync drops a job on retry', body }));

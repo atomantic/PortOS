@@ -312,6 +312,7 @@ export * from './secretText.js';
 export * from './piiRedactionPatterns.js';
 export * from './imageClean.js';
 export * from './imageFrameStats.js';
+export * from './imageThumbnail.js';
 export * from './imageRgba.js';
 export * from './imageWatermark.js';
 export * from './localImageFilename.js';

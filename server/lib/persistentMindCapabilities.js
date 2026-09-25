@@ -102,7 +102,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'Read and create only — no editing, closing, commenting, assigning, or labeling existing issues',
       'Every filed issue carries both required dispatch axes plus the persistent-mind and planner attribution labels',
       'An unreadable tracker refuses the file instead of risking a duplicate, and an exact title match reuses the existing issue',
-      'Issue titles and bodies are the mind\'s own prose, with home-directory paths and credential-shaped strings stripped before filing; it is additionally instructed to keep private records out, which is guidance rather than an enforced filter',
+      'Issue titles and bodies are the mind\'s own prose, with home-directory paths, credential-shaped strings, email addresses, phone numbers, IP/MAC addresses and network hostnames stripped before filing; it is additionally instructed to keep private records out, which is guidance rather than an enforced filter',
     ],
   }),
   Object.freeze({

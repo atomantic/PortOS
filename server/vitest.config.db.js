@@ -40,6 +40,7 @@ export const DB_TEST_INCLUDE = [
   'lib/db/schema/beeper.db.test.js',
   'services/beeperConversations.db.test.js',
   'services/beeperTribe.db.test.js',
+  'services/tribePurge.db.test.js',
   'services/beeperSync.db.test.js',
   'services/creativeDirector/projectsDB.test.js',
   'services/musicVideo/projectsDB.test.js',

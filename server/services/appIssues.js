@@ -34,6 +34,7 @@ import { ServerError, boundedErrorMessage } from '../lib/errorHandler.js';
 import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
 import { scrubHomePath } from '../lib/homePath.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 
 // Single-user repos never realistically exceed this; `glab` caps a page at 100.
 const GH_LIST_LIMIT = 200;
@@ -327,16 +328,22 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
  * copy (#7687 — three filers had re-implemented this, and only two called it).
  * `scrubHomePath` collapses the running user's home prefix (which embeds the OS
  * username in `/Users/<name>/…`); `scrubSecretTokens` replaces credential-shaped
- * substrings. Neither is a content filter — deciding whether a sentence names a
+ * substrings; `redactPii` replaces emails, phone numbers, IP/MAC literals,
+ * `.ts.net`/`.local` hosts and labelled GPS coordinates (#8460 — only one of
+ * three filers applied it). Its phone pattern also collapses ISO dates such as
+ * `2026-09-25`, an accepted over-redaction. None is a content filter — deciding whether a sentence names a
  * private record is not mechanically decidable, so that stays a prompt
- * instruction for the callers that reach an LLM. Both helpers pass a non-string
- * through untouched.
+ * instruction for the callers that reach an LLM. A non-string passes through
+ * untouched.
  *
  * Exported (not just used internally by `fileForgeIssue`) because a filer that
  * needs to scrub text for a NON-forge tracker in the same request — JIRA,
  * today — still needs one shared definition to call.
  */
-export const scrubForgeIssueText = (value) => scrubSecretTokens(scrubHomePath(value));
+export const scrubForgeIssueText = (value) => {
+  const scrubbed = scrubSecretTokens(scrubHomePath(value));
+  return typeof scrubbed === 'string' ? redactPii(scrubbed) : scrubbed;
+};
 
 /**
  * Refuse to proceed against an unreachable GitHub forge, in the `{ ok, error }`
@@ -420,13 +427,14 @@ export async function ensureForgeIssueLabels({ cli, exec, cwd, env, repo = null,
  * @param {string|null} [args.hostname] - github API host to probe; omit to skip the probe (already done, or non-github)
  * @param {string} args.title
  * @param {string} args.body
+ * @param {string} [args.trailer] - machine-generated text appended to the body AFTER scrubbing (a dedup marker the scrub must not rewrite); never pass model- or user-authored text here
  * @param {{name:string, color:string, description:string}[]} [args.labels] - applied to the issue AND created first
  * @param {(cli:string, args:string[], opts:object) => Promise<{code:number, stdout:string, stderr:string}>} [args.exec]
  * @returns {Promise<{ok:true, number:number|null, url:string}|{ok:false, error:string}>}
  */
 export async function fileForgeIssue({
   cli, cwd = undefined, env = undefined, repo = null, repoPath = null,
-  hostname = null, title, body, labels = [], exec = execForgeIssueCli,
+  hostname = null, title, body, trailer = '', labels = [], exec = execForgeIssueCli,
 } = {}) {
   const probe = await probeForgeReachability({ cli, hostname, env, label: 'file-forge-issue' });
   if (!probe.ok) return { ok: false, error: probe.error };
@@ -437,7 +445,7 @@ export async function fileForgeIssue({
 
   const args = forgeIssueCreateArgs(cli, {
     title: scrubForgeIssueText(title),
-    body: scrubForgeIssueText(body),
+    body: `${scrubForgeIssueText(body)}${trailer}`,
     labels: labels.map((spec) => spec.name),
     repo: cli === 'glab' ? null : repo,
   });
