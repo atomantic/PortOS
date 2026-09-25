@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
 import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
+import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
@@ -186,7 +187,8 @@ describe('configured provider reviewers', () => {
 
   it('keeps explicit tool-free review and public claim screening fail-closed for unsupported harnesses', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'custom-agent' });
-    expect(await runLocalCodeReview({ backend, diff: 'example diff', toolFree: true })).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
+    const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff', toolFree: false }, process.cwd());
+    expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
     expect(await runLocalClaimCommentReview({ backend, comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] })).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
@@ -194,7 +196,8 @@ describe('configured provider reviewers', () => {
   it('isolates an explicitly tool-free review even when a repository was supplied', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'claude' });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
-    expect(await runLocalCodeReview({ backend, diff: 'example diff', cwd: process.cwd(), toolFree: true })).toMatchObject({ ok: true });
+    const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff' }, process.cwd());
+    expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: true });
     const args = runCliProviderPrompt.mock.lastCall[0];
     expect(args.safetyProfile).toBe('public-review-gate');
     expect(args.cwd).not.toBe(process.cwd());

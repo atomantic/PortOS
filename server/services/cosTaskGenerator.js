@@ -508,6 +508,7 @@ export async function buildClaimWorkTask(app, {
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
       claimCommentGate: promptTaskType === 'claim-issue',
+      enforceIsolation: promptTaskType.startsWith('claim-issue'),
     });
 
   // Mirror the scheduler: inherit the delegated flow's isolation posture so the
@@ -559,7 +560,7 @@ async function resolveClaimReviewerPrompt(app) {
     csv,
     taskMetadata: reviewerConfigMetadata(config),
     effortBlock: appendReviewerEffortBlock(list, reviewerEfforts, reviewerModels),
-    localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts),
+    localReviewerBlock: buildLocalReviewerInstructions(list, reviewerModels, reviewerEfforts, { enforceIsolation: true }),
   };
 }
 

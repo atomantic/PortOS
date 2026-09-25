@@ -15,3 +15,11 @@ import { PATHS } from './fileUtils.js';
  * working. Each caller applies its own `shellQuote`.
  */
 export const LOCAL_REVIEW_BRIDGE_SCRIPT = join(PATHS.root, 'server/scripts/run-local-code-review.mjs');
+
+/** Preserve a claim's enforced review policy at the bridge boundary. */
+export function localReviewBridgeRequest(request, cwd) {
+  const { timeoutMs, ...reviewRequest } = request;
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) reviewRequest.timeoutMs = timeoutMs;
+  if (request.kind === 'claim-review') reviewRequest.toolFree = true;
+  return { ...reviewRequest, cwd };
+}
