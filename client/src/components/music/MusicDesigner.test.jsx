@@ -24,6 +24,12 @@ vi.mock('./MusicGenPanel', () => ({
   ),
 }));
 
+vi.mock('./WaveformPanel', () => ({
+  default: ({ trackId, description, providerId }) => (
+    <div data-testid="waveform-panel" data-track={trackId} data-description={description} data-provider={providerId} />
+  ),
+}));
+
 // Stateful stub of useProviderModels: the pin-restore effect calls its setters,
 // so they have to actually move the returned selection for the restore path to
 // be observable.
@@ -177,6 +183,28 @@ describe('<MusicDesigner>', () => {
       fireEvent.change(prompt, { target: { value: 'A quiet piano loop with tape hiss.' } });
 
       expect(screen.getByTestId('gen-panel')).toHaveAttribute('data-prompt', 'A quiet piano loop with tape hiss.');
+    });
+  });
+
+  describe('the render engine', () => {
+    it('swaps to the drawn-waveform engine and keeps it across step navigation', async () => {
+      api.getTrack.mockResolvedValue({
+        id: 'track-saved', title: 'Named Track', concept: 'x', prompt: 'Glassy tidal ambient.', lyrics: '',
+      });
+      renderAt('/music/generate/render?trackId=track-saved');
+      await findEnabledByLabelText(/prompt for this render/i);
+      expect(screen.getByTestId('gen-panel')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('tab', { name: /drawn waveform/i }));
+      const panel = await screen.findByTestId('waveform-panel');
+      expect(panel).toHaveAttribute('data-track', 'track-saved');
+      expect(panel).toHaveAttribute('data-description', 'Glassy tidal ambient.');
+      expect(panel).toHaveAttribute('data-provider', 'provider-a');
+      expect(screen.queryByTestId('gen-panel')).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: /^lyrics$/i }));
+      fireEvent.click(await screen.findByRole('tab', { name: /^render$/i }));
+      expect(await screen.findByTestId('waveform-panel')).toBeInTheDocument();
     });
   });
 

@@ -57,6 +57,20 @@ export function buildRenderAppend(track, renderInput) {
   return { render, renders: [...(track?.renders || []), render] };
 }
 
+/**
+ * Record a freshly rendered audio file as the track's ACTIVE take: re-read the
+ * track (so the append lands on the freshest history), append the render, and
+ * point the top-level audio fields at it. `patch` carries any extra fields the
+ * engine updates alongside (e.g. a title). Resolves to the updated track, or
+ * null when the track is gone. Shared by the offline LLM-music renderers.
+ */
+export async function appendActiveTake(trackId, { audioFilename, engine, prompt, durationSec }, patch = {}) {
+  const current = await getTrack(trackId);
+  if (!current) return null;
+  const { renders } = buildRenderAppend(current, { audioFilename, prompt, engine, durationSec });
+  return updateTrack(trackId, { ...patch, audioFilename, engine, modelId: '', durationSec, renders });
+}
+
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getTracksBackendName() {
   return getBackendName();
