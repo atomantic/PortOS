@@ -13,6 +13,11 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const providerHook = vi.hoisted(() => ({
   setSelectedProviderId: vi.fn(),
   setSelectedModel: vi.fn(),
+  // #8348 — the render-loop guard below flips this on to give the setters a
+  // new identity on every render (matching ChiefOfStaff.test.jsx's mock),
+  // then reads renderCount (bumped once per hook call, i.e. once per render).
+  unstableSetters: false,
+  renderCount: 0,
 }));
 const localLlm = vi.hoisted(() => ({
   getLocalLlmStatus: vi.fn(),
@@ -25,14 +30,27 @@ vi.mock('../../ui/Toast', () => ({ default: toast }));
 // The provider/model selector hook fetches providers over the network — stub it
 // so the test exercises only the config screen's own behavior.
 vi.mock('../../../hooks/useProviderModels', () => ({
-  default: () => ({
-    providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
-    availableModels: ['gpt-5'],
-    setSelectedProviderId: providerHook.setSelectedProviderId,
-    setSelectedModel: providerHook.setSelectedModel,
-    selectedProviderId: '',
-    selectedModel: '',
-  }),
+  default: () => {
+    providerHook.renderCount += 1;
+    // A real render loop never settles on its own — cap it here so a
+    // regression fails in milliseconds with a clear error instead of
+    // spinning the worker toward the heap limit (#8327/#8348).
+    if (providerHook.unstableSetters && providerHook.renderCount > 25) {
+      throw new Error(`ConfigTab render loop: useProviderModels invoked ${providerHook.renderCount} times`);
+    }
+    return {
+      providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
+      availableModels: ['gpt-5'],
+      setSelectedProviderId: providerHook.unstableSetters
+        ? (id) => providerHook.setSelectedProviderId(id)
+        : providerHook.setSelectedProviderId,
+      setSelectedModel: providerHook.unstableSetters
+        ? (model) => providerHook.setSelectedModel(model)
+        : providerHook.setSelectedModel,
+      selectedProviderId: '',
+      selectedModel: '',
+    };
+  },
 }));
 
 const ConfigTab = (await import('./ConfigTab')).default;
@@ -62,6 +80,8 @@ const renderConfig = (props = {}) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  providerHook.unstableSetters = false;
+  providerHook.renderCount = 0;
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
@@ -363,5 +383,33 @@ describe('boot startup compatibility', () => {
       { alwaysOn: false, autoStart: false },
       { silent: true },
     ));
+  });
+});
+
+// Regression coverage for #8327/#8348 — this file's own useProviderModels mock
+// returns STABLE setters, so it can never reproduce the render loop that fix
+// ade6d692d resolved. Only ChiefOfStaff.test.jsx's mock (fresh vi.fn() setters
+// per render) triggered it there, surfacing as a worker that grows to the
+// heap limit with no assertion pointing at ConfigTab. This test reproduces
+// the unstable-identity condition directly against ConfigTab so a regression
+// fails fast, here, with a clear render-count signal.
+describe('render loop guard (#8348)', () => {
+  it('settles instead of looping when the provider hook setters change identity every render', async () => {
+    providerHook.unstableSetters = true;
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    renderConfig({ config: { ...config, embeddingProviderId: 'codex', embeddingModel: 'gpt-5' } });
+    await screen.findByText('Waiting for the next wake');
+
+    const settledCount = providerHook.renderCount;
+    expect(settledCount).toBeLessThan(20);
+
+    // One more flush: a real loop keeps climbing here, a settled component does not.
+    await act(async () => {});
+    expect(providerHook.renderCount).toBe(settledCount);
+
+    // The guard must not pass just because the effect stopped running — the
+    // saved embedding pick still has to reach the provider hook.
+    expect(providerHook.setSelectedProviderId).toHaveBeenCalledWith('codex');
+    expect(providerHook.setSelectedModel).toHaveBeenCalledWith('gpt-5');
   });
 });
