@@ -117,22 +117,10 @@ describe('isClaimFlowDispatch', () => {
     }
   });
 
-  it('recognizes the explicit claimFlow marker, boolean and string form', () => {
-    expect(isClaimFlowDispatch(task({ claimFlow: true }))).toBe(true);
-    expect(isClaimFlowDispatch(task({ claimFlow: 'true' }))).toBe(true);
-  });
-
-  it('resolves the archived-agent projection (taskAnalysisType) and a bare taskType', () => {
-    expect(isClaimFlowDispatch(task({ taskAnalysisType: 'claim-issue' }))).toBe(true);
-    expect(isClaimFlowDispatch({ id: 'task-1', taskType: 'claim-work' })).toBe(true);
-  });
-
-  it('does not treat an ordinary committing task as a claim flow', () => {
-    expect(isClaimFlowDispatch(task({}))).toBe(false);
-    expect(isClaimFlowDispatch(task({ analysisType: 'security' }))).toBe(false);
-    expect(isClaimFlowDispatch(task({ claimFlow: 'false' }))).toBe(false);
-    expect(isClaimFlowDispatch(task({ analysisType: 'branch-reconcile' }))).toBe(false);
-  });
+  // The marker forms (boolean/string claimFlow), the archived taskAnalysisType
+  // projection, the bare taskType, and the negative shapes are pinned at the
+  // CALLER boundary in agentFinalization.successCriteria.test.js, which also
+  // asserts the commit probe is not invoked — the stronger contract.
 
   it('is NOT a declaresNoCommitCriterion shape — the goal-fidelity gate depends on the distinction', () => {
     // If claim flows ever satisfy declaresNoCommitCriterion, the goal-fidelity

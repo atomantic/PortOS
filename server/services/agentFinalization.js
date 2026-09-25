@@ -23,7 +23,6 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
@@ -789,8 +788,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   const reviewLoopLeaveOpen = reviewLoopFollowUp
     && (task.metadata?.reviewLoopLeaveOpen === true || task.metadata?.reviewLoopLeaveOpen === 'true');
   if (declaresNoCommitCriterion(task) && !reviewLoopLeaveOpen) return noFidelityVerdict();
-  const claimFlow = task.metadata?.claimFlow === true || task.metadata?.claimFlow === 'true'
-    || CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
+  const claimFlow = isClaimFlowDispatch(task);
   const claimed = claimFlow
     ? await claimedIssueObjective(workspacePath).catch(() => null)
     : null;

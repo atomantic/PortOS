@@ -232,9 +232,8 @@ export function isNonCommittingCoordinatorTask(task) {
  * type set is the backstop for records carrying only the scheduled type.
  */
 export function isClaimFlowDispatch(task) {
-  if (task?.metadata?.claimFlow === true || task?.metadata?.claimFlow === 'true') return true;
-  const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
-  return CLAIM_FLOW_TASK_TYPES.has(type);
+  if (isTruthyMeta(task?.metadata?.claimFlow)) return true;
+  return CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
 }
 
 /**
