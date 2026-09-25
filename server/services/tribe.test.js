@@ -24,10 +24,10 @@ import {
   personCadenceStatus,
   getCareSummary,
   autoLogTouchpoints,
-  DEFAULT_RING_CADENCE,
   findDuplicateTribeIdentifiers,
   checkDuplicateTribeIdentifiers,
 } from './tribe.js';
+import { DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
 
 // ISO date (YYYY-MM-DD) `n` whole days before local today.
 function daysAgo(n) {

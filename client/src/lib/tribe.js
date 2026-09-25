@@ -1,14 +1,14 @@
 // Pure Tribe domain helpers shared by the Tribe page and its circle-map
 // visualization. Rings are Dunbar-inspired concentric circles (support is the
 // innermost / closest, village the outermost / weak ties). The ring `cadenceDays`
-// defaults mirror DEFAULT_RING_CADENCE in server/services/tribe.js — keep in sync.
+// defaults are DEFAULT_RING_CADENCE from the shared `tribeCadence.js`.
 //
 // The cadence STATE MACHINE (external/missing/overdue/soon/steady) lives in the
 // shared, authoritative `tribeCadence.js` (mirrored from server/lib/tribeCadence.js)
 // so the page, the Tribe Care dashboard widget, and the proactive-alert check all
 // route through one implementation. `contactStatus` below only layers presentation
 // (label/tone) on top of that shared `cadenceStatus` — do not re-implement the rules.
-import { cadenceStatus, daysSinceDate } from './tribeCadence.js';
+import { cadenceStatus, daysSinceDate, DEFAULT_RING_CADENCE } from './tribeCadence.js';
 
 // The four inner rings are the Dunbar tribe (capped, care-cadenced). `external` is
 // a fifth, uncapped classification OUTSIDE the tribe — people known or previously
@@ -16,11 +16,11 @@ import { cadenceStatus, daysSinceDate } from './tribeCadence.js';
 // carries no care cadence (`cap: null`, and `contactStatus` returns an 'external'
 // state instead of overdue/soon), and the UI keeps it out of the care queue.
 export const RINGS = [
-  { id: 'support', label: 'Support', cap: 5, cadenceDays: 7, tone: 'text-rose-300', bg: 'bg-rose-500/10', border: 'border-rose-500/30', hex: '#fda4af' },
-  { id: 'core', label: 'Core', cap: 15, cadenceDays: 21, tone: 'text-amber-300', bg: 'bg-amber-500/10', border: 'border-amber-500/30', hex: '#fcd34d' },
-  { id: 'tribe', label: 'Tribe', cap: 50, cadenceDays: 45, tone: 'text-teal-300', bg: 'bg-teal-500/10', border: 'border-teal-500/30', hex: '#5eead4' },
-  { id: 'village', label: 'Village', cap: 150, cadenceDays: 90, tone: 'text-sky-300', bg: 'bg-sky-500/10', border: 'border-sky-500/30', hex: '#7dd3fc' },
-  { id: 'external', label: 'External', cap: null, cadenceDays: 365, tone: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30', hex: '#94a3b8' },
+  { id: 'support', label: 'Support', cap: 5, cadenceDays: DEFAULT_RING_CADENCE.support, tone: 'text-rose-300', bg: 'bg-rose-500/10', border: 'border-rose-500/30', hex: '#fda4af' },
+  { id: 'core', label: 'Core', cap: 15, cadenceDays: DEFAULT_RING_CADENCE.core, tone: 'text-amber-300', bg: 'bg-amber-500/10', border: 'border-amber-500/30', hex: '#fcd34d' },
+  { id: 'tribe', label: 'Tribe', cap: 50, cadenceDays: DEFAULT_RING_CADENCE.tribe, tone: 'text-teal-300', bg: 'bg-teal-500/10', border: 'border-teal-500/30', hex: '#5eead4' },
+  { id: 'village', label: 'Village', cap: 150, cadenceDays: DEFAULT_RING_CADENCE.village, tone: 'text-sky-300', bg: 'bg-sky-500/10', border: 'border-sky-500/30', hex: '#7dd3fc' },
+  { id: 'external', label: 'External', cap: null, cadenceDays: DEFAULT_RING_CADENCE.external, tone: 'text-slate-400', bg: 'bg-slate-500/10', border: 'border-slate-500/30', hex: '#94a3b8' },
 ];
 
 // Rings inside the active tribe (everything except `external`) — the set the care

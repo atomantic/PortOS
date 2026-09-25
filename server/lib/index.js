@@ -724,6 +724,7 @@ export * from './kilo.js';
 export * from './openchamber.js';
 
 export * from './layaMlx.js';
+export * from './layeredIntelligenceSources.js';
 
 export * from './persistentMindMaintainer.js';
 

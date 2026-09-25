@@ -15,24 +15,9 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { cadenceStatus } from '../lib/tribeCadence.js';
+import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
 import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import * as calendarSync from './calendarSync.js';
-
-// Default check-in cadence (days) per ring. Mirrored on the client in
-// `client/src/pages/Tribe.jsx` (the RINGS array's `cadenceDays`); the SQL column
-// default is a flat 45 (`cadence_days` in db.js / init-db.sql) because the
-// ring-aware default is resolved here before insert. Keep all three in sync.
-export const DEFAULT_RING_CADENCE = {
-  support: 7,
-  core: 21,
-  tribe: 45,
-  village: 90,
-  // `external` is for people outside the active tribe (former contacts, a nemesis):
-  // no care cadence is owed, so this default is a neutral yearly nudge and the UI
-  // excludes external people from the care queue entirely.
-  external: 365,
-};
 
 export function isoDate(value) {
   if (!value) return null;

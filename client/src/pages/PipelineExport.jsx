@@ -28,26 +28,38 @@ import {
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import AttributionList from '../components/media/AttributionList';
+import { TRIM_SIZES, DEFAULT_TRIM_SIZE, INTERIOR_FONTS, DEFAULT_INTERIOR_FONT } from '../lib/proseExportSettings.js';
 
-// Kept in sync with server/lib/proseExportSettings.js (allow-lists + defaults).
-const TRIM_SIZE_OPTIONS = [
-  { value: 'us-trade', label: 'US Trade (6" × 9")' },
-  { value: 'digest', label: 'Digest (5.5" × 8.5")' },
-  { value: 'mass-market', label: 'Mass Market (4.25" × 6.75")' },
-  { value: 'us-letter', label: 'US Letter (8.5" × 11")' },
-  { value: 'a5', label: 'A5' },
-];
-const FONT_OPTIONS = [
-  { value: 'times', label: 'Times (serif)' },
-  { value: 'helvetica', label: 'Helvetica (sans)' },
-  { value: 'courier', label: 'Courier (mono)' },
-];
-const DEFAULT_TRIM = 'us-trade';
-const DEFAULT_FONT = 'times';
+// Client labels for the server TRIM_SIZES and INTERIOR_FONTS (via
+// lib/proseExportSettings.js); a test asserts every server value has a label.
+export const TRIM_SIZE_LABELS = {
+  'us-trade': 'US Trade (6" × 9")',
+  'digest': 'Digest (5.5" × 8.5")',
+  'mass-market': 'Mass Market (4.25" × 6.75")',
+  'us-letter': 'US Letter (8.5" × 11")',
+  'a5': 'A5',
+};
+
+export const FONT_LABELS = {
+  'times': 'Times (serif)',
+  'helvetica': 'Helvetica (sans)',
+  'courier': 'Courier (mono)',
+};
+
+// Build select options from server enums with client labels
+const TRIM_SIZE_OPTIONS = Object.entries(TRIM_SIZES).map(([value]) => ({
+  value,
+  label: TRIM_SIZE_LABELS[value],
+}));
+
+const FONT_OPTIONS = INTERIOR_FONTS.map((value) => ({
+  value,
+  label: FONT_LABELS[value],
+}));
 
 const emptyForm = {
-  trimSize: DEFAULT_TRIM,
-  interiorFont: DEFAULT_FONT,
+  trimSize: DEFAULT_TRIM_SIZE,
+  interiorFont: DEFAULT_INTERIOR_FONT,
   titlePageTitle: '',
   titlePageSubtitle: '',
   titlePageAuthor: '',
@@ -61,8 +73,8 @@ const emptyForm = {
 const formFromSeries = (series) => {
   const es = series?.exportSettings || {};
   return {
-    trimSize: es.trimSize || DEFAULT_TRIM,
-    interiorFont: es.interiorFont || DEFAULT_FONT,
+    trimSize: es.trimSize || DEFAULT_TRIM_SIZE,
+    interiorFont: es.interiorFont || DEFAULT_INTERIOR_FONT,
     titlePageTitle: es.titlePageTitle || series?.name || '',
     titlePageSubtitle: es.titlePageSubtitle || series?.logline || '',
     titlePageAuthor: es.titlePageAuthor || series?.author || '',
