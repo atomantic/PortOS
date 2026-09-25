@@ -3,10 +3,10 @@ import { Check, Music2, Plus, Search, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { formatTimecode } from '../../utils/formatters';
 
-// Searchable, batch-oriented picker for adding existing library tracks to an
-// album. The parent owns persistence and ordering; this component only returns
-// the selected records in their current library order.
-export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) {
+// Searchable picker for adding existing library tracks to an album or
+// picking a soundtrack for code animation. The parent owns persistence; this
+// component returns the selected record(s).
+export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd, title = 'Add tracks', single = false }) {
   const [query, setQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
@@ -27,6 +27,9 @@ export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) 
 
   const toggleTrack = (trackId) => {
     setSelectedIds((previous) => {
+      if (single) {
+        return previous.has(trackId) ? new Set() : new Set([trackId]);
+      }
       const next = new Set(previous);
       if (next.has(trackId)) next.delete(trackId);
       else next.add(trackId);
@@ -52,7 +55,7 @@ export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) 
       <div className="flex items-center justify-between p-4 border-b border-port-border flex-shrink-0">
         <div className="flex items-center gap-2">
           <Music2 className="w-5 h-5 text-port-accent" aria-hidden="true" />
-          <h2 id="album-track-picker-title" className="text-lg font-bold text-white">Add tracks</h2>
+          <h2 id="album-track-picker-title" className="text-lg font-bold text-white">{title}</h2>
         </div>
         <button type="button" onClick={onClose} aria-label="Close track picker" className="p-2 text-gray-500 hover:text-white rounded min-h-[44px] min-w-[44px] flex items-center justify-center">
           <X size={18} aria-hidden="true" />
@@ -86,7 +89,8 @@ export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) 
                 <li key={track.id}>
                   <label className={`flex items-center gap-3 w-full p-3 rounded border bg-port-bg/40 cursor-pointer transition-colors ${checked ? 'border-port-accent' : 'border-port-border hover:border-gray-500'}`}>
                     <input
-                      type="checkbox"
+                      type={single ? 'radio' : 'checkbox'}
+                      name={single ? 'album-track-picker-radio' : undefined}
                       checked={checked}
                       onChange={() => toggleTrack(track.id)}
                       className="accent-port-accent"
@@ -111,7 +115,7 @@ export default function AlbumTrackPicker({ open, tracks = [], onClose, onAdd }) 
         <div className="flex items-center gap-2">
           <button type="button" onClick={onClose} className="px-3 py-2 rounded text-sm text-gray-400 hover:text-white">Cancel</button>
           <button type="button" onClick={handleAdd} disabled={selectedIds.size === 0} className="inline-flex items-center gap-2 px-3 py-2 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
-            <Plus size={14} aria-hidden="true" /> Add selected
+            <Plus size={14} aria-hidden="true" /> {single ? 'Select track' : 'Add selected'}
           </button>
         </div>
       </div>

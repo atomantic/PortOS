@@ -19,6 +19,8 @@ import { makePathResolver, resolveGalleryImage, resolveImageRef } from '../../li
 import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
+import { normalizeWaveSketch } from '../../lib/waveSketch.js';
+import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
 import {
   getCodeAnimationJobRecord,
   isCodeAnimationJobId,
@@ -42,6 +44,7 @@ import {
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
 const resolveUploadAudio = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
+const resolveMusicAudio = makePathResolver(() => PATHS.music, { extensions: SUPPORTED_AUDIO_EXTENSIONS });
 
 // This process-local set distinguishes live work from persisted jobs left
 // running by a previous server process. Those are marked interrupted when the
@@ -168,12 +171,123 @@ function resolveUploadedImages(referenceImages) {
   });
 }
 
-function resolveAudio(audio) {
+/**
+ * Derive compact timing cues from a track's drawn waveform (waveSketch).
+ * Returns prompt-ready cue text covering section/onset times, strongest note
+ * or stroke onsets, and the loudness contour, or '' if no valid sketch.
+ */
+export function _deriveWaveSketchCues(rawSketch) {
+  const sketch = normalizeWaveSketch(rawSketch);
+  if (!sketch) return '';
+
+  const durationSec = sketch.durationSec;
+  const strokes = [];
+  for (const voice of sketch.voices || []) {
+    const gain = typeof voice.gain === 'number' ? voice.gain : 0.6;
+    for (const note of voice.notes || []) {
+      const v = typeof note.v === 'number' ? note.v : 0.8;
+      strokes.push({
+        voice: voice.name || 'voice',
+        t: note.t,
+        d: note.d,
+        hz: note.hz,
+        pitch: note.pitch,
+        v,
+        strength: v * gain,
+      });
+    }
+  }
+
+  if (strokes.length === 0) return '';
+
+  // 1. Section and onset times
+  const uniqueOnsets = [...new Set(strokes.map((s) => Math.round(s.t * 100) / 100))].sort((a, b) => a - b);
+  const formattedOnsets = uniqueOnsets.slice(0, 16).map((t) => `${t.toFixed(1)}s`).join(', ');
+  const onsetSummary = uniqueOnsets.length > 16 ? `${formattedOnsets} (+${uniqueOnsets.length - 16} more)` : formattedOnsets;
+
+  // 2. Strongest note or stroke onsets
+  const strongest = [...strokes]
+    .sort((a, b) => b.strength - a.strength)
+    .slice(0, 6)
+    .sort((a, b) => a.t - b.t);
+  const formattedStrongest = strongest.map((s) => {
+    const pitchStr = s.pitch || (s.hz ? `${Math.round(s.hz)}Hz` : '');
+    const voicePitch = pitchStr ? `${s.voice} ${pitchStr}` : s.voice;
+    return `${s.t.toFixed(1)}s: ${voicePitch} (vel ${s.v.toFixed(2)})`;
+  }).join('; ');
+
+  // 3. Loudness contour
+  let contourSummary = '';
+  if (Array.isArray(sketch.contour) && sketch.contour.length >= 2) {
+    const count = Math.min(6, sketch.contour.length);
+    const sampled = [];
+    for (let i = 0; i < count; i++) {
+      const idx = Math.round((i / (count - 1)) * (sketch.contour.length - 1));
+      const t = (i / (count - 1)) * durationSec;
+      sampled.push(`${t.toFixed(1)}s: ${Math.round(sketch.contour[idx] * 100)}%`);
+    }
+    contourSummary = sampled.join(' -> ');
+  } else {
+    const steps = 4;
+    const sampled = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * durationSec;
+      const active = strokes.filter((s) => (t >= s.t && t <= s.t + s.d) || Math.abs(s.t - t) < 0.25);
+      const energy = active.length > 0
+        ? Math.min(1, active.reduce((max, s) => Math.max(max, s.strength), 0))
+        : 0;
+      sampled.push(`${t.toFixed(1)}s: ${Math.round(energy * 100)}%`);
+    }
+    contourSummary = sampled.join(' -> ');
+  }
+
+  const lines = [
+    'Drawn waveform timing cues:',
+    `- Section/onset times: ${onsetSummary}`,
+    `- Strongest onsets: ${formattedStrongest}`,
+    `- Loudness contour: ${contourSummary}`,
+  ];
+
+  return lines.join('\n');
+}
+
+async function resolveAudio(audio) {
   if (!audio) return null;
+
+  if (audio.source === 'track' || audio.trackId) {
+    const { getTrack } = await import('../tracks/index.js');
+    const track = await getTrack(audio.trackId);
+    if (!track || track.deletedAt) {
+      throw new ServerError(`Track not found: ${audio.trackId}`, { status: 400, code: 'AUDIO_NOT_FOUND' });
+    }
+    if (!track.audioFilename || !resolveMusicAudio(track.audioFilename)) {
+      throw new ServerError(`Audio file not found: ${track.audioFilename || audio.trackId}`, { status: 400, code: 'AUDIO_NOT_FOUND' });
+    }
+    const name = trimTo(audio.label, 200) || trimTo(track.title, 200) || track.audioFilename;
+    const durationSeconds = audio.durationSeconds ?? track.durationSec ?? null;
+    let notes = isNonBlankStr(audio.notes) ? trimTo(audio.notes, CODE_ANIMATION_LIMITS.audioNotesMax) : '';
+    if (track.waveSketch) {
+      const cues = _deriveWaveSketchCues(track.waveSketch);
+      if (cues) {
+        notes = notes ? `${notes}\n\n${cues}` : cues;
+        notes = trimTo(notes, CODE_ANIMATION_LIMITS.audioNotesMax);
+      }
+    }
+    return {
+      source: 'track',
+      trackId: track.id,
+      name,
+      durationSeconds,
+      notes,
+      url: `/data/music/${encodeURIComponent(track.audioFilename)}`,
+    };
+  }
+
   if (!resolveUploadAudio(audio.filename)) {
     throw new ServerError(`Audio file not found: ${audio.filename}`, { status: 400, code: 'AUDIO_NOT_FOUND' });
   }
   return {
+    source: 'upload',
     name: trimTo(audio.label, 200) || audio.filename,
     durationSeconds: audio.durationSeconds ?? null,
     notes: audio.notes,
@@ -188,7 +302,7 @@ function resolveAudio(audio) {
  */
 export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {}) {
   const uploads = resolveUploadedImages(input.referenceImages || []);
-  const audio = resolveAudio(input.audio);
+  const audio = await resolveAudio(input.audio);
   const universe = await resolveUniverse(input.universeId, {
     imageSlots: Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - uploads.length),
   });
