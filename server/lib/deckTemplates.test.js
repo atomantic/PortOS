@@ -70,6 +70,19 @@ describe('composeCardRenderPrompt', () => {
     expect(out.parts.orientation).toBe(defaultDeckCardOrientationPrompt({ kind: DECK_KIND.PLAYING }));
   });
 
+  it('pins a numbered card to its classic pip layout and total suit-symbol count, ahead of a scene that disguises pips', () => {
+    const out = composeCardRenderPrompt(
+      { kind: DECK_KIND.PLAYING },
+      { key: 'spades-6', name: 'Six of Spades', prompt: 'six spade pips as rooftop pennants along a parapet' },
+    );
+    expect(out.parts.subject).toMatch(/^Fixed identity: Six of Spades\. Exactly 6 large black spade pips/);
+    expect(out.parts.subject).toContain('two vertical columns of three pips');
+    expect(out.parts.subject).toContain('exactly 8 spade symbols in total (6 pips plus the 2 corner marks)');
+    expect(out.parts.subject).toContain('not objects in the scene');
+    expect(out.negativePrompt).toContain('pips disguised as scene objects');
+    expect(out.negativePrompt).toContain('suit symbols in the border or background');
+  });
+
   it('supports one-way faces and a true authored prompt override', () => {
     const oneWay = composeCardRenderPrompt(
       { kind: DECK_KIND.PLAYING, cardOrientation: DECK_CARD_ORIENTATION.ONE_WAY },
