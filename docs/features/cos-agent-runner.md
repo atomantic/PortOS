@@ -43,12 +43,13 @@ A separate `portos-cos` PM2 process that:
 
 ## Unattended recovery gates
 
-Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Five gates in `server/services/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Four of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.
+Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Six gates in `server/services/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Five of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.
 
 | Gate | What it sees | What it does |
 | --- | --- | --- |
 | Self-clearing provider signal | agy's "verifying your account eligibility" banner, which REJECTS the submission | Re-pastes the whole prompt while a grace window is open, then fails over |
 | Local-runtime OOM | a Metal/CUDA out-of-memory box that killed the turn | Pastes `continue` once the session is quiet; fails over to a fallback provider after 3 |
+| Truncated response | a harness banner that the response was cut off mid-generation (pi's TUI halts the whole session on it) | Pastes `continue` once the session is quiet; fails over to a fallback provider after 3 |
 | Retry stall | the TUI retrying one request past attempt 3, ten minutes on | Fails the run over to a fallback provider |
 | Tool-permission dialog | Claude Code asking to approve a call nobody can approve | Declines it, then explains why and sends the session back to work |
 | **Stall** | **nothing at all — the session went quiet with the task unfinished** | **Pastes a `continue` nudge after 3 minutes of silence, up to 3 times; then badges the agent card `Stalled`** |

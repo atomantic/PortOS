@@ -37,7 +37,7 @@ import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
-import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
@@ -54,6 +54,9 @@ import {
   TOOL_PERMISSION_NUDGE_TEXT,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
+  createTruncationNudgeGate,
+  TRUNCATION_NUDGE_MAX_ATTEMPTS,
+  TRUNCATION_NUDGE_TEXT,
   createStallNudgeGate,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
@@ -537,6 +540,12 @@ export function createTuiSessionController({
   // createOomNudgeGate for why this is a separate mechanism from the gate above.
   const detectLocalRuntimeOom = createLocalRuntimeOomDetector();
   const oomNudgeGate = createOomNudgeGate();
+  // A harness that cut the response off mid-generation (pi's TUI halts the
+  // whole session on its truncation banner). Same shape as the OOM gate — a
+  // dead turn, an intact session — so it nudges rather than re-prompts. See
+  // createTruncationNudgeGate.
+  const detectTruncatedResponse = createTruncatedResponseDetector();
+  const truncationNudgeGate = createTruncationNudgeGate();
   // A request the TUI keeps retrying and the provider never answers. Every
   // reaper reads such a session as busy (the retry ladder repaints the screen),
   // so without this the run holds its lane until the max-runtime ceiling — see
@@ -1298,6 +1307,24 @@ export function createTuiSessionController({
         }
       }
 
+      // A truncated response. Same shape as the OOM above — the turn is dead,
+      // the session is intact — so it arms a nudge instead of killing the run;
+      // the provider-signal timer sends it once the session has actually gone
+      // quiet. Same promptSubmittedAt gating: before the prompt is in there is
+      // no response of ours to have been truncated.
+      const truncationSignal = promptSubmittedAt ? detectTruncatedResponse(stripped) : null;
+      if (truncationSignal) {
+        const armed = truncationNudgeGate.arm(truncationSignal, now);
+        if (armed === 'armed') {
+          appendLine('⏳ Response was truncated before completion — will nudge the session to continue if it goes quiet');
+        } else if (armed === 'exhausted') {
+          // The truncations outlasted every nudge: this provider is not going
+          // to finish this response, so hand the task to a fallback provider.
+          await failOverToFallback(truncationSignal);
+          return;
+        }
+      }
+
       // Same gating as the OOM nudge above: before the prompt is in there is no
       // request of ours for the provider to be retrying. Acted on by the
       // provider-signal timer, on its own poll, like the other gates.
@@ -1645,6 +1672,15 @@ export function createTuiSessionController({
       if (nudge) {
         if (pasteController?.resubmit({ text: OOM_NUDGE_TEXT, label: 'local-runtime OOM nudge' })) {
           appendLine(`🔁 Local runtime OOM — nudged the session to continue (attempt ${nudge}/${OOM_NUDGE_MAX_ATTEMPTS})`);
+        }
+        return;
+      }
+      // Nudge a session a truncated response halted — the pi-TUI case where the
+      // only resume is somebody typing `continue`. Same timer, same reasoning.
+      const truncationNudge = truncationNudgeGate.takeNudge(now, lastOutputAt);
+      if (truncationNudge) {
+        if (pasteController?.resubmit({ text: TRUNCATION_NUDGE_TEXT, label: 'truncated-response nudge' })) {
+          appendLine(`🔁 Response was truncated before completion — nudged the session to continue (attempt ${truncationNudge}/${TRUNCATION_NUDGE_MAX_ATTEMPTS})`);
         }
         return;
       }

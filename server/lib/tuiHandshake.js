@@ -1293,6 +1293,48 @@ export function createOomNudgeGate() {
   };
 }
 
+// ─── Truncation nudge — "the harness cut the response off mid-generation" ────
+//
+// pi's TUI halts the whole session on `Response was truncated before
+// completion.` — the turn is dead, but the session still holds the whole
+// conversation, and the only thing that resumes it is somebody typing
+// `continue` and pressing Enter. Unattended, nothing ever does: the run sits
+// at the halted screen holding its lane. Same shape as the OOM gate above
+// (a dead turn, an intact session), so it rides the same silence policy and
+// the same budget — only the detector differs
+// (detectTruncatedResponse in ../aiToolkit/errorDetection.js).
+
+// Reuses the OOM gate's timing wholesale. The truncation banner, like the OOM
+// box, keeps repainting for chunks after the event, so the cooldown and the
+// wait-for-silence window are the same load-bearing details; and a response
+// that truncates three times in one run is not going to complete on the
+// fourth, for the same reason an OOM that outlasts three nudges isn't.
+export const TRUNCATION_NUDGE_MAX_ATTEMPTS = OOM_NUDGE_MAX_ATTEMPTS;
+// What gets pasted. The literal word a human typed, for the literal reason it
+// worked: the TUI still holds the conversation and the model just needs a turn.
+export const TRUNCATION_NUDGE_TEXT = 'continue';
+
+/**
+ * State machine for "nudge a TUI session a truncated response left halted".
+ * Identical policy to `createOomNudgeGate` — see `createSilenceNudgeGate` for
+ * the semantics of `arm` / `takeNudge`.
+ *
+ * @returns {{ arm: (analysis: object, nowMs: number) => 'armed'|'exhausted'|null,
+ *             takeNudge: (nowMs: number, lastOutputAtMs: number) => number }}
+ */
+export function createTruncationNudgeGate() {
+  const gate = createSilenceNudgeGate({
+    cooldownMs: OOM_NUDGE_COOLDOWN_MS,
+    settleMs: OOM_NUDGE_SETTLE_MS,
+    armWindowMs: OOM_NUDGE_ARM_WINDOW_MS,
+    maxAttempts: TRUNCATION_NUDGE_MAX_ATTEMPTS,
+  });
+  return {
+    arm: (analysis, nowMs) => (analysis ? gate.arm(nowMs) : null),
+    takeNudge: gate.takeNudge,
+  };
+}
+
 /**
  * The "wait for silence, then nudge" policy the OOM gate and the
  * tool-permission gate share: dedupe sightings inside `cooldownMs` (a TUI
