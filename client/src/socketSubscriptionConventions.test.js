@@ -65,7 +65,6 @@ const ALLOWED = {
   'src/hooks/useBeeperRealtime.js': 're-subscribes beeper:* on connect already',
   'src/hooks/useMoltworldWs.js': 're-subscribes agents:* on connect already',
   'src/hooks/useOnDemandTaskToast.js': 're-subscribes cos:* on connect already',
-  'src/components/cos/tabs/schedule/MaintenanceRunForm.jsx': 're-subscribes cos:* on connect already',
   'src/pages/ChiefOfStaff.jsx': 're-subscribes cos:* on connect already (two taskLists modes)',
   // Does not itself re-subscribe on connect, but rides on the shared cos:*
   // namespace that useCosTaskUpdates (always mounted from Layout) keeps alive

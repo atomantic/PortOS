@@ -9,7 +9,6 @@ import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
-import MaintenanceRunForm from './schedule/MaintenanceRunForm';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
 
 export function mergeUpdatedTaskInterval(schedule, taskType, interval, status) {
@@ -187,14 +186,6 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
           Refresh
         </button>
       </div>
-
-      <Banner size="md" title="Recommended maintenance order">
-        <p className="text-xs">Choose how to handle findings, then review the steps before starting.</p>
-        <details className="mt-2">
-          <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
-          <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} onRefresh={fetchSchedule} />
-        </details>
-      </Banner>
 
       {improvementDisabled && (
         <Banner size="md" icon={AlertCircle} title="Improvement is disabled">

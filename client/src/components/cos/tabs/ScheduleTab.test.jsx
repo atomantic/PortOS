@@ -8,7 +8,6 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getCosSchedule: vi.fn(),
-  getMaintenanceRuns: vi.fn().mockResolvedValue({ runs: [] }),
   triggerCosOnDemandTask: vi.fn(),
   updateCosTaskInterval: vi.fn(),
   getLocalLlmStatus: vi.fn().mockResolvedValue(null),
@@ -217,16 +216,18 @@ describe('Schedule labels', () => {
   });
 });
 
-it('keeps maintenance selections and the last saved schedule after a refresh failure', async () => {
+it('keeps the last saved schedule after a refresh failure', async () => {
   const user = userEvent.setup();
   api.getCodeReviewDefaults.mockResolvedValue({});
-  api.getCosSchedule.mockReset().mockResolvedValueOnce({ tasks: {} }).mockRejectedValueOnce(new Error('offline'));
+  api.getCosSchedule.mockReset().mockResolvedValueOnce({
+    tasks: {
+      security: { type: 'on-demand', enabled: true, displayName: 'Security' },
+    },
+  }).mockRejectedValueOnce(new Error('offline'));
   render(<MemoryRouter><ScheduleTab apps={[{ id: 'example', name: 'Example App' }]} providers={[]} providersLoaded /></MemoryRouter>);
-  await user.click(await screen.findByText('Run maintenance now'));
-  await user.selectOptions(screen.getByLabelText('App'), 'example');
+  expect(await screen.findByText('Security')).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
-  expect(screen.getByLabelText('App')).toHaveValue('example');
-  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByText('Security')).toBeVisible();
   expect(screen.queryByText('Failed to load task schedule')).not.toBeInTheDocument();
 });

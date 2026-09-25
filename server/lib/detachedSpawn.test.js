@@ -170,7 +170,9 @@ describe('spawnDetached', () => {
     expect(getOut()).toBe('out-a\nout-b\n');
     expect(getErr()).toBe('err-1\n');
     expect(handle.exitCode).toBe(0);
-  });
+  // Leave room beyond the 30s PID deadline for the handle's bounded error or
+  // close event to reach the test, especially on a loaded Windows runner.
+  }, 45_000);
 
   it('propagates a non-zero exit code', async () => {
     const controlDir = await tmpControlDir();
