@@ -6,7 +6,7 @@ import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './au
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
-import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath } from '../lib/apiAccessPolicy.js';
+import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath, isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
@@ -72,6 +72,27 @@ const warnIfPairedPeerUsedBasic = async (headers) => {
   if (!peer) return;
   warnedBasicPeers.add(instanceId);
   console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — update it, re-pair with the same sync secret, then remove the stored password on that machine`);
+};
+
+// Logged once per peer + method + path per process (bounded): an older or
+// newer peer calling outside the contract should be diagnosable without
+// flooding the log.
+const warnedPeerScope = new Set();
+const WARNED_PEER_SCOPE_MAX = 256;
+const refusePeerScope = (req, res, path, peer) => {
+  const key = `${peer.id} ${req.method} ${path}`;
+  if (!warnedPeerScope.has(key)) {
+    if (warnedPeerScope.size >= WARNED_PEER_SCOPE_MAX) warnedPeerScope.clear();
+    warnedPeerScope.add(key);
+    console.warn(`⛔ Peer ${peer.name || peer.id} refused outside the federation surface: ${req.method} ${path}`);
+  }
+  if (path.startsWith('/data/')) {
+    res.status(403).type('text/plain').send('Forbidden');
+    return;
+  }
+  sendErrorResponse(res, new ServerError('A peer credential only reaches the federation API.', {
+    status: 403, code: 'PEER_SCOPE_FORBIDDEN',
+  }));
 };
 
 export const __testing = { verifyBasicPassword };
@@ -140,8 +161,15 @@ export const authGate = async (req, res, next) => {
   }
   // A paired peer's scoped credential. Checked before Basic so a sender that
   // presents both during the upgrade handshake is identified as the peer.
+  // Its authority ends at the federation surface (#8387): operator routes
+  // refuse it outright rather than falling through to Basic, so a peer that
+  // sends both never borrows the password's reach.
   const peer = await verifyPeerToken(req.headers);
   if (peer) {
+    if (!isPeerApiRequestAllowed(req.method, path)) {
+      refusePeerScope(req, res, path, peer);
+      return;
+    }
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'peer', peerId: peer.id };
     return next();
   }

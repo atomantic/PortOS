@@ -38,11 +38,49 @@ provider) authenticates with `X-PortOS-Peer-Auth`, an HMAC-SHA256 of the pair
 secret bound to the sender's `X-PortOS-Instance-Id`. The secret itself is not
 sent, and each direction has a different token.
 
-The receiver maps a verified token to `method: 'peer'`. It authenticates
-`/api/*` and `/data/*` reads and pushes and the peer socket relay handshake. It
-never passes `requireHostControl` (`/api/commands/*` returns
-`HOST_CONTROL_FORBIDDEN`), cannot emit socket events, and cannot be exchanged
-for a session, because it is not the password. A disabled peer's token is refused.
+The receiver maps a verified token to `method: 'peer'`. It authenticates only
+the federation surface listed below and the peer socket relay handshake. Every
+other route returns `403 PEER_SCOPE_FORBIDDEN` (a plain `403` under `/data/`),
+including `/api/commands/*`, even when the request also carries the password
+as Basic. It cannot emit socket events and cannot be exchanged for a session,
+because it is not the password. A disabled peer's token is refused.
+
+### Peer API surface
+
+`PEER_API_SURFACE` in `server/lib/apiAccessPolicy.js` is the contract; this
+table mirrors it. `server/lib/apiAccessPolicy.test.js` scans every
+`peerFetch` call site and fails when this version calls a peer path the list
+does not admit.
+
+| Methods | Path | Used by |
+|---------|------|---------|
+| GET | `/api/system/health/details`, `/api/apps`, `/api/instances/sync-status` | Peer probe |
+| GET | `/api/apps/quality-federation` | App quality federation |
+| GET | `/api/cos/agents` | Peer socket relay snapshot |
+| POST | `/api/instances/peers/announce`, `/api/instances/peers/sync-categories` | Registration handshake |
+| GET | `/api/brain/sync`, `/api/brain/reconcile/{checksum,snapshot,manifest}` | Brain sync and parity |
+| GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
+| GET | `/api/peer-sync/*` | Record, manifest, and archive pulls |
+| POST | `/api/peer-sync/push` | Record push |
+| any | `/api/federation/media/v1/*` | Federated media provider |
+| GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
+| POST | `/api/providers/fleet-host/key` | Fleet LLM host key |
+| any | `/api/eidoverse/travel/federation/*` | Eidoverse guest travel |
+| GET | `/data/{images,image-refs,videos,music,audio,writers-room/works}/*` | Asset pulls |
+
+GET includes HEAD. Paths with `.`/`..`/empty segments or encoded separators
+are refused. The generic `GET /api/instances/peers/:id/query` proxy reaches only
+these paths on a paired peer.
+
+Removing an entry is a breaking change for older peers that still call it: they
+receive `403 PEER_SCOPE_FORBIDDEN`, and the receiver logs one `⛔ Peer … refused
+outside the federation surface` line per peer, method, and path. Adding a peer
+call site means adding its entry in the same change.
+
+Legacy HTTP Basic is the instance password itself, so it keeps operator reach
+(`method: 'basic'`, still refused host control). Its holder can already sign in
+at `/api/auth/login`, and the companion app uses it as a full session
+(`docs/COMPANION_APP_API.md`). Pair each peer so it stops sending the password.
 
 Rollout without breaking older installs:
 

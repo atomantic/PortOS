@@ -109,11 +109,10 @@ router.get('/processing', asyncHandler(async (req, res) => {
  * path — `probePeer` reads /health/details, /api/apps and /api/instances/
  * sync-status only — so the stamp never leaves the machine on its own.
  *
- * That is the guarantee being made, and the limit of it: the generic
- * `queryPeer` proxy (routes/instances.js, predates this) lets an authenticated
- * peer deliberately GET any /api/* path, as it can for every other endpoint on
- * this server. The point here is that the stamp is not PUSHED into a payload
- * that federates unprompted.
+ * That is the guarantee being made, and the limit of it: a peer holding the
+ * legacy Basic password can still deliberately GET this path (a paired peer's
+ * scoped token cannot — it is outside PEER_API_SURFACE, #8387). The point here
+ * is that the stamp is not PUSHED into a payload that federates unprompted.
  * See the root AGENTS.md privacy rules and #4694 ("local-only diagnostic data
  * — must not join a sync payload"). `health.test.js` pins both halves.
  */

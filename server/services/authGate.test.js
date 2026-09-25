@@ -674,6 +674,10 @@ describe('paired peer credential (#8356)', () => {
     app.use(express.json());
     app.use('/api/auth', authRoutes);
     app.get('/api/example', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.get('/api/peer-sync/manifest', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/cos/tasks', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
     return app;
@@ -692,14 +696,15 @@ describe('paired peer credential (#8356)', () => {
     const app = await buildApp();
     const headers = await peerHeaders();
 
-    const read = await withHeaders(request(app).get('/api/example'), headers);
+    const read = await withHeaders(request(app).get('/api/peer-sync/manifest'), headers);
     expect(read.status).toBe(200);
     expect(read.body.auth).toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
     expect((await withHeaders(request(app).post('/api/peer-sync/push').send({}), headers)).body.auth.method).toBe('peer');
 
     const exec = await withHeaders(request(app).post('/api/commands/execute').send({}), headers);
     expect(exec.status).toBe(403);
-    expect(exec.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    // The gate's peer scope refuses it before requireHostControl is reached.
+    expect(exec.body.code).toBe('PEER_SCOPE_FORBIDDEN');
 
     // The token is not the password, so it cannot be exchanged for a session.
     const login = await request(app).post('/api/auth/login').send({ password: headers['X-PortOS-Peer-Auth'] });
@@ -711,6 +716,36 @@ describe('paired peer credential (#8356)', () => {
     const basic = { Authorization: basicHeader('example-password') };
     expect((await withHeaders(request(app).get('/api/example'), basic)).body.auth.method).toBe('basic');
     expect((await withHeaders(request(app).post('/api/commands/execute').send({}), basic)).status).toBe(403);
+  });
+
+  it('confines the peer credential to the federation surface (#8387)', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-password' });
+    writePeers([pairedPeer()]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await buildApp();
+    const headers = await peerHeaders();
+    const basic = { Authorization: basicHeader('example-password') };
+    const operatorMutations = [
+      () => request(app).post('/api/cos/tasks').send({}),
+      () => request(app).post('/api/apps/example-app/restart').send({}),
+      () => request(app).put('/api/settings').send({}),
+      () => request(app).get('/api/example'),
+    ];
+    for (const send of operatorMutations) {
+      const refused = await withHeaders(send(), headers);
+      expect(refused.status).toBe(403);
+      expect(refused.body.code).toBe('PEER_SCOPE_FORBIDDEN');
+      // Presenting the password alongside the token does not widen the peer's reach.
+      expect((await withHeaders(send(), { ...headers, ...basic })).status).toBe(403);
+      expect((await send().set('Cookie', `portos_auth=${token}`)).body.auth.method).toBe('session');
+      // Basic is the operator password (the companion-app contract), not a peer scope.
+      expect((await withHeaders(send(), basic)).body.auth.method).toBe('basic');
+    }
+    const asset = await withHeaders(request(app).get('/data/voice-profiles/example.wav'), headers);
+    expect(asset.status).toBe(403);
+    expect(asset.text).toBe('Forbidden');
+    expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
   });
 
   it('rejects a token for another instance, a wrong secret, a disabled peer, or an unpaired peer', async () => {
