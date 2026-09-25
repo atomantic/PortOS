@@ -38,7 +38,7 @@ const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
-const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST'];
+const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
 // read failures with the same transient meaning on the reader side.
 const WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
 const FILE_WATCH_FALLBACK_POLL_MS = 5000;
@@ -222,10 +222,21 @@ export async function atomicWrite(filePath, data) {
     await chmod(tmp, existingMode).catch(() => {});
   }
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
-  // overwrite), but still fails with EPERM/EACCES if the destination is locked (AV scan,
+  // overwrite), but still fails with EPERM/EACCES/EBUSY if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.
   const replace = async () => {
-    let err = await rename(tmp, filePath).then(() => null, (e) => e);
+    const renameWithRetries = async (from, to) => {
+      let err = await rename(from, to).then(() => null, (e) => e);
+      if (isWindows()) {
+        for (let attempt = 1; err && attempt < WIN_RETRY_ATTEMPTS && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
+          await sleep(WIN_RETRY_DELAY_MS);
+          err = await rename(from, to).then(() => null, (e) => e);
+          if (!err) console.log(`⚠️ atomicWrite rename succeeded after ${attempt} retry(s): ${basename(filePath)}`);
+        }
+      }
+      return err;
+    };
+
     // Retry the ATOMIC rename before resorting to the backup swap (#4095). The
     // swap below renames the destination away and back, so for that instant the
     // destination DOES NOT EXIST — a concurrent read lands on ENOENT and reads
@@ -233,20 +244,13 @@ export async function atomicWrite(filePath, data) {
     // default instead of the file's real contents. A transient lock clears in
     // milliseconds, so retrying keeps almost every write on the atomic path and
     // never opens that window.
-    if (isWindows()) {
-      for (let attempt = 1; err && attempt < WIN_RETRY_ATTEMPTS && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
-        await sleep(WIN_RETRY_DELAY_MS);
-        err = await rename(tmp, filePath).then(() => null, (e) => e);
-        if (!err) console.log(`⚠️ atomicWrite rename succeeded after ${attempt} retry(s): ${basename(filePath)}`);
-      }
-    }
+    const err = await renameWithRetries(tmp, filePath);
     if (!err) return;
     if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
       const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      const hadExisting = await rename(filePath, bak).then(() => true, (e) => {
-        if (e.code === 'ENOENT') return false;
-        throw e;
-      });
+      const backupErr = await renameWithRetries(filePath, bak);
+      const hadExisting = backupErr?.code !== 'ENOENT';
+      if (hadExisting && backupErr) throw backupErr;
       const renameErr = await rename(tmp, filePath).then(() => null, (e) => e);
       if (renameErr) {
         if (hadExisting) await rename(bak, filePath).catch(() => {});

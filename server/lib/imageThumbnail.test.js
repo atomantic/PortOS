@@ -13,7 +13,7 @@ vi.mock('sharp', async (original) => {
 
 const { default: sharp } = await import('sharp');
 const { ensureImageThumbnail } = await import('./imageThumbnail.js');
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 beforeEach(() => { sharpCalls.count = 0; });
 
 async function source(name) {
