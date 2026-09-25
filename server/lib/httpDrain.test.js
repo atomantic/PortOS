@@ -48,22 +48,22 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-// A raw connection accepted before the drain begins, whose upgrade request is
-// only sent once `send()` is called — the same shape as `openPartialRequest`
-// above but for the 'upgrade' event rather than 'request'. `server.close()`
-// stops accepting NEW sockets, so the connection has to be open first for this
-// to exercise "a still-open keep-alive socket", not a refused new one.
+// A raw connection accepted before the drain begins with an incomplete upgrade
+// request. The partial header keeps it active: Node's server.close() drops idle
+// sockets, so a merely connected but idle socket would close before the upgrade
+// handler could refuse its completed request.
 const openUpgradeRequest = async (port, path) => {
   const socket = net.connect(port, '127.0.0.1');
   await new Promise((resolve) => socket.once('connect', resolve));
+  socket.write(
+    `GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n`,
+  );
   let raw = '';
   socket.on('data', (chunk) => { raw += chunk; });
   const closed = new Promise((resolve) => socket.once('close', () => resolve(raw)));
   return {
-    send: () => {
-      socket.write(
-        `GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
-      );
+    finish: () => {
+      socket.write('\r\n');
       return closed;
     },
   };
@@ -137,7 +137,9 @@ describe('createHttpDrain', () => {
 
   it('refuses a WebSocket upgrade on a still-open socket once the drain begins', async () => {
     const upgradeCalls = [];
+    const requestStarted = deferred();
     const { server, port } = await listen((req, res) => res.end('ok'));
+    server.once('connection', (socket) => socket.once('data', requestStarted.resolve));
     server.on('upgrade', (req, socket) => {
       upgradeCalls.push(req.url);
       socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
@@ -145,8 +147,9 @@ describe('createHttpDrain', () => {
     const drain = createHttpDrain([server]);
 
     const pending = await openUpgradeRequest(port, '/socket.io/');
+    await requestStarted.promise;
     drain.begin(5000);
-    const refused = await pending.send();
+    const refused = await pending.finish();
 
     expect(refused).toMatch(/^HTTP\/1\.1 503 /);
     expect(refused).toMatch(/connection: close/i);
