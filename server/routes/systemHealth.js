@@ -81,8 +81,8 @@ async function assertHealthSettingsWritable() {
 }
 
 const assertDismissibleWarningType = (type) => {
-  if (type === 'health-settings') {
-    throw new ServerError('The system health settings warning cannot be dismissed.', { status: 400 });
+  if (type === 'health-settings' || type === 'probe-unavailable') {
+    throw new ServerError('This system health warning cannot be dismissed.', { status: 400 });
   }
 };
 
@@ -155,12 +155,16 @@ router.get('/health', asyncHandler(async (req, res) => {
  */
 router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
+  const failedProbe = Symbol('failed health probe');
 
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcesses().catch(() => []),
     getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
-    cos.getStatus().catch(() => null),
+    cos.getStatus().catch((error) => {
+      console.error('Chief of Staff health probe failed', error);
+      return failedProbe;
+    }),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
     // such field — `cosStatus.queueLength` never existed, so the widget's
     // "N queued" was dead and always rendered 0. Both reads ride the same
@@ -170,7 +174,10 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
-    statfs('/').catch(() => null),
+    statfs('/').catch((error) => {
+      console.error('Root filesystem health probe failed', error);
+      return failedProbe;
+    }),
     getMemoryStats(),
     loadHealthSettings(),
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
@@ -192,7 +199,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // bavail = blocks available to unprivileged users (what the user can actually fill).
   // Derive used/usagePercent from the same figure so `used + free === total` and
   // the UI's percent corresponds to the displayed `free`.
-  const parsedDisk = parseFilesystemStats(diskStats);
+  const parsedDisk = diskStats === failedProbe ? null : parseFilesystemStats(diskStats);
   const disk = parsedDisk && {
     total: parsedDisk.total,
     used: parsedDisk.used,
@@ -248,6 +255,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       message: 'System health settings are unavailable; default thresholds are being used and saved warning dismissals were ignored.',
       dismissible: false
     });
+  }
+
+  if (diskStats === failedProbe) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false });
+  }
+  if (cosStatus === failedProbe) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'cos', status: 'unavailable', severity: 'warning', message: 'Chief of Staff status unavailable', dismissible: false });
   }
 
   if (disk) {
@@ -321,7 +335,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   for (const warning of rawWarnings) {
     const dismissal = dismissedWarnings[warning.type];
     const pendingPrune = pendingDismissalPrunes.get(warning.type);
-    if (dismissal?.message === warning.message && !sameDismissal(pendingPrune, dismissal)) {
+    if (warning.dismissible !== false && dismissal?.message === warning.message && !sameDismissal(pendingPrune, dismissal)) {
       nextDismissedWarnings[warning.type] = dismissal;
       continue;
     }
@@ -372,7 +386,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // An unreadable list degrades to null — unknown, which the widget hides —
   // rather than to a manufactured zero.
   const heldByRunningAgent = runningAgentsByTaskId(cosAgents);
-  const cosInfo = cosStatus ? {
+  const cosInfo = cosStatus && cosStatus !== failedProbe ? {
     running: cosStatus.running,
     paused: cosStatus.paused,
     activeAgents: cosAgents

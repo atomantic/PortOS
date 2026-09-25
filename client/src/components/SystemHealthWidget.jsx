@@ -68,6 +68,8 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   }
 
   const { overallHealth, warnings, system, processes, apps, cos } = health;
+  const diskProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'disk');
+  const cosProbeUnavailable = warnings.some(warning => warning.type === 'probe-unavailable' && warning.source === 'cos');
 
   const healthStyle = HEALTH_STYLE[overallHealth] || { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Activity };
   const HealthIcon = healthStyle.icon;
@@ -253,7 +255,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
         </div>
 
         {/* Disk Usage */}
-        {system.disk && (
+        {system.disk ? (
           <Link
             to="/system-resources/storage"
             aria-label="Open disk usage report"
@@ -276,21 +278,26 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
               />
             </div>
           </Link>
-        )}
+        ) : diskProbeUnavailable ? (
+          <div className="rounded-lg bg-port-bg/50 p-3" aria-label="Disk status unavailable">
+            <div className="text-xs text-gray-500">Disk</div>
+            <div className="text-lg font-bold text-port-warning">Unavailable</div>
+          </div>
+        ) : null}
       </div>
 
       {/* CoS Status (if running) */}
-      {cos && (
+      {(cos || cosProbeUnavailable) && (
         <div className="mt-4 pt-4 border-t border-port-border">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
             <div className="flex min-w-0 items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${cos.running ? (cos.paused ? 'bg-port-warning' : 'bg-port-success animate-pulse') : 'bg-gray-500'}`} />
+              <div className={`w-2 h-2 rounded-full ${cosProbeUnavailable ? 'bg-port-warning' : cos.running ? (cos.paused ? 'bg-port-warning' : 'bg-port-success animate-pulse') : 'bg-gray-500'}`} />
               <span className="truncate text-gray-300">Chief of Staff</span>
               <span className="text-gray-500">
-                {cos.running ? (cos.paused ? 'Paused' : 'Active') : 'Stopped'}
+                {cosProbeUnavailable ? 'Unavailable' : cos.running ? (cos.paused ? 'Paused' : 'Active') : 'Stopped'}
               </span>
             </div>
-            {cos.running && (
+            {cos?.running && !cosProbeUnavailable && (
               <div className="flex items-center gap-3 text-xs text-gray-500">
                 {cos.activeAgents > 0 && (
                   <span className="text-port-accent">{cos.activeAgents} agent{cos.activeAgents !== 1 ? 's' : ''}</span>

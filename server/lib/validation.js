@@ -1,6 +1,15 @@
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
 import { z } from 'zod';
+
+export const gitDeleteBranchBodySchema = z.object({
+  path: z.string().min(1),
+  branch: z.string().min(1),
+  local: z.boolean().default(false),
+  remote: z.boolean().default(false),
+}).refine(({ local, remote }) => local || remote, {
+  message: 'at least one of local or remote must be true',
+});
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
@@ -1635,9 +1644,8 @@ export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
 });
 
-// System health dashboard warnings — see server/routes/systemHealth.js. The
-// `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
-// keep the two lists in sync.
+// Dismissible system health warnings — see server/routes/systemHealth.js.
+// Probe failures are intentionally excluded: a missing measurement cannot be dismissed.
 export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review', 'health-settings'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });

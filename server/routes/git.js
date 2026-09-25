@@ -8,7 +8,7 @@ import { getAgents } from '../services/cosAgentLifecycle.js';
 import { protectedAgentIds } from '../services/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
-import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema } from '../lib/validation.js';
+import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema } from '../lib/validation.js';
 
 /**
  * Assert that a caller-supplied workspace path exists, is a directory, and
@@ -284,14 +284,8 @@ router.post('/cleanup-merged', asyncHandler(async (req, res) => {
 
 // POST /api/git/delete-branch - Delete a branch locally and/or remotely
 router.post('/delete-branch', asyncHandler(async (req, res) => {
-  const { path, branch, local, remote } = req.body;
+  const { path, branch, local, remote } = validateRequest(gitDeleteBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  if (!branch) {
-    throw new ServerError('branch is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (!local && !remote) {
-    throw new ServerError('at least one of local or remote must be true', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   const { excludeBranches } = await getAgentProtections();
   const result = await git.deleteBranch(path, branch, { local, remote, excludeBranches });
   res.json(result);
