@@ -133,9 +133,12 @@ describe('upsertMediaFromPeer', () => {
       role: 'r', caption: 'c', createdAt: 't', deleted: true, deletedAt: 't2',
     });
     const { sql, params } = calls[0];
-    expect(sql).toMatch(/deleted, deleted_at/i);
+    expect(sql).toMatch(/deleted, deleted_at, updated_at/i);
     expect(sql).toMatch(/SET role = EXCLUDED.role, caption = EXCLUDED.caption, deleted = EXCLUDED.deleted/i);
-    expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', true, 't2']);
+    expect(sql).toMatch(/WHERE EXCLUDED\.updated_at > catalog_ingredient_media\.updated_at/i);
+    // #8347: the 9th param is the revival-guard change-clock — falls back to
+    // deletedAt when the peer omits updatedAt.
+    expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', true, 't2', 't2']);
   });
 
   it('includes generation provenance when a peer sends the additive field', async () => {
@@ -147,7 +150,8 @@ describe('upsertMediaFromPeer', () => {
     const { sql, params } = calls[0];
     expect(sql).toMatch(/metadata\)/i);
     expect(sql).toMatch(/metadata = EXCLUDED\.metadata/i);
-    expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', false, null, JSON.stringify(metadata)]);
+    // deletedAt is null here, so the change-clock falls back to createdAt.
+    expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', false, null, 't', JSON.stringify(metadata)]);
   });
 
   it('uses the tombstone-less INSERT (preserve local state) when the keys are absent', async () => {

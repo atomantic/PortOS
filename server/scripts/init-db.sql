@@ -463,6 +463,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_refs (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (ingredient_id, ref_kind, ref_id, role)
 );
@@ -485,6 +486,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_relations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so unlinks propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (from_id, to_id, kind)
 );
@@ -568,6 +570,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so detaches propagate to peers
   deleted_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),        -- #8347: tombstone/revival change-clock (deleted_at resets to NULL on revival)
   sync_sequence BIGSERIAL,
   PRIMARY KEY (ingredient_id, media_key, kind)
 );
@@ -671,11 +674,18 @@ CREATE TRIGGER trg_catalog_source_sync_seq
 -- path would update `deleted`/`deleted_at` but leave sync_sequence at the
 -- original INSERT value — peers past that cursor would never see the change
 -- and their "Appears in" panels would stay stale forever.
+-- #8347: also stamps `updated_at` (unless the caller already set an explicit
+-- value — a peer apply carrying the sender's own clock) so the revival guard
+-- in `upsertRefFromPeer` has a change-clock that moves on BOTH a delete and a
+-- revival, unlike `deleted_at` which resets to NULL.
 CREATE OR REPLACE FUNCTION update_catalog_ref_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_refs', 'sync_sequence'));
   END IF;
   RETURN NEW;
@@ -691,11 +701,15 @@ CREATE TRIGGER trg_catalog_ref_sync_seq
 -- Relation UPDATE bumps sync_sequence on soft-delete or revival so peers pick
 -- up the tombstone (or the un-delete) on their next pull — same rationale as
 -- the ref trigger above.
+-- #8347: same `updated_at` change-clock stamp as the ref trigger above.
 CREATE OR REPLACE FUNCTION update_catalog_relation_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_relations', 'sync_sequence'));
   END IF;
   RETURN NEW;
@@ -712,6 +726,7 @@ CREATE TRIGGER trg_catalog_relation_sync_seq
 -- field (role/caption) changes, so peers receive the edit (or the tombstone)
 -- on their next pull. Unlike refs/relations, media rows carry editable
 -- metadata, so the change-detector also watches role + caption + provenance.
+-- #8347: same `updated_at` change-clock stamp as the ref/relation triggers.
 CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -720,6 +735,9 @@ BEGIN
      OR NEW.role IS DISTINCT FROM OLD.role
      OR NEW.caption IS DISTINCT FROM OLD.caption
      OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
+    IF NEW.updated_at IS NULL OR NEW.updated_at = OLD.updated_at THEN
+      NEW.updated_at := NOW();
+    END IF;
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
   END IF;
   RETURN NEW;

@@ -127,6 +127,11 @@ export function rowToIngredient(row) {
   };
 }
 
+// #8347: `updatedAt` is the tombstone/revival change-clock (see
+// catalog.js's ref/relation/media trigger comments) — falls back to
+// `created_at` for a row whose `updated_at` column predates the backfill
+// migration having run (should not happen post-boot, but keeps the mapper
+// total rather than emitting an invalid date string).
 export function rowToRef(row) {
   if (!row) return null;
   return {
@@ -137,6 +142,7 @@ export function rowToRef(row) {
     createdAt: row.created_at.toISOString(),
     deleted: !!row.deleted,
     deletedAt: row.deleted_at?.toISOString() ?? null,
+    updatedAt: (row.updated_at ?? row.created_at).toISOString(),
     syncSequence: String(row.sync_sequence),
   };
 }
@@ -150,6 +156,7 @@ export function rowToRelation(row) {
     createdAt: row.created_at.toISOString(),
     deleted: !!row.deleted,
     deletedAt: row.deleted_at?.toISOString() ?? null,
+    updatedAt: (row.updated_at ?? row.created_at).toISOString(),
     syncSequence: String(row.sync_sequence),
   };
 }
@@ -166,6 +173,7 @@ export function rowToMedia(row) {
     createdAt: row.created_at.toISOString(),
     deleted: !!row.deleted,
     deletedAt: row.deleted_at?.toISOString() ?? null,
+    updatedAt: (row.updated_at ?? row.created_at).toISOString(),
     syncSequence: String(row.sync_sequence),
   };
 }
