@@ -488,7 +488,7 @@ describe('Provider Service', () => {
       id: 'parity-fixture',
       name: 'Parity Fixture',
       type: 'tui',
-      command: 'codex',
+      command: 'claude',
       args: ['exec', '--full-auto'],
       endpoint: 'https://api.example.com/v1',
       apiKey: 'sk-test-secret',
@@ -512,6 +512,7 @@ describe('Provider Service', () => {
       secretEnvVars: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
       headlessArgs: ['--quiet', '--no-color'],
       tuiPromptDelayMs: 5000,
+      lowPriorityOnUsageLimit: true,
     };
 
     const created = await providerService.createProvider(seed);

@@ -585,6 +585,9 @@ export const providerSchema = z.object({
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
   tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // Kept in schema parity with aiToolkit's provider schema. This opt-in applies
+  // only to interactive Claude TUI runs after the session-limit banner.
+  lowPriorityOnUsageLimit: z.boolean().optional(),
   // Preset structure (#7565), in parity with the toolkit schema: the harness,
   // method and service slug a DERIVED preset is materialized from, the
   // optional catalog narrowing, and the bootstrap app it spawns through.

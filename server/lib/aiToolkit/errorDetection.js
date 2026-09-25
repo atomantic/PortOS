@@ -805,6 +805,74 @@ export function createImmediateFallbackSignalDetector({ maxBuffer = 512 } = {}) 
   };
 }
 
+// Claude Code's session-limit banner is distinct from the separate
+// `Now using extra usage` status. Only the interactive CLI can invoke the
+// hidden `/low-priority` command; this detector is consumed by the CoS TUI
+// runner after the submitted prompt's own screen reports its session limit.
+// Keep the match line-anchored and vendor-specific so quoted task text does not
+// opt an agent into another usage mode.
+const CLAUDE_SESSION_LIMIT_BANNER = /^[ \t│┃╎]*(?:⎿|⏺)[ \t]*You've hit your session limit\b/im;
+
+export function detectClaudeSessionLimitBanner(text, { lineStartTrusted = true } = {}) {
+  if (!text) return null;
+  const value = String(text);
+  const candidate = lineStartTrusted ? value : `${UNTRUSTED_BOUNDARY}${value}`;
+  if (!CLAUDE_SESSION_LIMIT_BANNER.test(candidate)) return null;
+  return {
+    hasError: true,
+    category: ERROR_CATEGORIES.USAGE_LIMIT,
+    message: 'Claude Code session usage limit reached',
+    waitTime: extractWaitTime(value),
+    requiresFallback: true,
+    actionable: false,
+    graceMs: 0,
+    suggestedFix: 'Claude Code session usage limit reached; continue with the configured fallback or wait for the reset.',
+    origin: 'provider',
+  };
+}
+
+export function createClaudeSessionLimitBannerDetector({ maxBuffer = 1024 } = {}) {
+  let line = '';
+  let lineStartTrusted = true;
+  let lineMatched = false;
+  const cap = Number.isFinite(maxBuffer) && maxBuffer > 0 ? maxBuffer : 1024;
+
+  return (chunk) => {
+    if (!chunk) return null;
+    const text = `${line}${String(chunk)}`;
+    const lines = text.split('\n');
+    let found = null;
+    for (let i = 0; i < lines.length - 1; i += 1) {
+      if (!lineMatched) {
+        const analysis = detectClaudeSessionLimitBanner(lines[i].replace(/\r$/, ''), { lineStartTrusted });
+        if (analysis) {
+          found ||= analysis;
+          lineMatched = true;
+        }
+      }
+      lineStartTrusted = true;
+      lineMatched = false;
+    }
+    line = lines.at(-1);
+    if (line.length > cap) {
+      line = line.slice(-cap);
+      lineStartTrusted = false;
+    }
+    if (!lineMatched) {
+      const analysis = detectClaudeSessionLimitBanner(line, { lineStartTrusted });
+      if (analysis) {
+        found ||= analysis;
+        lineMatched = true;
+      }
+    }
+    return found;
+  };
+}
+
+// A short pause lets Claude Code process its TUI mode command before the
+// rejected request is pasted again.
+export const CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS = 1500;
+
 // Undo JSON string escaping in a value lifted out of a raw error BODY. One pass,
 // so an escaped backslash can't be re-read as the start of the next escape
 // (`C:\\ntemp` stays a path, not a newline). Only the `json: true` patterns
