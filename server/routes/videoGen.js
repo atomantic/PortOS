@@ -118,14 +118,15 @@ const hardwareAwareVideoModels = async () => {
 // MLX import, no model load, cached both ways). /status keeps returning them
 // for its other readers — this is the single builder both routes share, so the
 // two can't drift.
-const videoModelContext = async () => {
+const videoModelContext = async (loadedSettings = null) => {
   const { capabilities, models } = await hardwareAwareVideoModels();
+  const settings = loadedSettings || await getSettings();
   return {
     // Each entry carries its optional `disclosure` block (provenance, weights/
     // runtime licenses, pinned-snapshot download size) straight off the
     // registry — absent for custom models, which the UI renders as Unknown.
     models,
-    defaultModel: defaultVideoModelId(capabilities),
+    defaultModel: defaultVideoModelId(capabilities, settings?.videoGen?.defaultModelId),
     // Total system memory in GB — the client uses this to auto-select the
     // highest-memory mode-compatible model that fits on this machine.
     // Rounded to nearest GB; sub-GB precision isn't useful for the
@@ -510,7 +511,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // kept here for the callers that already read them off /status. The Video
     // Gen page takes them from GET /model-context instead, so its Model picker
     // never waits on the python probe above.
-    ...(await videoModelContext()),
+    ...(await videoModelContext(s)),
     // Server-owned execution + policy scope per render backend (#3674). The
     // client renders these strings verbatim so the wording can't drift between
     // the two surfaces.

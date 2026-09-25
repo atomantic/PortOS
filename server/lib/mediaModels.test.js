@@ -29,6 +29,12 @@ afterEach(() => {
 // Compares the seed file to a freshly-bootstrapped registry with
 // _shippedDefaults stripped (that's a runtime-only field).
 describe('data.reference seed file', () => {
+  it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', () => {
+    const seeded = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf8'));
+    expect(seeded.video.defaultMlx).toBe('fastmetal_5b_qad');
+    expect(seeded.video.mlx.some((entry) => entry.id === seeded.video.defaultMlx)).toBe(true);
+  });
+
   it('appends new Apple video choices to an existing registry and preserves later removals', async () => {
     const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
     const fresh = loadMediaModels();
@@ -656,6 +662,20 @@ describe('mediaModels registry', () => {
     const id = getDefaultVideoModelId();
     expect(typeof id).toBe('string');
     expect(id.length).toBeGreaterThan(0);
+  });
+
+  it('uses FastMetal 1.3B when FastMetal 5B is above an Apple Silicon host memory floor', async () => {
+    const { getDefaultVideoModelId } = await import('./mediaModels.js');
+    const restorePlatform = pinPlatform('darwin');
+    try {
+      expect(getDefaultVideoModelId({
+        platform: 'darwin',
+        appleSilicon: true,
+        totalMemoryGb: 8,
+      })).toBe('fastmetal_1_3b_qad');
+    } finally {
+      restorePlatform();
+    }
   });
 
   it('normalizes a registry missing the video key without crashing consumers', async () => {

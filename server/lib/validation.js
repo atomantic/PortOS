@@ -1983,9 +1983,9 @@ export const renderDefaultsSettingsSchema = z.object(
 // third rung in resolveVideoMode's ladder (request → target pin → THIS →
 // local). `'auto'`/`''`/null all mean "no pin — local". Tolerant of unknown
 // keys for the same rollback/forward-compat reason as renderDefaults above.
-// `defaultModelId` predates this schema (pipeline storyboards/episodeVideo
-// read it as the local-model default) — typed here so a Settings save can't
-// write junk to it.
+// `defaultModelId` is the install-wide local video model choice used by the
+// Video Gen form and pipeline video stages — typed here so a Settings save
+// can't write junk to it.
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),

@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { AGY_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_MODEL } from './imageGenCapabilities.js';
+import {
+  AGY_IMAGEGEN_DEFAULT_MODEL,
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
+} from './imageGenCapabilities.js';
 import { pickAntigravityRelayModel } from './providerModels.js';
 
 // The cheap-tier pins here are code-level defaults: no migration carries them,
@@ -10,16 +14,16 @@ import { pickAntigravityRelayModel } from './providerModels.js';
 // went out of sync exactly that way — see AGY_IMAGEGEN_DEFAULT_MODEL for the
 // incident this guard exists to make impossible to ship again.
 //
-// Derived from `data.reference/providers.json` rather than a hand-transcribed
-// list: that seed is what a fresh install starts with, and every catalog
-// migration is written to keep it in lockstep, so it is the one place that
-// already knows which ids a vendor still serves.
+// Provider pins are checked against data.reference/providers.json, while the
+// local image pin is checked against data.reference/media-models.json. Those
+// seeds are what fresh installs start with and must contain every code default.
 //
 // Read as JSON instead of importing the toolkit's own catalog module — that
 // module pulls the whole provider subtree, and this is a two-value check (see
 // the server suite import budget in `importScoping.test.js`).
-describe('shipped image-gen model pins stay in the seeded provider catalog', () => {
+describe('shipped image-gen defaults stay in the seeded catalogs', () => {
   const SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/providers.json');
+  const MEDIA_SEED_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../../data.reference/media-models.json');
   const seeded = JSON.parse(readFileSync(SEED_PATH, 'utf8')).providers || {};
   const modelsFor = (id) => (Array.isArray(seeded[id]?.models) ? seeded[id].models : []);
 
@@ -42,5 +46,11 @@ describe('shipped image-gen model pins stay in the seeded provider catalog', () 
   // than a second, hand-maintained opinion that can quietly disagree with it.
   it('agy pin is the relay tier the runtime heal would pick from the same catalog', () => {
     expect(pickAntigravityRelayModel(modelsFor('antigravity-cli'))).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+  });
+
+  it('local image default remains in the seeded media catalog', () => {
+    const media = JSON.parse(readFileSync(MEDIA_SEED_PATH, 'utf8'));
+    expect(media.image.some((model) => model.id === LOCAL_IMAGEGEN_DEFAULT_MODEL)).toBe(true);
+    expect(LOCAL_IMAGEGEN_DEFAULT_MODEL).toBe('qwen-image-2.1');
   });
 });
