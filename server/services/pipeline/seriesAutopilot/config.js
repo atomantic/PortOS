@@ -5,6 +5,7 @@
 
 import { readReadinessGate } from '../../../lib/editorial/index.js';
 import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../../lib/seriesAutopilotDefaults.js';
 import { READINESS_GATES } from '../editorialScore.js';
 
 // Bounded convergence loops — re-verify/re-review at most this many rounds, then
@@ -12,13 +13,13 @@ import { READINESS_GATES } from '../editorialScore.js';
 // are the floor defaults; an install can raise them persistently via
 // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds} (or a single
 // run can override per-run through the autopilot start options).
-export const MAX_ARC_VERIFY_ROUNDS = 3;
-export const MAX_EDITORIAL_ROUNDS = 2;
+export const MAX_ARC_VERIFY_ROUNDS = SERIES_AUTOPILOT_DEFAULTS.maxArcVerifyRounds;
+export const MAX_EDITORIAL_ROUNDS = SERIES_AUTOPILOT_DEFAULTS.maxEditorialRounds;
 // Whole-manuscript beat-continuity convergence (#1510). The corpus is the
 // compact per-issue beat sheets, so this gate sits between beat generation and
 // the expensive text/script stage — bounded like the others, then pauses with
 // the residual findings for human review.
-export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
+export const MAX_BEAT_CONTINUITY_ROUNDS = SERIES_AUTOPILOT_DEFAULTS.maxBeatContinuityRounds;
 
 // Foundation-quality gate (CWQE Phase 11, #2176). Before drafting, judge the
 // whole foundation (world / characters / arc) against a weighted rubric and
@@ -27,8 +28,8 @@ export const MAX_BEAT_CONTINUITY_ROUNDS = 2;
 // findings for human review. Defaults ON for autopilot runs (the point of the
 // phase) but overridable per-run + via the persisted setting. 0 rounds skips
 // the gate entirely (accept the foundation as-is).
-export const MAX_FOUNDATION_ROUNDS = 3;
-export const DEFAULT_FOUNDATION_GATE_ENABLED = true;
+export const MAX_FOUNDATION_ROUNDS = SERIES_AUTOPILOT_DEFAULTS.maxFoundationRounds;
+export const DEFAULT_FOUNDATION_GATE_ENABLED = SERIES_AUTOPILOT_DEFAULTS.foundationGate;
 
 // Bounded retry budget for a delegated child runner (#1574). A child (volume
 // beats / text auto-run) can finish with its target stage(s) still empty when
@@ -123,8 +124,8 @@ export function resolveAutopilotRounds(options = {}, settings = null) {
 // Foundation-gate config (#2176): whether the gate runs, and the weighted [0,10]
 // threshold the foundation must clear. Mirror resolveAutopilotRounds — per-run
 // option wins, then the persisted pipelineEditorialChecks setting, then the
-// default. The enable flag defaults ON (the point of the phase); the threshold
-// falls through to DEFAULT_FOUNDATION_THRESHOLD in the loop when unset. Stamped
+// default. The enable flag defaults ON (the point of the phase); an unset
+// threshold falls through to the foundation judge's shared default. Stamped
 // onto run options once at start so the loop, the dry-run plan, and a resume all
 // read the same effective values.
 export function resolveAutopilotFoundationGate(options = {}, settings = null) {
@@ -156,7 +157,7 @@ export function resolveAutopilotReadinessGate(options = {}, settings = null) {
 // per-run option wins, then the persisted setting, then 0. A non-integer at any
 // layer falls through to the next. Stamped onto run options once at start so the
 // loop and a later resume read the same effective threshold.
-export const DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD = 0;
+export const DEFAULT_CHECK_FINDINGS_PAUSE_THRESHOLD = SERIES_AUTOPILOT_DEFAULTS.checkFindingsPauseThreshold;
 export function resolveAutopilotCheckPauseThreshold(options = {}, settings = null) {
   if (Number.isInteger(options?.checkFindingsPauseThreshold)) return options.checkFindingsPauseThreshold;
   const pec = settings?.pipelineEditorialChecks || {};
@@ -171,7 +172,7 @@ export function resolveAutopilotCheckPauseThreshold(options = {}, settings = nul
 // addresses the "paused runs go unnoticed" problem — but stays overridable per
 // run and via the persisted setting for users who don't want the noise. Boolean
 // at every layer: per-run option wins, then the persisted setting, then true.
-export const DEFAULT_NOTIFY_ON_PAUSE = true;
+export const DEFAULT_NOTIFY_ON_PAUSE = SERIES_AUTOPILOT_DEFAULTS.notifyOnPause;
 export function resolveAutopilotNotifyOnPause(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   return pickBool(options?.notifyOnPause, pec?.notifyOnPause, DEFAULT_NOTIFY_ON_PAUSE);
@@ -225,10 +226,10 @@ export function resolveAutopilotUnlockForRun(options = {}) {
 // least once; maxCycles is the cost ceiling; plateauDelta is the mean-score
 // movement below which the series counts as converged. Per-run option wins, then
 // the persisted pipelineEditorialChecks.revision* setting, then the default.
-export const DEFAULT_REVISION_ENABLED = false;
-export const DEFAULT_REVISION_MIN_CYCLES = 1;
-export const DEFAULT_REVISION_MAX_CYCLES = 2;
-export const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
+export const DEFAULT_REVISION_ENABLED = SERIES_AUTOPILOT_DEFAULTS.revisionEnabled;
+export const DEFAULT_REVISION_MIN_CYCLES = SERIES_AUTOPILOT_DEFAULTS.revisionMinCycles;
+export const DEFAULT_REVISION_MAX_CYCLES = SERIES_AUTOPILOT_DEFAULTS.revisionMaxCycles;
+export const DEFAULT_REVISION_PLATEAU_DELTA = SERIES_AUTOPILOT_DEFAULTS.revisionPlateauDelta;
 export function resolveAutopilotRevision(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   const int = (o, s, fallback) => {
@@ -269,7 +270,7 @@ export function resolveAutopilotRevision(options = {}, settings = null) {
 //
 // The filed task always awaits human approval and always opens a PR — see
 // selfImprove.js's header for why that isn't a knob.
-export const DEFAULT_SELF_IMPROVE = false;
+export const DEFAULT_SELF_IMPROVE = SERIES_AUTOPILOT_DEFAULTS.selfImprove;
 export function resolveAutopilotSelfImprove(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   return pickBool(options?.selfImprove, pec?.selfImprove, DEFAULT_SELF_IMPROVE);
@@ -287,7 +288,7 @@ export function resolveAutopilotSelfImprove(options = {}, settings = null) {
 // selfImprove (a scheduled unattended run is exactly where the user wants the
 // pipeline hardening itself), unlike unlockForRun (which rewrites user-set
 // protection state and stays per-run only).
-export const DEFAULT_OBSERVER = false;
+export const DEFAULT_OBSERVER = SERIES_AUTOPILOT_DEFAULTS.observer;
 export function resolveAutopilotObserver(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   return pickBool(options?.observer, pec?.observer, DEFAULT_OBSERVER);
@@ -300,7 +301,7 @@ export function resolveAutopilotObserver(options = {}, settings = null) {
 // stage pin, a per-stage route, and the run's own route (per-run picker OR the
 // series' `series.llm`, for the judge role as much as the creative one) all
 // remain stronger. session.js#roleLlm owns that precedence.
-export const DEFAULT_AUTO_SELECT_MODELS = false;
+export const DEFAULT_AUTO_SELECT_MODELS = SERIES_AUTOPILOT_DEFAULTS.autoSelectModels;
 export function resolveAutopilotAutoSelectModels(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   return pickBool(options?.autoSelectModels, pec?.autoSelectModels, DEFAULT_AUTO_SELECT_MODELS);
@@ -315,7 +316,7 @@ export function resolveAutopilotAutoSelectModels(options = {}, settings = null) 
 // it re-routes spend but mutates nothing, and "always run everything on my one
 // provider" is exactly the preference an unattended scheduled run wants to
 // inherit. Per-run option wins, then the persisted setting, then off.
-export const DEFAULT_OVERRIDE_STAGE_PINS = false;
+export const DEFAULT_OVERRIDE_STAGE_PINS = SERIES_AUTOPILOT_DEFAULTS.overrideStagePins;
 export function resolveAutopilotOverrideStagePins(options = {}, settings = null) {
   const pec = settings?.pipelineEditorialChecks || {};
   return pickBool(options?.overrideStagePins, pec?.overrideStagePins, DEFAULT_OVERRIDE_STAGE_PINS);

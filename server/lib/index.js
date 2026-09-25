@@ -123,6 +123,7 @@ export * from './proseExportSettings.js';
 export * from './shotGrammar.js';
 export * from './storyboardScenes.js';
 export * from './seasonStructure.js';
+export * from './seriesAutopilotDefaults.js';
 export * from './seriesCharacterArc.js';
 export * from './llmRoutePin.js';
 export * from './seriesLlmOverride.js';

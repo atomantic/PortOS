@@ -91,6 +91,32 @@ describe('AutopilotPanel', () => {
     ));
   });
 
+  it('shows shared option defaults when saved pipeline settings are absent', async () => {
+    getSettings.mockResolvedValueOnce({});
+    renderPanel({ id: 's1', targetFormat: 'comic' });
+    fireEvent.click(screen.getByRole('button', { name: /options/i }));
+
+    expect(await screen.findByLabelText('Arc verify rounds')).toHaveValue(3);
+    expect(screen.getByLabelText('Beat continuity rounds')).toHaveValue(2);
+    expect(screen.getByLabelText('Editorial rounds')).toHaveValue(2);
+    expect(screen.getByLabelText('Foundation threshold')).toHaveValue(7.5);
+    expect(screen.getByLabelText('Foundation rounds')).toHaveValue(3);
+    expect(screen.getByLabelText('Pause at high findings')).toHaveValue(0);
+
+    expect(screen.getByLabelText('Notify me when a run pauses (with a resume link)')).toBeChecked();
+    expect(screen.getByLabelText('Judge the foundation (world / characters / arc) before drafting')).toBeChecked();
+    expect(screen.getByLabelText('Iterate to quality (revise the weakest issue under a keep/revert score gate)')).not.toBeChecked();
+    expect(screen.getByLabelText('Improve the pipeline itself (diagnose PortOS when a run goes wrong)')).not.toBeChecked();
+    expect(screen.getByLabelText('Observing orchestrator (auto-fix the pipeline as the run progresses)')).not.toBeChecked();
+    expect(screen.getByLabelText('Let autopilot choose models from stage-specific results')).not.toBeChecked();
+    expect(screen.getByLabelText('Use this provider and model for every stage (ignore Prompts stage pins)')).not.toBeChecked();
+
+    fireEvent.click(screen.getByLabelText('Iterate to quality (revise the weakest issue under a keep/revert score gate)'));
+    expect(await screen.findByLabelText('Min cycles')).toHaveValue(1);
+    expect(screen.getByLabelText('Max cycles')).toHaveValue(2);
+    expect(screen.getByLabelText('Plateau Δ')).toHaveValue(0.3);
+  });
+
   it('sends pilot scope and does not reattach a settled run from a delayed status response', async () => {
     let resolveStatus;
     getPipelineAutopilotStatus.mockResolvedValueOnce({ active: false })
