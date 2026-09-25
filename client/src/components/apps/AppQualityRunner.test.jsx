@@ -28,6 +28,41 @@ it('launches missing checks with visible mode and effort, then exposes held runn
   expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
   expect(button).toBeEnabled();
 });
+
+it('runs only applicable scored categories below the overall composite as a batch', async () => {
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'run-below-score', status: 'running', steps: [] } });
+  const categories = [
+    { id: 'security', label: 'Security', score: 60, coverage: 'broad', confidence: 'high' },
+    { id: 'performance', label: 'Performance', score: 74, coverage: 'partial' },
+    { id: 'ux', label: 'UX', score: 75, coverage: 'broad', confidence: 'high' },
+    { id: 'privacy', label: 'Privacy', score: 90, coverage: 'broad', confidence: 'high' },
+    { id: 'unavailable', label: 'Unavailable', score: null, coverage: 'unavailable' },
+    { id: 'inapplicable', label: 'Inapplicable', score: 20, coverage: 'broad', applicable: false },
+    { id: 'not-applicable', label: 'Not applicable', score: 20, coverage: 'not-applicable' },
+  ];
+  render(<MemoryRouter initialEntries={['/apps/example/quality?qualityCheck=below-composite']}>
+    <AppQualityRunner app={{ ...app, quality: { score: 75, categories } }} />
+  </MemoryRouter>);
+
+  const button = await findEnabledByRole('button', { name: 'Run 2 checks now' });
+  fireEvent.click(button);
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({
+    taskTypes: ['security', 'performance'],
+  }), { silent: true }));
+  expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('explicitCheck');
+});
+
+it('explains when the composite score is unavailable for below-score selection', async () => {
+  render(<MemoryRouter initialEntries={['/apps/example/quality?qualityCheck=below-composite']}>
+    <AppQualityRunner app={{ ...app, quality: { score: null, categories: app.quality.categories } }} />
+  </MemoryRouter>);
+
+  await waitFor(() => expect(screen.queryByText('Loading runner status…')).not.toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'Run 0 checks now' })).toBeDisabled();
+  fireEvent.click(screen.getByText('Selected checks (0)'));
+  expect(screen.getByText(/No overall composite score is available/)).toBeInTheDocument();
+});
+
 it('allows one category and recovers from launch failure without reporting a run', async () => {
   startMaintenanceRun.mockRejectedValue(new Error('Provider unavailable'));
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
