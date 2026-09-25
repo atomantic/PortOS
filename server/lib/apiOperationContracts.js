@@ -75,6 +75,20 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       },
     },
   },
+  '/api/brain/youtube/ingests': {
+    get: {
+      summary: 'List YouTube ingest history',
+      description: 'No query returns the legacy { ingests } array of every stored ingest. Passing limit opts into a page ordered by ingestedAt desc (videoId as a deterministic tie-breaker); echo nextCursor from the previous response to continue.',
+      parameters: [
+        { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        { name: 'cursor', in: 'query', required: false, schema: { type: 'string', maxLength: 4096 } },
+      ],
+      responses: {
+        200: { description: 'Legacy full ingest array, or a bounded page with an optional nextCursor' },
+        400: { description: 'Invalid query or cursor', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_CURSOR'] },
+      },
+    },
+  },
   '/api/agent-context/manifest': {
     get: { summary: 'Read local Agent Tools MCP manifest', responses: { 200: { description: 'MCP transport, context scopes, semantic grants, schemas, and limits' } } },
   },

@@ -180,3 +180,66 @@ export function buildAgentTaskContext({ meta, url, agentPrompt, transcriptPath, 
     'If the content does not actually support the request, say so plainly rather than inventing findings.',
   ].join('\n');
 }
+
+// =============================================================================
+// INGEST HISTORY CURSOR PAGINATION (#8267)
+// =============================================================================
+
+const INGEST_CURSOR_VERSION = 1;
+
+/**
+ * Deterministic newest-first order for ingest records: `ingestedAt` descending
+ * with `videoId` descending as an explicit tie-breaker, so two records ingested
+ * in the same instant still have a stable relative order and cursor
+ * continuation neither repeats nor skips one of them.
+ */
+export function compareIngestsDesc(a, b) {
+  const byDate = String(b?.ingestedAt || '').localeCompare(String(a?.ingestedAt || ''));
+  if (byDate !== 0) return byDate;
+  return String(b?.videoId || '').localeCompare(String(a?.videoId || ''));
+}
+
+/**
+ * Opaque continuation token: the sort key of the last record on a page.
+ * Not exported — only `paginateIngests` below produces one; callers only
+ * ever need to decode a cursor they were handed, never mint one directly.
+ */
+function encodeIngestCursor(record) {
+  const payload = JSON.stringify({ v: INGEST_CURSOR_VERSION, ingestedAt: record.ingestedAt, videoId: record.videoId });
+  return Buffer.from(payload, 'utf8').toString('base64url');
+}
+
+/**
+ * Decode a cursor produced by `encodeIngestCursor`. Returns null (never
+ * throws) on anything malformed, so the route can turn it into one
+ * consistent 400 rather than leaking a JSON/base64 parse error.
+ */
+export function decodeIngestCursor(cursor) {
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(String(cursor), 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!payload || payload.v !== INGEST_CURSOR_VERSION
+    || typeof payload.ingestedAt !== 'string' || !payload.ingestedAt
+    || typeof payload.videoId !== 'string' || !payload.videoId) {
+    return null;
+  }
+  return { ingestedAt: payload.ingestedAt, videoId: payload.videoId };
+}
+
+/**
+ * Page an already-`compareIngestsDesc`-sorted ingest list. `cursor` (if given)
+ * is the decoded sort key of the last record already delivered; the page
+ * begins at the first record that sorts strictly after it by the SAME
+ * comparator, so a record ingested or removed elsewhere in the index between
+ * two page fetches can't shift an already-delivered row back into view.
+ */
+export function paginateIngests(sorted, { limit, cursor } = {}) {
+  const startIndex = cursor ? sorted.findIndex((item) => compareIngestsDesc(cursor, item) < 0) : 0;
+  if (startIndex === -1) return { items: [], nextCursor: null };
+  const items = sorted.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + limit < sorted.length;
+  return { items, nextCursor: hasMore ? encodeIngestCursor(items[items.length - 1]) : null };
+}

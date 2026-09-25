@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { youtubeIngestSchema, youtubeIngestSettingsSchema } from '../lib/brainValidation.js';
+import { youtubeIngestSchema, youtubeIngestSettingsSchema, youtubeIngestsQuerySchema } from '../lib/brainValidation.js';
 import * as ingest from '../services/youtubeIngest.js';
 
 const router = Router();
@@ -40,9 +40,19 @@ router.post('/ingest/:jobId/cancel', asyncHandler(async (req, res) => {
   res.json({ message: 'Cancellation requested' });
 }));
 
-/** GET /api/brain/youtube/ingests — every ingest, newest first. */
+/**
+ * GET /api/brain/youtube/ingests — every ingest, newest first. Query-less
+ * callers keep the legacy `{ ingests }` full-history array; passing `limit`
+ * opts into a bounded, cursor-continuable page (#8267).
+ */
 router.get('/ingests', asyncHandler(async (req, res) => {
-  res.json({ ingests: await ingest.listIngests() });
+  const { limit, cursor } = validateRequest(youtubeIngestsQuerySchema, req.query);
+  if (limit === undefined && cursor === undefined) {
+    res.json({ ingests: await ingest.listIngests() });
+    return;
+  }
+  const { items, nextCursor } = await ingest.listIngests({ limit: limit ?? 50, cursor });
+  res.json({ ingests: items, ...(nextCursor ? { nextCursor } : {}) });
 }));
 
 /** GET /api/brain/youtube/ingests/:videoId */

@@ -931,6 +931,15 @@ export const youtubeIngestSchema = repoIntakeSchema.pick({ targetAppId: true, pr
   priority: z.enum(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']).optional()
 });
 
+// GET /api/brain/youtube/ingests — query-less callers keep the legacy
+// `{ ingests }` full-history array. Passing `limit` opts into a page ordered
+// by `ingestedAt` desc with `videoId` as a deterministic tie-breaker (#8267);
+// `cursor` is the opaque key of the last record on the prior page.
+export const youtubeIngestsQuerySchema = z.object({
+  limit: z.preprocess((v) => (v === undefined || v === '' ? undefined : Number(v)), z.number().int().min(1).max(100).optional()),
+  cursor: z.preprocess((v) => (v === undefined || v === '' ? undefined : v), z.string().trim().min(1).max(4096).optional()),
+}).strict();
+
 // PUT /api/brain/youtube/settings. strict() rejects unknown keys so a typo
 // can't quietly accumulate in the settings file.
 export const youtubeIngestSettingsSchema = z.object({

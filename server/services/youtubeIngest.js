@@ -61,7 +61,10 @@ import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 import {
   buildAgentTaskContext,
   buildIngestNote,
+  compareIngestsDesc,
+  decodeIngestCursor,
   formatDuration,
+  paginateIngests,
   parseVideoMetadata,
   resolveObsidianPointer,
   sanitizeFilename,
@@ -169,10 +172,22 @@ async function putIngest(videoId, patch) {
   });
 }
 
-/** Every ingest, newest first. */
-export async function listIngests() {
+/**
+ * Every ingest, newest first. Query-less callers (the default) get the full
+ * legacy array. Passing `limit` opts into a bounded page ordered by
+ * `ingestedAt` desc with `videoId` as a deterministic tie-breaker; pass back
+ * a prior page's `nextCursor` to continue (#8267).
+ */
+export async function listIngests({ limit, cursor } = {}) {
   const index = await loadIndex();
-  return Object.values(index).sort((a, b) => String(b.ingestedAt || '').localeCompare(String(a.ingestedAt || '')));
+  const sorted = Object.values(index).sort(compareIngestsDesc);
+  if (limit === undefined) return sorted;
+  let decodedCursor = null;
+  if (cursor) {
+    decodedCursor = decodeIngestCursor(cursor);
+    if (!decodedCursor) throw new ServerError('Invalid ingest cursor', { status: 400, code: 'INVALID_CURSOR' });
+  }
+  return paginateIngests(sorted, { limit, cursor: decodedCursor });
 }
 
 export async function getIngest(videoId) {
