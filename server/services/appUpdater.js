@@ -321,10 +321,11 @@ async function _doUpdate(app, emit, {
     steps.push({ step: 'app-update', success: true });
   }
 
-  // update.sh/update.ps1 close with their own `pm2 start ecosystem.config.cjs`
-  // (and their own dashboard handoff), so restarting PortOS on top of the
-  // detached script would be redundant and would race it — the script may not
-  // have finished re-registering the processes we would be restarting.
+  // update.sh/update.ps1 close by starting the production app set from
+  // `ecosystem.config.cjs` without `portos-ui` (and perform their own dashboard
+  // handoff), so restarting PortOS on top of the detached script would be
+  // redundant and would race it — the script may not have finished
+  // re-registering the processes we would be restarting.
   const processNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
   if (processNames.length > 0) {
     emit('restart', 'running', 'Restarting app...');

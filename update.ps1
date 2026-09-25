@@ -94,6 +94,7 @@ function Invoke-Logged {
 # crash-looping app the user can see beats a silently headless machine — and the
 # recovery only ever runs on a path that was already leaving PortOS down.
 $script:Pm2AppsDown = $false
+$script:ProductionPm2Apps = 'portos-server,portos-cos,portos-autofixer,portos-autofixer-ui,portos-browser'
 
 # Which pm2 the recovery can actually reach. It CANNOT assume this checkout's own
 # copy: Safe-Install wipes root node_modules whenever the pulled update touched
@@ -132,7 +133,7 @@ function Restore-Pm2Apps {
         # a start that exits 0 and then crash-loops is the likely case here, not the
         # edge case. Never claim a recovery the health probe doesn't confirm.
         $ecosystem = Join-Path $RootDir 'ecosystem.config.cjs'
-        $startArgs = $pm2 + @('start', $ecosystem)
+        $startArgs = $pm2 + @('start', $ecosystem, '--only', $script:ProductionPm2Apps)
         Invoke-Logged @startArgs
         if ($LASTEXITCODE -eq 0) { Invoke-Logged node (Join-Path $RootDir 'scripts/verify-server-health.js') }
         if ($LASTEXITCODE -eq 0) {
@@ -145,7 +146,7 @@ function Restore-Pm2Apps {
             Write-SafeHost "❌ PortOS is not answering /api/system/health." -ForegroundColor Red
             # Name the pm2 that actually exists — the checkout's copy may be the
             # thing a failed install just deleted, so printing it would be a dead end.
-            Write-SafeHost "    Recover with: $($pm2 -join ' ') start $ecosystem" -ForegroundColor Red
+            Write-SafeHost "    Recover with: $($pm2 -join ' ') start $ecosystem --only $script:ProductionPm2Apps" -ForegroundColor Red
         }
     } catch {
         # A throwing recovery must not replace the real update failure, and must
@@ -374,6 +375,8 @@ Step "pm2-stop" "running" "Stopping PortOS apps..."
 $script:Pm2AppsDown = $true
 Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
 $global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
+$global:LASTEXITCODE = 0
 Step "pm2-stop" "done" "Apps stopped"
 Write-SafeHost ""
 
@@ -505,7 +508,9 @@ if ($LASTEXITCODE -eq 0) {
 $global:LASTEXITCODE = 0
 Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
 $global:LASTEXITCODE = 0
-Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
+$global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only $script:ProductionPm2Apps
 if ($LASTEXITCODE -ne 0) {
     if (Test-Path "$RootDir\data\update-complete.json") {
         Remove-Item -Force "$RootDir\data\update-complete.json"
@@ -530,7 +535,7 @@ if ($LASTEXITCODE -eq 0) {
     Step "verify" "done" "PortOS is answering /api/system/health"
 } else {
     Write-SafeHost "PortOS did not answer /api/system/health after the restart - re-running pm2 start" -ForegroundColor Yellow
-    Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs
+    Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only $script:ProductionPm2Apps
     $global:LASTEXITCODE = 0
     Invoke-Logged node scripts/verify-server-health.js
     if ($LASTEXITCODE -eq 0) {
@@ -540,7 +545,7 @@ if ($LASTEXITCODE -eq 0) {
         $verifyFailed = 1
         Step "verify" "warning" "PortOS is not answering /api/system/health"
         Write-SafeHost "PortOS is STILL not answering /api/system/health." -ForegroundColor Red
-        Write-SafeHost "    Recover with: node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs" -ForegroundColor Red
+        Write-SafeHost "    Recover with: node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only $script:ProductionPm2Apps" -ForegroundColor Red
     }
 }
 $global:LASTEXITCODE = 0
