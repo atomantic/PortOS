@@ -204,6 +204,16 @@ export const requireHostControl = (req, res, next) => {
 // API surface (apiRegistry) is HTTP-only — external callers hit REST endpoints,
 // not the interactive socket. The socket carries the authenticated UI session
 // (voice streaming, live updates) and must stay fully gated when auth is on.
+// Records which credential passed the handshake so the per-event re-check in
+// socket.js (registerAuthHandlers) can tell a real operator session from a
+// peer relay connection. `socket.data` always exists on a real Socket.IO
+// socket; guarded here only so the plain `{ handshake }` fixtures this
+// module's own tests pass in don't throw.
+const markAuthMethod = (socket, method) => {
+  if (!socket.data) socket.data = {};
+  socket.data.portosAuthMethod = method;
+};
+
 export const socketAuthGate = async (socket, next) => {
   const enabled = await isAuthEnabled();
   if (!enabled) return next();
@@ -214,12 +224,23 @@ export const socketAuthGate = async (socket, next) => {
     return next(err);
   }
   const token = extractToken(fakeReq);
-  if (await verifySession(token)) return next();
+  if (await verifySession(token)) {
+    markAuthMethod(socket, 'session');
+    return next();
+  }
   // Peer relay connections: the paired peer token, else legacy Basic. Neither
-  // can emit events — socket.js re-checks for a real session on every event.
-  if (await verifyPeerToken(fakeReq.headers)) return next();
+  // grants operator authority — socket.js re-checks every inbound event and
+  // allows a peer-authenticated socket only the minimal read-only
+  // subscription events it needs (PEER_RELAY_ALLOWED_EVENTS).
+  if (await verifyPeerToken(fakeReq.headers)) {
+    markAuthMethod(socket, 'peer');
+    return next();
+  }
   const basicPassword = extractBasicPassword(fakeReq);
-  if (basicPassword && await verifyBasicPassword(basicPassword)) return next();
+  if (basicPassword && await verifyBasicPassword(basicPassword)) {
+    markAuthMethod(socket, 'basic');
+    return next();
+  }
   const err = new Error('Authentication required');
   err.data = { code: 'AUTH_REQUIRED' };
   next(err);
