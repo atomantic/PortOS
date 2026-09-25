@@ -184,10 +184,9 @@ module.exports = {
       // wild is "SIGINT received" 5–30s after an image render completes,
       // killing in-flight jobs.
       //
-      // Code edits are picked up by a manual `pm2 restart ecosystem.config.cjs`
-      // — that's the documented workflow anyway (pm2 restart doesn't rebuild
-      // the client; you need npm run build / npm start). So losing the
-      // auto-restart-on-save behavior costs nothing in practice.
+      // Code edits are picked up by `npm run pm2:restart` in production or
+      // `npm run dev` during development. Restarting does not rebuild the
+      // client; use `npm run build` / `npm start` for production assets.
       //
       // To re-enable for ad-hoc dev work: flip this to `watch: ['server']`
       // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
@@ -242,6 +241,7 @@ module.exports = {
       kill_timeout: 30000
     },
     {
+      // Selected by `npm run dev`; production startup explicitly excludes Vite.
       name: 'portos-ui',
       script: path.join(__dirname, 'client', 'node_modules', 'vite', 'bin', 'vite.js'),
       cwd: path.join(__dirname, 'client'),

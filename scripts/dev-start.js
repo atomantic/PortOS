@@ -13,6 +13,14 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ECO = 'ecosystem.config.cjs';
+const DEV_PM2_APPS = [
+  'portos-server',
+  'portos-cos',
+  'portos-ui',
+  'portos-autofixer',
+  'portos-autofixer-ui',
+  'portos-browser'
+];
 
 // Ensure dependencies are installed BEFORE resolving pm2 path
 // (pm2 lives in node_modules — require.resolve fails if deps are missing)
@@ -43,8 +51,8 @@ try { pm2('delete', ECO); } catch {}
 // Brief pause for port release
 await new Promise(r => setTimeout(r, 1500));
 
-// Start fresh and tail logs
-pm2('start', ECO);
+// Start the full development set, including Vite on :5554, and tail logs.
+pm2('start', ECO, '--only', DEV_PM2_APPS.join(','));
 spawn(process.execPath, [PM2, 'logs'], {
   stdio: 'inherit',
   windowsHide: true

@@ -203,14 +203,17 @@ app uses in `ecosystem.config.cjs`.
 ### Starting/Stopping
 
 ```bash
-# Start all processes defined in ecosystem file
-pm2 start ecosystem.config.cjs
+# Start production apps only; this also removes an old Vite process
+npm run pm2:start
 
-# Restart all processes
-pm2 restart ecosystem.config.cjs
+# Start development apps, including Vite on :5554
+npm run dev
+
+# Restart production apps
+npm run pm2:restart
 
 # Stop all processes
-pm2 stop ecosystem.config.cjs
+npm run pm2:stop
 ```
 
 ### Monitoring
@@ -232,13 +235,13 @@ pm2 logs myapp-server
 
 2. **Always use ecosystem file** for restart/stop operations:
    ```bash
-   pm2 restart ecosystem.config.cjs  # Correct
+   npm run pm2:restart                # Production apps only
    pm2 restart all                   # Dangerous - affects all apps
    ```
 
 3. **Use `pm2 save`** after changes to persist the process list:
    ```bash
-   pm2 start ecosystem.config.cjs
+   npm run pm2:start
    pm2 save
    ```
 
