@@ -64,7 +64,6 @@ import { investigationOutcome } from '../lib/investigationTasks.js';
 import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
-import { redactPii } from '../lib/piiRedactionPatterns.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 import { buildGoalFidelityFalsePositiveReportBlock } from '../lib/goalFidelityCalibration.js';
 import {
@@ -323,10 +322,10 @@ async function fileFollowUpIssue({ task, review, fingerprint, context }) {
   const draft = buildGoalFidelityIssue({ task, review, fingerprint, context });
   if (draft.error) return { issue: null, error: draft.error };
   // Publishing the objective adds more operator-authored text than a title.
-  // Reuse the shared PII and credential scrubbers; never include transcripts
-  // or unrelated metadata in this public projection.
-  const title = redactPii(scrubForgeIssueText(draft.title));
-  const body = redactPii(scrubForgeIssueText(draft.body));
+  // The shared forge scrubber strips PII and credentials; never include
+  // transcripts or unrelated metadata in this public projection.
+  const title = scrubForgeIssueText(draft.title);
+  const body = scrubForgeIssueText(draft.body);
   // The marker hashes the local fingerprint, so redacting dates or private
   // task text cannot change the identity the duplicate scan reads back.
   const created = tracker === 'jira'

@@ -13,6 +13,7 @@ import { createTicket, searchIssues, addLabels, escapeJql } from '../jira.js';
 import { LI_LABEL, PLANNED_WORK_LABEL, LI_JIRA_BLOCKING_LABEL } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { normalizeIssueLabels } from './forgeFiler.js';
+import { scrubForgeIssueText } from '../appIssues.js';
 
 // ---------------------------------------------------------------------------
 // Jira filer. Jira has no forge CLI — it goes through the PortOS Jira REST
@@ -109,7 +110,10 @@ export async function listJiraBlockingIssues({ instanceId, projectKey, search = 
 /**
  * File ONE proposal ticket in a Jira project. Embeds the slug marker in the
  * description (searchable for dedup) and tags it with the layered-intelligence
- * label. Returns `{ success, key, url }` — Jira issues are keyed strings
+ * label. The summary and description go through the same scrubber every forge
+ * filer shares (`scrubForgeIssueText`, #8460); the slug marker is appended
+ * after it so redaction can never rewrite the dedup identity. Returns
+ * `{ success, key, url }` — Jira issues are keyed strings
  * (`PROJ-123`), not integers, so the handler resolves pause targets by key.
  */
 export async function fileProposalToJira({
@@ -117,10 +121,10 @@ export async function fileProposalToJira({
   model, effort, goodFirstIssue, helpWanted, planner, create = createTicket
 } = {}) {
   if (!instanceId || !projectKey) return { success: false, error: 'jira instance/project not configured' };
-  const description = `${body}\n\n${slugMarker(slug)}`;
+  const description = `${scrubForgeIssueText(body)}\n\n${slugMarker(slug)}`;
   const res = await create(instanceId, {
     projectKey,
-    summary: title,
+    summary: scrubForgeIssueText(title),
     description,
     issueType,
     labels: [LI_LABEL, ...jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner })]
