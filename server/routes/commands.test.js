@@ -38,11 +38,16 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 vi.mock('../services/auth.js', async () => {
-  const { extractToken } = await import('../../lib/portosAuthCore.js');
+  const { extractToken, extractTokens } = await import('../../lib/portosAuthCore.js');
+  const verifySession = vi.fn(async token => token === 'example-operator-session');
   return {
     extractToken,
     isAuthEnabled: vi.fn().mockResolvedValue(false),
-    verifySession: vi.fn(async token => token === 'example-operator-session'),
+    verifySession,
+    verifyRequestSession: async (req) => {
+      for (const token of extractTokens(req)) if (await verifySession(token)) return token;
+      return null;
+    },
     verifyPassword: vi.fn(async password => password === 'example-peer-password'),
   };
 });

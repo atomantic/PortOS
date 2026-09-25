@@ -537,7 +537,7 @@ describe('authGate Express path matching', () => {
     expect(status.body).toEqual({ enabled: true });
     const login = await request(app).post('/API/Auth/LOGIN').send({ password: 'correct-horse' });
     expect(login.status).toBe(200);
-    expect(login.headers['set-cookie']).toMatch(/portos_auth=/);
+    expect(login.headers['set-cookie']).toMatch(/portos_auth_\d+=/);
     const health = await request(app).get('/API/SYSTEM/HEALTH');
     expect(health.status).toBe(200);
     expect(health.body).toEqual({ status: 'ok' });

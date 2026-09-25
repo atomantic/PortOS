@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { remoteRequestHandler } from '../lib/requestOrigin.js';
 import { verifySession } from '../services/auth.js';
-vi.mock('../services/auth.js', () => ({
-  extractToken: req => req.headers.authorization,
-  verifySession: vi.fn().mockResolvedValue(true),
-  isAuthEnabled: vi.fn().mockResolvedValue(false),
-}));
+vi.mock('../services/auth.js', () => {
+  const verifySession = vi.fn().mockResolvedValue(true);
+  return {
+    extractToken: req => req.headers.authorization,
+    verifySession,
+    verifyRequestSession: async req => ((await verifySession(req.headers.authorization)) ? 'mock-session' : null),
+    isAuthEnabled: vi.fn().mockResolvedValue(false),
+  };
+});
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 

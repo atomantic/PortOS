@@ -196,6 +196,46 @@ describe('auth service', () => {
     expect(auth.extractToken({ headers: {} })).toBe(null);
   });
 
+  it('scopes the session cookie name to the browser-facing port', async () => {
+    const auth = await import('./auth.js');
+    expect(auth.sessionCookieNameFor('127.0.0.1:15555')).toBe('portos_auth_15555');
+    expect(auth.sessionCookieNameFor('box.tailnet.ts.net:5555')).toBe('portos_auth_5555');
+    expect(auth.sessionCookieNameFor('[::1]:5553')).toBe('portos_auth_5553');
+    // Default-port origins (e.g. `tailscale serve` on 443) keep the legacy name.
+    expect(auth.sessionCookieNameFor('box.tailnet.ts.net')).toBe('portos_auth');
+    expect(auth.sessionCookieNameFor('[::1]')).toBe('portos_auth');
+    expect(auth.sessionCookieNameFor(undefined)).toBe('portos_auth');
+    expect(auth.sessionCookieNameFor('host:0')).toBe('portos_auth');
+    expect(auth.sessionCookieNameFor('host:99999')).toBe('portos_auth');
+    expect(auth.buildSessionCookie('tok', { name: 'portos_auth_15555' })).toMatch(/^portos_auth_15555=tok; /);
+    expect(auth.buildClearCookie({ name: 'portos_auth_15555' })).toMatch(/^portos_auth_15555=; .*Max-Age=0/);
+  });
+
+  it('extracts every PortOS session cookie, own port first, then Bearer', async () => {
+    const auth = await import('./auth.js');
+    const req = {
+      headers: {
+        host: '127.0.0.1:15555',
+        cookie: 'portos_auth=legacy; other=x; portos_auth_5555=mac; portos_auth_15555=mine; portos_autofixer_auth=side; portos_auth_x=no',
+        authorization: 'Bearer bearer-tok',
+      },
+    };
+    expect(auth.extractTokens(req)).toEqual(['mine', 'legacy', 'mac', 'bearer-tok']);
+    expect(auth.extractToken(req)).toBe('mine');
+    expect(auth.parseSessionCookies('portos_auth=%E0; portos_auth_1=ok; portos_auth_1=ok')).toEqual([{ name: 'portos_auth_1', value: 'ok' }]);
+    const many = Array.from({ length: 20 }, (_, i) => `portos_auth_${i + 1}=t${i}`).join('; ');
+    expect(auth.parseSessionCookies(many)).toHaveLength(8);
+  });
+
+  it('verifyRequestSession accepts any live candidate so a stale same-host cookie cannot mask it', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.createSession();
+    const headers = { host: '127.0.0.1:15555', cookie: `portos_auth=${'d'.repeat(64)}; portos_auth_15555=${token}` };
+    expect(await auth.verifyRequestSession({ headers })).toBe(token);
+    expect(await auth.verifyRequestSession({ headers: { cookie: `portos_auth=${'d'.repeat(64)}`, authorization: `Bearer ${token}` } })).toBe(token);
+    expect(await auth.verifyRequestSession({ headers: { cookie: `portos_auth=${'d'.repeat(64)}` } })).toBe(null);
+  });
+
   it('builds session and clear cookies with the right flags', async () => {
     const auth = await import('./auth.js');
     const cookie = auth.buildSessionCookie('tok', { secure: true });
