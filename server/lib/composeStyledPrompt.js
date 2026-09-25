@@ -1,24 +1,26 @@
 /**
- * Compose a user prompt + negative with an optional style preset.
+ * Compose a user prompt + negative with an optional style preset — or several,
+ * for a caller layering independent style sources (e.g. a universe style and a
+ * built-in preset).
  *
- * Mirror of `client/src/lib/composeStyledPrompt.js` — kept in sync manually
- * since client and server are separate bundles (same convention as
- * `server/lib/scenePrompt.js` ↔ `client/src/lib/scenePrompt.js`).
+ * `client/src/lib/composeStyledPrompt.js` re-exports `composeStyledPrompt`
+ * from here (it keeps `composeCanonStyledPrompt`, a client-only wrapper).
  *
- * Preset prompt prefixes the user prompt — diffusion models weight earlier
+ * Preset prompt(s) prefix the user prompt — diffusion models weight earlier
  * tokens heaviest, so the broad aesthetic carries over the user's content.
- * Preset negative appends to user negative so user-specified avoids stay
+ * Preset negative(s) append to user negative so user-specified avoids stay
  * first-class.
  *
- * Used by Universe Builder's batch-prompt compiler and any future server-side
- * caller that needs the same style-prefix convention.
+ * Used by Universe Builder's batch-prompt compiler, the pipeline's visual
+ * stages, and any future server-side caller that needs the same style-prefix
+ * convention.
  */
 export function composeStyledPrompt(userPrompt, userNegative, preset) {
   const prompt = (userPrompt || '').trim();
   const negative = (userNegative || '').trim();
-  if (!preset) return { prompt, negativePrompt: negative };
-  const stylePart = (preset.prompt || '').trim();
-  const styleNeg = (preset.negativePrompt || '').trim();
+  const presets = Array.isArray(preset) ? preset : [preset];
+  const stylePart = presets.map((item) => (item?.prompt || '').trim()).filter(Boolean).join('. ');
+  const styleNeg = presets.map((item) => (item?.negativePrompt || '').trim()).filter(Boolean).join(', ');
   // Avoid trailing ". " when only one of the two parts is non-empty so the
   // composed prompt is clean and deterministic regardless of which input
   // is missing.

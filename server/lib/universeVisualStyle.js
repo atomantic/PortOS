@@ -44,6 +44,17 @@ export function universeVisualStyleTokens(universe) {
 }
 
 /**
+ * Join a chip-token list (embrace OR avoid) into the comma-separated string
+ * `composeStyledPrompt` consumes. Tokens are trimmed and blank entries
+ * dropped — the same normalization `universeVisualStyleTokens` applies to a
+ * whole universe, exposed here for a caller (`universeBuilder/compile.js`'s
+ * prompt assembly) that already has just the raw array, not the universe.
+ */
+export function joinInfluenceList(structured) {
+  return tokenList(structured).join(', ');
+}
+
+/**
  * Positive style clause for an image prompt.
  *
  * `override` / `mode` mirror `series.stylePromptOverride` +
@@ -114,4 +125,29 @@ export function mergeNegativePromptTokens(sources) {
 export function universeAestheticLine(universe, options) {
   const clause = buildVisualStyleClause(universe, options);
   return clause ? `Universe aesthetic: ${clause}` : '';
+}
+
+/**
+ * The ONE style preset a universe (plus an optional series override) hands to
+ * `composeStyledPrompt` — `{ prompt, negativePrompt } | null`. Both the browser
+ * (Universe Builder canon renders, FableLoom's scene composer) and the server
+ * (the FableLoom visual-canon compiler) must apply the exact same override
+ * composition, or a series override drifts out of sync between what the
+ * preview shows and what a render actually receives (#8442) — the browser
+ * used to carry its own copy (`client/src/lib/universeStylePreset.js`, now a
+ * re-export of this).
+ *
+ * `series` is optional; when omitted the result is the universe-only preset.
+ * Avoid (negative) tokens always come from the universe — the mode only
+ * composes the positive embrace clause. See `buildVisualStyleClause` for the
+ * prepend/append/override semantics of `stylePromptOverrideMode`.
+ */
+export function universeStylePreset(universe, series = null) {
+  const prompt = buildVisualStyleClause(universe, {
+    override: series?.stylePromptOverride,
+    mode: series?.stylePromptOverrideMode,
+  });
+  const negativePrompt = universeVisualStyleTokens(universe).avoid.join(', ');
+  if (!prompt && !negativePrompt) return null;
+  return { prompt, negativePrompt };
 }

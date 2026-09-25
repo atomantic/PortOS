@@ -10,19 +10,15 @@
  */
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
+import { joinInfluenceList } from '../../lib/universeVisualStyle.js';
 import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { getWorldCategoryKeys, normalizeCategoryKey, ENTRY_REF_KIND } from './sanitize.js';
 
-// Join an influence list (embrace or avoid) into the comma-separated string
-// shape the renderer's `composeStyledPrompt` consumes. Tokens have already
-// been deduped + capped by `sanitizeInfluenceList` at write time, so this is
-// just a thin join — exported so downstream consumers (universeCanon,
-// pipeline/visualStages) read a single helper instead of each open-coding
-// `(arr || []).join(', ')`.
-export function joinInfluenceList(structured = []) {
-  if (!Array.isArray(structured)) return '';
-  return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');
-}
+// Re-exported so this module's existing importers (universeCanon.js,
+// pipeline/seriesTitleLogo.js, seriesVoiceDiscover.js, seriesGenerate.js) are
+// unchanged — the canonical definition now lives in universeVisualStyle.js,
+// shared with the browser (#8442).
+export { joinInfluenceList };
 
 // Collapse newlines + control chars in user-supplied free text before
 // embedding in a prompt. Defense-in-depth against a logline / styleNotes /
