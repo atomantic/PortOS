@@ -265,8 +265,10 @@ export async function appendChanges(entries, { skipLogged = false } = {}) {
 const MAX_PENDING_APPENDS = 1000;
 let pendingAppends = [];
 
-function queuePendingAppends(entries) {
-  pendingAppends = [...entries, ...pendingAppends];
+// Oldest first. A retried batch goes back in FRONT of anything queued while it
+// was in flight (it is older); a fresh local write joins at the back.
+function queuePendingAppends(entries, { retried = false } = {}) {
+  pendingAppends = retried ? [...entries, ...pendingAppends] : [...pendingAppends, ...entries];
   const overflow = pendingAppends.length - MAX_PENDING_APPENDS;
   if (overflow > 0) {
     pendingAppends = pendingAppends.slice(overflow);
@@ -289,7 +291,7 @@ export async function retryPendingAppends() {
       return written.length;
     },
     (err) => {
-      queuePendingAppends(batch);
+      queuePendingAppends(batch, { retried: true });
       console.error(`❌ Brain sync log retry failed (${batch.length} entries queued): ${err.message}`);
       return 0;
     },
@@ -299,8 +301,10 @@ export async function retryPendingAppends() {
 /**
  * Append the relay entries of a LOCAL brain write. Never rejects — the record
  * is already saved, so a failed append is queued for retry instead of failing
- * the user's write. Earlier failures are retried first so local ops keep their
- * order in the log; while those still fail, the new entries queue behind them.
+ * the user's write. Earlier failures are retried first so local ops mostly keep
+ * their order in the log; while those still fail, the new entries queue behind
+ * them. Order is not load-bearing — peers and compaction resolve by the LWW
+ * clock, never by log position — so concurrent writers are not serialized here.
  */
 export async function appendLocalChanges(entries) {
   if (!entries?.length) return;
