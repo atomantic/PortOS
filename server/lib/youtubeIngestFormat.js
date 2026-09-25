@@ -199,8 +199,12 @@ export function compareIngestsDesc(a, b) {
   return String(b?.videoId || '').localeCompare(String(a?.videoId || ''));
 }
 
-/** Opaque continuation token: the sort key of the last record on a page. */
-export function encodeIngestCursor(record) {
+/**
+ * Opaque continuation token: the sort key of the last record on a page.
+ * Not exported — only `paginateIngests` below produces one; callers only
+ * ever need to decode a cursor they were handed, never mint one directly.
+ */
+function encodeIngestCursor(record) {
   const payload = JSON.stringify({ v: INGEST_CURSOR_VERSION, ingestedAt: record.ingestedAt, videoId: record.videoId });
   return Buffer.from(payload, 'utf8').toString('base64url');
 }

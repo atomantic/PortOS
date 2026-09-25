@@ -41,10 +41,11 @@ export default function YoutubeIngestSettings() {
   }, []);
 
   // Loads 50 records at a time; `usePagedCollection` dedupes by `id`, so each
-  // record is given one from its `videoId` (the ingest index's own key).
+  // record is given one from its `videoId` (the ingest index's own key). A
+  // failed fetch must reject rather than resolve empty, or `usePagedCollection`
+  // reads it as "no more records" and InfiniteScrollFooter's retry never shows.
   const fetchIngestsPage = useCallback(async ({ cursor, signal }) => {
-    const res = await api.getYoutubeIngests({ limit: INGESTS_PAGE_SIZE, cursor, silent: true, signal })
-      .catch(() => ({ ingests: [] }));
+    const res = await api.getYoutubeIngests({ limit: INGESTS_PAGE_SIZE, cursor, silent: true, signal });
     return {
       items: (res.ingests || []).map((record) => ({ ...record, id: record.videoId })),
       nextCursor: res.nextCursor ?? null,
@@ -203,7 +204,7 @@ export default function YoutubeIngestSettings() {
         {saving ? 'Saving…' : 'Save YouTube Settings'}
       </button>
 
-      {(ingests.length > 0 || ingestsPage.loading) && (
+      {(ingests.length > 0 || ingestsPage.loading || Boolean(ingestsPage.error)) && (
         <div className="pt-4 border-t border-port-border">
           <h4 className="text-sm font-medium text-gray-400 mb-2">
             Ingested ({ingests.length}{ingestsPage.hasMore ? '+' : ''})

@@ -9,7 +9,6 @@ import {
   buildAgentTaskContext,
   resolveObsidianPointer,
   compareIngestsDesc,
-  encodeIngestCursor,
   decodeIngestCursor,
   paginateIngests,
 } from './youtubeIngestFormat.js';
@@ -273,10 +272,11 @@ describe('ingest history cursor pagination (#8267)', () => {
     ]);
   });
 
-  it('round-trips a cursor through encode/decode', () => {
-    const record = { ingestedAt: '2026-01-02T00:00:00.000Z', videoId: 'ccccccccccc' };
-    const decoded = decodeIngestCursor(encodeIngestCursor(record));
-    expect(decoded).toEqual({ ingestedAt: record.ingestedAt, videoId: record.videoId });
+  it('round-trips a cursor minted by paginateIngests through decodeIngestCursor', () => {
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    const page = paginateIngests(sorted, { limit: 2 });
+    const decoded = decodeIngestCursor(page.nextCursor);
+    expect(decoded).toEqual({ ingestedAt: '2026-01-02T00:00:00.000Z', videoId: 'ccccccccccc' });
   });
 
   it('decodeIngestCursor returns null (never throws) on garbage input', () => {

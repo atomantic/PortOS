@@ -55,6 +55,17 @@ describe('YoutubeIngestSettings ingest history pagination (#8267)', () => {
     expect(screen.getByText('Video v1')).toBeInTheDocument();
   });
 
+  it('surfaces a failed initial fetch as a retryable error instead of a silent empty list', async () => {
+    api.getYoutubeIngests.mockRejectedValue(new Error('network down'));
+
+    render(<YoutubeIngestSettings />);
+
+    expect(await screen.findByRole('button', { name: /retry loading/i })).toBeInTheDocument();
+    // Not the "nothing ingested yet" silent case: the section header (and its
+    // retry) render even though zero records loaded.
+    expect(screen.getByText((_, el) => el.tagName === 'H4' && /Ingested \(0/.test(el.textContent))).toBeInTheDocument();
+  });
+
   it('removes a forgotten ingest from the loaded page without refetching', async () => {
     api.getYoutubeIngests.mockResolvedValue({ ingests: [ingest('v1', '2026-01-02T00:00:00.000Z')] });
     api.deleteYoutubeIngest.mockResolvedValue({ message: 'Ingest removed' });
