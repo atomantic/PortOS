@@ -94,7 +94,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
   it('does not persist the elevated checkout token into leaf job steps', () => {
     for (const id of leafJobs) {
       const body = jobs[id];
-      const checkoutStart = body.indexOf('      - uses: actions/checkout@v7');
+      const checkoutStart = body.indexOf('      - uses: actions/checkout@');
       const nextStep = body.indexOf('\n      - ', checkoutStart + 1);
       const checkout = body.slice(checkoutStart, nextStep === -1 ? undefined : nextStep);
       expect(checkout, id).toContain('persist-credentials: false');

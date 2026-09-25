@@ -61,7 +61,7 @@ jobs:
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Depth 2, not full history: a pull_request checkout is the merge ref,
           # so depth 2 carries both of its parents — which is everything the
@@ -143,7 +143,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
@@ -154,7 +154,7 @@ jobs:
         run: node scripts/ci-base-sha.js
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
           cache: npm
@@ -180,7 +180,7 @@ jobs:
       # See docs/GITHUB_ACTIONS.md.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -248,7 +248,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             server/node_modules/.vite
@@ -342,7 +342,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
@@ -353,7 +353,7 @@ jobs:
         run: node scripts/ci-base-sha.js
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
           cache: npm
@@ -376,7 +376,7 @@ jobs:
       # has a stamp check to notice.
       - name: Cache client node_modules
         id: client-modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
           key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -386,7 +386,7 @@ jobs:
         run: npm ci --prefix client
 
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             client/node_modules/.vite
@@ -453,12 +453,12 @@ jobs:
       # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
       # test jobs: the linter's file list arrives from the impact plan, so this
       # job never diffs and a single-commit checkout is everything it needs.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
           cache: npm
@@ -481,7 +481,7 @@ jobs:
       # has a stamp check to notice.
       - name: Cache client node_modules
         id: client-modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: client/node_modules
           key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -535,12 +535,12 @@ jobs:
       PGPASSWORD: portos
       PORTOS_REQUIRE_DB: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
           cache: npm
@@ -551,7 +551,7 @@ jobs:
       # on the cache hit.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -619,7 +619,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             server/node_modules/.vite
@@ -667,7 +667,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # See the impact job: depth 2 is the whole PR merge ref, which is all
@@ -678,7 +678,7 @@ jobs:
         run: node scripts/ci-base-sha.js
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
           cache: npm
@@ -689,7 +689,7 @@ jobs:
       # on the cache hit.
       - name: Cache server node_modules
         id: server-modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: server/node_modules
           key: server-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
@@ -757,7 +757,7 @@ jobs:
       # deliberately: this is where a near miss is safe, so this is the entry
       # that keeps restore-keys and stays warm across a lockfile bump.
       - name: Cache Vitest transform artifacts
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             server/node_modules/.vite
@@ -796,12 +796,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Use the minimum supported Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.22.2
 
@@ -841,7 +841,7 @@ jobs:
       # gate is the fan-in job every required check waits on. Cone mode always
       # includes the repo root, which is where package.json ("type": "module")
       # has to come from for the script to load as ESM.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts
           persist-credentials: false
@@ -890,7 +890,7 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts
           persist-credentials: false

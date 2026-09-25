@@ -25,7 +25,7 @@ jobs:
     steps:
       # Depth 2 so both parents of the release merge commit — and their trees —
       # are available to compare against the tree being released.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
 
@@ -74,13 +74,13 @@ jobs:
     if: always() && !contains(github.event.head_commit.message, '[skip ci]')
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.x
 
@@ -204,7 +204,7 @@ jobs:
 
       - name: Create Release
         if: steps.release-check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
           name: ${{ steps.changelog.outputs.release_title }}
