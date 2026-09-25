@@ -22,6 +22,7 @@ import {
 } from '../../lib/schemaVersions.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';
+import { SERIES_ID_RE } from '../pipeline/series.js';
 import { diffWorkBodyManifest } from '../writersRoom/sync.js';
 import {
   ackDeletesUpTo,
@@ -275,6 +276,15 @@ export async function applyIncomingPush(payload, authorization) {
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
       await mergeIssuesFromSync(issues, { source, senderSchemaVersions });
     }
+    // Bundled sidecar docs (manuscript-review, reverse-outline) write under the
+    // series record dir, so a malformed id (e.g. containing `../`) would escape
+    // the series store. mergeSeriesFromSync already refused the record itself;
+    // skip its sidecars too. NOT marked pending: an invalid id can never become
+    // valid, so withholding the sender's hash would retry it forever.
+    const seriesIdValid = SERIES_ID_RE.test(record.id);
+    if (!seriesIdValid && (isPlainObject(manuscriptReview) || isPlainObject(reverseOutline))) {
+      console.warn(`⚠️ peerSync: skipped bundled series sidecars for invalid series id`);
+    }
     // Merge the bundled manuscript-review sibling doc, LWW-per-comment. Same
     // guards as the issue batch + linkedCollection below: skip for local-
     // ephemeral records (the user opted this series out of sync) and tombstone
@@ -285,7 +295,7 @@ export async function applyIncomingPush(payload, authorization) {
     // lastPushedHash. Raise the row's pending flag so the sender withholds the
     // hash (mirrors the missing-assets guard) and retries next cycle.
     // Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
+    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
       const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
       await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
     }
@@ -294,7 +304,7 @@ export async function applyIncomingPush(payload, authorization) {
     // the review above: a merge failure must withhold the sender's hash so the
     // outline (which has no independent reconciliation cycle) re-sends next
     // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
+    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
       const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
       await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
     }
