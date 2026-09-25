@@ -42,7 +42,7 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, providers, providersLoaded, apps }) {
+export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -53,6 +53,20 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
   const userHistory = usePagedCollection(fetchUserHistory, { enabled: showCompletedUserTasks && tasks.user?.completedCount != null });
   const systemHistory = usePagedCollection(fetchSystemHistory, { enabled: showCompletedSystemTasks && tasks.cos?.completedCount != null });
   const refreshHistory = () => { userHistory.reload(); systemHistory.reload(); onRefresh(); };
+
+  const handleTaskDeleted = useCallback((taskId, taskSource) => {
+    if (taskSource === 'user') {
+      setUserTasksLocal(prev => prev.filter(t => t.id !== taskId));
+      userHistory.setItems(prev => prev.filter(t => t.id !== taskId));
+    } else if (taskSource === 'internal' || taskSource === 'cos') {
+      systemHistory.setItems(prev => prev.filter(t => t.id !== taskId));
+    } else {
+      setUserTasksLocal(prev => prev.filter(t => t.id !== taskId));
+      userHistory.setItems(prev => prev.filter(t => t.id !== taskId));
+      systemHistory.setItems(prev => prev.filter(t => t.id !== taskId));
+    }
+    onTaskDeleted?.(taskId, taskSource);
+  }, [onTaskDeleted, userHistory.setItems, systemHistory.setItems]);
   const historyVersion = useRef({ user: tasks.user?.completedCount, internal: tasks.cos?.completedCount, revision: completedRevision });
   useEffect(() => {
     const previous = historyVersion.current;
@@ -268,7 +282,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                     >
                       <div className="space-y-1.5">
                         {pendingUserTasksLocal.map(task => (
-                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                          <SortableTaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                         ))}
                       </div>
                     </SortableContext>
@@ -288,7 +302,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -305,7 +319,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -328,7 +342,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 {showCompletedUserTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
                     {tasks.user?.completedCount != null && <InfiniteScrollFooter hasMore={userHistory.hasMore} loading={userHistory.loading} error={userHistory.error} onLoadMore={userHistory.loadMore} />}
                   </div>
@@ -362,7 +376,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
                 <div className="p-2 space-y-1.5">
                   {pendingSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -379,7 +393,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -396,7 +410,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 </div>
                 <div className="p-2 space-y-1.5">
                   {blockedSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -419,7 +433,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], li
                 {showCompletedSystemTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
                     {tasks.cos?.completedCount != null && <InfiniteScrollFooter hasMore={systemHistory.hasMore} loading={systemHistory.loading} error={systemHistory.error} onLoadMore={systemHistory.loadMore} />}
                   </div>
