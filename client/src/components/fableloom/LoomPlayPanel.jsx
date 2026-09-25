@@ -129,7 +129,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   useEffect(() => {
     if (!hostedSession?.id) return;
     const socket = io('/fableloom-hosted', {
-      auth: { sessionId: hostedSession.id, token: hostedSession.token, role: 'host' },
+      auth: { sessionId: hostedSession.id, token: hostedSession.hostToken, role: 'host' },
       transports: ['websocket', 'polling'],
     });
     hostedSocketRef.current = socket;
@@ -196,7 +196,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       socket.disconnect();
       hostedSocketRef.current = null;
     };
-  }, [hostedSession?.id, hostedSession?.token]);
+  }, [hostedSession?.id, hostedSession?.hostToken]);
 
   // Re-bind the server-side hosted session when the host advances to a
   // different episode (e.g. the "Next: Episode N" button). Without this the

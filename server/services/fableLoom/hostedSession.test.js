@@ -16,6 +16,7 @@ import {
   stopHostedSessionSweep,
   switchHostedEpisode,
   updateHostedSession,
+  verifyHostedHostToken,
   verifyHostedToken,
 } from './hostedSession.js';
 import * as records from './records.js';
@@ -216,6 +217,29 @@ describe('fableLoom hostedSession', () => {
       expect(verifyHostedToken(result.session.id, result.token)).toBe(true);
       expect(verifyHostedToken(result.session.id, 'wrong-token')).toBe(false);
       expect(verifyHostedToken('missing-session', result.token)).toBe(false);
+    });
+
+    it('mints a separate host token that never appears in the join URL (#8357)', async () => {
+      const result = await createHostedSession('loom-1', 'ep-1', { audioTarget: 'host' });
+      expect(result.hostToken).toBeDefined();
+      expect(result.hostToken.length).toBe(64); // 256 bits hex
+      expect(result.hostToken).not.toBe(result.token);
+      expect(result.joinUrl).not.toContain(result.hostToken);
+
+      // Internal storage verifies hashed host token, distinct from the audience hash
+      const internal = _getInternalSession(result.session.id);
+      expect(internal.hashedHostToken).toBeDefined();
+      expect(internal.hashedHostToken).not.toBe(internal.hashedToken);
+      expect(internal.hashedHostToken).not.toBe(result.hostToken); // Hashed, not plaintext
+
+      // Sanitized session omits hashedHostToken
+      const sanitized = getHostedSession(result.session.id);
+      expect(sanitized.hashedHostToken).toBeUndefined();
+
+      // The audience token must NOT verify as a host token, and vice versa
+      expect(verifyHostedHostToken(result.session.id, result.hostToken)).toBe(true);
+      expect(verifyHostedHostToken(result.session.id, result.token)).toBe(false);
+      expect(verifyHostedToken(result.session.id, result.hostToken)).toBe(false);
     });
 
     it('refuses to start a session on an HTTP-only install with a 412 preflight failure', async () => {

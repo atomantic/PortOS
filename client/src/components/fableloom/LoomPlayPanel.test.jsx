@@ -10,7 +10,10 @@ vi.mock('socket.io-client', () => ({
 vi.mock('./LoomHostedSessionModal', () => ({
   default: ({ onSessionCreated }) => (
     <button type="button" onClick={() => onSessionCreated({ id: 'host-session' }, {
-      id: 'host-session', token: 'host-token', joinUrl: 'https://example.test/fableloom/join#session=host-session&token=host-token',
+      id: 'host-session',
+      token: 'audience-token',
+      hostToken: 'the-real-host-token',
+      joinUrl: 'https://example.test/fableloom/join#session=host-session&token=audience-token',
     })}>
       Start hosted session
     </button>
@@ -46,7 +49,7 @@ const sendMessage = async (user, text) => {
 beforeEach(() => vi.clearAllMocks());
 
 describe('LoomPlayPanel', () => {
-  it('authenticates the host socket with the session token', async () => {
+  it('authenticates the host socket with the HOST token, never the audience join token (#8357)', async () => {
     const user = userEvent.setup();
     render(<LoomPlayPanel loom={loom} episode={episode} />);
 
@@ -54,7 +57,7 @@ describe('LoomPlayPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
 
     expect(io).toHaveBeenCalledWith('/fableloom-hosted', expect.objectContaining({
-      auth: { sessionId: 'host-session', token: 'host-token', role: 'host' },
+      auth: { sessionId: 'host-session', token: 'the-real-host-token', role: 'host' },
     }));
   });
 
