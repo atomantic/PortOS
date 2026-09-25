@@ -55,8 +55,31 @@ describe('deleteMergedBranches', () => {
     // The reaper's reason is what tells the user why the branch survived — the
     // generic "it's in a worktree" wording is now only the unknown-reason fallback.
     expect(cleanup.skipped).toEqual(['feature/locked (local: worktree has uncommitted changes)']);
-    expect(execGit).toHaveBeenCalledWith(['branch', '-d', 'feature/free'], '/repo', { ignoreExitCode: true });
-    expect(execGit).not.toHaveBeenCalledWith(['branch', '-d', 'feature/locked'], '/repo', { ignoreExitCode: true });
+    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/free'], '/repo', { ignoreExitCode: true });
+    expect(execGit).not.toHaveBeenCalledWith(['branch', '-D', 'feature/locked'], '/repo', { ignoreExitCode: true });
+  });
+
+  it('deletes branches proven merged into the default when the app checkout is elsewhere', async () => {
+    execGit.mockImplementation((args) => {
+      if (args[0] === 'symbolic-ref') return Promise.resolve(result('origin/main\n'));
+      if (args[0] === 'rev-parse' && args.includes('--verify')) return Promise.resolve(result('abc123\n'));
+      if (args[0] === 'rev-parse' && args.includes('--abbrev-ref')) return Promise.resolve(result('develop\n'));
+      if (args[0] === 'branch' && args.includes('--list')) return Promise.resolve(result('  develop\n  main\n  feature/merged\n'));
+      if (args[0] === 'branch' && args.includes('-r') && args.includes('--merged')) return Promise.resolve(result(''));
+      if (args[0] === 'branch' && args.includes('--merged')) {
+        return Promise.resolve(result('main\nfeature/merged\n'));
+      }
+      if (args[0] === 'branch' && args[1] === '-d') {
+        return Promise.resolve(result('', 1, 'error: branch is not fully merged into the current checkout'));
+      }
+      return Promise.resolve(result());
+    });
+
+    const cleanup = await deleteMergedBranches('/repo');
+
+    expect(cleanup.deleted).toEqual([{ name: 'feature/merged', local: 'deleted', remote: null }]);
+    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/merged'], '/repo', { ignoreExitCode: true });
+    expect(execGit).not.toHaveBeenCalledWith(['branch', '-d', 'feature/merged'], '/repo', { ignoreExitCode: true });
   });
 
   it('reports a worktree-held branch generically when the reaper named no reason', async () => {
@@ -87,9 +110,9 @@ describe('deleteMergedBranches', () => {
     expect(cleanup.deleted).toEqual([
       { name: 'feature/reaped', local: 'deleted', remote: 'deleted', worktree: 'removed' }
     ]);
-    // The reap already deleted the local branch — re-running `branch -d` would
-    // only produce a spurious "not found" skip.
-    expect(execGit).not.toHaveBeenCalledWith(['branch', '-d', 'feature/reaped'], '/repo', { ignoreExitCode: true });
+    // The reap already deleted the local branch — re-running branch deletion
+    // would only produce a spurious "not found" skip.
+    expect(execGit).not.toHaveBeenCalledWith(['branch', '-D', 'feature/reaped'], '/repo', { ignoreExitCode: true });
     expect(execGit).toHaveBeenCalledWith(['push', 'origin', '--delete', 'feature/reaped'], '/repo', { ignoreExitCode: true });
   });
 
@@ -120,7 +143,7 @@ describe('deleteMergedBranches', () => {
 
     // The worktree hold is gone with the tree, so the branch is an ordinary
     // target again rather than being reported as still checked out.
-    expect(execGit).toHaveBeenCalledWith(['branch', '-d', 'feature/locked'], '/repo', { ignoreExitCode: true });
+    expect(execGit).toHaveBeenCalledWith(['branch', '-D', 'feature/locked'], '/repo', { ignoreExitCode: true });
     expect(cleanup.deleted).toContainEqual({ name: 'feature/locked', local: 'deleted', remote: null });
     expect(cleanup.skipped).toEqual([]);
   });
