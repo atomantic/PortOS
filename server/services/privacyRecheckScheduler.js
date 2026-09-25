@@ -71,9 +71,9 @@ const SCHEDULED_PURPOSES = [
  * is still refused. One subject's or purpose's failure must not abort the
  * others, and this runs OUTSIDE the request lifecycle, so the per-pass
  * try/catch is the sanctioned exception to the no-try/catch rule.
- * Exported for tests; the cron handler calls it after the enabled check.
+ * The cron handler calls it after the enabled check.
  */
-export async function runScheduledRecheck() {
+async function runScheduledRecheck() {
   const subjects = await listSubjects();
   for (const { scope, label, run } of SCHEDULED_PURPOSES) {
     const granted = subjects.filter((s) => (s.activeScopes ?? []).includes(scope));

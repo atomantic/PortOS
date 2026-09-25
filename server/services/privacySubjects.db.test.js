@@ -97,10 +97,9 @@ describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
     expect(consents[0]).toMatchObject({
       subjectId: subject.id, scope: 'pii_vault', method: 'signed_form', note: 'form filed',
     });
-    expect(await subjects.hasActiveConsent(subject.id, 'pii_vault')).toBe(true);
     // Creation grants local-vault use only — never a broker purpose (#8332).
-    expect(await subjects.hasActiveConsent(subject.id, 'broker_scan')).toBe(false);
-    expect(await subjects.hasActiveConsent(subject.id, 'broker_optout')).toBe(false);
+    const row = (await subjects.listSubjects()).find((s) => s.id === subject.id);
+    expect(row.activeScopes).toEqual(['pii_vault']);
   });
 
   it('reports consent and record counts on the list', async () => {

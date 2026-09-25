@@ -25,7 +25,7 @@ vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransact
 
 const {
   resolveSubjectId, createSubject, updateSubject, deleteSubject,
-  listSubjects, assertSubject, hasActiveConsent, assertSubjectConsent, recordConsent,
+  listSubjects, assertSubject, assertSubjectConsent, recordConsent,
   revokeConsent,
 } = await import('./privacySubjects.js');
 const { PRIVACY_SELF_SUBJECT_ID } = await import('../lib/privacyValidation.js');
@@ -203,7 +203,7 @@ describe('consent gate — purpose-scoped (#8332)', () => {
 
   it('a pii_vault-only subject is refused BOTH broker purposes', async () => {
     useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }]);
-    expect(await hasActiveConsent('s2', 'pii_vault')).toBe(true);
+    await expect(assertSubjectConsent('s2', { scope: 'pii_vault' })).resolves.toMatchObject({ id: 's2' });
     for (const scope of ['broker_scan', 'broker_optout']) {
       await expect(assertSubjectConsent('s2', { scope, action: 'x' }))
         .rejects.toMatchObject({ status: 403, code: 'SUBJECT_CONSENT_REQUIRED' });
@@ -226,7 +226,6 @@ describe('consent gate — purpose-scoped (#8332)', () => {
   it('refuses to run an unscoped gate — there is no "any consent" mode', async () => {
     useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }]);
     await expect(assertSubjectConsent('s2', { action: 'scan' })).rejects.toMatchObject({ code: 'CONSENT_SCOPE_INVALID' });
-    await expect(hasActiveConsent('s2')).rejects.toMatchObject({ code: 'CONSENT_SCOPE_INVALID' });
     expect(queryMock).not.toHaveBeenCalled();
   });
 

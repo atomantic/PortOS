@@ -236,9 +236,10 @@ function assertKnownScope(scope) {
  * Does this subject hold an ACTIVE (unrevoked) grant for exactly `scope`? A
  * grant for a different purpose never counts — `pii_vault` (local storage)
  * does not imply `broker_scan`, and `broker_scan` does not imply
- * `broker_optout`. Callers that need a hard stop use assertSubjectConsent.
+ * `broker_optout`. Module-private: callers use assertSubjectConsent (the hard
+ * stop) or listSubjects' `activeScopes` (the read-only view).
  */
-export async function hasActiveConsent(subjectId, scope) {
+async function hasActiveConsent(subjectId, scope) {
   assertKnownScope(scope);
   const resolved = resolveSubjectId(subjectId);
   const { rows } = await query(

@@ -10,7 +10,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { listSubjectsMock, runScanPassMock, runOptOutPassMock } = vi.hoisted(() => ({
+const { listSubjectsMock, runScanPassMock, runOptOutPassMock, scheduleMock } = vi.hoisted(() => ({
+  scheduleMock: vi.fn(),
   listSubjectsMock: vi.fn(),
   runScanPassMock: vi.fn(async () => ({})),
   runOptOutPassMock: vi.fn(async () => ({})),
@@ -19,11 +20,18 @@ const { listSubjectsMock, runScanPassMock, runOptOutPassMock } = vi.hoisted(() =
 vi.mock('./privacySubjects.js', () => ({ listSubjects: listSubjectsMock }));
 vi.mock('./privacyScan.js', () => ({ runScanPass: runScanPassMock }));
 vi.mock('./privacyOptOut.js', () => ({ runOptOutPass: runOptOutPassMock }));
-vi.mock('./eventScheduler.js', () => ({ schedule: vi.fn(), cancel: vi.fn(), parseCronToNextRun: vi.fn() }));
-vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+vi.mock('./eventScheduler.js', () => ({ schedule: scheduleMock, cancel: vi.fn(), parseCronToNextRun: vi.fn() }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: { enabled: true } } })) }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
 
-const { runScheduledRecheck } = await import('./privacyRecheckScheduler.js');
+const { startPrivacyRecheckScheduler } = await import('./privacyRecheckScheduler.js');
+
+// Register the cron, then fire its handler the way the event scheduler would.
+const runScheduledRecheck = async () => {
+  await startPrivacyRecheckScheduler();
+  const { handler } = scheduleMock.mock.calls.at(-1)[0];
+  await handler();
+};
 
 const ranFor = (mock) => mock.mock.calls.map(([arg]) => arg.subjectId);
 
