@@ -171,11 +171,13 @@ export default function WaveformPanel({
   // (unless a draw already landed first).
   useEffect(() => {
     safeRemoveStorage(LEGACY_SKETCH_KEY);
-    if (track || !trackId) return;
+    if (track || !trackId) return undefined;
+    let cancelled = false;
     getTrack(trackId, { silent: true }).then((loaded) => {
       const stored = normalizeWaveSketch(loaded?.waveSketch);
-      if (stored && mountedRef.current) setSketch((current) => current ?? stored);
+      if (stored && !cancelled) setSketch((current) => current ?? stored);
     }).catch(() => {});
+    return () => { cancelled = true; };
   }, [trackId, track]);
 
   const stop = () => {
