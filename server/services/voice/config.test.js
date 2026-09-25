@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 const { getSettings, updateSettings } = await import('../settings.js');
 const { VOICE_DEFAULTS, getVoiceConfig, updateVoiceConfig, invalidateVoiceConfigCache } = await import('./config.js');
@@ -24,6 +25,23 @@ describe('voice configuration defaults', () => {
       modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
       voice: 'warm-narrator',
     });
+  });
+
+  it('keeps every shipped voice setting aligned with its code default', async () => {
+    const seed = JSON.parse(await readFile(new URL('../../../data.reference/settings.json', import.meta.url), 'utf8'));
+
+    const assertSeedLeavesMatchDefaults = (defaults, values, path = 'voice') => {
+      for (const [key, value] of Object.entries(values)) {
+        const currentPath = `${path}.${key}`;
+        if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          assertSeedLeavesMatchDefaults(defaults?.[key] || {}, value, currentPath);
+          continue;
+        }
+        expect(defaults?.[key], `seed ${currentPath} must match VOICE_DEFAULTS`).toEqual(value);
+      }
+    };
+
+    assertSeedLeavesMatchDefaults(VOICE_DEFAULTS, seed.voice);
   });
 });
 
