@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -43,7 +43,7 @@ import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
-import { isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
+import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
@@ -159,6 +159,7 @@ async function prepareRequestedWorktree({
   forkHead,
   allowSharedWorkspaceFallback,
 }) {
+  const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
   // Detecting the base branch and resolving the branch holder are independent
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
@@ -218,7 +219,8 @@ async function prepareRequestedWorktree({
     // `origin/<branch>` to attach to (#6064). Null for every other task, which
     // is the behavior that predates it.
     forkHead: forkHead || undefined,
-    planId: task.metadata?.planId || undefined
+    planId: task.metadata?.planId || undefined,
+    linkDependencies: !isolateDependencies,
   }).catch(err => {
     worktreeError = err;
     emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${err.message}`, { taskId: task.id });
@@ -227,6 +229,11 @@ async function prepareRequestedWorktree({
 
   if (worktreeInfo) {
     const nextWorkspacePath = worktreeInfo.worktreePath;
+    // An adopted tree may predate the dependency-update opt-out. Detach only
+    // the source-checkout links; preserve a real install already in the tree.
+    if (isolateDependencies && takeover?.worktreeInfo) {
+      await unlinkWorktreeDependencies(workspacePath, nextWorkspacePath);
+    }
     const origin = worktreeInfo.adopted
       ? `adopted from ${takeover?.adoptedFrom || task.metadata?.resumedFromAgentId || 'the interrupted run'}`
       : `base: ${worktreeInfo.baseBranch}`;
@@ -575,7 +582,8 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         });
 
         worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-          planId: task.metadata?.planId || undefined
+          planId: task.metadata?.planId || undefined,
+          linkDependencies: resolveTaskHookType(task) !== 'dependency-updates',
         }).catch(err => {
           emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
           return null;

@@ -385,6 +385,13 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(5);
   });
 
+  it('keeps dependency installs inside scheduled worktrees', () => {
+    const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
+    expect(current).toContain('intentionally private to that worktree');
+    expect(current).toContain('isolated from the source checkout');
+    expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(7);
+  });
+
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
   // code-reviewer-a/b version a pipeline whose stages use the
   // code-reviewer-review / code-reviewer-implement prompt bodies — so there is

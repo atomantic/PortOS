@@ -262,9 +262,11 @@ npm install --prefix client
 pm2 restart portos-cos
 ```
 
-**Prevention**: if a worktree is missing dependencies, symlink them from the
-primary checkout and call the workspace binaries directly
-(`server/node_modules/.bin/vitest run <files>`) — never install.
+**Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
+use the workspace binaries from the primary checkout
+(`server/node_modules/.bin/vitest run <files>`) and never install there. The
+`dependency-updates` scheduled task is the exception: its managed worktree gets
+no dependency symlinks, and any package-manager install stays in that worktree.
 
 ### Tasks Not Being Picked Up
 

@@ -487,6 +487,11 @@ Check {appName} dependencies for updates and security vulnerabilities:
 
 Repository: {repoPath}
 
+When this task runs in a CoS-managed worktree, its \`node_modules\` directories are
+intentionally private to that worktree. If validation needs installed packages,
+use the repository's documented package manager from the worktree so installs
+and lockfile regeneration stay isolated from the source checkout.
+
 Inventory security alerts first, then resolve open automated dependency PRs before
 making your own bumps. A Dependabot/Renovate PR is a bump already
 proposed and already isolated to one package — redoing it yourself conflicts with the bot
