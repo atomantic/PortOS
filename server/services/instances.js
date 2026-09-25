@@ -919,14 +919,37 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   const result = await withData(async (data) => {
     // Check for existing peer by instanceId
     let existing = data.peers.find(p => p.instanceId === instanceId);
+    // instanceId is public (GET /api/system/health returns it unauthenticated),
+    // so a match on instanceId alone does not prove the caller IS that peer —
+    // only that it knows a public value. Track whether the match instead came
+    // through the address+port fallback below, where the caller's address is
+    // already part of the match.
+    let matchedByAddress = false;
     // Fallback: check by address + port
     if (!existing) {
       existing = data.peers.find(p => p.address === address && p.port === port);
+      matchedByAddress = true;
     }
 
     const normalizedHost = validHost(host);
 
     if (existing?.syncSecret) return { created: false, peer: existing };
+
+    // A forged announce: instanceId matches a stored peer, but the caller's
+    // source address does not match the stored one. Record the sighting only
+    // — never let it teach host/port/name/status, or an attacker who merely
+    // reads a peer's public instanceId could redirect our future requests
+    // (and the peer's Basic credential) to a host they control.
+    // Exempt tailcat: its stored `address` is intentionally the LOCAL forward's
+    // loopback address, never the remote caller's — a mismatch there is the
+    // normal case, not a forgery signal, and its host/port are already pinned
+    // to the local forward by the `transport !== 'tailcat'` guards below.
+    if (existing && !matchedByAddress && existing.transport !== 'tailcat' && existing.address !== address) {
+      console.warn(`⚠️ Peer announce instanceId matched but address mismatched (expected ${existing.address}, got ${address}) — ignoring host/port/name update`);
+      existing.lastSeen = new Date().toISOString();
+      instanceEvents.emit('peers:updated', data.peers);
+      return { created: false, peer: existing };
+    }
 
     if (existing) {
       existing.lastSeen = new Date().toISOString();
