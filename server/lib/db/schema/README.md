@@ -44,13 +44,14 @@ init-db.sql, each with a one-line reason.
 | `x.js` | `xDdl` | X account diagnostics, public post metrics, and review-gated drafts |
 | `beeper.js` | `beeperDdl` | Beeper conversation mirror — accounts, the vault-encrypted access credential, conversations, messages, participants, attachment metadata, sync cursors, and the outbound send outbox (machine-local, never federated) |
 | `audit.js` | `auditDdl`, `auditedTables`, `buildAuditTriggers()` | `record_audit` table/function + per-table audit triggers |
+| `syncFeed.js` | `syncFeedDdl`, `syncFeedTables`, `buildSyncFeedTriggers()` | Commit-ordered federation change feed (`sync_feed`) + deferred capture triggers on memories and the catalog tables (#8315) |
 
 ### Composer (`index.js`)
 
 - `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `aiGraph`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
-  `beeper` → `audit` DDL → audit triggers).
+  `beeper` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).
 
 `ensureSchemaImpl()` calls these two builders and runs each list through
 `pool.query` in order.

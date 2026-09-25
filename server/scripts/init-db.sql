@@ -2148,3 +2148,76 @@ CREATE TABLE IF NOT EXISTS deck_cards (
   );
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards (deck_id, position);
 CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks (deleted, updated_at DESC);
+
+-- ============================================================================
+-- Commit-ordered federation change feed (#8315)
+-- ============================================================================
+-- Peers page memories and the catalog tables by a feed POSITION drawn at
+-- COMMIT (deferred constraint triggers serialized by a transaction-scoped
+-- advisory lock), not by the row-write-time sync_sequence, so a transaction
+-- that commits late can never land below a cursor a peer already advanced
+-- past. Positions start at 1e15 so a legacy sync_sequence cursor replays the
+-- whole feed once. Rationale: server/lib/db/schema/syncFeed.js (mirrored there
+-- for existing installs; parity-locked by db.ddlParity.test.js).
+CREATE TABLE IF NOT EXISTS sync_feed (
+  stream TEXT NOT NULL,
+  row_sequence BIGINT NOT NULL,
+  position BIGINT NOT NULL,
+  PRIMARY KEY (stream, row_sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_feed_position ON sync_feed (stream, position);
+CREATE SEQUENCE IF NOT EXISTS memories_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_scraps_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredients_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_sources_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_refs_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_relations_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_tags_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE SEQUENCE IF NOT EXISTS catalog_ingredient_media_sync_feed_seq START WITH 1000000000000000 MINVALUE 1000000000000000;
+CREATE OR REPLACE FUNCTION sync_feed_capture()
+RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(8315001);
+  IF TG_OP <> 'INSERT' THEN
+    DELETE FROM sync_feed WHERE stream = TG_TABLE_NAME AND row_sequence = OLD.sync_sequence;
+  END IF;
+  IF TG_OP <> 'DELETE' THEN
+    INSERT INTO sync_feed (stream, row_sequence, position)
+    VALUES (TG_TABLE_NAME, NEW.sync_sequence, nextval(format('%I', TG_TABLE_NAME || '_sync_feed_seq')::regclass))
+    ON CONFLICT (stream, row_sequence) DO UPDATE SET position = EXCLUDED.position;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_memories_sync_feed ON memories;
+CREATE CONSTRAINT TRIGGER trg_memories_sync_feed AFTER INSERT OR DELETE ON memories DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_memories_sync_feed_update ON memories;
+CREATE CONSTRAINT TRIGGER trg_memories_sync_feed_update AFTER UPDATE ON memories DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_scraps_sync_feed ON catalog_scraps;
+CREATE CONSTRAINT TRIGGER trg_catalog_scraps_sync_feed AFTER INSERT OR DELETE ON catalog_scraps DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_scraps_sync_feed_update ON catalog_scraps;
+CREATE CONSTRAINT TRIGGER trg_catalog_scraps_sync_feed_update AFTER UPDATE ON catalog_scraps DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredients_sync_feed ON catalog_ingredients;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredients_sync_feed AFTER INSERT OR DELETE ON catalog_ingredients DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredients_sync_feed_update ON catalog_ingredients;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredients_sync_feed_update AFTER UPDATE ON catalog_ingredients DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_sources_sync_feed ON catalog_ingredient_sources;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_sources_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_sources DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_sources_sync_feed_update ON catalog_ingredient_sources;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_sources_sync_feed_update AFTER UPDATE ON catalog_ingredient_sources DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_refs_sync_feed ON catalog_ingredient_refs;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_refs_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_refs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_refs_sync_feed_update ON catalog_ingredient_refs;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_refs_sync_feed_update AFTER UPDATE ON catalog_ingredient_refs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_relations_sync_feed ON catalog_ingredient_relations;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_relations_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_relations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_relations_sync_feed_update ON catalog_ingredient_relations;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_relations_sync_feed_update AFTER UPDATE ON catalog_ingredient_relations DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_tags_sync_feed ON catalog_tags;
+CREATE CONSTRAINT TRIGGER trg_catalog_tags_sync_feed AFTER INSERT OR DELETE ON catalog_tags DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_tags_sync_feed_update ON catalog_tags;
+CREATE CONSTRAINT TRIGGER trg_catalog_tags_sync_feed_update AFTER UPDATE ON catalog_tags DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredient_media;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
+DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
+CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
