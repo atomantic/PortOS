@@ -278,16 +278,23 @@ export async function createHostedSession(loomId, episodeId, {
   }
 
   const sessionId = randomUUID();
-  // Generate 256-bit cryptographically secure token
+  // Generate 256-bit cryptographically secure tokens. The audience (QR/join
+  // link) token and the host token are DISTINCT secrets — the audience token
+  // must never grant `role: 'host'` (#8357), so each is hashed and verified
+  // independently.
   const token = randomBytes(32).toString('hex');
   const hashedToken = createHash('sha256').update(token).digest('hex');
+  const hostToken = randomBytes(32).toString('hex');
+  const hashedHostToken = createHash('sha256').update(hostToken).digest('hex');
 
   const boundedTtl = Math.max(1, Math.min(MAX_SESSION_TTL_MINUTES, Number.isInteger(ttlMinutes) ? ttlMinutes : DEFAULT_SESSION_TTL_MINUTES));
   const now = new Date();
   const expiresAt = new Date(now.getTime() + boundedTtl * 60 * 1000).toISOString();
 
   const rootBaseUrl = baseUrl || preflight.https.url;
-  // Fragment-based QR URL: #session=...&token=...
+  // Fragment-based QR URL: #session=...&token=... — carries ONLY the audience
+  // token. The host token is returned in the create response and never
+  // appears here.
   const joinUrl = `${rootBaseUrl}/fableloom/join#session=${sessionId}&token=${token}`;
 
   const session = {
@@ -296,6 +303,7 @@ export async function createHostedSession(loomId, episodeId, {
     episodeId,
     universeId: loom.universeId || null,
     hashedToken,
+    hashedHostToken,
     status: 'active',
     audioTarget: FABLELOOM_AUDIO_TARGETS.includes(audioTarget) ? audioTarget : 'host',
     currentNodeId: startNode.id,
@@ -322,16 +330,15 @@ export async function createHostedSession(loomId, episodeId, {
 
   return {
     session: sanitizeHostedSession(session),
-    token, // returned ONLY once to session creator
+    token, // audience token — returned ONLY once to session creator; also embedded in joinUrl
+    hostToken, // host token — returned ONLY once to session creator; NEVER embedded in joinUrl
     joinUrl,
     preflight,
   };
 }
 
-/**
- * Verify a join token for a hosted session using constant-time comparison.
- */
-export function verifyHostedToken(sessionId, token) {
+/** Shared constant-time comparison against a session's stored token hash. */
+function verifyHostedTokenAgainst(sessionId, token, hashField) {
   if (!sessionId || !token || typeof token !== 'string') return false;
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') return false;
@@ -339,11 +346,30 @@ export function verifyHostedToken(sessionId, token) {
     session.status = 'ended';
     return false;
   }
+  const storedHash = session[hashField];
+  if (!storedHash) return false;
   const candidateHash = createHash('sha256').update(token).digest('hex');
-  const storedBuf = Buffer.from(session.hashedToken, 'hex');
+  const storedBuf = Buffer.from(storedHash, 'hex');
   const candidateBuf = Buffer.from(candidateHash, 'hex');
   if (storedBuf.length !== candidateBuf.length) return false;
   return timingSafeEqual(storedBuf, candidateBuf);
+}
+
+/**
+ * Verify the AUDIENCE join token for a hosted session using constant-time
+ * comparison. Does not grant the host role — see `verifyHostedHostToken`.
+ */
+export function verifyHostedToken(sessionId, token) {
+  return verifyHostedTokenAgainst(sessionId, token, 'hashedToken');
+}
+
+/**
+ * Verify the HOST token for a hosted session using constant-time comparison
+ * (#8357). This token is distinct from the audience join token embedded in
+ * the QR `joinUrl` — the audience token must never authorize `role: 'host'`.
+ */
+export function verifyHostedHostToken(sessionId, token) {
+  return verifyHostedTokenAgainst(sessionId, token, 'hashedHostToken');
 }
 
 /**

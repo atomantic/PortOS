@@ -186,12 +186,12 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(next.mock.calls[0][0].message).toBe('HOSTED_SESSION_UNAUTHORIZED');
     });
 
-    it('rejects a host connection using another session token', async () => {
+    it('rejects a host connection using another session\'s host token', async () => {
       const { session } = await createHostedSession('loom-1', 'ep-1');
-      const { token: otherToken } = await createHostedSession('loom-1', 'ep-1');
+      const { hostToken: otherHostToken } = await createHostedSession('loom-1', 'ep-1');
       const socket = {
         handshake: {
-          auth: { sessionId: session.id, role: 'host', token: otherToken },
+          auth: { sessionId: session.id, role: 'host', token: otherHostToken },
         },
       };
       const next = vi.fn();
@@ -200,11 +200,39 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(next.mock.calls[0][0].message).toBe('HOSTED_SESSION_UNAUTHORIZED');
     });
 
-    it('allows host connection with its session token', async () => {
+    // #8357: the audience (QR/join link) token must never grant the host
+    // role — that link is handed to the audience device and can be forwarded.
+    it('rejects a host connection using the AUDIENCE join token', async () => {
       const { session, token } = await createHostedSession('loom-1', 'ep-1');
       const socket = {
         handshake: {
           auth: { sessionId: session.id, role: 'host', token },
+        },
+      };
+      const next = vi.fn();
+      await middleware(socket, next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+      expect(next.mock.calls[0][0].message).toBe('HOSTED_SESSION_UNAUTHORIZED');
+    });
+
+    it('rejects an audience connection using the HOST token', async () => {
+      const { session, hostToken } = await createHostedSession('loom-1', 'ep-1');
+      const socket = {
+        handshake: {
+          auth: { sessionId: session.id, role: 'audience', token: hostToken },
+        },
+      };
+      const next = vi.fn();
+      await middleware(socket, next);
+      expect(next).toHaveBeenCalledWith(expect.any(Error));
+      expect(next.mock.calls[0][0].message).toBe('HOSTED_SESSION_UNAUTHORIZED');
+    });
+
+    it('allows host connection with its own host token', async () => {
+      const { session, hostToken } = await createHostedSession('loom-1', 'ep-1');
+      const socket = {
+        handshake: {
+          auth: { sessionId: session.id, role: 'host', token: hostToken },
         },
       };
       const next = vi.fn();
@@ -218,6 +246,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
   describe('socket event exchange', () => {
     let session;
     let token;
+    let hostToken;
     let audience;
 
     /** Connect a second, host-role socket into the same session room. */
@@ -229,7 +258,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
     };
 
     beforeEach(async () => {
-      ({ session, token } = await createHostedSession('loom-1', 'ep-1'));
+      ({ session, token, hostToken } = await createHostedSession('loom-1', 'ep-1'));
       // The LLM turn is stubbed by default so utterance tests assert the
       // session state machine, not provider behaviour. Tests that care about
       // the outcome override this.
@@ -258,9 +287,11 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         turnPhase: 'idle',
         hasAudienceConnected: true,
       });
-      // The snapshot must never carry the join credential in either form.
+      // The snapshot must never carry either join credential in either form.
       expect(sync.data.hashedToken).toBeUndefined();
+      expect(sync.data.hashedHostToken).toBeUndefined();
       expect(JSON.stringify(sync.data)).not.toContain(token);
+      expect(JSON.stringify(sync.data)).not.toContain(hostToken);
     });
 
     it('ignores audience mic controls from a host socket', async () => {

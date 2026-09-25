@@ -16,6 +16,7 @@ import {
   startHostedListening,
   switchHostedEpisode,
   updateHostedSession,
+  verifyHostedHostToken,
   verifyHostedToken,
 } from '../services/fableLoom/hostedSession.js';
 
@@ -59,12 +60,18 @@ export function registerFableLoomHostedNamespace(io) {
         return next(new Error('HOSTED_SESSION_NOT_FOUND_OR_EXPIRED'));
       }
 
-      if (!token || !verifyHostedToken(sessionId, token)) {
-        return next(new Error('HOSTED_SESSION_UNAUTHORIZED'));
-      }
-
       if (role !== 'audience' && role !== 'host') {
         return next(new Error('HOSTED_SESSION_ROLE_INVALID'));
+      }
+
+      // The audience (QR/join link) token and the host token are distinct
+      // secrets (#8357) — each role verifies against its own token so the
+      // audience token can never authenticate a `role: 'host'` connection.
+      const tokenValid = role === 'host'
+        ? verifyHostedHostToken(sessionId, token)
+        : verifyHostedToken(sessionId, token);
+      if (!token || !tokenValid) {
+        return next(new Error('HOSTED_SESSION_UNAUTHORIZED'));
       }
 
       socket.hostedRole = role;
