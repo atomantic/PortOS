@@ -28,17 +28,21 @@ export function connectToPeer(peer) {
     reconnectionAttempts: 5,
     reconnectionDelay: 5000,
     timeout: CONNECT_TIMEOUT_MS,
-    // peerSocketOptionsFor injects the peer's Basic-auth credential as
-    // extraHeaders so the relay handshake survives an auth-gating proxy.
+    // peerSocketOptionsFor injects the same credential headers peerFetch sends
+    // (the pair token, and Basic until the receiver confirms the token).
     ...peerSocketOptionsFor(peer)
   });
 
   // `host` is required so fetchPeerAgents() can rebuild the HTTPS URL via peerBaseUrl();
-  // `auth` is carried so its peerFetch presents the same credential as the probe.
+  // `auth`, `syncSecret` and `peerAuthAccepted` are carried so its peerFetch
+  // presents the same credential as the probe (#8356).
   const conn = {
     socket,
     agents: new Map(),
-    peer: { id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null }
+    peer: {
+      id: peer.id, name: peer.name, address: peer.address, host: peer.host ?? null, port: peer.port, auth: peer.auth ?? null,
+      syncSecret: peer.syncSecret ?? null, peerAuthAccepted: peer.peerAuthAccepted === true,
+    }
   };
 
   peerConnections.set(peer.id, conn);

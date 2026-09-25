@@ -792,6 +792,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // The key exists so the NEXT incompatible daily-log change can bump to 2 and
   // have v1 receivers reject it.
   meatspace: 1,
+  // v1 = the paired-peer credential (#8356): `X-PortOS-Peer-Auth`, an HMAC of the
+  // pair `syncSecret` bound to the sender's instance id, replacing the instance
+  // password over HTTP Basic between paired peers. Not a record or snapshot
+  // category — it versions the authentication handshake. A receiver advertises it
+  // as `peerAuth.version` in GET /api/system/health/details together with
+  // `peerAuth.accepted` (whether THIS request's token verified). A sender drops
+  // the Basic header only after that confirmation (`peer.peerAuthAccepted`), so
+  // an older receiver, which never answers, keeps getting Basic.
+  peerAuth: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -883,11 +892,15 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * `applyRemote` through SNAPSHOT_CATEGORY_SCHEMA_KEYS; meatspace is never a
  * per-record push.
  *
+ * `peerAuth` (#8356): the peer credential handshake version, advertised by the
+ * receiver's health details; it gates which header a sender presents, never a
+ * record transfer.
+ *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

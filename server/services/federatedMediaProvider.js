@@ -308,7 +308,8 @@ export function normalizeFederatedMediaProviderConfig(settings) {
 /**
  * The provider is stricter than ordinary federation reads: it never inherits
  * authGate's auth-off bypass and never accepts a browser session. A verified
- * Basic credential plus a registered, enabled caller is required every time.
+ * peer credential (the paired peer token, or legacy Basic) plus a registered,
+ * enabled caller is required every time.
  * Status discovery is expected to encounter disabled or misconfigured peers,
  * so callers can mark those denials as warnings: the HTTP response still tells
  * the consumer exactly why discovery failed, but it stays off this provider's
@@ -323,9 +324,9 @@ export async function authorizeFederatedMediaPeer(req, { statusProbe = false } =
       ...(statusProbe ? { severity: 'warning' } : {}),
     });
   };
-  if (req.portosAuthContext?.method !== 'basic' || req.portosAuthContext?.authenticated !== true) {
+  if (!['peer', 'basic'].includes(req.portosAuthContext?.method) || req.portosAuthContext?.authenticated !== true) {
     deny(
-      'Verified peer Basic authentication is required',
+      'Verified peer authentication is required',
       'MEDIA_PROVIDER_PEER_AUTH_REQUIRED',
       403,
     );

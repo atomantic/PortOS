@@ -25,9 +25,42 @@ To revoke or rotate a pair, remove or replace its sync secret. Secrets stay in t
 existing machine-local `instances.json` peer configuration, are stripped from
 client/socket and announcement payloads, and never travel in record bodies. The
 sender attaches `X-PortOS-Peer-Sync-Token` only to `/api/peer-sync/push`, alongside
-any existing Basic credential for the optional instance password. HTTP redirects
+the peer credential below. HTTP redirects
 are refused for credentialed pushes. Use the existing private encrypted transport
 (Tailscale or HTTPS) to protect these credentials in transit.
+
+## Peer credentials are not operator authority
+
+The instance password is operator authority: whoever holds it can sign in at
+`/api/auth/login` and run host commands. A peer must not need it. Once a pair
+secret is configured, every peer request (probe, sync, relay socket, media
+provider) authenticates with `X-PortOS-Peer-Auth`, an HMAC-SHA256 of the pair
+secret bound to the sender's `X-PortOS-Instance-Id`. The secret itself is not
+sent, and each direction has a different token.
+
+The receiver maps a verified token to `method: 'peer'`. It authenticates
+`/api/*` and `/data/*` reads and pushes and the peer socket relay handshake. It
+never passes `requireHostControl` (`/api/commands/*` returns
+`HOST_CONTROL_FORBIDDEN`), cannot emit socket events, and cannot be exchanged
+for a session, because it is not the password. A disabled peer's token is refused.
+
+Rollout without breaking older installs:
+
+- The sender sends the token and any stored Basic credential together until the
+  receiver's `GET /api/system/health/details` reports
+  `peerAuth.accepted: true` for the probe. It then stops sending Basic to that
+  peer (`peerAuthAccepted` on the local peer record). A later 401/403 probe
+  clears the flag, so Basic returns if the receiver loses its side of the pair.
+- An unpaired peer, an older receiver, or one whose secret differs keeps
+  receiving Basic, which is still accepted as `method: 'basic'` (also refused
+  host control).
+- A receiver logs one warning per process when a paired peer still signs in with
+  the instance password.
+- **Instances** shows a hint on each peer card with a stored password. After the
+  peer confirms the token, remove the stored password there. No migration deletes
+  stored credentials.
+
+The handshake version is `peerAuth` in `server/lib/schemaVersions.js`.
 
 ## Existing installations and mixed versions
 

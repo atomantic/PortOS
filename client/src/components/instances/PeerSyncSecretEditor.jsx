@@ -2,10 +2,25 @@ import { useState } from 'react';
 import { updatePeer } from '../../services/api';
 import toast from '../ui/Toast';
 
+// A stored peer password is normally that machine's instance password, which
+// carries operator authority there. The pair secret replaces it with a
+// peer-only credential (#8356); this hint walks the user through the switch.
+function storedPasswordHint(peer) {
+  if (!peer.auth?.hasPassword) return null;
+  if (!peer.hasSyncSecret) {
+    return 'The stored password grants operator access on that machine if it is its instance password. Set a sync secret on both machines to use a peer-only credential instead.';
+  }
+  if (peer.peerAuthAccepted) {
+    return 'This peer accepts the pair credential. Remove the stored password — it is no longer needed.';
+  }
+  return 'Still signing in with the stored password. Update that machine and enter the same sync secret there; the password stops being sent once it accepts the pair credential.';
+}
+
 export default function PeerSyncSecretEditor({ peer, onRefresh }) {
   const [editing, setEditing] = useState(false);
   const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
+  const passwordHint = storedPasswordHint(peer);
   const save = async (value) => {
     if (saving || (value !== null && (value.length < 32 || value.length > 256))) return;
     setSaving(true);
@@ -22,6 +37,7 @@ export default function PeerSyncSecretEditor({ peer, onRefresh }) {
       <p className={peer.hasSyncSecret ? 'text-port-success' : 'text-port-warning'}>
         {peer.hasSyncSecret ? 'Record push authentication configured' : 'Record pushes paused until a sync secret is configured on both instances'}
       </p>
+      {passwordHint && <p className="text-port-warning">{passwordHint}</p>}
       {editing ? (
         <div className="space-y-2">
           <label htmlFor={`peer-sync-secret-${peer.id}`} className="block">Shared sync secret</label>

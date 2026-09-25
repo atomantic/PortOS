@@ -523,7 +523,15 @@ export async function updatePeer(id, updates) {
       if (updates.syncSecret !== null && (typeof updates.syncSecret !== 'string' || updates.syncSecret.length < 32 || updates.syncSecret.length > 256)) {
         throw new Error('Peer sync secret must contain 32 to 256 characters');
       }
-      peer.syncSecret = updates.syncSecret;
+      if (updates.syncSecret !== peer.syncSecret) {
+        peer.syncSecret = updates.syncSecret;
+        // The pair token is derived from this secret, so the receiver's earlier
+        // confirmation no longer applies: present Basic again (when stored)
+        // until the next probe re-confirms, and reconnect the relay with the
+        // new headers (#8356).
+        peer.peerAuthAccepted = false;
+        authChanged = true;
+      }
       // Entering the pair secret is the local inbound-admission action.
       if (peer.syncSecret && !peer.directions?.includes('inbound')) {
         const directions = Array.isArray(peer.directions) && peer.directions.length ? peer.directions : ['outbound'];
@@ -830,6 +838,13 @@ export async function probePeer(peer) {
     // Surface "reachable but needs a credential" distinctly from plain offline.
     // Cleared on any successful probe (including after the user adds the password).
     entry.authRequired = authRequired;
+    // Peer credential handshake (#8356). Latch on the receiver's confirmation
+    // that this probe's pair token verified; after that peerFetch stops sending
+    // the stored Basic password. A 401/403 unlatches, so a receiver that loses
+    // its side of the pairing (or is downgraded) gets Basic again next probe.
+    // Other failures (timeouts, offline) keep the last answer.
+    if (status === 'online') entry.peerAuthAccepted = lastHealth?.peerAuth?.accepted === true;
+    else if (authRequired) entry.peerAuthAccepted = false;
     entry.lastApps = remoteApps ?? entry.lastApps ?? null;
     entry.remoteSyncSeqs = remoteSyncSeqs ?? entry.remoteSyncSeqs ?? null;
     if (normalizePeerMediaProviderConfig(entry).enabled) {

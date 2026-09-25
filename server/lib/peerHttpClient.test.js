@@ -83,6 +83,7 @@ import {
   readPeerBody,
   PEER_BODY_IDLE_TIMEOUT,
   peerAuthHeaders,
+  derivePeerAuthToken,
   __resetSelfInstanceIdForTests,
 } from './peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from './httpClient.js';
@@ -127,6 +128,40 @@ describe('peerHttpClient', () => {
       await peerFetch('http://peer.example/api/peer-sync/record', {}, { auth: { username: 'alice', password: 'pw' } });
       expect(calls[0].options.headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
       expect(calls[0].options.headers.Authorization).toBe(`Basic ${Buffer.from('alice:pw').toString('base64')}`);
+    });
+
+    describe('paired peer credential (#8356)', () => {
+      const syncSecret = 'example-pair-secret-0123456789-abcdef';
+      const basic = `Basic ${Buffer.from(':example-password').toString('base64')}`;
+      const token = () => derivePeerAuthToken(syncSecret, 'self-instance-id');
+
+      it('sends only the pair token once the receiver has confirmed it', async () => {
+        await peerFetch('http://peer.example/api/cos/agents', {}, {
+          auth: { password: 'example-password' }, syncSecret, peerAuthAccepted: true,
+        });
+        const { headers } = calls[0].options;
+        expect(headers['X-PortOS-Peer-Auth']).toBe(token());
+        expect(headers['X-PortOS-Instance-Id']).toBe('self-instance-id');
+        expect(Object.keys(headers).some((k) => k.toLowerCase() === 'authorization')).toBe(false);
+        // The token is an HMAC, never the secret itself, and differs per sender.
+        expect(headers['X-PortOS-Peer-Auth']).not.toContain(syncSecret);
+        expect(derivePeerAuthToken(syncSecret, 'other-instance-id')).not.toBe(token());
+      });
+
+      it('keeps Basic beside the token until the receiver confirms it, and for unpaired peers', async () => {
+        await peerFetch('http://peer.example/api/cos/agents', {}, { auth: { password: 'example-password' }, syncSecret });
+        expect(calls[0].options.headers.Authorization).toBe(basic);
+        expect(calls[0].options.headers['X-PortOS-Peer-Auth']).toBe(token());
+        await peerFetch('http://peer.example/api/cos/agents', {}, { auth: { password: 'example-password' }, peerAuthAccepted: true });
+        expect(calls[1].options.headers.Authorization).toBe(basic);
+        expect(calls[1].options.headers['X-PortOS-Peer-Auth']).toBeUndefined();
+      });
+
+      it('puts the same credential on the socket relay handshake', async () => {
+        await peerFetch('http://peer.example/x'); // warms the memoized instance id
+        const opts = peerSocketOptionsFor({ auth: { password: 'example-password' }, syncSecret, peerAuthAccepted: true });
+        expect(opts.extraHeaders).toEqual({ 'X-PortOS-Instance-Id': 'self-instance-id', 'X-PortOS-Peer-Auth': token() });
+      });
     });
 
     it('lets explicit caller headers win', async () => {
