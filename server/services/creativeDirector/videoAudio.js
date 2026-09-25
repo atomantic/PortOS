@@ -1,6 +1,7 @@
 /** Standalone soundtrack selection over the existing music library and audio queue. */
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { isMediaAdmissionRefusal } from '../mediaJobQueue/admission.js';
 import { sleep } from '../../lib/fileUtils.js';
 
 const blocked = message => new ServerError(message, { status: 409, code: 'VIDEO_AUDIO_BLOCKED' });
@@ -60,7 +61,7 @@ export async function prepareVideoSoundtrack(project, isCurrent) {
   const audioRevision = canonicalSnapshotChecksum(audio);
   if (project.musicBed?.audioRevision === audioRevision && await resolveMusicTrackPath(project.musicBed.filename)) return project.musicBed;
   const { reserveVideoAttempt, assertVideoAttemptDispatch, settleVideoAttempt } = await import('./videoExecution.js');
-  const { getJob, enqueueJob, MEDIA_QUEUE_PERSIST_FAILED } = await import('../mediaJobQueue/index.js');
+  const { getJob, enqueueJob } = await import('../mediaJobQueue/index.js');
   const { getProject, mutateVideoProject } = await import('./local.js');
   const key = `audio:${audioRevision}`;
   let attempt = [...(project.videoExecution.attempts || [])].reverse().find(row => row.key === key && ['submitting', 'queued', 'running', 'completed', 'uncertain'].includes(row.status));
@@ -74,9 +75,10 @@ export async function prepareVideoSoundtrack(project, isCurrent) {
       params: { engine: audio.providerId, modelId: audio.model, prompt: audio.prompt, durationSec: audio.durationSec,
         videoProduction: { projectId: project.id, attemptId: attempt.id, executionId: attempt.executionId } } })
       .catch(async (error) => {
-        // A refused admission (#8325) submitted nothing; fail the receipt so the
-        // next Resume retries instead of treating it as an uncertain submission.
-        if (error.code === MEDIA_QUEUE_PERSIST_FAILED) await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
+        // A refused admission (#8325 failed snapshot, #8326 full queue) submitted
+        // nothing; fail the receipt so the next Resume retries instead of
+        // treating it as an uncertain submission.
+        if (isMediaAdmissionRefusal(error)) await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
         throw error;
       });
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId });

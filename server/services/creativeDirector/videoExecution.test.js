@@ -17,7 +17,6 @@ vi.mock('./sceneEvaluator.js', () => ({ resolveVisionEvalTarget: vi.fn(async () 
 vi.mock('../videoGen/reactor.js', () => ({ REACTOR_MODEL_ID: 'fast-h3' }));
 vi.mock('../videoGen/modelSelection.js', () => ({ resolveVideoModelSelection: vi.fn() }));
 vi.mock('../mediaJobQueue/index.js', () => ({ listJobs: vi.fn(() => state.jobs), getJob: vi.fn(id => state.jobs.find(job => job.id === id)),
-  MEDIA_QUEUE_PERSIST_FAILED: 'MEDIA_QUEUE_PERSIST_FAILED',
   enqueueJob: vi.fn(async job => { const jobId = `example-audio-${state.jobs.length}`; state.jobs.push({ ...job, id: jobId, status: 'completed', result: { filename: 'example-bed.wav', durationSec: 10 } }); return { jobId }; }),
 }));
 vi.mock('../pipeline/musicGen.js', () => ({ ENGINES: { 'example-audio': { id: 'example-audio', models: [{ id: 'example-model' }], defaultModelId: 'example-model', minDurationSec: 1, maxDurationSec: 30 } }, isEngineHealthy: vi.fn(async () => true) }));
@@ -157,6 +156,19 @@ it('keeps uncertain submissions inert until the user explicitly acknowledges a p
   expect(enqueueUnattendedMediaJob).toHaveBeenCalledTimes(1);
   await startVideoExecution('example-video', await startInput({}, { retryAttemptIds: [attempt.id] }));
   expect(state.project.videoExecution.attempts[0].status).toBe('failed');
+  expect(startCreativeDirectorProject).toHaveBeenCalledTimes(2);
+});
+
+// #8326: a full queue created no job, so nothing could have been charged —
+// treating it as uncertain would park the project behind a duplicate-charge
+// acknowledgement for a submission that never happened.
+it('treats a full media queue as a certain non-submission that a plain Resume retries', async () => {
+  await startVideoExecution('example-video', await startInput());
+  enqueueUnattendedMediaJob.mockRejectedValueOnce(Object.assign(new Error('The media queue is full'), { code: 'MEDIA_QUEUE_FULL', status: 429 }));
+  await expect(enqueue()).rejects.toMatchObject({ code: 'MEDIA_QUEUE_FULL' });
+  expect(state.project.videoExecution.attempts[0].status).toBe('failed');
+  expect(state.project).toMatchObject({ status: 'paused', videoExecution: { blocker: 'The media queue is full' } });
+  await startVideoExecution('example-video', await startInput());
   expect(startCreativeDirectorProject).toHaveBeenCalledTimes(2);
 });
 

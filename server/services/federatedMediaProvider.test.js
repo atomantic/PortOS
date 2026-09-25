@@ -66,7 +66,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
   laneConcurrencyFor: vi.fn((job) => state.laneWidthByKind[job?.kind] ?? 1),
   isRemoteMediaJob: (job) => job?.kind === 'audio' && job.params?.remoteMedia !== undefined,
   getJob: vi.fn((id) => state.jobs.find((job) => job.id === id) || null),
-  enqueueJob: vi.fn(({ kind, owner, params }) => {
+  enqueueJob: vi.fn(async ({ kind, owner, params }) => {
     const suffix = String(state.nextId++).padStart(12, '0');
     const id = `00000000-0000-4000-8000-${suffix}`;
     const job = {
@@ -453,6 +453,15 @@ describe('federated media provider capacity and idempotency', () => {
       callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'commission-2',
     })).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_BUSY' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('reports a full local media queue to the peer as retryable provider capacity', async () => {
+    enqueueJob.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('The media queue is full'), { status: 429, code: 'MEDIA_QUEUE_FULL' });
+    });
+    await expect(submitFederatedMediaJob({
+      callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'queue-full',
+    })).rejects.toMatchObject({ status: 429, code: 'MEDIA_PROVIDER_BUSY', context: { retryable: true } });
   });
 
   it('does not count outgoing proxy jobs against this machine provider capacity', async () => {

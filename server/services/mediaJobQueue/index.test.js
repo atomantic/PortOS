@@ -2227,3 +2227,92 @@ describe('durable admission and shutdown flush', () => {
     await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
   });
 });
+
+// #8326: waiting work is bounded across every lane, separately from each
+// lane's running concurrency, and the bound never evicts a persisted job.
+describe('pending-job ceiling', () => {
+  const jobsFile = () => join(tempDataDir, 'media-jobs.json');
+  const queueFull = { status: 429, code: 'MEDIA_QUEUE_FULL' };
+  const waiting = () => mediaJobQueue.listJobs({ status: 'queued' }).length;
+
+  beforeEach(() => {
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+  });
+
+  it('admits exactly the ceiling under concurrent submission and refuses the next without touching state', async () => {
+    const { MAX_PENDING_MEDIA_JOBS } = mediaJobQueue;
+    // A running job holds the only GPU slot, so everything below waits.
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'running' } });
+    await waitFor(() => mediaJobQueue.getJob(blocker.jobId)?.status === 'running');
+
+    // One synchronous check-and-push per submission: firing them all at once
+    // must not let in-flight snapshot writes admit past the ceiling.
+    const results = await Promise.allSettled(Array.from({ length: MAX_PENDING_MEDIA_JOBS + 1 },
+      (_, i) => mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: `wait-${i}` } })));
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(MAX_PENDING_MEDIA_JOBS);
+    expect(results.filter((r) => r.status === 'rejected').map((r) => r.reason)).toEqual([expect.objectContaining(queueFull)]);
+    expect(waiting()).toBe(MAX_PENDING_MEDIA_JOBS);
+    await flush();
+
+    const snapshot = readFileSync(jobsFile(), 'utf8');
+    const liveCount = mediaJobQueue.listJobs().length;
+    const enqueued = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('enqueued', enqueued);
+    atomicWriteSpy.mockClear();
+    await expect(mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'one more' } }))
+      .rejects.toMatchObject({ ...queueFull, context: { retryable: true, maxPendingJobs: MAX_PENDING_MEDIA_JOBS } });
+    await flush();
+    expect(mediaJobQueue.listJobs()).toHaveLength(liveCount);
+    expect(enqueued).not.toHaveBeenCalled();
+    expect(atomicWriteSpy).not.toHaveBeenCalled();
+    expect(readFileSync(jobsFile(), 'utf8')).toBe(snapshot);
+    mediaJobQueue.mediaJobEvents.off('enqueued', enqueued);
+
+    // Draining one waiting job frees exactly one slot.
+    await mediaJobQueue.cancelJob(mediaJobQueue.listJobs({ status: 'queued' })[0].id);
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'after drain' } }))
+      .resolves.toMatchObject({ status: 'queued' });
+  });
+
+  // A batch preflight: one that fits is admitted to try, one that could fit
+  // after a drain is retryable, one bigger than the ceiling never can be.
+  it('distinguishes a batch that must wait from one that can never fit', async () => {
+    const { MAX_PENDING_MEDIA_JOBS } = mediaJobQueue;
+    expect(() => mediaJobQueue.assertMediaQueueRoom(MAX_PENDING_MEDIA_JOBS)).not.toThrow();
+    expect(() => mediaJobQueue.assertMediaQueueRoom(MAX_PENDING_MEDIA_JOBS + 1))
+      .toThrow(expect.objectContaining({ status: 400, code: 'MEDIA_BATCH_TOO_LARGE' }));
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'running' } });
+    await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
+    await waitFor(() => waiting() === 1);
+    expect(() => mediaJobQueue.assertMediaQueueRoom(MAX_PENDING_MEDIA_JOBS))
+      .toThrow(expect.objectContaining({ ...queueFull, message: expect.stringContaining('room for 249 more') }));
+  });
+
+  it('restores a snapshot above the ceiling intact and blocks only new admissions until it drains', async () => {
+    const { MAX_PENDING_MEDIA_JOBS } = mediaJobQueue;
+    const count = MAX_PENDING_MEDIA_JOBS + 10;
+    const ids = Array.from({ length: count }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    writeFileSync(jobsFile(), JSON.stringify({
+      jobs: ids.map((id) => ({ id, kind: 'video', status: 'queued', queuedAt: '2026-09-01T00:00:00.000Z', params: { prompt: 'restored' } })),
+    }));
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    await flush();
+
+    // Nothing evicted — in memory or on disk.
+    expect(mediaJobQueue.listJobs().map((j) => j.id).sort()).toEqual([...ids].sort());
+    expect(JSON.parse(readFileSync(jobsFile(), 'utf8')).jobs.map((j) => j.id).sort()).toEqual([...ids].sort());
+    expect(waiting()).toBe(count - 1);
+
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'new' } })).rejects.toMatchObject(queueFull);
+
+    // Drain to one below the ceiling; admission reopens for exactly that room.
+    const queuedIds = mediaJobQueue.listJobs({ status: 'queued' }).map((j) => j.id);
+    for (const id of queuedIds.slice(0, count - MAX_PENDING_MEDIA_JOBS)) await mediaJobQueue.cancelJob(id);
+    expect(waiting()).toBe(MAX_PENDING_MEDIA_JOBS - 1);
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'fits' } })).resolves.toMatchObject({ status: 'queued' });
+    await expect(mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'full again' } })).rejects.toMatchObject(queueFull);
+  });
+});

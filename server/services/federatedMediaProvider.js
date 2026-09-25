@@ -41,6 +41,7 @@ import {
   laneConcurrencyFor,
   listJobs,
 } from './mediaJobQueue/index.js';
+import { MEDIA_QUEUE_FULL } from './mediaJobQueue/admission.js';
 import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
 import { BYOV_VIDEO_RUNTIMES, isByovRuntimeReady } from './videoGen/runtimes.js';
 import { minimaxH3ControlError } from './videoGen/minimaxH3Controls.js';
@@ -862,6 +863,14 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
       kind: input.kind,
       owner: jobOwner(callerId),
       params: buildQueueParams(input, capability, federatedMedia, inputAssetParams),
+    }).catch((error) => {
+      // The shared queue's own pending ceiling (#8326) is the same capacity
+      // refusal as the provider bound above; answer in the wire's vocabulary so
+      // the consumer retries later instead of seeing a local queue code.
+      if (error?.code === MEDIA_QUEUE_FULL) {
+        unavailable('Provider queue is at capacity', 'MEDIA_PROVIDER_BUSY', 429, { retryable: true });
+      }
+      throw error;
     });
     return {
       replayed: false,

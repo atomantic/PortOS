@@ -38,6 +38,7 @@ import {
   cloudPromptRequired, maxInputImages, resolveCloudProviderConfig, resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
+import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
@@ -243,6 +244,18 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   if (cloudConfig && !cloudConfig.enabled && inputImageCount) {
     cleanupReqFilesTemp();
     throw cloudConfig.disabledError;
+  }
+
+  // A full media queue (#8326) is refused before anything is staged too — the
+  // route's enqueue would refuse the same render, after these copies landed.
+  // Lazy: only a queue-bound render needs the queue loaded.
+  if (data.mediaProviderPeerId || QUEUEABLE_IMAGE_MODES.includes(mode)) {
+    await import('../mediaJobQueue/index.js')
+      .then(({ assertMediaQueueRoom }) => assertMediaQueueRoom(1))
+      .catch((err) => {
+        cleanupReqFilesTemp();
+        throw err;
+      });
   }
 
   // Resolve cleaners ONCE at the route layer so all three dispatch paths

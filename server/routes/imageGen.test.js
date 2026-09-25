@@ -129,6 +129,7 @@ vi.mock('../lib/systemCapabilities.js', async () => {
 });
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
+  assertMediaQueueRoom: vi.fn(),
   enqueueJob: vi.fn(({ kind }) => ({ jobId: `mock-${kind}-job`, position: 1, status: 'queued' })),
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
@@ -562,6 +563,24 @@ describe('Image Gen Routes', () => {
         payload: { jobId: 'queued-job-001' },
       }));
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a fox in a forest');
+    });
+
+    // #8326: a full media queue must answer with a retryable refusal before
+    // any job id exists — and before the render's inputs are staged.
+    it('answers a full media queue with a retryable 429 and no job id', async () => {
+      const { mediaQueueFullError } = await import('../services/mediaJobQueue/admission.js');
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.assertMediaQueueRoom.mockImplementationOnce(() => { throw mediaQueueFullError({ pending: 250 }); });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest' });
+
+      expect(response.status).toBe(429);
+      expect(response.body).toMatchObject({ code: 'MEDIA_QUEUE_FULL', context: { retryable: true, maxPendingJobs: 250 } });
+      expect(response.body.jobId).toBeUndefined();
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(recordUserAction).not.toHaveBeenCalled();
     });
 
     it('local mode maps cfgScale to guidance before enqueueing', async () => {

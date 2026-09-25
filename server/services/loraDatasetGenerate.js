@@ -38,7 +38,7 @@ import {
   extractCharacterPromptCommon,
   REFERENCE_SHEET_CONSTANTS,
 } from './universeCharacterSheet.js';
-import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
+import { assertMediaQueueRoom, enqueueJob, mediaJobEvents, partialBatchAdmissionError } from './mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from './imageGen/prepareParams.js';
@@ -312,13 +312,20 @@ export async function generateDatasetImages(datasetId, options = {}) {
   });
 
   const { base, activeMode, modelId } = await resolveRenderParams(options);
+  // Refuse a batch the media queue cannot hold (#8326) whole, before any
+  // image entry is appended.
+  assertMediaQueueRoom(variations.length);
 
   const launched = [];
   for (const variation of variations) {
     const imageId = uuidv4();
     const file = `${imageId}.png`;
     const { prompt, negativePrompt } = buildDatasetImagePrompt(universe, subject, variation, entryKind);
-    const queued = await enqueueJob({ kind: 'image', params: { ...base, prompt, negativePrompt } });
+    // Refused part-way (the queue filled after the preflight): the images
+    // already launched keep their entries and renders; report how many.
+    const queued = await enqueueJob({ kind: 'image', params: { ...base, prompt, negativePrompt } }).catch((err) => {
+      throw partialBatchAdmissionError(err, { admitted: launched.length, total: variations.length, noun: 'dataset images' });
+    });
     const jobId = queued.jobId;
 
     const entry = {

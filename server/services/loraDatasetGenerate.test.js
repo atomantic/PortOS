@@ -37,7 +37,9 @@ vi.mock('sharp', () => ({
   })),
 }));
 vi.mock('./settings.js', () => ({ getSettings: (...args) => renderMocks.getSettings(...args) }));
-vi.mock('./mediaJobQueue/index.js', () => ({
+vi.mock('./mediaJobQueue/index.js', async () => ({
+  assertMediaQueueRoom: vi.fn(),
+  partialBatchAdmissionError: (await import('./mediaJobQueue/admission.js')).partialBatchAdmissionError,
   enqueueJob: (...args) => renderMocks.enqueueJob(...args),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
@@ -263,7 +265,7 @@ describe('generateDatasetImages local model selection', () => {
     renderMocks.getSettings.mockResolvedValue({
       imageGen: { mode: 'local', local: { pythonPath: '/python', modelId: 'pinned-model' } },
     });
-    renderMocks.enqueueJob.mockReturnValue({ jobId: 'job-1' });
+    renderMocks.enqueueJob.mockResolvedValue({ jobId: 'job-1' });
     renderMocks.getImageModels.mockReturnValue(renderModels);
   });
 

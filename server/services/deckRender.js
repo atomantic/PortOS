@@ -40,7 +40,7 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
   // request — this module is reached by the route + hook graphs, which never
   // need them instantiated (server/AGENTS.md "Import scoping").
   const [
-    { enqueueJob }, { getSettings }, { resolveRenderTargetConfig }, { resolveLocalImageModel }, { resolveImageCleaners },
+    { enqueueJob, assertMediaQueueRoom, partialBatchAdmissionError }, { getSettings }, { resolveRenderTargetConfig }, { resolveLocalImageModel }, { resolveImageCleaners },
   ] = await Promise.all([
     import('./mediaJobQueue/index.js'), import('./settings.js'), import('./imageGen/cloudProviderConfig.js'),
     import('./imageGen/prepareParams.js'), import('./imageGen/index.js'),
@@ -74,6 +74,9 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
     ? resolveLocalImageModel(settings, { modelId: model || localPinModel || undefined })
     : null;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
+  // Refuse a batch the media queue cannot hold (#8326) whole, before any card
+  // is queued, rather than landing part of it.
+  assertMediaQueueRoom(targets.length);
 
   const jobs = [];
   const stamps = [];
@@ -98,11 +101,12 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
         ...(localModel?.selectedModel?.id ? { modelId: localModel.selectedModel.id } : {}),
         ...base,
       };
-    // A refused admission (#8325) still stamps the cards already queued, so
-    // the deck shows the renders that WILL land before the error surfaces.
+    // A refused admission (#8325, or #8326 when another producer filled the
+    // queue mid-batch) still stamps the cards already queued, so the deck shows
+    // the renders that WILL land, and the error says how many did.
     const { jobId } = await enqueueJob({ kind: 'image', params, owner: 'decks' }).catch(async (err) => {
       if (stamps.length) await markCardsRenderQueued(deck.id, stamps);
-      throw err;
+      throw partialBatchAdmissionError(err, { admitted: jobs.length, total: targets.length, noun: 'card renders' });
     });
     jobs.push({ cardId: card.id, key: card.key, jobId });
     stamps.push({ cardId: card.id, render: {
