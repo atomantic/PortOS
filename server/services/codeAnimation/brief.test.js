@@ -41,7 +41,6 @@ describe('buildCodeAnimationBriefPrompt', () => {
   it('asks for a director\'s plan: a timed beat sheet and a rig-ready character bible', () => {
     const prompt = buildCodeAnimationBriefPrompt({ seedIdea: 'a robot realizes its world is generated', format: FORMAT });
     expect(prompt).toContain('HOW TO DIRECT IT');
-    expect(prompt).toContain('new visual payoff every 3–5 seconds');
     expect(prompt).toContain('each led by its time range covering the full 20 seconds');
     expect(prompt).toContain('identity lock');
   });

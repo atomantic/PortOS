@@ -28,7 +28,7 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { CODE_ANIMATION_LIMITS, moodBoardSection, universeStyleLines } from './prompt.js';
+import { CODE_ANIMATION_LIMITS, PACING_RULE, moodBoardSection, universeStyleLines } from './prompt.js';
 
 // What separates a studio short from a moving screensaver, distilled from how
 // strong animation briefs are written. Static text — the per-film specifics
@@ -36,7 +36,7 @@ import { CODE_ANIMATION_LIMITS, moodBoardSection, universeStyleLines } from './p
 const DIRECTING_PRINCIPLES = `HOW TO DIRECT IT:
 - The film in one line: a premise that escalates and pays off with a reveal, twist, or loop. If you can't say it in one sentence, it's too complicated for this length.
 - Wordless and readable: the story must land with zero dialogue. Characters act through their eyes, posture, and one signature expressive feature (an antenna, a tail, ears, a scarf), plus a small vocabulary of non-verbal sounds.
-- Hook and density: open cold, mid-action, and hook within two seconds. Give the audience a new visual payoff every 3–5 seconds, and escalate — each repetition of a device bigger or stranger than the last (the rule of three works).
+- Hook and density: ${PACING_RULE}. Escalate — each repetition of a device bigger or stranger than the last (the rule of three works).
 - An emotional arc for the lead, beat by beat (e.g. delighted → curious → worried → determined), and one quiet, kind beat inside the chaos — often a small object or motif they protect — so we care.
 - A signature device: one distinctive, recurring visual mechanism (a transition, a transformation, a rule of the world) that is this film's own, varied each time it recurs.
 - Scale and camera: choose a point of view that makes the world cinematic (a tiny character with a camera at their eye level turns a curb into a cliff), and say how the camera moves in each beat.

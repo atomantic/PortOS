@@ -199,7 +199,7 @@ function castSection(cast) {
   return `CHARACTERS — the design bible (non-negotiable; every frame must stay on-model):
 ${trimTo(cast, CODE_ANIMATION_LIMITS.castMax)}
 
-Build each lead ONCE as a 2D cutout rig before animating anything:
+Build each lead ONCE as a cutout rig (2D, or its equivalent in your renderer) before animating anything:
 - A part hierarchy with pivots (root → body → head → face; limbs as segmented chains; appendages like antennae, tails, ears, or scarves as their own joints), drawn from functions that take pose parameters.
 - A procedural face: eyes, lids, pupils, brows, and mouth driven by parameters (size, lid cuts, pupil position, highlight, squash/stretch, special shapes such as hearts, stars, spirals, flat lines). Implement every named expression as a parameter preset and blend between presets; blink in 3–4 frames.
 - Secondary motion on damped springs — appendages, hair, cloth, suspension, head lag when the body accelerates or brakes — so nothing moves rigidly.
@@ -208,19 +208,21 @@ Build each lead ONCE as a 2D cutout rig before animating anything:
 - Locomotion that is physically honest: wheels rotate by distance traveled, feet plant without sliding, stops land with weight.`;
 }
 
+// The pacing bar both halves hold a film to — the brief writer plans to it and
+// the coding model stages to it — stated once so the two can't drift apart.
+export const PACING_RULE = 'open cold, mid-action, and hook within two seconds; give the audience a new visual payoff every 3–5 seconds; vary each repeated device (direction, noise seed, timing) so it never feels copy-pasted';
+
 // The craft bar. A one-shot HTML file can't run a multi-session render-and-
 // review loop, so the loop is folded into how the model structures the code
 // and what it checks before answering.
-function directionSection() {
-  return `DIRECTION — make it feel like a studio short, not a tech demo:
-- Structure the code like a production: a shot/beat timeline (an array of { start, end, … } entries mapped from the brief's timestamps), a virtual camera (position, zoom, rotation, seeded handheld micro-shake, shake impulses, tilts, dolly moves), a scene/world layer system shared by every shot, the character rigs, the transitions, and a final finish pass.
+const DIRECTION = `DIRECTION — make it feel like a studio short, not a tech demo:
+- Structure the code like a production: a shot/beat timeline (an array of { start, end, … } entries at the brief's timestamps; where it gives none, time the beats yourself: establish → develop → climax → resolve), a virtual camera (position, zoom, rotation, seeded handheld micro-shake, shake impulses, tilts, dolly moves), a scene/world layer system shared by every shot, the character rigs, the transitions, and a final finish pass.
 - Depth and scale (unless the art style is deliberately flat): at least four parallax layers per scene with atmospheric perspective (haze and desaturation with distance), a shallow-focus feel (blurred foreground elements), and a camera height chosen to sell the characters' scale.
-- Lighting: key, fill, and rim on the characters as gradient overlays and multiplied shadow layers; glowing elements cast light on nearby surfaces. Finish the whole frame with a pass that suits the style (e.g. subtle grain and a gentle vignette).
+- Lighting: key, fill, and rim on the characters (gradient overlays and multiplied shadow layers in 2D, shader terms in WebGL); glowing elements cast light on nearby surfaces. Finish the whole frame with a pass that suits the style (e.g. subtle grain and a gentle vignette).
 - Performance: anticipation, squash and stretch, overlap, easing, and deliberate holds — a held reaction (a one-second deadpan, a freeze) is what lets a gag land. Emotion reads through the eyes, posture, and signature appendage, never through captions.
-- Pacing: open cold and hook in the first two seconds; give the audience a new visual payoff every 3–5 seconds; vary each repeated device (transition direction, noise seed, timing) so it never feels copy-pasted.
+- Pacing: ${PACING_RULE}.
 - Readability: compose on thirds, and keep faces, eyes, and any text legible at phone size (about 360px wide); typed on-screen text types at a human rhythm with small pauses.
 - Endings: the player loops the film — when the brief ends by returning to its opening, match the final frame's framing, lighting, and motion to t=0 so the cut back feels intentional.`;
-}
 
 // The critique pass the reference workflow runs on rendered stills, as a
 // pre-answer check against the failures one-shot animation code shows most.
@@ -300,9 +302,8 @@ export function buildCodeAnimationPrompt({
   const imagesText = referenceImagesSection(referenceImages, delivery);
   if (imagesText) sections.push(imagesText);
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
-  sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}
-Stage the brief's beats at their timestamps; where it gives none, plan the film as timed beats yourself (establish → develop → climax → resolve).`);
-  sections.push(directionSection());
+  sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
+  sections.push(DIRECTION);
   sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio }));
   sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);

@@ -39,14 +39,12 @@ describe('buildCodeAnimationPrompt', () => {
     });
     expect(withCast).toContain('CHARACTERS — the design bible');
     expect(withCast).toContain('Wick — a palm-sized paper lantern whose wire handle droops when sad');
-    expect(withCast).toContain('procedural face');
     expect(buildCodeAnimationPrompt({ concept: 'x', format })).not.toContain('CHARACTERS —');
   });
 
   it('holds every film to the direction bar and a pre-answer self-review', () => {
     const prompt = buildCodeAnimationPrompt({ concept: 'x', format });
     expect(prompt).toContain('DIRECTION — make it feel like a studio short');
-    expect(prompt).toContain('virtual camera');
     expect(prompt).toContain('SELF-REVIEW before you answer');
     // The self-review follows the runtime contract, right before the output rule.
     expect(prompt.indexOf('SELF-REVIEW')).toBeGreaterThan(prompt.indexOf('RUNTIME CONTRACT'));

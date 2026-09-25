@@ -410,16 +410,11 @@ export default function CodeAnimation() {
   // builds the prompt.
   const handleWriteBrief = async () => {
     if (!canWriteBrief) return;
-    const startingBrief = {
-      title: draft.title,
-      concept: draft.concept,
-      cast: draft.cast,
-      onScreenText: draft.onScreenText,
-      styleNotes: draft.styleNotes,
-    };
+    const ideaInput = toBriefIdeaInput(draft);
+    const startingBrief = ideaInput.current;
     setWritingBrief(true);
     const result = await generateCodeAnimationBrief({
-      ...toBriefIdeaInput(draft),
+      ...ideaInput,
       providerId: briefProviderId || undefined,
       model: briefModel || undefined,
       effort: briefEffort || undefined,
@@ -429,17 +424,19 @@ export default function CodeAnimation() {
     });
     setWritingBrief(false);
     if (!result?.brief) return;
-    const { title, concept, cast = '', onScreenText, styleNotes } = result.brief;
-    // Style refinements live in the Style section, not the brief — only replace
-    // the artist's own notes when the writer actually asked for a refinement.
-    setDraft((previous) => ({
-      ...previous,
-      ...(previous.title === startingBrief.title ? { title } : {}),
-      ...(previous.concept === startingBrief.concept ? { concept } : {}),
-      ...(previous.cast === startingBrief.cast ? { cast } : {}),
-      ...(previous.onScreenText === startingBrief.onScreenText ? { onScreenText } : {}),
-      ...(styleNotes && previous.styleNotes === startingBrief.styleNotes ? { styleNotes } : {}),
-    }));
+    // Fill only the fields the artist left untouched while the writer ran.
+    setDraft((previous) => {
+      const next = { ...previous };
+      for (const [key, before] of Object.entries(startingBrief)) {
+        const written = result.brief[key];
+        if (typeof written !== 'string' || previous[key] !== before) continue;
+        // Style refinements live in the Style section, not the brief — only replace
+        // the artist's own notes when the writer actually asked for a refinement.
+        if (key === 'styleNotes' && !written) continue;
+        next[key] = written;
+      }
+      return next;
+    });
     toast.success('Brief written — edit it before building the prompt');
   };
 
