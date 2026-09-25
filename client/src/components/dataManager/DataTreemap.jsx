@@ -54,16 +54,16 @@ export default function DataTreemap({ categories, selectedKey, detail, onSelect 
     [categories, width, height],
   );
 
-  if (!tiles.length) {
-    return (
-      <div ref={ref} className="flex items-center justify-center h-40 rounded-lg border border-port-border text-sm text-gray-500">
-        Nothing stored in data/ yet
-      </div>
-    );
-  }
-
+  // One wrapper for both states: useContainerWidth observes the element it
+  // first mounted on, so swapping roots would strand the observer on a
+  // detached node when an empty overview later fills in.
   return (
-    <div ref={ref} className="relative w-full rounded-lg bg-port-bg" style={{ height }}>
+    <div ref={ref} className="relative w-full rounded-lg bg-port-bg" style={{ height: tiles.length ? height : undefined }}>
+      {!tiles.length && (
+        <div className="flex items-center justify-center h-40 rounded-lg border border-port-border text-sm text-gray-500">
+          Nothing stored in data/ yet
+        </div>
+      )}
       {tiles.map(({ item: cat, x, y, w, h }) => {
         const kind = DATA_KINDS[dataKindOf(cat)];
         const selected = cat.key === selectedKey;
