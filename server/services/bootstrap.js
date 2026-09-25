@@ -128,7 +128,7 @@ import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, flushMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -1107,6 +1107,16 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       closeServer(localHttpServer, 'Local HTTP mirror')
     ]);
 
+    // Flush the media-job queue now that no request can admit another job
+    // (#8325): terminal transitions and the latest progress reach the snapshot a
+    // restart restores from. The file write is independent of Postgres, so it
+    // runs alongside the DB close below and is awaited before exit — bounded by
+    // its own timeout so it spends no budget beyond the DB close's.
+    const mediaQueueFlushed = flushMediaJobQueue().then((outcome) => {
+      if (outcome.ok) console.log('✅ Media job queue flushed');
+      else console.error(`❌ Media job queue flush failed: ${outcome.error}`);
+    });
+
     const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
@@ -1119,6 +1129,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     }
 
     await markerWritten;
+    await mediaQueueFlushed;
     clearTimeout(forceExitTimer);
     process.exit(0);
   };

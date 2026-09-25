@@ -390,7 +390,7 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     const { cancelRequested: _canceled, reconcile: _reconcile, ...marker } = params.remoteMedia ?? {};
     params.remoteMedia = { ...marker, cancelRequested: false, reconcile: false };
   }
-  const result = enqueueJob({ kind: job.kind, params, owner: job.owner });
+  const result = await enqueueJob({ kind: job.kind, params, owner: job.owner });
   // Drop the original failed/canceled row from archive — the new job inherits
   // its work, and leaving both visible just lets users keep clicking Retry on
   // the dead row and stacking duplicate jobs. If the prune returns false the

@@ -441,7 +441,9 @@ let persistChain = Promise.resolve();
 // still runs normally in memory for the life of the process.
 let persistBlocked = false;
 function persist() {
-  if (persistBlocked) return persistChain;
+  // Blocked: nothing is written, but callers awaiting durability (enqueueJob)
+  // must not inherit a stale rejection from a write that predates the latch.
+  if (persistBlocked) return persistChain.catch(() => {});
   persistChain = persistChain.then(persistImpl, persistImpl);
   return persistChain;
 }
@@ -744,7 +746,7 @@ async function drainLoop() {
       remote: limits.remote - remoteRunning.length,
     };
     for (const job of candidates) {
-      if (job.status !== 'queued' || job.hold) continue;
+      if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
       startLaneJob(job, { lane });
@@ -781,7 +783,7 @@ export function removeArchivedJob(jobId) {
 // even if the lane is at its limit. GPU jobs are rejected (single MLX runtime
 // would OOM). The rejection code stays 'NOT_CODEX' for client back-compat.
 export function runJobNow(jobId) {
-  const job = queue.find((j) => j.id === jobId);
+  const job = queue.find((j) => j.id === jobId && !j.admitting);
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
   if (!isCloudImageJob(job)) {
     return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
@@ -1232,7 +1234,17 @@ async function runJob(job) {
   dispatcher.detach();
 }
 
-export function enqueueJob({ kind, params, owner = null }) {
+// Error code of a refused admission. The job was withdrawn before any dispatch,
+// so a caller may treat the submission as definitively not made.
+export const MEDIA_QUEUE_PERSIST_FAILED = 'MEDIA_QUEUE_PERSIST_FAILED';
+
+// Admission is durable (#8325): the job is acknowledged — and made eligible for
+// dispatch — only after a snapshot containing it has been written. Until then it
+// sits in the queue flagged `admitting` (a transient, unserialized field) so the
+// snapshot includes it while drainLoop/runJobNow leave it alone. A failed write
+// withdraws the job and throws, so a caller never holds a job id that a restart
+// would not restore, and no provider work starts for it.
+export async function enqueueJob({ kind, params, owner = null }) {
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
@@ -1263,11 +1275,30 @@ export function enqueueJob({ kind, params, owner = null }) {
       return laneQueue.length + liveCount + 1;
     })(),
   };
+  job.admitting = true;
   queue.push(job);
-  const sseEntry = ensureSseEntry(id);
-  broadcastSse(sseEntry, { type: 'queued', position: job.position });
+  try {
+    await persist();
+  } catch (err) {
+    // Withdraw before the next snapshot so the rejected job never lands on disk.
+    const idx = queue.indexOf(job);
+    if (idx >= 0) queue.splice(idx, 1);
+    recomputeQueuePositions();
+    // An unrelated write may have landed the admitting job on disk before ours
+    // failed; best-effort rewrite so a restart cannot resurrect a refused job.
+    persist().catch(() => {});
+    console.error(`❌ media-job [${id.slice(0, 8)}] ${kind} not queued — snapshot write failed: ${err.message}`);
+    throw new ServerError(`Could not save the ${kind} job to the media queue: ${err.message}`, {
+      status: 503,
+      code: MEDIA_QUEUE_PERSIST_FAILED,
+    });
+  }
+  delete job.admitting;
+  // A bulk cancel can reach the job while its snapshot is in flight; cancelJob
+  // already archived and announced it, so report that instead of 'queued'.
+  if (job.status !== 'queued') return { jobId: id, position: job.position, status: job.status };
+  broadcastSse(ensureSseEntry(id), { type: 'queued', position: job.position });
   mediaJobEvents.emit('enqueued', job);
-  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on enqueue failed: ${e.message}`));
   startWorker();
   console.log(`📥 media-job [${id.slice(0, 8)}] ${kind} queued (position ${job.position})`);
   return { jobId: id, position: job.position, status: 'queued' };
@@ -1460,6 +1491,34 @@ export function attachSseClient(jobId, res) {
   res.write(`data: ${JSON.stringify(terminal)}\n\n`);
   res.end();
   return true;
+}
+
+export const MEDIA_QUEUE_FLUSH_TIMEOUT_MS = 2000;
+
+// Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
+// then write one fresh snapshot — it captures the latest in-memory progress,
+// so a debounced progress write still pending in runJob is not lost — and wait
+// for the whole persist chain behind it. Bounded so a stalled disk cannot eat
+// the shutdown budget; never rejects, reporting the outcome instead.
+export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
+  const drain = (async () => {
+    while (terminalOperations.size > 0) {
+      await Promise.allSettled([...terminalOperations]);
+    }
+    // The lane finalizer schedules its archive snapshot a few microtasks after
+    // the terminal operation settles; yield so most land ahead of our persist.
+    await Promise.resolve();
+    await persist();
+    // A finalizer that still slipped in behind us wrote a newer snapshot.
+    await persistChain;
+    return { ok: true };
+  })().catch((err) => ({ ok: false, error: err.message }));
+  let timer;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([drain, timeout]).finally(() => clearTimeout(timer));
 }
 
 // Test-only reset hook. Real callers go through enqueueJob/cancelJob.

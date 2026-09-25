@@ -17,7 +17,8 @@ vi.mock('./sceneEvaluator.js', () => ({ resolveVisionEvalTarget: vi.fn(async () 
 vi.mock('../videoGen/reactor.js', () => ({ REACTOR_MODEL_ID: 'fast-h3' }));
 vi.mock('../videoGen/modelSelection.js', () => ({ resolveVideoModelSelection: vi.fn() }));
 vi.mock('../mediaJobQueue/index.js', () => ({ listJobs: vi.fn(() => state.jobs), getJob: vi.fn(id => state.jobs.find(job => job.id === id)),
-  enqueueJob: vi.fn(job => { const jobId = `example-audio-${state.jobs.length}`; state.jobs.push({ ...job, id: jobId, status: 'completed', result: { filename: 'example-bed.wav', durationSec: 10 } }); return { jobId }; }),
+  MEDIA_QUEUE_PERSIST_FAILED: 'MEDIA_QUEUE_PERSIST_FAILED',
+  enqueueJob: vi.fn(async job => { const jobId = `example-audio-${state.jobs.length}`; state.jobs.push({ ...job, id: jobId, status: 'completed', result: { filename: 'example-bed.wav', durationSec: 10 } }); return { jobId }; }),
 }));
 vi.mock('../pipeline/musicGen.js', () => ({ ENGINES: { 'example-audio': { id: 'example-audio', models: [{ id: 'example-model' }], defaultModelId: 'example-model', minDurationSec: 1, maxDurationSec: 30 } }, isEngineHealthy: vi.fn(async () => true) }));
 vi.mock('../pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async filename => filename ? `/fake/music/${filename}` : null) }));

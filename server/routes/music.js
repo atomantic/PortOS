@@ -557,7 +557,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
     };
   }
 
-  const result = enqueueJob({
+  const result = await enqueueJob({
     kind: 'audio',
     params: {
       // Keep only the fixed-vocabulary profile and routing request under the

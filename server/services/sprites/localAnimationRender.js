@@ -329,8 +329,9 @@ export const spriteAnimationJobTag = ({ recordId, runId, track, direction }) => 
 });
 
 /**
- * Queue the render. Returns the media-job id synchronously so the caller can
- * stamp it on an already-persisted run record.
+ * Queue the render. Resolves to the media-job id once the queue has durably
+ * admitted it (#8325), so the caller can stamp it on an already-persisted run
+ * record; rejects when the queue could not save the job.
  *
  * `hidden: true` keeps the clip out of the user's video gallery: it is an
  * intermediate the sprite pipeline consumes, not a video they asked to keep.
@@ -338,8 +339,8 @@ export const spriteAnimationJobTag = ({ recordId, runId, track, direction }) => 
  * explicitly chose the LOCAL provider, and the unattended helper's default
  * routing could send the job to a peer instead.
  */
-export function enqueueLocalAnimationRender({ plan, canvas, prompt, inputAbs, recordId, runId, track, direction }) {
-  return enqueueJob({
+export async function enqueueLocalAnimationRender({ plan, canvas, prompt, inputAbs, recordId, runId, track, direction }) {
+  const { jobId } = await enqueueJob({
     kind: 'video',
     // The owner the client's sprite pending-render hook filters on.
     owner: 'sprites',
@@ -354,7 +355,8 @@ export function enqueueLocalAnimationRender({ plan, canvas, prompt, inputAbs, re
       hidden: true,
       ...spriteAnimationJobTag({ recordId, runId, track, direction }),
     },
-  }).jobId;
+  });
+  return jobId;
 }
 
 /**

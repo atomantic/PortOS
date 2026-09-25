@@ -831,7 +831,7 @@ async function advanceRun(runId) {
     }
     const visualConditioning = enrichConditioning(job.params.visualConditioning, job, asset);
     if (visualConditioning) job.params.visualConditioning = visualConditioning;
-    const enqueued = enqueueJob({
+    const enqueued = await enqueueJob({
       kind: job.kind,
       params: job.params,
       owner: `fableloom:${run.loomId}:${run.episodeId}:${asset.id}`,

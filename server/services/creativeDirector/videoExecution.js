@@ -301,7 +301,11 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
     await settleVideoAttempt(project.id, attempt.id, { status: 'queued', jobId: result.jobId });
     return { ...result, attemptId: attempt.id };
   } catch (error) {
-    const uncertain = error.code !== 'VIDEO_DISPATCH_BLOCKED';
+    // A refused queue admission (#8325) withdrew the job before dispatch, so
+    // nothing was submitted — as certain a failure as a blocked dispatch. (The
+    // literal mirrors mediaJobQueue's MEDIA_QUEUE_PERSIST_FAILED; importing the
+    // queue here would close a static cycle with its dynamic import of us.)
+    const uncertain = error.code !== 'VIDEO_DISPATCH_BLOCKED' && error.code !== 'MEDIA_QUEUE_PERSIST_FAILED';
     await settleVideoAttempt(project.id, attempt.id, { status: uncertain ? 'uncertain' : 'failed' });
     await pauseVideoExecution(project.id, uncertain ? 'Submission could not be confirmed. Reconcile the queue or explicitly authorize retry; it may charge again.' : error.message);
     throw new ServerError(error.message, { status: 409, code: uncertain ? 'VIDEO_SUBMISSION_UNCERTAIN' : error.code });

@@ -60,7 +60,7 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
 async function enqueueLoggedImage(req, job) {
-  const queued = enqueueJob(job);
+  const queued = await enqueueJob(job);
   try {
     const happenedAt = new Date().toISOString();
     await recordUserAction({

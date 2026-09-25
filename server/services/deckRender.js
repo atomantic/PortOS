@@ -98,7 +98,12 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
         ...(localModel?.selectedModel?.id ? { modelId: localModel.selectedModel.id } : {}),
         ...base,
       };
-    const { jobId } = enqueueJob({ kind: 'image', params, owner: 'decks' });
+    // A refused admission (#8325) still stamps the cards already queued, so
+    // the deck shows the renders that WILL land before the error surfaces.
+    const { jobId } = await enqueueJob({ kind: 'image', params, owner: 'decks' }).catch(async (err) => {
+      if (stamps.length) await markCardsRenderQueued(deck.id, stamps);
+      throw err;
+    });
     jobs.push({ cardId: card.id, key: card.key, jobId });
     stamps.push({ cardId: card.id, render: {
       jobId, status: 'queued', queuedAt: new Date().toISOString(), mode,
