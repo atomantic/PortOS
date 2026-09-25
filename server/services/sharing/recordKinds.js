@@ -31,6 +31,10 @@
  * (writersRoomWork's prose rides the separate `draftBodyManifest`; the other
  * four are body-less LWW records).
  *
+ * `referencedAssets(record, envelope)` derives filename-only references using
+ * the same walk as the sender builder, without depending on local asset bytes.
+ * The five asset-less kinds omit it and cannot admit any generic push assets.
+ *
  * `merge` is called uniformly as `desc.merge(records, { source,
  * senderSchemaVersions })` — every merger destructures at least `{ source }`;
  * the dozen that don't also use `senderSchemaVersions` simply ignore the
@@ -70,6 +74,18 @@ import {
   buildBoardAssetManifest,
   buildFableLoomAssetManifest,
   buildDeckAssetManifest,
+  referenceCollectionAssetManifest,
+  referenceAuthorAssetManifest,
+  referenceArtistAssetManifest,
+  referenceAlbumAssetManifest,
+  referenceTrackAssetManifest,
+  referenceProjectAssetManifest,
+  referenceMusicVideoAssetManifest,
+  referenceFableLoomAssetManifest,
+  referenceBoardAssetManifest,
+  referenceDeckAssetManifest,
+  referenceAssetManifestForSeries,
+  referenceAssetManifestWithCollection,
 } from './peerSyncAssets.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 
@@ -79,60 +95,71 @@ export const RECORD_KINDS = Object.freeze({
     load: (id) => getUniverse(id, { includeDeleted: true }),
     merge: mergeUniversesFromSync,
     buildAssetManifest: null, // bundle-aware builder lives in buildPushPayload's universe hook
+    referencedAssets: (record, { linkedCollection }) => referenceAssetManifestWithCollection(record, linkedCollection),
     hasEphemeral: true,
   },
   series: {
     load: (id) => getSeries(id, { includeDeleted: true }),
     merge: mergeSeriesFromSync,
     buildAssetManifest: null, // bundle-aware builder lives in buildPushPayload's series hook
+    referencedAssets: (record, { issues, linkedCollection }) => referenceAssetManifestForSeries(record,
+      (Array.isArray(issues) ? issues : []).filter((issue) => issue?.deleted !== true && issue?.ephemeral !== true), linkedCollection),
     hasEphemeral: true,
   },
   mediaCollection: {
     load: (id) => getCollection(id, { includeDeleted: true }),
     merge: mergeMediaCollectionsFromSync,
     buildAssetManifest: buildCollectionAssetManifest,
+    referencedAssets: referenceCollectionAssetManifest,
     hasEphemeral: false,
   },
   author: {
     load: (id) => getAuthor(id, { includeDeleted: true }),
     merge: mergeAuthorsFromSync,
     buildAssetManifest: buildAuthorAssetManifest,
+    referencedAssets: referenceAuthorAssetManifest,
     hasEphemeral: false,
   },
   artist: {
     load: (id) => getArtist(id, { includeDeleted: true }),
     merge: mergeArtistsFromSync,
     buildAssetManifest: buildArtistAssetManifest,
+    referencedAssets: referenceArtistAssetManifest,
     hasEphemeral: false,
   },
   album: {
     load: (id) => getAlbum(id, { includeDeleted: true }),
     merge: mergeAlbumsFromSync,
     buildAssetManifest: buildAlbumAssetManifest,
+    referencedAssets: referenceAlbumAssetManifest,
     hasEphemeral: false,
   },
   track: {
     load: (id) => getTrack(id, { includeDeleted: true }),
     merge: mergeTracksFromSync,
     buildAssetManifest: buildTrackAssetManifest,
+    referencedAssets: referenceTrackAssetManifest,
     hasEphemeral: false,
   },
   creativeDirectorProject: {
     load: (id) => getProject(id, { includeDeleted: true }),
     merge: mergeProjectsFromSync,
     buildAssetManifest: buildProjectAssetManifest,
+    referencedAssets: referenceProjectAssetManifest,
     hasEphemeral: false,
   },
   moodBoard: {
     load: (id) => getBoard(id, { includeDeleted: true }),
     merge: mergeBoardsFromSync,
     buildAssetManifest: buildBoardAssetManifest,
+    referencedAssets: referenceBoardAssetManifest,
     hasEphemeral: false,
   },
   fableLoom: {
     load: (id) => getLoom(id, { includeDeleted: true }),
     merge: mergeLoomsFromSync,
     buildAssetManifest: buildFableLoomAssetManifest,
+    referencedAssets: referenceFableLoomAssetManifest,
     // No ephemeral concept (syncWire.js's fableLoom wire case: "always
     // wire-syncable when present"). `classifyLocalRecord` had NO arm for this
     // kind before this table — a found loom always fell through to the
@@ -166,6 +193,7 @@ export const RECORD_KINDS = Object.freeze({
     load: (id) => getMusicVideoProject(id, { includeDeleted: true }),
     merge: mergeMusicVideoProjectsFromSync,
     buildAssetManifest: buildMusicVideoAssetManifest,
+    referencedAssets: referenceMusicVideoAssetManifest,
     // Documented drift (pre-#6843): applyIncomingPush's local-ephemeral lookup
     // special-cased this kind (`local?.ephemeral === true`, added by #1858),
     // but the store carries no ephemeral flag at all
@@ -194,6 +222,7 @@ export const RECORD_KINDS = Object.freeze({
     load: (id) => getDeckForSync(id),
     merge: mergeDecksFromSync,
     buildAssetManifest: buildDeckAssetManifest,
+    referencedAssets: referenceDeckAssetManifest,
     hasEphemeral: false,
   },
 });

@@ -3061,6 +3061,29 @@ describe('Jira filer', () => {
     expect(payload.description).toContain('B');
   });
 
+  // #8460 — the Jira filer shares the forge scrubber, and both filers append
+  // the slug marker after it: a date-bearing slug would otherwise collapse to
+  // `<phone>` and lose the dedup identity the next run reads back.
+  it('fileProposalToJira redacts PII but keeps a date-bearing slug marker intact', async () => {
+    const create = vi.fn().mockResolvedValue({ success: true, ticketId: 'PROJ-12', url: 'https://j/browse/PROJ-12' });
+    await fileProposalToJira({
+      instanceId: 'i', projectKey: 'PROJ', slug: 'release-2026-09-25', create,
+      title: 'Mail alice@example.com', body: 'Peer 192.0.2.10 on host-1.example.ts.net, call +1 555 010 0000.',
+    });
+    const { summary, description } = create.mock.calls[0][1];
+    for (const leak of ['alice@example.com', '192.0.2.10', 'host-1.example.ts.net', '+1 555 010 0000']) {
+      expect(`${summary}\n${description}`).not.toContain(leak);
+    }
+    expect(extractSlugFromBody(description)).toBe('release-2026-09-25');
+  });
+
+  it('fileProposalToForge keeps a date-bearing slug marker intact through the scrubber', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'https://github.com/o/r/issues/5\n' });
+    await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 'release-2026-09-25', model: 'light', effort: 'low', exec });
+    const createCall = exec.mock.calls.find(c => c[1][0] === 'issue')[1];
+    expect(extractSlugFromBody(createCall[createCall.indexOf('--body') + 1])).toBe('release-2026-09-25');
+  });
+
   it('fileProposalToJira forwards hyphenated dispatch + contributor labels without deriving them', async () => {
     const create = vi.fn().mockResolvedValue({ success: true, ticketId: 'PROJ-11', url: 'https://j/browse/PROJ-11' });
     await fileProposalToJira({
