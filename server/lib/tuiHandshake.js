@@ -1310,29 +1310,22 @@ export function createOomNudgeGate() {
 // that truncates three times in one run is not going to complete on the
 // fourth, for the same reason an OOM that outlasts three nudges isn't.
 export const TRUNCATION_NUDGE_MAX_ATTEMPTS = OOM_NUDGE_MAX_ATTEMPTS;
-// What gets pasted. The literal word a human typed, for the literal reason it
-// worked: the TUI still holds the conversation and the model just needs a turn.
-export const TRUNCATION_NUDGE_TEXT = 'continue';
+// What gets pasted — the same word the OOM nudge pastes, for the same reason:
+// the TUI still holds the conversation and the model just needs a turn.
+export const TRUNCATION_NUDGE_TEXT = OOM_NUDGE_TEXT;
 
 /**
  * State machine for "nudge a TUI session a truncated response left halted".
- * Identical policy to `createOomNudgeGate` — see `createSilenceNudgeGate` for
- * the semantics of `arm` / `takeNudge`.
+ * Delegates to `createOomNudgeGate` — the two conditions share every policy
+ * detail (a dead turn, an intact session, a banner that repaints), so the
+ * gate is literally the same machine under a name that says what it watches
+ * for. See `createSilenceNudgeGate` for the semantics of `arm` / `takeNudge`.
  *
  * @returns {{ arm: (analysis: object, nowMs: number) => 'armed'|'exhausted'|null,
  *             takeNudge: (nowMs: number, lastOutputAtMs: number) => number }}
  */
 export function createTruncationNudgeGate() {
-  const gate = createSilenceNudgeGate({
-    cooldownMs: OOM_NUDGE_COOLDOWN_MS,
-    settleMs: OOM_NUDGE_SETTLE_MS,
-    armWindowMs: OOM_NUDGE_ARM_WINDOW_MS,
-    maxAttempts: TRUNCATION_NUDGE_MAX_ATTEMPTS,
-  });
-  return {
-    arm: (analysis, nowMs) => (analysis ? gate.arm(nowMs) : null),
-    takeNudge: gate.takeNudge,
-  };
+  return createOomNudgeGate();
 }
 
 /**

@@ -1920,8 +1920,11 @@ describe('createOomNudgeGate', () => {
 });
 
 describe('createTruncationNudgeGate', () => {
-  // Same shape as the OOM gate: a dead turn, an intact session. These pin the
-  // policy is truly shared rather than drifting from createOomNudgeGate.
+  // The gate delegates to createOomNudgeGate (same shape: a dead turn, an
+  // intact session), so the full silence/cooldown/budget policy is pinned by
+  // the OOM suite above. These two prove the delegation stays behavioral —
+  // the truncation gate still nudges on quiet and still hands back the
+  // exhausted verdict — rather than asserting constant equality.
   const analysis = { category: 'output-length', message: 'Provider cut the response off before completion' };
 
   it('nudges only once the session has actually gone quiet', () => {
@@ -1936,30 +1939,6 @@ describe('createTruncationNudgeGate', () => {
     expect(gate.takeNudge(t0 + 60_000, t0 + 5_000)).toBe(0);
   });
 
-  it('treats repaints of the same banner as one truncation', () => {
-    const gate = createTruncationNudgeGate();
-    const t0 = 0;
-    expect(gate.arm(analysis, t0)).toBe('armed');
-    expect(gate.arm(analysis, t0 + 100)).toBeNull();
-    expect(gate.takeNudge(t0 + OOM_NUDGE_SETTLE_MS + 1, t0)).toBe(1);
-    // Disarmed, but still inside the dedupe cooldown — a repaint must not
-    // spend a second nudge on the same event.
-    expect(gate.arm(analysis, t0 + OOM_NUDGE_COOLDOWN_MS - 1)).toBeNull();
-    expect(gate.arm(analysis, t0 + OOM_NUDGE_COOLDOWN_MS)).toBe('armed');
-  });
-
-  it('drops a stale arm the session never went quiet for', () => {
-    const gate = createTruncationNudgeGate();
-    const t0 = 0;
-    gate.arm(analysis, t0);
-    // Output kept flowing for the whole window: the session recovered on its
-    // own, so the arm expires rather than firing into the next quiet spell.
-    expect(gate.takeNudge(t0 + OOM_NUDGE_ARM_WINDOW_MS + 1, t0 + OOM_NUDGE_ARM_WINDOW_MS)).toBe(0);
-    const t1 = t0 + OOM_NUDGE_COOLDOWN_MS;
-    expect(gate.arm(analysis, t1)).toBe('armed');
-    expect(gate.takeNudge(t1 + OOM_NUDGE_SETTLE_MS + 1, t1)).toBe(1);
-  });
-
   it('hands back an exhausted verdict once the nudge budget is spent', () => {
     const gate = createTruncationNudgeGate();
     let t = 0;
@@ -1972,12 +1951,6 @@ describe('createTruncationNudgeGate', () => {
     // Truncated again after the budget: this provider is not going to finish
     // the response, so the caller fails over instead of nudging again.
     expect(gate.arm(analysis, t)).toBe('exhausted');
-  });
-
-  it('ignores a null analysis', () => {
-    const gate = createTruncationNudgeGate();
-    expect(gate.arm(null, 0)).toBeNull();
-    expect(gate.takeNudge(OOM_NUDGE_SETTLE_MS + 1, 0)).toBe(0);
   });
 });
 
