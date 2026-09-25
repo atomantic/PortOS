@@ -37,6 +37,11 @@ describe('RECORD_KINDS registry completeness (#6843)', () => {
     expect(typeof desc.merge).toBe('function');
     expect(typeof desc.hasEphemeral).toBe('boolean');
     expect(desc.buildAssetManifest === null || typeof desc.buildAssetManifest === 'function').toBe(true);
+    if (desc.buildAssetManifest || kind === 'universe' || kind === 'series') {
+      expect(typeof desc.referencedAssets).toBe('function');
+    } else {
+      expect(desc.referencedAssets).toBeUndefined();
+    }
   });
 
   it('only universe and series carry hasEphemeral:true — every other kind (including fableLoom and musicVideoProject, both documented drift fixes in #6843) has no ephemeral concept', () => {
