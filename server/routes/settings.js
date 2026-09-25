@@ -173,7 +173,8 @@ const projectEffectiveBackup = (safe) => {
       ...safe.backup,
       destPath: effective.destPath,
       enabled: effective.enabled,
-      cronExpression: effective.cronExpression
+      cronExpression: effective.cronExpression,
+      retentionCount: effective.retentionCount
     }
   };
 };

@@ -110,7 +110,7 @@ describe('startBackupScheduler', () => {
     expect(runBackup).toHaveBeenCalledWith(
       '/dest-fresh',
       null,
-      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'] }
+      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'], retentionCount: null }
     );
   });
 
@@ -290,7 +290,7 @@ describe('backup schedule defaults (#6632)', () => {
     await startBackupScheduler();
     await schedule.mock.calls[0][0].handler();
     expect(runBackup).toHaveBeenCalledWith('/example-backups', null, {
-      excludePaths: [], disabledDefaultExcludes: []
+      excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
     });
   });
 });

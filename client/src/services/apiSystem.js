@@ -359,6 +359,10 @@ export async function downloadBackupSnapshot(snapshotId, source) {
   return { filename };
 }
 export const restoreDatabase = (data, options) => request('/backup/restore-db', { method: 'POST', body: JSON.stringify(data), ...options });
+export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
+  const query = source ? `?source=${encodeURIComponent(source)}` : '';
+  return request(`/backup/snapshots/${encodeURIComponent(snapshotId)}${query}`, { method: 'DELETE', ...options });
+};
 
 // Data Manager
 export const getDataOverview = () => request('/data');

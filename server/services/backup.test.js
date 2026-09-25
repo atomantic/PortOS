@@ -110,7 +110,7 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 }));
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
@@ -452,6 +452,74 @@ describe('listSnapshots', () => {
     const readdirSpy = vi.spyOn(fs, 'readdir');
     expect(await listSnapshots('')).toEqual([]);
     expect(readdirSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteSnapshot', () => {
+  let destRoot;
+
+  beforeEach(async () => {
+    destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-delete-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(destRoot, { recursive: true, force: true });
+  });
+
+  async function makeSnapshot(source, id, { marker } = {}) {
+    const dir = joinPath(destRoot, 'snapshots', source, id);
+    await fs.mkdir(joinPath(dir, 'data'), { recursive: true });
+    await fs.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt: '2026-01-01T00:00:00Z', fileCount: 0 }));
+    if (marker) await fs.writeFile(joinPath(dir, marker), '');
+    return dir;
+  }
+
+  it('removes exactly the selected source/ID pair, leaving a same-ID snapshot on another source untouched', async () => {
+    const targetDir = await makeSnapshot(machineHost, '2026-06-08T15-18-34');
+    const siblingDir = await makeSnapshot('previous-machine', '2026-06-08T15-18-34');
+
+    const result = await deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost });
+
+    expect(result).toEqual({ deleted: true, snapshotId: '2026-06-08T15-18-34', source: machineHost });
+    await expect(fs.stat(targetDir)).rejects.toThrow();
+    await expect(fs.stat(siblingDir)).resolves.toBeDefined();
+  });
+
+  it('defaults to the current machine when source is omitted', async () => {
+    const targetDir = await makeSnapshot(machineHost, '2026-06-08T15-18-34');
+    await deleteSnapshot(destRoot, '2026-06-08T15-18-34');
+    await expect(fs.stat(targetDir)).rejects.toThrow();
+  });
+
+  it('404s for a snapshot that does not exist, without touching the disk', async () => {
+    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost }))
+      .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+  });
+
+  it('refuses a snapshot that is still being written (409 SNAPSHOT_INCOMPLETE), leaving it on disk', async () => {
+    const dir = await makeSnapshot(machineHost, '2026-06-08T15-18-34', { marker: '.in-progress' });
+    await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    await expect(fs.stat(dir)).resolves.toBeDefined();
+  });
+
+  it('allows deleting a failed snapshot — unlike restore, deletion has no reason to require success', async () => {
+    const dir = await makeSnapshot(machineHost, '2026-06-08T15-18-34', { marker: '.failed' });
+    await deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: machineHost });
+    await expect(fs.stat(dir)).rejects.toThrow();
+  });
+
+  it('rejects an explicitly selected source namespace that is a symbolic link', async () => {
+    const outsideRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-delete-outside-'));
+    try {
+      await makeSnapshot('evil', '2026-06-08T15-18-34');
+      await fs.rm(joinPath(destRoot, 'snapshots', 'evil'), { recursive: true, force: true });
+      await fs.symlink(outsideRoot, joinPath(destRoot, 'snapshots', 'evil'), 'dir');
+      await expect(deleteSnapshot(destRoot, '2026-06-08T15-18-34', { source: 'evil' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2882,6 +2950,74 @@ describe('runBackup lifecycle', () => {
     proc.emit('close', 0);
     await expect(pending).resolves.toMatchObject({ status: 'ok' });
     expect(await getState()).toMatchObject({ status: 'ok', error: null });
+  });
+
+  // -----------------------------------------------------------------------
+  // Retention pruning (#8334) — after a successful run, the oldest COMPLETED
+  // snapshots on THIS machine beyond retentionCount are deleted. Failed,
+  // in-progress, and other-source snapshots must never be touched, and
+  // retentionCount null/undefined must never prune anything (an existing
+  // install with no stored value keeps everything — see backupConfig.js).
+  // -----------------------------------------------------------------------
+  describe('retention pruning', () => {
+    async function seedSnapshot(source, id, { generatedAt, marker } = {}) {
+      const fsp = await actualFs();
+      const dir = joinPath(destRoot, 'snapshots', source, id);
+      await fsp.mkdir(joinPath(dir, 'data'), { recursive: true });
+      if (generatedAt) {
+        await fsp.writeFile(joinPath(dir, 'manifest.json'), JSON.stringify({ generatedAt, fileCount: 0 }));
+      }
+      if (marker) await fsp.writeFile(joinPath(dir, marker), '');
+      return dir;
+    }
+
+    it('prunes only the oldest completed snapshots in the current machine namespace, keeping failed/in-progress/other-source snapshots', async () => {
+      const fsp = await actualFs();
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+      const old3 = await seedSnapshot(machineHost, '2020-01-03T00-00-00', { generatedAt: '2020-01-03T00:00:00.000Z' });
+      const incomplete = await seedSnapshot(machineHost, '2020-01-04T00-00-00', { marker: '.in-progress' });
+      const failed = await seedSnapshot(machineHost, '2020-01-05T00-00-00', { generatedAt: '2020-01-05T00:00:00.000Z', marker: '.failed' });
+      const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+
+      const io = { emit: vi.fn() };
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = runBackup(destRoot, io, { retentionCount: 2 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      proc.emit('close', 0);
+      const result = await pending;
+
+      // Keeps the newest 2 completed snapshots on this machine: the run just
+      // created and old3. old1 and old2 are pruned.
+      await expect(fsp.stat(old1)).rejects.toThrow();
+      await expect(fsp.stat(old2)).rejects.toThrow();
+      await expect(fsp.stat(old3)).resolves.toBeDefined();
+      const newSnapshotDir = joinPath(destRoot, 'snapshots', machineHost, result.snapshotId);
+      await expect(fsp.stat(newSnapshotDir)).resolves.toBeDefined();
+
+      // Never touched: still-being-written, failed, and another machine's namespace.
+      await expect(fsp.stat(incomplete)).resolves.toBeDefined();
+      await expect(fsp.stat(failed)).resolves.toBeDefined();
+      await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {
+      const fsp = await actualFs();
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+
+      const io = { emit: vi.fn() };
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = runBackup(destRoot, io, { retentionCount: null });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      proc.emit('close', 0);
+      await pending;
+
+      await expect(fsp.stat(old1)).resolves.toBeDefined();
+      await expect(fsp.stat(old2)).resolves.toBeDefined();
+    });
   });
 
 });

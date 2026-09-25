@@ -93,7 +93,7 @@ function attemptRegistration(inputs, timezone, signature) {
         const excludePaths = fresh.backup?.excludePaths || [];
         const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
         console.log('💾 Backup scheduler: running scheduled backup');
-        await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes });
+        await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
       },
       metadata: { source: 'backupScheduler' }
     });

@@ -8,6 +8,7 @@ vi.mock('../../services/api', () => ({
   triggerBackup: vi.fn(),
   getBackupSnapshots: vi.fn(),
   restoreDatabase: vi.fn(),
+  deleteBackupSnapshot: vi.fn(),
   // FolderPicker imports `* as api` from the same module; it only calls this
   // when its picker is opened (never in these tests), but the mock defines it
   // so the import doesn't resolve to undefined if the picker ever mounts eagerly.
@@ -33,6 +34,7 @@ import {
   triggerBackup,
   getBackupSnapshots,
   restoreDatabase,
+  deleteBackupSnapshot,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import { BackupTab } from './BackupTab';
@@ -40,7 +42,7 @@ import { BackupTab } from './BackupTab';
 beforeEach(() => {
   vi.clearAllMocks();
   // Sensible defaults — individual tests override as needed.
-  getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+  getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
   getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [], pgBackup: null });
   getBackupSnapshots.mockResolvedValue([]);
 });
@@ -113,6 +115,7 @@ describe('BackupTab', () => {
           destPath: '/new/dest',
           enabled: false,
           cronExpression: '0 2 * * *',
+          retentionCount: null,
           excludePaths: [],
           disabledDefaultExcludes: [],
         },
@@ -129,6 +132,60 @@ describe('BackupTab', () => {
       });
 
       expect(toast.error).toHaveBeenCalledWith('disk full');
+    });
+  });
+
+  describe('retention control (#8334)', () => {
+    it('saves a numeric retentionCount typed into the field', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: 30, excludePaths: [], disabledDefaultExcludes: [] },
+      });
+      updateSettings.mockResolvedValue({});
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const input = screen.getByLabelText(/Retention \(snapshots kept on this machine\)/i);
+      expect(input).not.toBeDisabled();
+      fireEvent.change(input, { target: { value: '14' } });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      });
+
+      expect(updateSettings).toHaveBeenCalledWith(
+        { backup: expect.objectContaining({ retentionCount: 14 }) },
+        { silent: true }
+      );
+    });
+
+    it('toggling Unlimited clears the field and saves retentionCount: null', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: 30, excludePaths: [], disabledDefaultExcludes: [] },
+      });
+      updateSettings.mockResolvedValue({});
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const input = screen.getByLabelText(/Retention \(snapshots kept on this machine\)/i);
+      expect(input.value).toBe('30');
+
+      fireEvent.click(screen.getByRole('switch', { name: 'Unlimited retention' }));
+      expect(input).toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      });
+
+      expect(updateSettings).toHaveBeenCalledWith(
+        { backup: expect.objectContaining({ retentionCount: null }) },
+        { silent: true }
+      );
+    });
+
+    it('refuses to render the form when retentionCount is not projected', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] },
+      });
+      render(<BackupTab />);
+      await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
     });
   });
 
@@ -335,11 +392,62 @@ describe('BackupTab', () => {
     });
   });
 
+  describe('snapshot deletion (#8334)', () => {
+    it('does not delete until the confirmation modal is confirmed', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-2026-06-09' }]);
+      await renderTab();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Delete snapshot snap-2026-06-09/i }));
+      expect(screen.getByText(/Delete snapshot\?/i)).toBeInTheDocument();
+      expect(deleteBackupSnapshot).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+      await waitFor(() => expect(screen.queryByText(/Delete snapshot\?/i)).toBeNull());
+      expect(deleteBackupSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('deletes the exact source/ID pair and removes the row on confirm', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-2026-06-09', source: 'previous-machine', selectionKey: 'previous-machine/snap-2026-06-09' }]);
+      deleteBackupSnapshot.mockResolvedValue({ deleted: true, snapshotId: 'snap-2026-06-09', source: 'previous-machine' });
+      await renderTab();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Delete snapshot snap-2026-06-09/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+      });
+
+      expect(deleteBackupSnapshot).toHaveBeenCalledWith('snap-2026-06-09', 'previous-machine', { silent: true });
+      expect(toast.success).toHaveBeenCalledWith('Deleted snapshot snap-2026-06-09');
+      await waitFor(() => expect(screen.queryByText('snap-2026-06-09')).not.toBeInTheDocument());
+    });
+
+    it('toasts an error and keeps the row when deletion fails', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-2026-06-09' }]);
+      deleteBackupSnapshot.mockResolvedValue({ deleted: false });
+      await renderTab();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Delete snapshot snap-2026-06-09/i }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+      });
+
+      expect(toast.error).toHaveBeenCalledWith('Failed to delete snapshot');
+      expect(screen.getByText('snap-2026-06-09')).toBeInTheDocument();
+    });
+
+    it('disables delete for a snapshot still being written', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-incomplete', incomplete: true }]);
+      await renderTab();
+
+      expect(await screen.findByRole('button', { name: /Delete snapshot snap-incomplete/i })).toBeDisabled();
+    });
+  });
+
   describe('Run Now gating (saved state)', () => {
     // The AGENTS.md invariant: "Run Now must gate on saved state, not the form
     // input." `canRun` keys off `savedDestPath` + `dirty`, never the live input.
     it('disables Run Backup Now when no destination is saved', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       await renderTab();
 
       const runBtn = screen.getByRole('button', { name: /Run Backup Now/i });
@@ -350,7 +458,7 @@ describe('BackupTab', () => {
     });
 
     it('disables Run Backup Now while the destination is edited-but-unsaved (dirty)', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       await renderTab();
 
       // Enabled at rest with a saved destination.
@@ -368,7 +476,7 @@ describe('BackupTab', () => {
     });
 
     it('re-enables Run Backup Now once the edited destination is saved', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       updateSettings.mockResolvedValue({});
       await renderTab();
 
@@ -387,7 +495,7 @@ describe('BackupTab', () => {
     });
 
     it('disables Run Backup Now while a save is in flight (not just when dirty)', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       // Hold the save pending so we can observe the in-flight window. The
       // invariant is "disable while dirty *or* a save is in flight" — the
       // pending save (not dirtiness) is what must keep the action locked here.
@@ -416,7 +524,7 @@ describe('BackupTab', () => {
     });
 
     it('explains that a first destination save is in flight', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       let resolveSave;
       updateSettings.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
       await renderTab();
@@ -555,7 +663,7 @@ describe('BackupTab', () => {
     it('preserves independent custom rules through default toggles, save, and reload', async () => {
       const loraPath = '/loras/*.safetensors';
       const custom = ['*.safetensors', '/lo*/', 'loras/'];
-      const backup = { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: custom, disabledDefaultExcludes: [loraPath, '/cache'] };
+      const backup = { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: custom, disabledDefaultExcludes: [loraPath, '/cache'] };
       getSettings.mockResolvedValue({ backup });
       getBackupStatus.mockResolvedValue({ defaultExcludes: [EXCLUDES[0], { path: loraPath, reason: 'LoRA weights', overridable: true }] });
       updateSettings.mockImplementation(async payload => { getSettings.mockResolvedValue(payload); return {}; });
@@ -615,7 +723,7 @@ describe('BackupTab', () => {
     });
 
     it('keeps the configure-first reason during an empty no-op save', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       let resolveSave;
       updateSettings.mockReturnValue(new Promise((resolve) => { resolveSave = resolve; }));
       await renderTab();
@@ -629,7 +737,7 @@ describe('BackupTab', () => {
     });
 
     it('toasts "Backup already running" and leaves rendered status/snapshots untouched when skipped', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       // Seed real prior state so the test catches a regression that mutates the
       // VISIBLE status/snapshots (not just one that triggers a refetch): a healthy
       // last-dump line and one existing snapshot must both survive the skip.
@@ -660,7 +768,7 @@ describe('BackupTab', () => {
     });
 
     it('refreshes snapshots and toasts success on a non-skipped run', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [] } });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
       // Empty on mount, a named snapshot on the post-run refetch — so the test
       // proves the returned snapshots are actually applied to state and rendered,
       // not merely that a second fetch happened.
@@ -758,7 +866,7 @@ describe('BackupTab', () => {
     // screen's own defaults over the schedule, cancelling it.
     it('preserves the resolved schedule when only an exclusion is edited and saved', async () => {
       getSettings.mockResolvedValue({
-        backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', excludePaths: [], disabledDefaultExcludes: [] }
+        backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', retentionCount: null, excludePaths: [], disabledDefaultExcludes: [] }
       });
       updateSettings.mockResolvedValue({});
       await renderTab();
