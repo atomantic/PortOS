@@ -3,16 +3,16 @@
  *
  * A review-loop / merge follow-up task (`spawnReviewLoopFollowUp`) exists for
  * exactly one reason: to land the pull request named in its `reviewLoopPRUrl`.
- * Blocking one is therefore not the self-contained "a task got parked" outcome
- * an ordinary block is — the PR, its branch, and its worktree are left with
- * nothing in the system that will ever merge them, and the Blocked list is the
- * only trace.
+ * Blocking one can leave the PR, its branch, and its worktree with no active
+ * merge follow-up. The development watchdog rechecks the forge and retires the
+ * task if the PR has already become terminal; while it remains open and the
+ * follow-up remains blocked, the user needs the blocker and PR link to decide
+ * what to do.
  *
- * Nothing sweeps them up afterwards, either: `app-unresolved` (the category that
- * produced the incident this was written for) sits in BOTH
- * `PAUSED_BLOCKED_CATEGORIES` and `USER_DECISION_BLOCKED_CATEGORIES`, so the
- * failure reaper never expires it and the investigation auto-retry never revives
- * it. The PR stays open indefinitely.
+ * Some block categories are deliberate user decisions, so the investigation
+ * retry and failure reaper leave them alone. A blocked follow-up can therefore
+ * outlive a PR that was merged or closed externally; developmentWatchdog owns
+ * that forge-state reconciliation.
  *
  * Keyed on the `pending|in_progress|… → blocked` TRANSITION off the shared
  * `tasks:changed` event rather than hung off one blocking call site: ~12 sites
@@ -58,8 +58,8 @@ export async function notifyIfPrLeftOrphaned({ task, previousStatus } = {}) {
   await addNotification({
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     title: 'PR left open: its merge follow-up was blocked',
-    description: `Task ${task.id} was going to land ${prUrl}, but ${why} `
-      + `Nothing else will merge this PR — land it manually, or fix the block and re-run the task.`,
+    description: `The merge follow-up task ${task.id} is blocked: ${why} PR: ${prUrl}. `
+      + `If the PR is still open, fix the blocker and re-run the task or merge it manually.`,
     priority: PRIORITY_LEVELS.HIGH,
     link: prUrl,
     metadata: { taskId: task.id, prUrl, prBranch: task.metadata?.reviewLoopPRBranch },
@@ -67,7 +67,7 @@ export async function notifyIfPrLeftOrphaned({ task, previousStatus } = {}) {
   await ensureTaskThread({
     taskId: task.id,
     title: 'PR left open: its merge follow-up was blocked',
-    nextAction: 'Fix the blocked merge follow-up or land the pull request manually.',
+    nextAction: 'Check the linked PR. If it is still open, fix the blocker and re-run the task or merge it manually.',
     notes: `${prUrl}\n${why}`,
     priority: 'high',
   });

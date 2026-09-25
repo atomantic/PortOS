@@ -1591,11 +1591,11 @@ export async function init() {
   });
 
   // A task that was going to MERGE a pull request just got blocked — surface the
-  // PR it left orphaned. Registered separately from the dequeue listener above
-  // because it must fire on a transition that listener has no branch for
-  // (→ blocked), and it is not gated on `isDaemonRunning()`: a block that lands
-  // as the daemon stops still strands its PR. See orphanedPrNotifier.js for why
-  // nothing else ever recovers these.
+  // current blocker and PR link. Registered separately from the dequeue listener
+  // above because it must fire on a transition that listener has no branch for
+  // (→ blocked), and it is not gated on `isDaemonRunning()`: even while stopped,
+  // the notification and Brain commitment preserve the next action. The
+  // development watchdog later retires the task if the PR is already terminal.
   cosEvents.on('tasks:changed', (data) => {
     notifyIfPrLeftOrphaned(data)
       .catch(err => console.error(`❌ Orphaned-PR check failed for task ${data?.task?.id}: ${err.message}`));
