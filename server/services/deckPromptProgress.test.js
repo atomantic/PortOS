@@ -68,6 +68,14 @@ describe('deck prompt progress channel', () => {
     expect(framesOf(res).at(-1)).toEqual({ type: 'chunk', written: 24, requested: 79, chunk: 2, chunks: 7 });
   });
 
+  it('allows only one active prompt run per deck and releases the channel after finish', () => {
+    expect(beginPromptProgress('deck-1')).toBe(true);
+    expect(beginPromptProgress('deck-1')).toBe(false);
+
+    finishPromptProgress('deck-1', { type: 'complete' });
+    expect(beginPromptProgress('deck-1')).toBe(true);
+  });
+
   it('keeps channels separate per deck', () => {
     const first = fakeRes();
     const second = fakeRes();

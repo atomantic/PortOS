@@ -134,8 +134,12 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
 
   let universe = null;
   let cast = null;
+  if (!beginPromptProgress(deck.id)) {
+    throw new ServerError('Prompt generation is already running for this deck.', {
+      status: 409, code: 'DECK_PROMPT_GENERATION_IN_PROGRESS',
+    });
+  }
   try {
-    beginPromptProgress(deck.id);
     if (deck.universeId) {
       const { getUniverse } = await import('../services/universeBuilder.js');
       universe = await getUniverse(deck.universeId).catch(() => null);

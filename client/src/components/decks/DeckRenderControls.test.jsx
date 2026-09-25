@@ -191,7 +191,9 @@ describe('DeckRenderControls prompt progress', () => {
       generating: true,
       generatingStatus: 'Writing prompts… 24 of 79 · batch 2 of 7',
     });
-    expect(screen.getByText('Writing prompts… 24 of 79 · batch 2 of 7')).toBeInTheDocument();
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Writing prompts… 24 of 79 · batch 2 of 7');
+    expect(status).toHaveAttribute('aria-live', 'polite');
   });
 
   it('names the casting phase before the first prompt chunk lands', async () => {

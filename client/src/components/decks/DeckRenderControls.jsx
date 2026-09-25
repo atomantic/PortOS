@@ -100,7 +100,7 @@ export default function DeckRenderControls({
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Step step="1" title="Prompts" note={promptNote({ generating, generatingStatus, unprompted, total })}>
+        <Step step="1" title="Prompts" note={promptNote({ generating, generatingStatus, unprompted, total })} live={generating}>
           {(noteId) => (<>
             <button
               type="button"
@@ -230,7 +230,7 @@ const renderNote = ({ prompted, rendering, missing, inFlight, runtimeBlocked }) 
 // carry it. The note is real page text rather than a `title`: a disabled button
 // is neither focusable nor hoverable on touch, so a tooltip on it reaches
 // nobody.
-function Step({ step, title, note, children }) {
+function Step({ step, title, note, live = false, children }) {
   const noteId = useId();
   return (
     <section className="rounded border border-port-border/60 bg-port-bg/30 p-2.5 space-y-2" aria-label={`Step ${step}: ${title}`}>
@@ -238,7 +238,12 @@ function Step({ step, title, note, children }) {
         <span className="text-port-accent">{step}</span> · {title}
       </h3>
       <div className="flex items-center gap-2 flex-wrap">{children(noteId)}</div>
-      <p id={noteId} className="text-[11px] leading-snug text-gray-400">{note}</p>
+      <p
+        id={noteId}
+        className="text-[11px] leading-snug text-gray-400"
+        role={live ? 'status' : undefined}
+        aria-live={live ? 'polite' : undefined}
+      >{note}</p>
     </section>
   );
 }

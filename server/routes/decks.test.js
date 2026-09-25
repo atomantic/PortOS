@@ -148,6 +148,16 @@ describe('deck routes', () => {
     expect(generateDeckCardPrompts).not.toHaveBeenCalled();
   });
 
+  it('rejects a second generate-prompts run while the deck already has one active', async () => {
+    beginPromptProgress.mockReturnValueOnce(false);
+    const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({ overwrite: true });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DECK_PROMPT_GENERATION_IN_PROGRESS');
+    expect(generateDeckCardPrompts).not.toHaveBeenCalled();
+    // The conflict must not close the first run's channel with a false error.
+    expect(finishPromptProgress).not.toHaveBeenCalled();
+  });
+
   it('generate-prompts streams start/chunk/complete progress frames', async () => {
     const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({});
     expect(res.status).toBe(200);

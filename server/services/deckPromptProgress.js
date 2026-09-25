@@ -76,6 +76,10 @@ const ensureChannel = (key, deckId) => {
 export function beginPromptProgress(deckId) {
   const key = String(deckId);
   const channel = ensureChannel(key, deckId);
+  // A started, unfinished channel belongs to an active generation run. Only
+  // one prompt POST may own a deck channel at a time; otherwise one run could
+  // publish the other run's chunks or terminal frame to every subscriber.
+  if (channel.started) return false;
   if (!channel.started) {
     channel.started = true;
     clearTimer(channel);
