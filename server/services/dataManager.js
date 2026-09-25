@@ -1,8 +1,9 @@
-import { readdir, stat, lstat } from 'fs/promises';
+import { readdir, stat, lstat, statfs } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
@@ -259,6 +260,10 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
 }
 
 export async function getDataOverview({ strict = false } = {}) {
+  // Capacity of the volume holding data/ so the page can show how much room is
+  // left, not just what PortOS occupies. Null when the platform can't say.
+  // Independent of the scans below, so it runs alongside them.
+  const diskPromise = statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null);
   const entries = await readdir(DATA_DIR, { withFileTypes: true }).catch((err) => {
     if (strict) throw err;
     return [];
@@ -286,9 +291,13 @@ export async function getDataOverview({ strict = false } = {}) {
 
   categories.sort((a, b) => b.size - a.size);
 
+  const disk = await diskPromise;
+
   return {
     totalSize: totalResult.size,
+    totalFileCount: totalResult.fileCount,
     categories,
+    disk,
     dataDir: 'data'
   };
 }

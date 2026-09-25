@@ -164,7 +164,7 @@ describe('DataManager per-item purge (#3327)', () => {
 
   it('keeps the category-wide Purge button for category-scoped and legacy rows', async () => {
     render(<DataManager />);
-    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
 
     expandRow('Messages');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
@@ -209,7 +209,7 @@ describe('DataManager busy categories (#3342)', () => {
 
   it('keeps the Purge button for an idle category in the same list', async () => {
     render(<DataManager />);
-    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
 
     expandRow('Messages');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
@@ -268,7 +268,7 @@ describe('DataManager busy categories (#3342)', () => {
     purgeDataCategory.mockImplementation(() => new Promise((res) => { resolvePurge = res; }));
 
     render(<DataManager />);
-    await waitFor(() => expect(screen.getByText('Messages')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Messages').length).toBeGreaterThan(0));
 
     expandRow('Messages');
     await waitFor(() => expect(screen.getByRole('button', { name: /Purge/ })).toBeInTheDocument());
@@ -375,5 +375,61 @@ describe('DataManager category detail loading state (#4147)', () => {
     expect(panel.querySelectorAll('.animate-pulse')).toHaveLength(15);
     // Matches the loaded scroller's cap so filling in doesn't resize the panel.
     expect(panel.className).toContain('max-h-64');
+  });
+});
+
+// The disk-usage map and its side panel (disktree-style redesign): a tile
+// selects its category, nests that category's entries, and the "worth a look"
+// shortlist offers only whole-category reclaim — never an item-scoped category
+// whose files are the only copy.
+describe('DataManager treemap + selection panel', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue({
+      ...scopedOverview,
+      disk: { total: 10 * 1024 ** 3, used: 6 * 1024 ** 3, free: 4 * 1024 ** 3 },
+    });
+    getDataCategory.mockReset().mockImplementation((key) => Promise.resolve({
+      key,
+      items: key === 'messages' ? [{ name: 'inbox-archive', type: 'directory', size: 900, fileCount: 4 }] : [],
+    }));
+  });
+
+  it('selects a category from its tile and nests its entries in the map', async () => {
+    render(<DataManager />);
+    const tile = await screen.findByRole('button', { name: /^Messages/, pressed: false });
+    fireEvent.click(tile);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Messages/, pressed: true })).toBeInTheDocument());
+    // Entry name shows in the nested tile and in the expanded row's table.
+    await waitFor(() => expect(screen.getAllByText('inbox-archive').length).toBe(2));
+    const panel = screen.getByRole('complementary', { name: 'Selection details' });
+    expect(panel).toHaveTextContent('data/messages');
+    expect(panel).toHaveTextContent('Reclaimable');
+  });
+
+  // data/ holds settings/state JSON at its root — counted in totalSize but in no
+  // category. The map must give those bytes a tile rather than stretch the
+  // directories over the whole area.
+  it('gives files directly in data/ their own non-selectable tile', async () => {
+    getDataOverview.mockResolvedValue({ ...overview, totalSize: 4000, totalFileCount: 20 });
+    render(<DataManager />);
+    const loose = await screen.findByRole('button', { name: /^Loose files/ });
+    expect(loose).toBeDisabled();
+    expect(loose).toHaveAttribute('title', expect.stringContaining('Files directly in data/'));
+    expect(screen.getByText(/20 files · 2 categories/)).toBeInTheDocument();
+  });
+
+  it('shortlists only whole-category reclaim and shows disk headroom', async () => {
+    render(<DataManager />);
+    const panel = await screen.findByRole('complementary', { name: 'Selection details' });
+    await waitFor(() => expect(panel).toHaveTextContent('Worth a look'));
+
+    const shortlist = panel.querySelector('ul');
+    expect(shortlist).toHaveTextContent('Messages');
+    expect(shortlist).toHaveTextContent('Legacy');
+    expect(shortlist).not.toHaveTextContent('Images');
+    expect(panel).toHaveTextContent('4 GB');
+    expect(panel).toHaveTextContent('6 GB used');
+    expect(panel).toHaveTextContent('10 GB total');
   });
 });
