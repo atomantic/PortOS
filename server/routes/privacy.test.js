@@ -82,6 +82,7 @@ vi.mock('../services/privacySubjects.js', () => ({
   deleteSubject: vi.fn(async () => ({ ok: true })),
   listSubjectConsents: vi.fn(async () => [{ id: 'consent-1', scope: 'pii_vault', method: 'signed_form', note: '' }]),
   recordConsent: vi.fn(async (input) => ({ id: 'consent-2', ...input })),
+  revokeConsent: vi.fn(async ({ subjectId, scope }) => ({ subjectId, scope, revoked: 1, revokedAt: '2026-01-02T00:00:00Z' })),
   assertSubject: vi.fn(async (id) => ({ id })),
 }));
 
@@ -633,6 +634,26 @@ describe('/api/privacy/subjects', () => {
     expect(subjectService.recordConsent).toHaveBeenCalledWith({
       subjectId: VALID_UUID, scope: 'broker_optout', method: 'written', note: 'form on file',
     });
+
+    const scan = await request(makeApp()).post(`/api/privacy/subjects/${VALID_UUID}/consents`)
+      .send({ scope: 'broker_scan', method: 'self' });
+    expect(scan.status).toBe(201);
+  });
+
+  it('revokes one broker purpose without deleting the subject (#8332)', async () => {
+    const res = await request(makeApp()).post(`/api/privacy/subjects/${VALID_UUID}/consents/revoke`)
+      .send({ scope: 'broker_optout' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ scope: 'broker_optout', revoked: 1, revokedAt: '2026-01-02T00:00:00Z' });
+    expect(subjectService.revokeConsent).toHaveBeenCalledWith({ subjectId: VALID_UUID, scope: 'broker_optout' });
+    expect(subjectService.deleteSubject).not.toHaveBeenCalled();
+
+    // Local-vault consent is not revocable here, and the scope is required.
+    for (const body of [{ scope: 'pii_vault' }, {}, { scope: 'broker_scan', extra: 1 }]) {
+      const bad = await request(makeApp()).post(`/api/privacy/subjects/${VALID_UUID}/consents/revoke`).send(body);
+      expect(bad.status).toBe(400);
+    }
+    expect(subjectService.revokeConsent).toHaveBeenCalledTimes(1);
   });
 });
 

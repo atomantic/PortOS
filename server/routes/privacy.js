@@ -20,6 +20,7 @@ import {
   privacySubjectUpdateSchema,
   privacySubjectIdParamsSchema,
   privacySubjectConsentSchema,
+  privacySubjectConsentRevokeSchema,
   privacyChangeListQuerySchema,
   privacySubjectScopeQuerySchema,
   privacyVaultCreateSchema,
@@ -54,6 +55,7 @@ import {
   deleteSubject,
   listSubjectConsents,
   recordConsent,
+  revokeConsent,
   assertSubject,
 } from '../services/privacySubjects.js';
 import {
@@ -105,7 +107,8 @@ const router = Router();
 // ─── Household subjects (issue #3658) ──────────────────────────────────────
 // The people the Privacy Center works on behalf of. `self` is seeded and
 // undeletable; every other subject requires a recorded consent method at
-// creation, and the scan/opt-out engines refuse to act without one.
+// creation. Broker purposes are separate, revocable grants — the scan/opt-out
+// engines refuse to act without an active grant of their exact scope (#8332).
 
 router.get('/subjects', asyncHandler(async (_req, res) => {
   res.json(await listSubjects());
@@ -142,13 +145,24 @@ router.get('/subjects/:id/consents', asyncHandler(async (req, res) => {
   res.json(await listSubjectConsents(id));
 }));
 
-// Append a further consent row (e.g. the subject later agreed to broker
-// opt-outs). Append-only — there is no revoke endpoint: revoking consent means
-// deleting the subject, which hard-deletes their records.
+// Grant one purpose (e.g. the subject later agreed to broker scans or opt-outs).
+// Appends a grant row; the scope defaults to the local-only `pii_vault`, so a
+// broker purpose is only ever granted by naming it (#8332).
 router.post('/subjects/:id/consents', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
   const { scope, method, note } = validateRequest(privacySubjectConsentSchema, req.body);
   res.status(201).json(await recordConsent({ subjectId: id, scope, method, note }));
+}));
+
+// Withdraw one broker purpose (`broker_scan` | `broker_optout`) WITHOUT deleting
+// the subject: the active grant rows get a `revoked_at` timestamp (audit trail
+// kept), and every later direct or scheduled call for that purpose is refused
+// by the engine gate (#8332). Local-vault consent is still withdrawn by deleting
+// the subject.
+router.post('/subjects/:id/consents/revoke', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privacySubjectIdParamsSchema, req.params);
+  const { scope } = validateRequest(privacySubjectConsentRevokeSchema, req.body);
+  res.json(await revokeConsent({ subjectId: id, scope }));
 }));
 
 router.get('/status', asyncHandler(async (req, res) => {

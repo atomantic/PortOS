@@ -35,6 +35,16 @@ The **Data Brokers** module tracks exposure on data brokers, people-search sites
 - Direct opt-out URL shortcuts and template letters
 - Status verification dates and follow-up reminders
 
+**Consent is per purpose and revocable.** Each household subject holds separate grants (Household drawer), and the scan/opt-out engines refuse — on direct calls and on the automatic recheck schedule alike — without an active grant of the exact purpose:
+
+| Scope | Unlocks | Leaves this machine |
+|---|---|---|
+| `pii_vault` | Local encrypted vault storage (granted at subject creation) | Nothing |
+| `broker_scan` | The read-only exposure scan | Scan-eligible name and city/state, in broker search URLs |
+| `broker_optout` | Opt-out submissions and their verification re-probes | Full name, email, phone, city/state (and DOB when a broker requires it) |
+
+A vault grant never implies a broker purpose, and a scan grant never implies submissions. Revoking a broker purpose stamps `revoked_at` on its grant rows — the subject, their vault records, and the audit trail stay — so even the undeletable `self` subject can withdraw it.
+
 ---
 
 ## Security Model & Data Flow
@@ -42,7 +52,7 @@ The **Data Brokers** module tracks exposure on data brokers, people-search sites
 ```mermaid
 flowchart TD
     User["User Interface (Settings / Privacy)"]
-    Vault["Vault Storage (data/vault.json)"]
+    Vault["Vault Storage (Postgres privacy_vault_records)"]
     Crypto["AES-256-GCM Encryption (vaultCrypto.js)"]
     Orgs["Organizations & Changes (Postgres DB)"]
     Federation["Federation & Peer Sync"]

@@ -46,30 +46,46 @@ export async function startPrivacyRecheckScheduler() {
         console.log('🛡️ Privacy recheck: disabled since registration — skipping run');
         return;
       }
-      // Run for EVERY consenting subject, not just `self` — a household member
-      // added to the Privacy Center gets the same scheduled upkeep (#3658). A
-      // subject with no consent row is skipped here (the engines would refuse
-      // them anyway); one subject's failure must not abort the others, and this
-      // handler runs OUTSIDE the request lifecycle, so the per-subject try/catch
-      // is the sanctioned exception to the no-try/catch rule.
-      const subjects = await listSubjects();
-      const consenting = subjects.filter((s) => (s.consentCount ?? 0) > 0);
-      console.log(`🛡️ Privacy recheck: running scheduled scan + opt-out pass for ${consenting.length} consenting subject(s)`);
-      for (const subject of consenting) {
-        try {
-          // Scan first (re-checks due cases + finds new exposure), then work the
-          // cases. Both are settings-driven and safe to re-run (idempotent).
-          await runScanPass({ subjectId: subject.id });
-          await runOptOutPass({ subjectId: subject.id });
-        } catch (err) {
-          console.error(`❌ Privacy recheck failed for subject ${subject.id}: ${err.message}`);
-        }
-      }
+      await runScheduledRecheck();
     },
     metadata: { source: 'privacyRecheckScheduler' },
   });
 
   console.log(`🛡️ Privacy recheck scheduler: registered at cron "${cronExpression}"`);
+}
+
+// Each scheduled purpose, in run order: scan first (re-checks due cases + finds
+// new exposure), then work the cases. Both passes are settings-driven and safe
+// to re-run (idempotent).
+const SCHEDULED_PURPOSES = [
+  { scope: 'broker_scan', label: 'scan', run: runScanPass },
+  { scope: 'broker_optout', label: 'opt-out', run: runOptOutPass },
+];
+
+/**
+ * One scheduled recheck over every subject, not just `self` — a household
+ * member gets the same upkeep (#3658). Subjects are selected PER PURPOSE from
+ * their active grants (#8332): a `broker_scan`-only subject is scanned but
+ * never submitted, a `pii_vault`-only (or fully revoked) subject gets neither.
+ * The engines re-check the grant themselves, so a revocation racing this loop
+ * is still refused. One subject's or purpose's failure must not abort the
+ * others, and this runs OUTSIDE the request lifecycle, so the per-pass
+ * try/catch is the sanctioned exception to the no-try/catch rule.
+ * The cron handler calls it after the enabled check.
+ */
+async function runScheduledRecheck() {
+  const subjects = await listSubjects();
+  for (const { scope, label, run } of SCHEDULED_PURPOSES) {
+    const granted = subjects.filter((s) => (s.activeScopes ?? []).includes(scope));
+    console.log(`🛡️ Privacy recheck: ${label} pass for ${granted.length}/${subjects.length} subject(s) with active ${scope} consent`);
+    for (const subject of granted) {
+      try {
+        await run({ subjectId: subject.id });
+      } catch (err) {
+        console.error(`❌ Privacy recheck ${label} failed for subject ${subject.id}: ${err.message}`);
+      }
+    }
+  }
 }
 
 export function stopPrivacyRecheckScheduler() {

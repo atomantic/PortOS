@@ -53,7 +53,7 @@ vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } })
 import PrivacyBrokersTab from './PrivacyBrokersTab.jsx';
 import * as apiMod from '../../services/api';
 
-const renderTab = () => render(<MemoryRouter initialEntries={['/privacy/brokers']}><PrivacyBrokersTab /></MemoryRouter>);
+const renderTab = (props = {}) => render(<MemoryRouter initialEntries={['/privacy/brokers']}><PrivacyBrokersTab {...props} /></MemoryRouter>);
 
 describe('PrivacyBrokersTab', () => {
   beforeEach(() => {
@@ -119,5 +119,30 @@ describe('PrivacyBrokersTab', () => {
     const brokerToggle = await screen.findByLabelText('Enable Spokeo');
     fireEvent.click(brokerToggle);
     await waitFor(() => expect(apiMod.setPrivacyBrokerEnabled).toHaveBeenCalledWith('spokeo', false, expect.anything()));
+  });
+
+  // ── Purpose-scoped broker consent (#8332) ──
+  it('warns which broker purposes are not granted and links to Household', async () => {
+    const onManageConsent = vi.fn();
+    renderTab({ consentScopes: ['broker_scan', 'pii_vault'], onManageConsent });
+    const banner = await screen.findByText(/No active consent for broker opt-out requests for this person/);
+    expect(banner.textContent).not.toMatch(/exposure scan/);
+    fireEvent.click(screen.getByRole('button', { name: 'Manage consent' }));
+    expect(onManageConsent).toHaveBeenCalled();
+  });
+
+  it('shows no consent warning until the grants are known', async () => {
+    renderTab();
+    await screen.findByText('Spokeo');
+    expect(screen.queryByText(/No active consent/)).toBeNull();
+  });
+
+  it('restates a refused opt-out pass as the missing purpose grant', async () => {
+    const toast = (await import('../ui/Toast')).default;
+    apiMod.runPrivacyOptOut.mockRejectedValueOnce(Object.assign(new Error('raw 403'), { code: 'SUBJECT_CONSENT_REQUIRED', status: 403 }));
+    renderTab();
+    await screen.findByText('Spokeo');
+    fireEvent.click(screen.getByRole('button', { name: /Run opt-out pass/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/^No active consent for broker opt-out requests/)));
   });
 });

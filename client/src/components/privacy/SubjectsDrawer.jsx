@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, ShieldCheck, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, ShieldCheck, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
 import Drawer from '../Drawer';
 import FormField from '../ui/FormField';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
@@ -8,11 +8,13 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
 import {
   createPrivacySubject, deletePrivacySubject, getPrivacySubjectConsents,
+  grantPrivacySubjectConsent, revokePrivacySubjectConsent,
 } from '../../services/api';
 import toast from '../ui/Toast';
 import { formatDateShort } from '../../utils/formatters';
 import {
-  SUBJECT_RELATIONSHIPS, CONSENT_METHODS, CONSENT_SCOPES, INPUT_CLS, labelFor,
+  SUBJECT_RELATIONSHIPS, CONSENT_METHODS, CONSENT_SCOPES, BROKER_CONSENT_PURPOSES,
+  INPUT_CLS, labelFor,
 } from './constants';
 
 // `self` is excluded — you are always your own subject and consent is implied.
@@ -21,14 +23,17 @@ const ADDABLE_RELATIONSHIPS = SUBJECT_RELATIONSHIPS.filter((r) => r.id !== 'self
 const EMPTY = { displayName: '', relationship: 'partner', consentMethod: 'verbal', consentNote: '' };
 
 // Consent audit trail for one subject — loaded lazily on expand so opening the
-// drawer costs one request, not one per household member.
-function ConsentTrail({ subjectId }) {
+// drawer costs one request, not one per household member. `version` changes
+// after a grant/revoke so an open trail refetches instead of going stale.
+function ConsentTrail({ subjectId, version }) {
   // null = not fetched · [] = fetched-and-empty · 'error' = fetch failed. A
   // failed read must NOT collapse into the empty case: "no consent on record"
   // is an assertion about the engine's state, and saying it because a request
   // failed would be a lie the user acts on.
   const [consents, setConsents] = useState(null);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => { setConsents(null); }, [version]);
 
   useEffect(() => {
     if (!open || consents !== null) return undefined;
@@ -70,7 +75,8 @@ function ConsentTrail({ subjectId }) {
               <li key={c.id} className="text-[11px] text-gray-500">
                 <span className="text-gray-300">{labelFor(CONSENT_METHODS, c.method)}</span>
                 {' · '}{labelFor(CONSENT_SCOPES, c.scope)}
-                {c.grantedAt ? ` · ${formatDateShort(c.grantedAt)}` : ''}
+                {c.grantedAt ? ` · granted ${formatDateShort(c.grantedAt)}` : ''}
+                {c.revokedAt ? <span className="text-port-warning">{` · revoked ${formatDateShort(c.revokedAt)}`}</span> : null}
                 {c.note ? <span className="italic"> — {c.note}</span> : null}
               </li>
             ))}
@@ -81,11 +87,87 @@ function ConsentTrail({ subjectId }) {
   );
 }
 
+// One broker purpose's grant state for one subject. Granting WIDENS disclosure,
+// so it goes through an inline confirm that names what is sent and records how
+// consent was captured; revoking narrows it and runs immediately. The server
+// gate is authoritative — this only drives the grant/revoke endpoints.
+function BrokerPurposeRow({ subject, purpose, granted, onChanged }) {
+  const [confirming, setConfirming] = useState(false);
+  const [method, setMethod] = useState(subject.isSelf ? 'self' : 'verbal');
+
+  const [grant, granting] = useAsyncAction(async () => {
+    const row = await grantPrivacySubjectConsent(subject.id, { scope: purpose.id, method }, { silent: true });
+    if (row) {
+      toast.success(`${purpose.label} granted for ${subject.displayName}`);
+      setConfirming(false);
+      onChanged(purpose.id, true);
+    }
+    return row;
+  }, { errorMessage: `Failed to grant ${purpose.label.toLowerCase()}` });
+
+  const [revoke, revoking] = useAsyncAction(async () => {
+    const result = await revokePrivacySubjectConsent(subject.id, purpose.id, { silent: true });
+    if (result) {
+      toast.success(`${purpose.label} revoked for ${subject.displayName}`);
+      onChanged(purpose.id, false);
+    }
+    return result;
+  }, { errorMessage: `Failed to revoke ${purpose.label.toLowerCase()}` });
+
+  return (
+    <div className="py-2 border-t border-port-border/60 first:border-t-0">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-gray-200">{purpose.label}</span>
+          {granted
+            ? <Pill size="xs" tone="success" icon={ShieldCheck}>Granted</Pill>
+            : <Pill size="xs" icon={ShieldOff}>Not granted</Pill>}
+        </div>
+        {granted ? (
+          <button
+            onClick={() => revoke()}
+            disabled={revoking}
+            aria-label={`Revoke ${purpose.label.toLowerCase()} for ${subject.displayName}`}
+            className="px-2.5 py-1 text-xs rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40 disabled:opacity-50"
+          >
+            {revoking ? 'Revoking…' : 'Revoke'}
+          </button>
+        ) : !confirming && (
+          <button
+            onClick={() => setConfirming(true)}
+            aria-label={`Grant ${purpose.label.toLowerCase()} for ${subject.displayName}`}
+            className="px-2.5 py-1 text-xs rounded border border-port-border text-gray-300 hover:text-white hover:bg-port-border/40"
+          >
+            Grant…
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[11px] text-gray-500">{purpose.disclosure}</p>
+      {confirming && !granted && (
+        <div className="mt-2 space-y-2">
+          <FormField label="Consent captured via" labelClassName="block text-[11px] text-gray-400 mb-1">
+            <select value={method} onChange={(e) => setMethod(e.target.value)} className={INPUT_CLS}>
+              {CONSENT_METHODS.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          </FormField>
+          <InlineConfirmRow
+            tone="warning"
+            confirmText={granting ? 'Granting…' : 'Grant'}
+            question={`Allow ${purpose.label.toLowerCase()} for ${subject.displayName}? This sends their data to external data brokers.`}
+            onConfirm={() => { if (!granting) grant(); }}
+            onCancel={() => setConfirming(false)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Manage the household: who the Privacy Center tracks, on what consent.
 // Consent is captured at creation because the engine refuses to scan or submit
 // opt-outs for a subject with no consent row — the form cannot create a subject
 // that the rest of the feature would then silently refuse to act on.
-export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onDeleted }) {
+export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onDeleted, onConsentChanged }) {
   const [form, setForm] = useState(EMPTY);
   const [adding, setAdding] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -134,8 +216,9 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onD
       <div className="space-y-4">
         <p className="text-xs text-gray-500">
           Each person is scoped separately — their vault records, organizations, changes, and broker
-          cases never mix. Broker scans and opt-out submissions are refused for anyone without a
-          consent record.
+          cases never mix. Vault consent is local-only: broker scans and opt-out requests each need
+          their own grant, can be revoked at any time without removing the person, and are refused
+          — including on the automatic schedule — for anyone without an active grant.
         </p>
 
         <div className="space-y-2">
@@ -146,14 +229,25 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onD
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-white truncate">{s.displayName}</span>
                     <Pill size="xs">{labelFor(SUBJECT_RELATIONSHIPS, s.relationship)}</Pill>
-                    {s.consentCount > 0 && (
-                      <Pill size="xs" tone="success" icon={ShieldCheck}>Consented</Pill>
+                    {(s.activeScopes ?? []).includes('pii_vault') && (
+                      <Pill size="xs" tone="success" icon={ShieldCheck}>Vault consent</Pill>
                     )}
                   </div>
                   <div className="mt-0.5 text-[11px] text-gray-500">
                     {s.recordCount ?? 0} vault record{s.recordCount === 1 ? '' : 's'}
                   </div>
-                  <ConsentTrail subjectId={s.id} />
+                  <div className="mt-2">
+                    {BROKER_CONSENT_PURPOSES.map((purpose) => (
+                      <BrokerPurposeRow
+                        key={purpose.id}
+                        subject={s}
+                        purpose={purpose}
+                        granted={(s.activeScopes ?? []).includes(purpose.id)}
+                        onChanged={(scope, granted) => onConsentChanged?.(s.id, scope, granted)}
+                      />
+                    ))}
+                  </div>
+                  <ConsentTrail subjectId={s.id} version={(s.activeScopes ?? []).join(',')} />
                 </div>
                 {!s.isSelf && (
                   <button

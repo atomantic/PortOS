@@ -357,9 +357,13 @@ describe('getOptOutDigest', () => {
 // NO CONSENT, NO ACTION — carried verbatim from unbroker. The refusal is at the
 // SERVICE layer, so a cron / direct API / agent caller is refused exactly like a
 // hidden UI button would be. Asserted here, NOT only in a UI test.
-describe('consent gate — engine-enforced (#3658)', () => {
+describe('consent gate — engine-enforced (#3658, #8332)', () => {
+  // Scope-aware stand-in for the real gate: the subject holds the local-vault
+  // AND read-only scan grants but NOT broker_optout — neither may unlock a
+  // submission or its verification probes.
   const refuse = () => {
-    assertSubjectConsentMock.mockImplementation(async () => {
+    assertSubjectConsentMock.mockImplementation(async (id, { scope }) => {
+      if (scope === 'pii_vault' || scope === 'broker_scan') return { id };
       const err = new Error('no consent');
       err.status = 403;
       err.code = 'SUBJECT_CONSENT_REQUIRED';
@@ -367,7 +371,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
     });
   };
 
-  it('runOptOutPass refuses a subject with no consent, before reading the vault', async () => {
+  it('runOptOutPass refuses a subject without broker_optout consent, before reading the vault', async () => {
     refuse();
     const vault = await import('./privacyVault.js');
     await expect(runOptOutPass({ subjectId: 'subject-2' }))
@@ -378,7 +382,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
     expect(createDraft).not.toHaveBeenCalled();
   });
 
-  it('runVerificationPass refuses a subject with no consent, before reading the ledger', async () => {
+  it('runVerificationPass refuses a subject without broker_optout consent, before reading the ledger', async () => {
     refuse();
     await expect(runVerificationPass({ subjectId: 'subject-2' }))
       .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
@@ -389,7 +393,7 @@ describe('consent gate — engine-enforced (#3658)', () => {
   it('passes the resolved subject through to the guard and the ledger reads', async () => {
     listBrokerCases.mockResolvedValue([]);
     await runVerificationPass({ subjectId: 'subject-2' });
-    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { action: 'opt-out verification pass' });
+    expect(assertSubjectConsentMock).toHaveBeenCalledWith('subject-2', { scope: 'broker_optout', action: 'opt-out verification pass' });
     expect(listBrokerCases).toHaveBeenCalledWith({ subjectId: 'subject-2' });
   });
 });

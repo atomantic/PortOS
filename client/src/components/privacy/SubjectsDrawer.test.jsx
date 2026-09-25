@@ -7,18 +7,21 @@ vi.mock('../../services/api', () => ({
   createPrivacySubject: vi.fn(),
   deletePrivacySubject: vi.fn(),
   getPrivacySubjectConsents: vi.fn(),
+  grantPrivacySubjectConsent: vi.fn(),
+  revokePrivacySubjectConsent: vi.fn(),
 }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import SubjectsDrawer from './SubjectsDrawer';
 import {
   createPrivacySubject, deletePrivacySubject, getPrivacySubjectConsents,
+  grantPrivacySubjectConsent, revokePrivacySubjectConsent,
 } from '../../services/api';
 import { SELF_SUBJECT_ID } from './constants';
 
 const SUBJECTS = [
-  { id: SELF_SUBJECT_ID, displayName: 'Me', relationship: 'self', isSelf: true, consentCount: 1, recordCount: 3 },
-  { id: 'sub-2', displayName: 'Alex', relationship: 'partner', isSelf: false, consentCount: 1, recordCount: 1 },
+  { id: SELF_SUBJECT_ID, displayName: 'Me', relationship: 'self', isSelf: true, consentCount: 2, recordCount: 3, activeScopes: ['broker_scan', 'pii_vault'] },
+  { id: 'sub-2', displayName: 'Alex', relationship: 'partner', isSelf: false, consentCount: 1, recordCount: 1, activeScopes: ['pii_vault'] },
 ];
 
 function renderDrawer(props = {}) {
@@ -105,5 +108,43 @@ describe('SubjectsDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(deletePrivacySubject).toHaveBeenCalledWith('sub-2', { silent: true }));
     expect(onDeleted).toHaveBeenCalledWith('sub-2');
+  });
+
+  // ── Purpose-scoped broker consent (#8332) ──
+  it('grants a broker purpose only after a confirm that names the external disclosure', async () => {
+    grantPrivacySubjectConsent.mockResolvedValue({ id: 'c-9', scope: 'broker_optout' });
+    const onConsentChanged = vi.fn();
+    renderDrawer({ onConsentChanged });
+
+    fireEvent.click(screen.getByLabelText('Grant broker opt-out requests for Alex'));
+    expect(grantPrivacySubjectConsent).not.toHaveBeenCalled();
+    expect(screen.getByText(/sends their data to external data brokers/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Consent captured via/i), { target: { value: 'written' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Grant' }));
+
+    await waitFor(() => expect(grantPrivacySubjectConsent).toHaveBeenCalledWith(
+      'sub-2', { scope: 'broker_optout', method: 'written' }, { silent: true },
+    ));
+    expect(onConsentChanged).toHaveBeenCalledWith('sub-2', 'broker_optout', true);
+  });
+
+  it('revokes a broker purpose without removing the person', async () => {
+    revokePrivacySubjectConsent.mockResolvedValue({ subjectId: SELF_SUBJECT_ID, scope: 'broker_scan', revoked: 1 });
+    const onConsentChanged = vi.fn();
+    renderDrawer({ onConsentChanged });
+
+    fireEvent.click(screen.getByLabelText('Revoke broker exposure scan for Me'));
+    await waitFor(() => expect(revokePrivacySubjectConsent).toHaveBeenCalledWith(SELF_SUBJECT_ID, 'broker_scan', { silent: true }));
+    expect(onConsentChanged).toHaveBeenCalledWith(SELF_SUBJECT_ID, 'broker_scan', false);
+    expect(deletePrivacySubject).not.toHaveBeenCalled();
+  });
+
+  it('shows revocation timestamps in the consent record', async () => {
+    getPrivacySubjectConsents.mockResolvedValue([
+      { id: 'c-2', subjectId: 'sub-2', scope: 'broker_scan', method: 'written', note: '', grantedAt: '2026-01-01T00:00:00Z', revokedAt: '2026-02-01T00:00:00Z' },
+    ]);
+    renderDrawer();
+    fireEvent.click(screen.getAllByRole('button', { name: /Consent record/i })[1]);
+    await waitFor(() => expect(screen.getByText(/revoked/)).toBeInTheDocument());
   });
 });

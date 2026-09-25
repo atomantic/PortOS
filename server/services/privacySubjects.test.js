@@ -6,8 +6,12 @@
  *     pre-#3658 caller keeps its old behaviour.
  *   - subject creation writes the consent row in the SAME transaction, so a
  *     subject can never exist without recorded consent.
- *   - `assertSubjectConsent` REFUSES (403) a subject with no consent row — the
- *     engine-enforced half of the no-consent-no-action rule.
+ *   - `assertSubjectConsent` REFUSES (403) a subject without an ACTIVE grant of
+ *     the EXACT purpose scope — the engine-enforced half of the
+ *     no-consent-no-action rule (#8332: a `pii_vault` grant never unlocks a
+ *     broker purpose, and a revoked grant never counts).
+ *   - `revokeConsent` withdraws one broker purpose by timestamping its grant
+ *     rows — never by deleting them or the subject.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,7 +25,8 @@ vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransact
 
 const {
   resolveSubjectId, createSubject, updateSubject, deleteSubject,
-  listSubjects, assertSubject, hasActiveConsent, assertSubjectConsent, recordConsent,
+  listSubjects, assertSubject, assertSubjectConsent, recordConsent,
+  revokeConsent,
 } = await import('./privacySubjects.js');
 const { PRIVACY_SELF_SUBJECT_ID } = await import('../lib/privacyValidation.js');
 
@@ -132,14 +137,16 @@ describe('listSubjects', () => {
   it('returns `self` first and carries consent/record counts for the UI switcher', async () => {
     queryMock.mockResolvedValue({
       rows: [
-        { ...subjectRow(), consent_count: 1, record_count: 4 },
-        { ...subjectRow({ id: 's2', display_name: 'Alex Example', relationship: 'partner' }), consent_count: 0, record_count: 0 },
+        { ...subjectRow(), consent_count: 1, record_count: 4, active_scopes: ['broker_scan', 'pii_vault'] },
+        { ...subjectRow({ id: 's2', display_name: 'Alex Example', relationship: 'partner' }), consent_count: 0, record_count: 0, active_scopes: [] },
       ],
     });
     const subjects = await listSubjects();
     expect(subjects[0].isSelf).toBe(true);
-    expect(subjects[0]).toMatchObject({ consentCount: 1, recordCount: 4 });
-    expect(subjects[1]).toMatchObject({ isSelf: false, consentCount: 0 });
+    expect(subjects[0]).toMatchObject({ consentCount: 1, recordCount: 4, activeScopes: ['broker_scan', 'pii_vault'] });
+    expect(subjects[1]).toMatchObject({ isSelf: false, consentCount: 0, activeScopes: [] });
+    // Active purposes exclude revoked grants — what the scheduler selects on.
+    expect(queryMock.mock.calls[0][0]).toMatch(/revoked_at IS NULL\) AS active_scopes/);
     // The ORDER BY must put `self` first regardless of display name.
     expect(queryMock.mock.calls[0][0]).toMatch(/ORDER BY \(s\.id <> \$1\)/);
   });
@@ -179,36 +186,82 @@ describe('recordConsent', () => {
   });
 });
 
-describe('consent gate', () => {
-  it('hasActiveConsent is true when ANY consent row exists for the subject', async () => {
-    queryMock.mockResolvedValue({ rows: [{ '?column?': 1 }] });
-    expect(await hasActiveConsent('s2')).toBe(true);
-    expect(queryMock.mock.calls[0][1]).toEqual(['s2']);
+describe('consent gate — purpose-scoped (#8332)', () => {
+  // A fake consent table the mocked query() answers from, so the assertions
+  // exercise the real SQL predicates' parameters rather than a canned boolean.
+  const useConsentRows = (rows) => {
+    queryMock.mockImplementation(async (sql, params) => {
+      if (/FROM privacy_subjects/.test(sql)) return { rows: [subjectRow({ id: params[0], relationship: 'partner' })] };
+      if (/SELECT 1 FROM privacy_consents/.test(sql)) {
+        expect(sql).toMatch(/scope = \$2 AND revoked_at IS NULL/);
+        const [subjectId, scope] = params;
+        return { rows: rows.filter((r) => r.subjectId === subjectId && r.scope === scope && !r.revokedAt) };
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+  };
+
+  it('a pii_vault-only subject is refused BOTH broker purposes', async () => {
+    useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }]);
+    await expect(assertSubjectConsent('s2', { scope: 'pii_vault' })).resolves.toMatchObject({ id: 's2' });
+    for (const scope of ['broker_scan', 'broker_optout']) {
+      await expect(assertSubjectConsent('s2', { scope, action: 'x' }))
+        .rejects.toMatchObject({ status: 403, code: 'SUBJECT_CONSENT_REQUIRED' });
+    }
   });
 
-  it('hasActiveConsent is false when the subject has no rows', async () => {
-    queryMock.mockResolvedValue({ rows: [] });
-    expect(await hasActiveConsent('s2')).toBe(false);
+  it('broker_scan unlocks the scan without unlocking submissions', async () => {
+    useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }, { subjectId: 's2', scope: 'broker_scan' }]);
+    await expect(assertSubjectConsent('s2', { scope: 'broker_scan' })).resolves.toMatchObject({ id: 's2' });
+    await expect(assertSubjectConsent('s2', { scope: 'broker_optout' }))
+      .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
   });
 
-  it('assertSubjectConsent REFUSES a consentless subject with a 403', async () => {
-    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
-      ? { rows: [subjectRow({ id: 's2', relationship: 'partner' })] }
-      : { rows: [] }));
-    await expect(assertSubjectConsent('s2', { action: 'broker opt-out pass' }))
-      .rejects.toMatchObject({ status: 403, code: 'SUBJECT_CONSENT_REQUIRED' });
+  it('a revoked grant no longer counts', async () => {
+    useConsentRows([{ subjectId: 's2', scope: 'broker_optout', revokedAt: '2026-01-02' }]);
+    await expect(assertSubjectConsent('s2', { scope: 'broker_optout' }))
+      .rejects.toMatchObject({ code: 'SUBJECT_CONSENT_REQUIRED' });
   });
 
-  it('assertSubjectConsent returns the subject when consent is on file', async () => {
-    queryMock.mockImplementation(async (sql) => (/FROM privacy_subjects/.test(sql)
-      ? { rows: [subjectRow({ id: 's2', relationship: 'partner' })] }
-      : { rows: [{ '?column?': 1 }] }));
-    await expect(assertSubjectConsent('s2')).resolves.toMatchObject({ id: 's2' });
+  it('refuses to run an unscoped gate — there is no "any consent" mode', async () => {
+    useConsentRows([{ subjectId: 's2', scope: 'pii_vault' }]);
+    await expect(assertSubjectConsent('s2', { action: 'scan' })).rejects.toMatchObject({ code: 'CONSENT_SCOPE_INVALID' });
+    expect(queryMock).not.toHaveBeenCalled();
   });
 
   it('assertSubjectConsent 404s before it ever checks consent for an unknown subject', async () => {
     queryMock.mockResolvedValue({ rows: [] });
-    await expect(assertSubjectConsent('s2')).rejects.toMatchObject({ status: 404, code: 'SUBJECT_NOT_FOUND' });
+    await expect(assertSubjectConsent('s2', { scope: 'broker_scan' })).rejects.toMatchObject({ status: 404, code: 'SUBJECT_NOT_FOUND' });
     expect(queryMock).toHaveBeenCalledTimes(1); // no consent probe
+  });
+});
+
+describe('revokeConsent (#8332)', () => {
+  it('timestamps the active grants of one scope and keeps the subject', async () => {
+    queryMock.mockImplementation(async (sql) => {
+      if (/FROM privacy_subjects/.test(sql)) return { rows: [subjectRow({ id: 's2' })] };
+      if (/UPDATE privacy_consents/.test(sql)) return { rows: [{ revoked_at: '2026-01-02T00:00:00Z' }] };
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    const result = await revokeConsent({ subjectId: 's2', scope: 'broker_optout' });
+    expect(result).toEqual({ subjectId: 's2', scope: 'broker_optout', revoked: 1, revokedAt: '2026-01-02T00:00:00Z' });
+    const [sql, params] = queryMock.mock.calls.find(([q]) => /UPDATE privacy_consents/.test(q));
+    expect(sql).toMatch(/SET revoked_at = NOW\(\)/);
+    expect(sql).toMatch(/scope = \$2 AND revoked_at IS NULL/);
+    expect(params).toEqual(['s2', 'broker_optout']);
+    // Audit history and the subject survive: no DELETE of any kind.
+    expect(queryMock.mock.calls.some(([q]) => /DELETE/.test(q))).toBe(false);
+  });
+
+  it('refuses to revoke local-vault consent (that still means deleting the subject)', async () => {
+    await expect(revokeConsent({ subjectId: 's2', scope: 'pii_vault' }))
+      .rejects.toMatchObject({ status: 400, code: 'CONSENT_SCOPE_NOT_REVOCABLE' });
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it('404s an unknown subject', async () => {
+    queryMock.mockResolvedValue({ rows: [] });
+    await expect(revokeConsent({ subjectId: 's2', scope: 'broker_scan' }))
+      .rejects.toMatchObject({ status: 404, code: 'SUBJECT_NOT_FOUND' });
   });
 });

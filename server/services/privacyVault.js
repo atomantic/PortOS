@@ -78,12 +78,15 @@ export async function createVaultRecord(input) {
   const subjectId = (await assertSubject(input.subjectId)).id;
   const id = randomUUID();
   const useForScans = resolveUseForScans(input.type, input.useForScans);
-  // First record FOR THIS SUBJECT ⇒ write the consent row (audit trail for the
-  // opt-out engine). Scoped per subject so a household member added directly
-  // through the vault still gets a consent row of their own rather than riding
-  // on `self`'s.
+  // First record FOR THIS SUBJECT without local-vault consent ⇒ write the
+  // `pii_vault` consent row. Scoped per subject so a household member added
+  // directly through the vault still gets a consent row of their own rather than
+  // riding on `self`'s. This grant is LOCAL-ONLY — it never unlocks broker scans
+  // or opt-outs, which need their own explicit grants (#8332) — so keying the
+  // check on the scope (not "any row") keeps a broker grant from standing in for
+  // the vault's own audit fact.
   const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1`, [subjectId],
+    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1 AND scope = 'pii_vault'`, [subjectId],
   );
   const needsConsent = countRows[0].n === 0;
   const { rows } = await query(
