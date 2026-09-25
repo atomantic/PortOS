@@ -1,5 +1,7 @@
-import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks } from 'lucide-react';
+import { useState } from 'react';
+import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks, Eraser } from 'lucide-react';
 import Drawer from '../Drawer';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { timeAgo, formatDateShort } from '../../utils/formatters';
 import { CASE_STATE_TONE, ACTION_TONES, manualCaseActions, labelFor, CASE_STATES } from './constants';
 import { isHttpUrl } from '../../utils/urlNormalize';
@@ -12,17 +14,27 @@ const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
 // is a pure controlled view. The backend does not persist a full state-history
 // log, so "history" here is the timeline we DO have: created → last-updated →
 // next-recheck, plus the current reason/channel/disclosure/evidence.
+//
+// Identity evidence (#8333) — the matched name/location and the search/listing
+// URLs built from them — is sealed server-side and absent from `caseData`.
+// The parent reveals it for the open case and passes it as `identity`
+// (null while loading, erased, or never recorded); `onEraseEvidence` drops it.
 export default function BrokerCaseDrawer({
-  open, onClose, caseData, broker, onRecheck, onTransition, busy = false,
+  open, onClose, caseData, broker, onRecheck, onTransition, identity = null, onEraseEvidence, busy = false,
 }) {
+  // Keyed by case id so an armed confirm never carries over to another case.
+  const [confirmEraseId, setConfirmEraseId] = useState(null);
+  const confirmErase = Boolean(caseData?.id) && confirmEraseId === caseData.id;
   // Stale/deleted deep link — the case is gone but the URL still points at it.
   const notFound = open && !caseData;
 
   const evidence = caseData?.evidence || {};
-  const listingUrls = Array.isArray(evidence.listing_urls) ? evidence.listing_urls : [];
+  const listingUrls = Array.isArray(identity?.listing_urls) ? identity.listing_urls : [];
   const playbook = Array.isArray(broker?.optout?.playbook) ? broker.optout.playbook : [];
   const optoutUrl = broker?.optout?.url || evidence.optout_url || null;
-  const searchUrl = evidence.search_url || null;
+  const searchUrl = identity?.search_url || null;
+  const matched = [identity?.matched_name, identity?.matched_location].filter(Boolean).join(' · ');
+  const hasSealedEvidence = Boolean(caseData?.identityEvidence?.sealed);
 
   // Which manual transitions make sense from the current state. The action
   // descriptors (label/tone/icon) live in the shared CASE_ACTIONS presentation
@@ -108,6 +120,7 @@ export default function BrokerCaseDrawer({
             {evidence.match_basis && (
               <div className="text-xs text-gray-400 mb-1">Match basis: {evidence.match_basis}</div>
             )}
+            {matched && <div className="text-xs text-gray-400 mb-1">Matched: {matched}</div>}
             {listingUrls.length ? (
               <ul className="space-y-1">
                 {listingUrls.map((u) => (
@@ -123,12 +136,34 @@ export default function BrokerCaseDrawer({
                 ))}
               </ul>
             ) : (
-              <span className="text-gray-500 text-xs">No listing URLs recorded</span>
+              <span className="text-gray-500 text-xs">
+                {hasSealedEvidence && !identity ? 'Loading sealed evidence…' : 'No listing URLs recorded'}
+              </span>
             )}
             {evidence.screenshot && isHttpUrl(evidence.screenshot) && (
               <a href={evidence.screenshot} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline mt-1">
                 <ExternalLink size={12} /> Confirmation screenshot
               </a>
+            )}
+            {hasSealedEvidence && onEraseEvidence && (
+              confirmErase ? (
+                <InlineConfirmRow
+                  className="mt-2"
+                  question="Erase the matched name, location, and search/listing links for this case? A later scan can record them again."
+                  confirmText="Erase"
+                  onConfirm={() => { setConfirmEraseId(null); onEraseEvidence(caseData); }}
+                  onCancel={() => setConfirmEraseId(null)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmEraseId(caseData.id)}
+                  disabled={busy}
+                  className="mt-2 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-port-error disabled:opacity-50"
+                >
+                  <Eraser size={12} /> Erase identity evidence
+                </button>
+              )
             )}
           </Row>
 

@@ -176,11 +176,30 @@ export async function updateVaultRecord(id, patch) {
   });
 }
 
+// Vault types whose values a scan copies into broker-case evidence (the
+// matched name, the matched city/state, and the search/listing URLs built from
+// both) — deleting one of these must not leave that copy behind (#8333).
+const EVIDENCE_SOURCE_TYPES = new Set(['legal_name', 'address']);
+
 export async function deleteVaultRecord(id) {
-  const { rows } = await query(`DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type`, [id]);
-  if (!rows[0]) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
-  console.log(`🗑️ Deleted vault record ${id} (type=${rows[0].type})`);
-  return { ok: true };
+  // Lazy: privacyBrokers is only needed on this path, and most suites that
+  // reach the vault never delete a record.
+  const { clearSubjectIdentityEvidence } = await import('./privacyBrokers.js');
+  return withTransaction(async (client) => {
+    const { rows } = await client.query(
+      `DELETE FROM privacy_vault_records WHERE id = $1 RETURNING id, type, subject_id`, [id],
+    );
+    const deleted = rows[0];
+    if (!deleted) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+    // Same transaction: the vault row and every case-evidence copy derived from
+    // it go together, or neither does. Not gated on the CURRENT use_for_scans:
+    // a record toggled out of scans after a scan used it still left a copy.
+    if (EVIDENCE_SOURCE_TYPES.has(deleted.type)) {
+      await clearSubjectIdentityEvidence(deleted.subject_id, { client });
+    }
+    console.log(`🗑️ Deleted vault record ${id} (type=${deleted.type})`);
+    return { ok: true };
+  });
 }
 
 /** The ONE decrypt path — explicit reveal. Returns plaintext; logs id/type only. */

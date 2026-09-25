@@ -152,6 +152,15 @@ export const getPrivacyBrokerCases = (state, options) =>
 /** Force a case due for recheck now. */
 export const recheckPrivacyCase = (id, options) =>
   request(`/privacy/broker-cases/${id}/recheck`, { method: 'POST', ...options });
+/**
+ * Reveal a case's sealed identity evidence (matched name/location, search +
+ * listing URLs) for the case drawer: `{ caseId, sealed, evidence }` (#8333).
+ */
+export const getPrivacyCaseEvidence = (id, options) =>
+  request(`/privacy/broker-cases/${id}/evidence`, options);
+/** Erase a case's identity evidence; state + verdict metadata stay. Returns the case. */
+export const erasePrivacyCaseEvidence = (id, options) =>
+  request(`/privacy/broker-cases/${id}/evidence`, { method: 'DELETE', ...options });
 /** Manual case transition (digest done/dismiss, drawer controls): { toState, reason? }. */
 export const transitionPrivacyCase = (id, toState, reason, options) => request(`/privacy/broker-cases/${id}/transition`, {
   method: 'POST',

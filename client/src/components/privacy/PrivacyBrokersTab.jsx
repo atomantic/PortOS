@@ -8,6 +8,7 @@ import {
   getPrivacyScanStatus, getPrivacyBrokerCases, getPrivacyBrokers, getPrivacyOptOutDigest,
   getPrivacyOptOutSchedule, updatePrivacyOptOutSchedule, runPrivacyScan, runPrivacyOptOut,
   refreshPrivacyBrokers, recheckPrivacyCase, transitionPrivacyCase, setPrivacyBrokerEnabled,
+  getPrivacyCaseEvidence, erasePrivacyCaseEvidence,
 } from '../../services/api';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import toast from '../ui/Toast';
@@ -96,6 +97,24 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
   const visibleCases = stateFilter ? cases.filter((c) => c.state === stateFilter) : cases;
   const openCase = openCaseId ? cases.find((c) => c.id === openCaseId) : null;
 
+  // Sealed identity evidence (#8333) is not in the case list — the drawer
+  // reveals it for the one open case. Keyed by case id so a stale response for
+  // a previously-open case never renders under the current one.
+  const [revealed, setRevealed] = useState(null);
+  const openCaseSealed = Boolean(openCase?.identityEvidence?.sealed);
+  const openCaseRowId = openCase?.id;
+  // A re-scan/transition while the drawer is open bumps updatedAt → re-reveal.
+  const openCaseUpdatedAt = openCase?.updatedAt;
+  useEffect(() => {
+    if (!openCaseRowId || !openCaseSealed) return undefined;
+    let active = true;
+    getPrivacyCaseEvidence(openCaseRowId)
+      .then((r) => { if (active) setRevealed(r); })
+      .catch(() => { if (active) setRevealed(null); });
+    return () => { active = false; };
+  }, [openCaseRowId, openCaseSealed, openCaseUpdatedAt]);
+  const openCaseIdentity = openCaseSealed && revealed?.caseId === openCaseRowId ? revealed.evidence : null;
+
   // ── Run controls (synchronous passes — gate both while either runs) ─────────
   // The engine refuses to scan (`broker_scan`) or submit (`broker_optout`) for
   // a subject without an active grant of that exact purpose (403
@@ -177,6 +196,14 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
     setCaseBusy(false);
     if (r) { toast.success(`Case → ${labelFor(CASE_STATES, toState)}`); load(); }
     else toast.error('Transition not allowed');
+  };
+
+  const doEraseEvidence = async (kase) => {
+    setCaseBusy(true);
+    const r = await erasePrivacyCaseEvidence(kase.id, { silent: true }).catch(() => null);
+    setCaseBusy(false);
+    if (r) { setRevealed(null); toast.success('Identity evidence erased'); load(); }
+    else toast.error('Failed to erase identity evidence');
   };
 
   const openDrawer = (id) => { searchParams.set('case', id); setSearchParams(searchParams, { replace: false }); };
@@ -374,7 +401,7 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
           <div className="space-y-1.5">
             {visibleCases.map((c) => {
               const broker = brokerById.get(c.brokerId);
-              const listingCount = Array.isArray(c.evidence?.listing_urls) ? c.evidence.listing_urls.length : 0;
+              const listingCount = c.identityEvidence?.listingCount ?? 0;
               return (
                 <button
                   key={c.id}
@@ -453,6 +480,8 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
         onClose={closeDrawer}
         onRecheck={doRecheck}
         onTransition={doTransition}
+        identity={openCaseIdentity}
+        onEraseEvidence={doEraseEvidence}
         busy={caseBusy}
       />
     </div>
