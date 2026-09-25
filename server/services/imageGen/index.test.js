@@ -33,7 +33,7 @@ const mfluxModel = {
 beforeEach(() => {
   vi.clearAllMocks();
   models.value = [mfluxModel];
-  settings.value = { imageGen: { mode: 'local', local: { pythonPath: '/test/python3' } } };
+  settings.value = { imageGen: { mode: 'local', local: { modelId: 'dev', pythonPath: '/test/python3' } } };
 });
 
 describe('local image connection readiness', () => {
