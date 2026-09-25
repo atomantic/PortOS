@@ -158,6 +158,8 @@ export * from './canvasRoll.js';
 export * from './wireframeCore.js';
 export * from './chiptunePlayback.js';
 export * from './waveSketchPlayback.js';
+export * from './waveSketchSynth.js';
+export * from './waveSketchSynthWorker.js';
 export * from './chordPlayback.js';
 export * from './chordShapes.js';
 export * from './colorMatch.js';

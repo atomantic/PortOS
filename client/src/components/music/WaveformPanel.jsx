@@ -26,13 +26,12 @@ import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useAudioSessionClaim from '../../hooks/useAudioSessionClaim';
 import { createWaveSketchPlayer } from '../../lib/waveSketchPlayback.js';
+import { createSketchSynthesizer } from '../../lib/waveSketchSynth.js';
 import { safeRemoveStorage } from '../../lib/safeStorage.js';
 import { clamp, formatTimecode } from '../../utils/formatters';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import { drawTrackWaveform, getTrack, renderTrackWaveform } from '../../services/api';
-import {
-  isPaintedCanvas, normalizeWaveSketch, pcmPeaks, synthesizeSketchChannels,
-} from '../../../../server/lib/waveSketch.js';
+import { isPaintedCanvas, normalizeWaveSketch } from '../../../../server/lib/waveSketch.js';
 import { PAINTED_CANVAS_LIMITS, paintedCanvasStats } from '../../../../server/lib/paintedCanvas.js';
 
 // Before #8376 the latest drawing lived only in this per-viewer key; the track
@@ -284,11 +283,32 @@ export default function WaveformPanel({
   const elapsedRef = useRef(null);
 
   const painted = isPaintedCanvas(sketch);
-  // Channels: [mono] for a v1 drawing, [left, right] for a painting.
-  const pcm = useMemo(() => (sketch ? synthesizeSketchChannels(sketch) : null), [sketch]);
-  const peaksPath = useMemo(() => (pcm
-    ? pcmPeaks(pcm.length === 1 ? pcm[0] : pcm[0].map((v, i) => (v + pcm[1][i]) / 2), PEAK_COLUMNS).map(([min, max], x) => `M${x + 0.5} ${(50 - max * 48).toFixed(1)}V${(50 - min * 48 + 0.5).toFixed(1)}`).join('')
-    : ''), [pcm]);
+  // The preview is synthesized in a Web Worker (#8470) — a max-work painting
+  // takes seconds. Channels: [mono] for a v1 drawing, [left, right] for a
+  // painting. A preview is tagged with the sketch it rendered and ignored
+  // under any other, so Play waits for this sketch's audio and never plays a
+  // previous track's.
+  const [preview, setPreview] = useState(null);
+  const synthRef = useRef(null);
+  useEffect(() => () => synthRef.current?.dispose(), []);
+  useEffect(() => {
+    if (!sketch) return undefined;
+    let active = true;
+    synthRef.current ??= createSketchSynthesizer();
+    synthRef.current.synthesize(sketch, PEAK_COLUMNS).then((result) => {
+      if (active && result) setPreview({ sketch, ...result });
+    }).catch((err) => {
+      if (!active) return;
+      console.error(`〰️ Waveform preview failed to render: ${err.message}`);
+      toast.error('Could not render the preview');
+    });
+    return () => { active = false; };
+  }, [sketch]);
+  const current = preview?.sketch === sketch ? preview : null;
+  const pcm = current?.channels ?? null;
+  const peaksPath = useMemo(() => (current
+    ? current.peaks.map(([min, max], x) => `M${x + 0.5} ${(50 - max * 48).toFixed(1)}V${(50 - min * 48 + 0.5).toFixed(1)}`).join('')
+    : ''), [current]);
 
   // The Music Designer passes only the draft's id: load its stored drawing
   // (unless a draw already landed first).
@@ -459,9 +479,9 @@ export default function WaveformPanel({
             : <SketchDrawing sketch={sketch} peaksPath={peaksPath} playheadRef={playheadRef} />}
 
           <div className="flex flex-wrap items-center gap-2">
-            <button type="button" onClick={playing ? stop : play} className={GHOST_BTN}>
-              {playing ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              <span>{playing ? 'Stop' : painted ? 'Play painting' : 'Play drawing'}</span>
+            <button type="button" onClick={playing ? stop : play} disabled={!playing && !pcm} className={GHOST_BTN}>
+              {playing ? <Square className="h-4 w-4" /> : pcm ? <Play className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+              <span>{playing ? 'Stop' : !pcm ? 'Rendering preview…' : painted ? 'Play painting' : 'Play drawing'}</span>
             </button>
             <button type="button" onClick={save} disabled={disabled || busy || !trackId} className={PRIMARY_BTN}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}

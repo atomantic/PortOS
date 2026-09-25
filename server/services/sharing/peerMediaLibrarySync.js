@@ -16,7 +16,8 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
@@ -259,15 +260,23 @@ export async function syncMediaLibraryFromPeer(peer) {
     // only streams-caps the HTTPS (host) shim; for a plain-HTTP (address) peer it
     // delegates to native fetch, which ignores `maxBytes`, so `res.json()` would
     // otherwise buffer an unbounded body. Express on the sender sets Content-Length
-    // for the JSON response, so a content-length check here is the real cap (mirrors
-    // the record-pull path's RECORD_PAYLOAD_MAX_BYTES guard). A peer that omits it
-    // is a trusted tailnet peer per the threat model.
+    // for the JSON response, so the declared-length check is a fast path; a chunked
+    // body that declares none is capped while streaming by readPeerBody below.
     const declaredLen = Number(res.headers?.get?.('content-length'));
     if (Number.isFinite(declaredLen) && declaredLen > MEDIA_LIBRARY_MANIFEST_MAX_BYTES) {
       console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES}) — skipping`);
       return { pulled: 0, skipped: 'too-large' };
     }
-    const body = await res.json().catch(() => null);
+    let tooLarge = false;
+    const body = await readPeerBody(res, 'json', { maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES })
+      .catch((err) => {
+        tooLarge = err?.code === RESPONSE_TOO_LARGE;
+        return null;
+      });
+    if (tooLarge) {
+      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} streamed past ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES} bytes — skipping`);
+      return { pulled: 0, skipped: 'too-large' };
+    }
     const parsed = peerLibraryManifestSchema.safeParse(body);
     if (!parsed.success) {
       console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} failed validation — skipping`);

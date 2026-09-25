@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { isAlwaysPublicApiPath, isPeerApiRequestAllowed } from './apiAccessPolicy.js';
+import { isAlwaysPublicApiPath, isPeerApiRequestAllowed, isPeerBasicBootstrapRequest } from './apiAccessPolicy.js';
 
 const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -32,6 +32,7 @@ const peerCallSitePaths = () => {
 
 const reachable = (path) => ['GET', 'POST'].some((method) => isAlwaysPublicApiPath(path)
   || isPeerApiRequestAllowed(method, path)
+  || isPeerBasicBootstrapRequest(method, path)
   || isPeerApiRequestAllowed(method, `${path}${path.endsWith('/') ? '' : '/'}x`));
 
 describe('peer API surface (#8387)', () => {
@@ -50,6 +51,9 @@ describe('peer API surface (#8387)', () => {
     expect(isPeerApiRequestAllowed('GET', '/api/apps/')).toBe(true);
     // Operator mutations beside allowed reads stay closed.
     expect(isPeerApiRequestAllowed('POST', '/api/peer-sync/sync-now')).toBe(false);
+    expect(isPeerApiRequestAllowed('POST', '/api/instances/peers/pair-secret')).toBe(false);
+    expect(isPeerBasicBootstrapRequest('POST', '/api/instances/peers/pair-secret')).toBe(true);
+    expect(isPeerBasicBootstrapRequest('GET', '/api/instances/peers/pair-secret')).toBe(false);
     expect(isPeerApiRequestAllowed('POST', '/api/sync/brain/apply')).toBe(false);
     expect(isPeerApiRequestAllowed('POST', '/api/apps/example-app/restart')).toBe(false);
     expect(isPeerApiRequestAllowed('GET', '/api/apps/example-app')).toBe(false);

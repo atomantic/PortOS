@@ -384,6 +384,21 @@ describe('peerHttpClient', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
+    it('rejects a streamed body past maxBytes and cancels its reader', async () => {
+      let pulled = 0;
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream({
+        pull(controller) { pulled++; controller.enqueue(new Uint8Array(4)); },
+        cancel,
+      }));
+      await expect(readPeerBody(response, 'arrayBuffer', { maxBytes: 10 }))
+        .rejects.toMatchObject({ code: RESPONSE_TOO_LARGE });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(pulled).toBeLessThanOrEqual(4);
+      // A body exactly at the cap still resolves unchanged.
+      expect(await readPeerBody(new Response('{"a":12}'), 'json', { maxBytes: 8 })).toEqual({ a: 12 });
+    });
+
     it('preserves buffered HTTPS binary and bad-JSON response behavior', async () => {
       const bytes = Buffer.from([0, 255, 128]);
       const response = { arrayBuffer: async () => bytes, json: async () => JSON.parse('{') };

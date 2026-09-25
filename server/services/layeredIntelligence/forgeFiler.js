@@ -255,7 +255,7 @@ export async function fileProposalToForge({
   const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli })
     .map((name) => dispatchLabelSpec(name, { cli }));
   const labels = [LI_LABEL_SPEC, ...extras.filter(Boolean)];
-  const result = await fileForgeIssue({ cli, cwd, env, hostname, title, body: `${body}\n\n${slugMarker(slug)}`, labels, exec });
+  const result = await fileForgeIssue({ cli, cwd, env, hostname, title, body, trailer: `\n\n${slugMarker(slug)}`, labels, exec });
   return result.ok
     ? { success: true, number: result.number, url: result.url }
     : { success: false, error: result.error };

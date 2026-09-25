@@ -22,7 +22,7 @@
  * back over the sender's `/data/{images,image-refs,videos}/` static mounts.
  */
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
@@ -685,15 +685,24 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   if (!res) return { pulled: false, reason: 'peer-unreachable' };
   if (res.status === 404) return { pulled: false, reason: 'not-on-peer' };
   if (!res.ok) return { pulled: false, reason: `http-${res.status}` };
-  // Plain-HTTP path: Node's fetch ignores maxBytes, but Express sets
-  // Content-Length on JSON — reject an oversized declared body before buffering.
+  // Plain-HTTP path: Node's fetch ignores maxBytes. Express sets Content-Length
+  // on JSON, so reject an oversized declared body before buffering (fast path);
+  // readPeerBody still caps a chunked body that declares no length.
   const declaredLen = Number(res.headers?.get?.('content-length'));
   if (Number.isFinite(declaredLen) && declaredLen > RECORD_PAYLOAD_MAX_BYTES) {
     console.error(`⚠️ peerSync: pull-record ${recordKind}/${recordId} declared ${declaredLen} bytes > cap`);
     return { pulled: false, reason: 'payload-too-large' };
   }
 
-  const body = await res.json().catch(() => null);
+  const body = await readPeerBody(res, 'json', { maxBytes: RECORD_PAYLOAD_MAX_BYTES })
+    .catch((err) => {
+      if (err?.code === RESPONSE_TOO_LARGE) tooLarge = true;
+      return null;
+    });
+  if (tooLarge) {
+    console.error(`⚠️ peerSync: pull-record ${recordKind}/${recordId} streamed past the payload cap`);
+    return { pulled: false, reason: 'payload-too-large' };
+  }
   // The peer response is untrusted — validate with the SAME schema the inbound
   // /push route uses before handing it to applyIncomingPush.
   const parsed = peerSyncPushSchema.safeParse(body);

@@ -384,7 +384,16 @@ export async function applyIncomingPush(payload, authorization) {
   // For local-ephemeral records, skip the diff entirely so we don't even
   // report a non-empty missingAssets back to the sender (which would
   // surface a "still syncing" UI for a record we silently refused).
-  const missingAssets = localEphemeral ? [] : await diffAssetManifestAgainstLocal(assetManifest);
+  const references = !localEphemeral && record.deleted !== true && desc.referencedAssets
+    ? await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack })
+    : [];
+  const referencedKeys = new Set(references.map((entry) => `${entry.kind}:${entry.filename}`));
+  const incomingAssets = Array.isArray(assetManifest) ? assetManifest : [];
+  const ownAssets = incomingAssets.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
+  if (ownAssets.length < incomingAssets.length) {
+    console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
+  }
+  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: mergeResult?.applied === true });
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the
   // record + its issues + a bundled linkedTrack tombstone (#1858 bundles the
@@ -433,7 +442,7 @@ export async function applyIncomingPush(payload, authorization) {
   // (missingAssets is already [] for localEphemeral above, so the worker
   // can never schedule pulls for opted-out records.)
   if (missingAssets.length > 0) {
-    pullMissingAssetsFromPeer(sourceInstanceId, missingAssets).catch((err) => {
+    pullMissingAssetsFromPeer(sourceInstanceId, missingAssets, { includeMismatched: mergeResult?.applied === true }).catch((err) => {
       console.log(`⚠️ peerSync: asset pull from ${sourceInstanceId} failed: ${err.message}`);
     });
   }
