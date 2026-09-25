@@ -49,6 +49,10 @@ const DEFAULT_DRAFT = {
   interactive: false,
 };
 
+// Brief fields where a blank from the brief writer means "nothing to add"
+// rather than "clear it" (on-screen text, by contrast, can be deliberately none).
+const KEEP_ON_BLANK = new Set(['styleNotes', 'cast']);
+
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const loadDraft = () => {
@@ -430,9 +434,9 @@ export default function CodeAnimation() {
       for (const [key, before] of Object.entries(startingBrief)) {
         const written = result.brief[key];
         if (typeof written !== 'string' || previous[key] !== before) continue;
-        // Style refinements live in the Style section, not the brief — only replace
-        // the artist's own notes when the writer actually asked for a refinement.
-        if (key === 'styleNotes' && !written) continue;
+        // A blank refinement or character bible means the writer had nothing to
+        // add — never let it wipe what the artist already wrote there.
+        if (KEEP_ON_BLANK.has(key) && !written) continue;
         next[key] = written;
       }
       return next;
