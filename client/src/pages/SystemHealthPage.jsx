@@ -299,7 +299,7 @@ function SystemHealthOverview() {
           </h3>
           {health.topProcesses === null ? (
             <p role="status" className="text-gray-400 text-sm">
-              Process manager (PM2) status unavailable. <Link to="/system-resources/overview" className="text-port-accent hover:text-port-accent/80">Check health →</Link>
+              Process manager (PM2) status unavailable.
             </p>
           ) : health.topProcesses && health.topProcesses.length > 0 ? (
             <div className="space-y-1">

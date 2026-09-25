@@ -50,7 +50,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
     const norm = (pct) => Math.max(0.18, Math.min(1, (pct ?? 0) / 100));
     cells[0] = norm(memPct);
     cells[1] = norm(cpuPct);
-    cells[2] = processes && procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
+    cells[2] = procTotal ? Math.max(0.25, procOnline / procTotal) : 0.25;
     cells[3] = appTotal ? Math.max(0.25, appOnline / appTotal) : 0.25;
     cells[4] = norm(diskPct);
     for (let row = 1; row < 5; row++) {
@@ -60,7 +60,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
       }
     }
     return cells;
-  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal, processes]);
+  }, [memPct, cpuPct, diskPct, procOnline, procTotal, appOnline, appTotal]);
 
   // Don't render if no data
   if (!health) {

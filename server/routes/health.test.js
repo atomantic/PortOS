@@ -187,6 +187,20 @@ describe('System Health Routes', () => {
     }
   });
 
+  it('reports an unreadable PM2 as unavailable rather than zero processes (#8431)', async () => {
+    listProcessesStrict.mockResolvedValueOnce(null);
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+
+    const response = await request(app).get('/api/system/health/details');
+    expect(response.status).toBe(200);
+    expect(response.body.processes).toBeNull();
+    expect(response.body.topProcesses).toBeNull();
+    expect(response.body.overallHealth).toBe('warning');
+    expect(response.body.warnings).toContainEqual(
+      { type: 'probe-unavailable', source: 'pm2', status: 'unavailable', severity: 'warning', message: 'Process manager (PM2) status unavailable', dismissible: false }
+    );
+  });
+
   it('serves the running build on its own route (#4694)', async () => {
     const response = await request(app).get('/api/system/build');
 

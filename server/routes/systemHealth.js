@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import os from 'os';
 import { statfs } from 'fs/promises';
-import { listProcesses, listProcessesStrict } from '../services/pm2.js';
+import { listProcessesStrict } from '../services/pm2.js';
 import { getAppStatusSummary, annotateExpectedExit } from '../services/appProcessStatus.js';
 import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instanceIdentity.js';

@@ -19,7 +19,7 @@ const jlistInflight = new Map();
 const cacheKey = (pm2Home) => pm2Home || '_default';
 
 // Track PM2 read failures per home so we log only on state change or reason change
-const jlistFailureState = new Map(); // home -> { lastError: string, lastLogged: number }
+const jlistFailureState = new Map(); // home -> { lastError: string }
 
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
@@ -47,7 +47,7 @@ function logJlistFailure(pm2Home, errorReason) {
   // Log only if no prior state, or if the reason changed
   if (!state || state.lastError !== errorReason) {
     console.error(`❌ PM2 read failed (home=${homeDesc}): ${errorReason}`);
-    jlistFailureState.set(key, { lastError: errorReason, lastLogged: Date.now() });
+    jlistFailureState.set(key, { lastError: errorReason });
   }
 }
 
