@@ -368,8 +368,9 @@ const waveformSchema = z.object({
   ...designerPickerShape,
 }).omit({ template: true });
 
-// POST /api/music/waveform — have the LLM DRAW the music: single-cycle
-// waveforms plus timed strokes, previewed and rendered by lib/waveSketch.js.
+// POST /api/music/waveform — stateless: have the LLM DRAW the music (single-cycle
+// waveforms plus timed strokes, lib/waveSketch.js) without storing it. The
+// designer draws via POST /api/tracks/:id/waveform/draw, which persists it.
 // One explicit user action per call.
 router.post('/waveform', asyncHandler(async (req, res) => {
   const body = validateRequest(waveformSchema, req.body ?? {});

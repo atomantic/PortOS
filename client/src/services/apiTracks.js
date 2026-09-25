@@ -104,9 +104,18 @@ export const publishTrackChiptune = (id, body, requestOptions = {}) => request(`
   ...requestOptions,
 });
 
-// Render a drawn-waveform sketch (the Music Designer's LLM-drawn engine) into
-// the shared music library as the track's active take.
-// `body`: { sketch, prompt?, title? } → { track, filename, durationSec }.
+// Have the LLM DRAW the music as a wave sketch (server/lib/waveSketch.js) and
+// store it on the track (`waveSketch`/`waveSketchPrompt`, #8376).
+// `body`: { description, lyrics?, guidance?, durationSec?, revise? (redraw the
+// stored sketch), providerId?, model?, effort? } → { sketch, llm, track }.
+export const drawTrackWaveform = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/waveform/draw`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// Render the track's STORED wave sketch into the shared music library as the
+// track's active take. `body`: { prompt?, title? } → { track, filename, durationSec }.
 export const renderTrackWaveform = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/waveform/render`, {
   method: 'POST',
   body: JSON.stringify(body),

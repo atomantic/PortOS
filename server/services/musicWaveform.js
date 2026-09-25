@@ -3,9 +3,14 @@
  *
  *   drawWaveSketch()          musical description → a wave sketch the LLM drew
  *                             point by point (lib/waveSketch.js contract).
- *   renderWaveSketchToTrack() a (client round-tripped) sketch → WAV/OGG in the
- *                             shared music library, appended to the track's
- *                             render history as an `engine: 'waveform'` take.
+ *                             Stateless (POST /api/music/waveform).
+ *   drawWaveSketchForTrack()  the same, persisted on the track as
+ *                             `waveSketch`/`waveSketchPrompt` (#8376) so the
+ *                             drawing survives reloads, syncs to the user's
+ *                             other machines, and can be revised later.
+ *   renderWaveSketchToTrack() the track's STORED sketch → WAV in the shared
+ *                             music library, appended to the track's render
+ *                             history as an `engine: 'waveform'` take.
  *
  * The browser previews the same sketch with the same deterministic synth
  * (`synthesizeWaveSketch`), so the saved take is exactly what was auditioned.
@@ -118,23 +123,43 @@ export async function drawWaveSketch({ description, lyrics, guidance, durationSe
   return { sketch, llm: { provider: run.provider?.id || provider.id, model: ranModel } };
 }
 
-/**
- * Render a sketch into the shared music library and make it the track's active
- * take (same render-history contract as the chiptune and diffusion engines).
- */
-export async function renderWaveSketchToTrack({ trackId, sketch, prompt, title }) {
-  const normalized = normalizeWaveSketch(sketch);
-  if (!normalized) {
-    throw new ServerError('That waveform drawing has nothing playable in it', { status: 400, code: 'WAVEFORM_EMPTY' });
-  }
+const requireTrack = async (trackId) => {
   const track = await tracks.getTrack(trackId);
   if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
+  return track;
+};
+
+/**
+ * Draw (or, with `revise`, redraw the track's stored sketch) and persist the
+ * result on the track. The description it was drawn from is kept alongside as
+ * `waveSketchPrompt` so a remix reopens with the same brief.
+ */
+export async function drawWaveSketchForTrack({ trackId, revise = false, ...params }) {
+  const track = await requireTrack(trackId);
+  const current = revise ? track.waveSketch : null;
+  const { sketch, llm } = await drawWaveSketch({ ...params, current });
+  const updated = await tracks.updateTrack(trackId, { waveSketch: sketch, waveSketchPrompt: trimTo(params.description, MAX_DESCRIPTION) });
+  return { sketch: updated.waveSketch, llm, track: updated };
+}
+
+/**
+ * Render the track's stored sketch into the shared music library and make it
+ * the track's active take (same render-history contract as the chiptune and
+ * diffusion engines). The server renders what it stored, never a
+ * client-supplied drawing, so the take always matches the persisted sketch.
+ */
+export async function renderWaveSketchToTrack({ trackId, prompt, title }) {
+  const track = await requireTrack(trackId);
+  const normalized = track.waveSketch;
+  if (!normalized) {
+    throw new ServerError('This track has no drawing to render yet — draw one first', { status: 400, code: 'WAVEFORM_EMPTY' });
+  }
 
   const wav = pcmToWavBuffer(synthesizeWaveSketch(normalized), { sampleRate: WAVE_SKETCH_SAMPLE_RATE });
   const filename = await writeWavAudioFile(wav, PATHS.music, `music-${randomUUID()}`);
   const durationSec = Math.max(1, Math.round(normalized.durationSec));
   const updated = await tracks.appendActiveTake(trackId, {
-    audioFilename: filename, prompt: prompt || track.prompt, engine: WAVEFORM_ENGINE, durationSec,
+    audioFilename: filename, prompt: prompt || track.waveSketchPrompt || track.prompt, engine: WAVEFORM_ENGINE, durationSec,
   }, title ? { title } : {});
   if (!updated) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`〰️ Rendered drawn waveform take (${durationSec}s)`);

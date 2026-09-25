@@ -10,8 +10,12 @@
  * is exactly what gets saved.
  *
  * The LLM call fires only from the Draw/Revise buttons (no cold-bootstrap LLM
- * calls). The latest drawing is remembered per viewer in localStorage so a
- * reload doesn't lose it; saving renders it into the track's render history.
+ * calls). Every drawing is stored on the track (`waveSketch`, #8376), so it
+ * survives reloads, syncs to the user's other machines, and reopens for
+ * revision from either host: the Music Designer's drawn engine (which passes
+ * only `trackId`, so the panel loads the track) or the Tracks editor's "Drawn
+ * waveform" mode (which passes the loaded `track`). Saving renders the stored
+ * drawing into the track's render history.
  */
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
@@ -19,17 +23,18 @@ import { Brush, Loader2, Play, Save, Square, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import useAudioSessionClaim from '../../hooks/useAudioSessionClaim';
-import { getAudioContext, resumeAudioContext } from '../../lib/audioContext.js';
-import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
+import { createWaveSketchPlayer } from '../../lib/waveSketchPlayback.js';
+import { safeRemoveStorage } from '../../lib/safeStorage.js';
 import { clamp, formatTimecode } from '../../utils/formatters';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
-import { drawWaveform, renderTrackWaveform } from '../../services/api';
+import { drawTrackWaveform, getTrack, renderTrackWaveform } from '../../services/api';
 import {
-  WAVE_SKETCH_LIMITS, WAVE_SKETCH_SAMPLE_RATE,
-  normalizeWaveSketch, pcmPeaks, synthesizeWaveSketch,
+  WAVE_SKETCH_LIMITS, normalizeWaveSketch, pcmPeaks, synthesizeWaveSketch,
 } from '../../../../server/lib/waveSketch.js';
 
-const SKETCH_KEY = 'portos.musicDesigner.waveSketch';
+// Before #8376 the latest drawing lived only in this per-viewer key; the track
+// is now the store, so the stale key is just cleared.
+const LEGACY_SKETCH_KEY = 'portos.musicDesigner.waveSketch';
 const DEFAULT_LENGTH_SEC = 20;
 const MIN_LENGTH_SEC = 4;
 const PEAK_COLUMNS = 600;
@@ -38,13 +43,6 @@ const LANE_HEIGHT = 14;
 const VOICE_COLORS = ['rgb(var(--port-accent))', 'rgb(var(--port-accent-2))', 'rgb(var(--port-success))', 'rgb(var(--port-warning))', 'rgb(var(--port-error))', 'rgb(var(--port-text-muted))'];
 const voiceColor = (index) => VOICE_COLORS[index % VOICE_COLORS.length];
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-
-// Only the most recent drawing is kept (one key, tagged with its draft track),
-// re-validated on read so a stale or hand-edited entry can't break the panel.
-const readStoredSketch = (trackId) => {
-  const stored = safeReadJsonStorage(SKETCH_KEY);
-  return trackId && stored?.trackId === trackId ? normalizeWaveSketch(stored.sketch) : null;
-};
 
 /** One drawn cycle, shown twice so the loop seam is visible. */
 function ShapeDrawing({ name, points, color, usedBy }) {
@@ -146,11 +144,12 @@ const SketchDrawing = memo(function SketchDrawing({ sketch, peaksPath, playheadR
 });
 
 export default function WaveformPanel({
-  trackId, disabled = false, description = '', lyrics = '', title = '',
-  providerId, model, effort, providerPicker, onRendered,
+  trackId, track, disabled = false, description = '', lyrics = '', title = '',
+  providerId, model, effort, providerPicker, onRendered, onTrackUpdate,
 }) {
   const mountedRef = useMounted();
-  const [sketch, setSketch] = useState(() => readStoredSketch(trackId));
+  // Seeded from the host's track once; hosts key the panel by track id.
+  const [sketch, setSketch] = useState(() => normalizeWaveSketch(track?.waveSketch));
   const [guidance, setGuidance] = useState('');
   // Raw field text — clamped only when used, so typing "12" isn't snapped to
   // the minimum after its first digit.
@@ -159,8 +158,7 @@ export default function WaveformPanel({
   const [saving, setSaving] = useState(false);
   const [playing, setPlaying] = useState(false);
   const { claim, release } = useAudioSessionClaim('playback');
-  const sourceRef = useRef(null);
-  const startedAtRef = useRef(0);
+  const playerRef = useRef(null);
   const playheadRef = useRef(null);
   const elapsedRef = useRef(null);
 
@@ -169,14 +167,21 @@ export default function WaveformPanel({
     ? pcmPeaks(pcm, PEAK_COLUMNS).map(([min, max], x) => `M${x + 0.5} ${(50 - max * 48).toFixed(1)}V${(50 - min * 48 + 0.5).toFixed(1)}`).join('')
     : ''), [pcm]);
 
+  // The Music Designer passes only the draft's id: load its stored drawing
+  // (unless a draw already landed first).
+  useEffect(() => {
+    safeRemoveStorage(LEGACY_SKETCH_KEY);
+    if (track || !trackId) return undefined;
+    let cancelled = false;
+    getTrack(trackId, { silent: true }).then((loaded) => {
+      const stored = normalizeWaveSketch(loaded?.waveSketch);
+      if (stored && !cancelled) setSketch((current) => current ?? stored);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [trackId, track]);
+
   const stop = () => {
-    const source = sourceRef.current;
-    sourceRef.current = null;
-    if (source) {
-      source.onended = null;
-      try { source.stop(); } catch { /* already ended */ }
-      source.disconnect();
-    }
+    playerRef.current?.stop();
     release();
     if (mountedRef.current) setPlaying(false);
   };
@@ -187,22 +192,15 @@ export default function WaveformPanel({
   const play = async () => {
     if (!pcm) return;
     stop();
-    const ctx = getAudioContext();
+    playerRef.current ??= createWaveSketchPlayer({
+      onEnded: () => { release(); if (mountedRef.current) setPlaying(false); },
+    });
     claim();
-    const started = await resumeAudioContext(ctx).then(() => true).catch((err) => {
+    const started = await playerRef.current.play(pcm).catch((err) => {
       console.error(`〰️ Waveform preview failed to start: ${err.message}`);
       return false;
     });
-    if (!started || !mountedRef.current) { release(); return; }
-    const buffer = ctx.createBuffer(1, pcm.length, WAVE_SKETCH_SAMPLE_RATE);
-    buffer.getChannelData(0).set(pcm);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.onended = () => { if (sourceRef.current === source) stop(); };
-    sourceRef.current = source;
-    startedAtRef.current = ctx.currentTime;
-    source.start();
+    if (!started || !mountedRef.current) { playerRef.current.stop(); release(); return; }
     setPlaying(true);
   };
 
@@ -217,7 +215,7 @@ export default function WaveformPanel({
     if (!playing) { paint(0); return undefined; }
     let raf = 0;
     const loop = () => {
-      paint(Math.max(0, getAudioContext().currentTime - startedAtRef.current));
+      paint(playerRef.current?.position() ?? 0);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -226,13 +224,14 @@ export default function WaveformPanel({
 
   const draw = async (mode) => {
     if (!description.trim()) { toast.error('Write the musical description first'); return; }
+    if (!trackId) return;
     setDrawing(mode);
-    const res = await drawWaveform({
+    const res = await drawTrackWaveform(trackId, {
       description: description.trim(),
       lyrics: lyrics.trim() || undefined,
       guidance: guidance.trim() || undefined,
       durationSec: clamp(Number(lengthInput) || DEFAULT_LENGTH_SEC, MIN_LENGTH_SEC, WAVE_SKETCH_LIMITS.DURATION_MAX_SEC),
-      ...(mode === 'revise' && sketch ? { current: sketch } : {}),
+      ...(mode === 'revise' ? { revise: true } : {}),
       providerId: providerId || undefined,
       model: model || undefined,
       effort: effort || undefined,
@@ -241,14 +240,13 @@ export default function WaveformPanel({
     setDrawing(null);
     if (!res?.sketch) return;
     setSketch(res.sketch);
-    safeWriteJsonStorage(SKETCH_KEY, { trackId, sketch: res.sketch });
+    if (res.track) onTrackUpdate?.(res.track);
   };
 
   const save = async () => {
     if (!sketch || !trackId) return;
     setSaving(true);
     const res = await renderTrackWaveform(trackId, {
-      sketch,
       prompt: description.trim() || undefined,
       title: title.trim() || sketch.title || undefined,
     }, { silent: true }).catch((err) => { toast.error(err?.message || 'Could not save the take'); return null; });
@@ -301,12 +299,12 @@ export default function WaveformPanel({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => draw('fresh')} disabled={disabled || busy || !description.trim()} className={sketch ? GHOST_BTN : PRIMARY_BTN}>
+        <button type="button" onClick={() => draw('fresh')} disabled={disabled || busy || !trackId || !description.trim()} className={sketch ? GHOST_BTN : PRIMARY_BTN}>
           {drawing === 'fresh' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brush className="h-4 w-4" />}
           <span>{drawing === 'fresh' ? 'Drawing…' : sketch ? 'Draw from scratch' : 'Draw it'}</span>
         </button>
         {sketch && (
-          <button type="button" onClick={() => draw('revise')} disabled={disabled || busy || !description.trim()} className={PRIMARY_BTN}>
+          <button type="button" onClick={() => draw('revise')} disabled={disabled || busy || !trackId || !description.trim()} className={PRIMARY_BTN}>
             {drawing === 'revise' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
             <span>{drawing === 'revise' ? 'Revising…' : 'Revise drawing'}</span>
           </button>

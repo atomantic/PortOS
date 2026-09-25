@@ -287,7 +287,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // the ambiguous render back and make a later remix silently change vocal mode.
   // tracks v6 = render history entries preserve the effective generation
   // executionProfile. Older peers would strip the measured placement on sync.
-  tracks: 6,
+  // tracks v7 = `track.waveSketch`/`waveSketchPrompt` (#8376, the Music
+  // Designer's LLM-drawn wave sketch). Same strip-and-push-back reason as v3:
+  // a <=v6 peer's sketch-unaware sanitizer would drop the drawing and LWW the
+  // loss back. The accepted sender-behind direction is covered by the
+  // absent-key carry in services/tracks/logic.js mergeTrackRecord.
+  tracks: 7,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

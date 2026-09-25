@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const musicGenProps = vi.hoisted(() => ({ current: null }));
 const chiptuneProps = vi.hoisted(() => ({ current: null }));
+const waveformProps = vi.hoisted(() => ({ current: null }));
 
 // Stub the heavy children — this suite pins the MIDI read-through wiring
 // (#2477 follow-up), not the editor/generation internals.
@@ -15,6 +16,10 @@ vi.mock('./MusicGenPanel', () => ({ default: (props) => {
 vi.mock('./ChiptunePanel', () => ({ default: (props) => {
   chiptuneProps.current = props;
   return <div data-testid="chiptune-panel" />;
+} }));
+vi.mock('./TrackWaveformHost', () => ({ default: (props) => {
+  waveformProps.current = props;
+  return <div data-testid="waveform-panel" />;
 } }));
 vi.mock('./TrackRenderCard', () => ({ default: ({ render: item, onRemix, onSendToVideo }) => (
   <>
@@ -261,7 +266,34 @@ describe('<TracksManager> generative workflow hand-off', () => {
     expect(musicGenProps.current.remix).not.toHaveProperty('instrumentalOnly');
   });
 
-  it('remixes a drawn-waveform take in the designer\'s drawn engine', async () => {
+  it('remixes a drawn take on the track\'s stored sketch, seeded with the take\'s description', async () => {
+    const waveSketch = { version: 1, title: 'Glass Tide' };
+    listTracks.mockResolvedValue([{
+      ...TRACK,
+      prompt: 'Current source',
+      waveSketch,
+      renders: [{ id: 'render-drawn', audioFilename: 'drawn.wav', engine: 'waveform', prompt: 'Glassy', createdAt: '2026-01-02T00:00:00Z' }],
+    }]);
+    renderAt('track-1');
+    await screen.findByDisplayValue('Current source');
+    // An unrelated active take opens on the audio panel; the drawn mode is offered.
+    expect(screen.getByTestId('gen-panel')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remix render-drawn' }));
+
+    expect(await screen.findByTestId('waveform-panel')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Drawn waveform' })).toHaveAttribute('aria-pressed', 'true');
+    expect(waveformProps.current.track.waveSketch).toBe(waveSketch);
+    expect(waveformProps.current.description).toBe('Glassy');
+    expect(screen.queryByTestId('location')).toBeNull();
+  });
+
+  it('opens a track whose active take was drawn on its drawing', async () => {
+    listTracks.mockResolvedValue([{ ...TRACK, engine: 'waveform', waveSketch: { version: 1 } }]);
+    renderAt('track-1');
+    expect(await screen.findByTestId('waveform-panel')).toBeInTheDocument();
+  });
+
+  it('sends a drawn take with no stored sketch to the designer\'s drawn engine', async () => {
     listTracks.mockResolvedValue([{
       ...TRACK,
       renders: [{ id: 'render-drawn', audioFilename: 'drawn.wav', engine: 'waveform', prompt: 'Glassy', createdAt: '2026-01-02T00:00:00Z' }],

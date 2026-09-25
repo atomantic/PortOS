@@ -46,17 +46,6 @@ export const generateLyrics = (body, requestOptions = {}) => request('/music/lyr
   ...requestOptions,
 });
 
-// Have the LLM DRAW the music as a wave sketch (server/lib/waveSketch.js):
-// single-cycle waveforms + timed strokes the browser synthesizes directly.
-// body: { description, lyrics?, guidance?, durationSec?, current? (sketch to
-// revise), providerId?, model?, effort? }
-// → { sketch, llm: { provider, model } }
-export const drawWaveform = (body, requestOptions = {}) => request('/music/waveform', {
-  method: 'POST',
-  body: JSON.stringify(body),
-  ...requestOptions,
-});
-
 // Have the LLM write the piece as Strudel code (the Music Designer's code
 // engine). Nothing runs server-side; the browser plays it in a sandboxed frame.
 // body: { description, lyrics?, guidance?, current? (code to revise),
