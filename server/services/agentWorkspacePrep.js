@@ -17,7 +17,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * `cleanupOnError` + the matching `agent:deferred` / `agent:error` event:
  *
  *   { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
- *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task re-queued
+ *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task paused on a `git-conflict-wait` cooldown
  *   { outcome: 'blocked', reason }                          // explicit worktree requested but creation failed
  *                                                           // (`worktree-busy` blocks are a TIMED pause and revive themselves)
  *
@@ -80,6 +80,8 @@ async function blockTask(task, reason, blockedCategory, extraMetadata = {}) {
 // task takes the ordinary `worktree-failed` block and the orphaned-PR notifier
 // raises its card.
 const WORKTREE_BUSY_COOLDOWN_MS = 2 * 60 * 1000;
+// How long a task blocked by an unpullable shared checkout waits before retrying.
+const GIT_CONFLICT_COOLDOWN_MS = 5 * 60 * 1000;
 const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 
 // Compatibility export for callers that reached for the accessor from this
@@ -426,7 +428,11 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   if (!isReadOnly && !claimWorkspace) {
     // Isolated tasks fetch their base in createWorktree; never rebase the
     // shared checkout as a side effect of preparing a separate workspace.
-    const pullResult = wantsWorktree ? { skipped: 'isolated-task' } : await git.ensureLatest(workspacePath).catch(err => {
+    // The conflict-resolution task works on the very checkout that won't pull;
+    // gating it on a clean pull would defer it forever.
+    const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
+      : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
+      : await git.ensureLatest(workspacePath).catch(err => {
       emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
       return { success: false, error: err.message };
     });
@@ -439,22 +445,30 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       });
 
       const appId = task.metadata?.app || null;
+      // The description's first line is the duplicate key, so it stays stable
+      // across retries; the (varying) git error goes in the context.
       const conflictDesc = `Resolve git conflict in ${resolvedAppName || workspacePath} on branch ${pullResult.branch}. `
-        + `The branch has diverged from origin and automatic rebase failed. `
-        + `Error: ${pullResult.error}`;
+        + `The branch has diverged from origin and automatic rebase failed.`;
 
       await addTask({
         description: conflictDesc,
         priority: 'HIGH',
         app: appId,
-        context: `This conflict is blocking task ${task.id}: "${task.description}". `
+        metadata: { gitConflictResolution: true },
+        context: `Error: ${pullResult.error}\n`
+          + `This conflict is blocking task ${task.id}: "${task.description}". `
           + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
         position: 'top'
       }, 'internal').catch(err => {
         emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
       });
 
-      await updateTask(task.id, { status: 'pending' }, task.taskType || 'user').catch(() => {});
+      // A timed pause, not `pending`: a pending task is re-dequeued within
+      // seconds and re-runs the same failing rebase in a hot loop until the
+      // resolver lands. The cooldown sweeper revives it.
+      await blockTask(task, `Git conflict in ${resolvedAppName || workspacePath} (branch ${pullResult.branch}); waiting for the resolver task`, 'git-conflict-wait', {
+        cooldownUntil: new Date(Date.now() + GIT_CONFLICT_COOLDOWN_MS).toISOString(),
+      });
       return {
         outcome: 'deferred',
         reason: 'Git conflict blocks task — conflict resolution task created',

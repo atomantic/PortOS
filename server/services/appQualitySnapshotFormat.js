@@ -20,6 +20,7 @@ import { auditQualityReportSchema } from '../lib/auditQuality.js';
 
 export const APP_QUALITY_FILE_SCHEMA_VERSION = 2;
 export const APP_QUALITY_REPORT_VERSION = 1;
+export const APP_QUALITY_SNAPSHOT_FILENAME = '.quality.json';
 export const APP_QUALITY_LEGACY_SNAPSHOT_FILENAME = 'quality-snapshot.json';
 export const QUALITY_COVERAGE_VALUES = Object.freeze(['broad', 'partial', 'unavailable', 'not-applicable']);
 export const QUALITY_CONFIDENCE_VALUES = Object.freeze(['low', 'medium', 'high']);

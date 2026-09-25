@@ -41,7 +41,8 @@ export const PROVIDER_CONFIG_BLOCKED_CATEGORY = 'provider-config';
  */
 export const TIMED_COOLDOWN_BLOCKED_CATEGORIES = new Set([
   'orphan-cooldown',  // the orphan sweep's retry backoff
-  'worktree-busy'     // the branch is checked out in another worktree
+  'worktree-busy',    // the branch is checked out in another worktree
+  'git-conflict-wait' // the shared checkout won't pull; a resolver task is fixing it
 ]);
 
 /**

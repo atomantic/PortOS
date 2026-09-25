@@ -997,9 +997,82 @@ export function hasChangelogDir(dir) {
  * @returns {{ success: boolean, branch: string, conflict: boolean, error: string|null }}
  */
 
-export async function ensureLatest(dir) {
+// One pre-task pull per checkout at a time. Several agents for the same app
+// prep concurrently; without this the second one's `rebase` hits the first's
+// `.git/rebase-merge` and its failure-path `rebase --abort` then tears down the
+// FIRST agent's in-flight rebase.
+const ensureLatestTails = new Map();
+
+export function ensureLatest(dir) {
+  const key = resolve(dir);
+  const prev = ensureLatestTails.get(key) || Promise.resolve();
+  const run = prev.catch(() => {}).then(() => ensureLatestUnserialized(dir));
+  const tail = run.catch(() => {});
+  ensureLatestTails.set(key, tail);
+  tail.then(() => { if (ensureLatestTails.get(key) === tail) ensureLatestTails.delete(key); });
+  return run;
+}
+
+// Files PortOS itself owns in a managed app's checkout. The quality publisher
+// lands them through a PR, so origin is authoritative; a local commit that only
+// touches them is a stale leftover (an older publisher committed on the live
+// checkout) and is safe to drop when it blocks the pull. Imported lazily: only
+// a conflicting pull needs it, and git.js is reached by hundreds of suites.
+async function portosOwnedCheckoutFiles() {
+  const { APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME } = await import('./appQualitySnapshotFormat.js');
+  return new Set([APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]);
+}
+
+async function rebaseInProgress(dir) {
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    const res = await execGit(['rev-parse', '--git-path', name], dir, { ignoreExitCode: true });
+    const gitPath = res.stdout?.trim();
+    if (gitPath && existsSync(resolve(dir, gitPath))) return true;
+  }
+  return false;
+}
+
+// When the only thing the local branch adds over origin is PortOS-owned files,
+// move the branch to origin (`reset --keep` refuses rather than clobbering
+// anything uncommitted). Returns the dropped commit subjects, or null when the
+// local side carries anything else.
+async function dropPortosOwnedLocalCommits(dir, branch) {
+  const upstream = `origin/${branch}`;
+  const changed = await execGit(['diff', '--name-only', `${upstream}...HEAD`], dir, { ignoreExitCode: true });
+  if (changed.exitCode !== 0) return null;
+  const files = changed.stdout.split('\n').map(f => f.trim()).filter(Boolean);
+  const owned = await portosOwnedCheckoutFiles();
+  if (!files.length || !files.every(f => owned.has(f))) return null;
+  const log = await execGit(['log', '--format=%h %s', `${upstream}..HEAD`], dir, { ignoreExitCode: true });
+  const reset = await execGit(['reset', '--keep', upstream], dir, { ignoreExitCode: true });
+  if (reset.exitCode !== 0) return null;
+  return log.stdout.split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+// git's rebase failure output is a multi-line block of `hint:` advice with a
+// `\r`-overwritten progress line glued in front — the part worth logging is
+// the error plus the CONFLICT lines naming the files.
+function summarizeRebaseConflict({ stdout = '', stderr = '' } = {}) {
+  const lines = `${stdout}\n${stderr}`.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+  const keep = lines.filter(l => /^(CONFLICT|error:|fatal:)/.test(l));
+  return (keep.length ? keep : lines.filter(l => !l.startsWith('hint:')).slice(0, 3)).join('; ') || 'rebase failed';
+}
+
+async function ensureLatestUnserialized(dir) {
   const gitCheck = await isRepo(dir).catch(() => false);
   if (!gitCheck) return { success: true, branch: null, conflict: false, error: null, skipped: 'not-a-repo' };
+
+  // A rebase left in progress is someone's (a person's, or an agent resolving a
+  // conflict) — never start a second one on top of it, and never abort it.
+  if (await rebaseInProgress(dir)) {
+    const branch = await getBranch(dir).catch(() => null);
+    return {
+      success: false,
+      branch,
+      conflict: true,
+      error: 'a rebase is already in progress in this checkout; finish it (git rebase --continue) or abort it (git rebase --abort)'
+    };
+  }
 
   const currentBranch = await getBranch(dir).catch(() => null);
   if (!currentBranch) return { success: true, branch: null, conflict: false, error: null, skipped: 'no-branch' };
@@ -1083,11 +1156,16 @@ export async function ensureLatest(dir) {
         error: `Cleared an abandoned git lock (${rebaseLock}) left by a killed git process. The rebase onto origin/${currentBranch} did not complete — retry now that the lock is clear.`
       };
     }
+    const dropped = await dropPortosOwnedLocalCommits(dir, currentBranch);
+    if (dropped) {
+      console.warn(`⚠️ Dropped ${dropped.length} stale local PortOS-owned commit(s) on ${currentBranch} in ${dir} to match origin: ${dropped.join('; ')}`);
+      return { success: true, branch: currentBranch, conflict: false, error: null, droppedLocalCommits: dropped };
+    }
     return {
       success: false,
       branch: currentBranch,
       conflict: true,
-      error: `branch ${currentBranch} has diverged from origin and rebase has conflicts: ${rebaseResult.stderr}`
+      error: `branch ${currentBranch} has diverged from origin and rebase has conflicts: ${summarizeRebaseConflict(rebaseResult)}`
     };
   }
 
