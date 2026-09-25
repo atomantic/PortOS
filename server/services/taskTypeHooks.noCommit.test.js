@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { declaresNoCommitCriterion } from './taskTypeHooks.js';
+import { declaresNoCommitCriterion, isClaimFlowDispatch } from './taskTypeHooks.js';
 
 const task = (metadata) => ({ id: 'task-1', metadata });
 
@@ -100,5 +100,45 @@ describe('declaresNoCommitCriterion', () => {
         worktreeChangesExpected: false,
       }))).toBe(false);
     });
+  });
+});
+
+/**
+ * `isClaimFlowDispatch` — the claim-flow predicate. Deliberately NOT folded into
+ * `declaresNoCommitCriterion`: that predicate also gates the goal-fidelity gate's
+ * no-diff bail, which claim flows must not take (their claim-worktree diff is what
+ * the fidelity review reads). Its only consumers are the success-criteria commit
+ * probe and the history-backfill fossil sanitizer.
+ */
+describe('isClaimFlowDispatch', () => {
+  it('recognizes every claim-flow type on analysisType', () => {
+    for (const analysisType of ['plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work']) {
+      expect(isClaimFlowDispatch(task({ analysisType }))).toBe(true);
+    }
+  });
+
+  it('recognizes the explicit claimFlow marker, boolean and string form', () => {
+    expect(isClaimFlowDispatch(task({ claimFlow: true }))).toBe(true);
+    expect(isClaimFlowDispatch(task({ claimFlow: 'true' }))).toBe(true);
+  });
+
+  it('resolves the archived-agent projection (taskAnalysisType) and a bare taskType', () => {
+    expect(isClaimFlowDispatch(task({ taskAnalysisType: 'claim-issue' }))).toBe(true);
+    expect(isClaimFlowDispatch({ id: 'task-1', taskType: 'claim-work' })).toBe(true);
+  });
+
+  it('does not treat an ordinary committing task as a claim flow', () => {
+    expect(isClaimFlowDispatch(task({}))).toBe(false);
+    expect(isClaimFlowDispatch(task({ analysisType: 'security' }))).toBe(false);
+    expect(isClaimFlowDispatch(task({ claimFlow: 'false' }))).toBe(false);
+    expect(isClaimFlowDispatch(task({ analysisType: 'branch-reconcile' }))).toBe(false);
+  });
+
+  it('is NOT a declaresNoCommitCriterion shape — the goal-fidelity gate depends on the distinction', () => {
+    // If claim flows ever satisfy declaresNoCommitCriterion, the goal-fidelity
+    // gate's no-diff bail (agentFinalization.js) fires before its claimFlow
+    // branch and the claimed-issue review silently stops running.
+    expect(declaresNoCommitCriterion(task({ analysisType: 'claim-issue' }))).toBe(false);
+    expect(declaresNoCommitCriterion(task({ claimFlow: true }))).toBe(false);
   });
 });

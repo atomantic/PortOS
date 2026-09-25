@@ -521,3 +521,59 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
     expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
   });
 });
+
+/**
+ * CLAIM flows (plan-task / claim-issue / claim-issue-gitlab / claim-issue-jira /
+ * claim-work): the agent cuts its OWN claim/<item> worktree and opens/merges the PR
+ * there, while CoS keeps `useWorktree: false` so the workspace this criterion probes
+ * is the app's live checkout — which the claim run never commits to. The probe is
+ * workspace-scoped, so it stamped `validationPassed: false` on every successful run
+ * (the boolean OVERRIDES the exit code in task-learning), pinning the type's bucket
+ * at ~0-25% while the runs visibly succeed. The exemption falls back to the exit
+ * code; the goal-fidelity gate still judges the run against the claimed issue's
+ * requirements, so nothing is lost but the misattributed probe.
+ */
+describe('evaluateSuccessCriteria — claim-flow exemption', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('declares NO commit criterion for every claim-flow type', async () => {
+    for (const analysisType of ['plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work']) {
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts the explicit claimFlow marker on a task of any type', async () => {
+    // A manually marked claim (e.g. a dependency task also marked claimFlow) or a
+    // schedule queued before the marker existed carries only the flag.
+    for (const claimFlow of [true, 'true']) {
+      const task = { id: 't2', taskType: 'internal', metadata: { claimFlow } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('exempts the archived-agent projection (metadata.taskAnalysisType) too', async () => {
+    // Same analysisType → taskAnalysisType → taskType chain the learning bucket
+    // uses, so the criterion agrees with the bucket on the archived shape.
+    const task = { id: 't3', taskType: 'internal', metadata: { taskAnalysisType: 'claim-issue' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('exempts a claim task typed on taskType alone', async () => {
+    const task = { id: 't4', taskType: 'claim-work' };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does NOT exempt a task whose claimFlow flag is falsy or absent', async () => {
+    // The flag is the marker of a claim dispatch; a task that merely carries the
+    // string "false" (or nothing) is an ordinary committing run.
+    committedDuringRun.mockResolvedValueOnce(false);
+    const task = { id: 't5', taskType: 'internal', metadata: { analysisType: 'security', claimFlow: 'false' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+});
