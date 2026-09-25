@@ -551,6 +551,70 @@ describe('DailyLogTab autosave', () => {
   });
 });
 
+// A slow Draft or Quick Append response must not land on whatever day the
+// user has switched to by the time it resolves (#8422).
+describe('DailyLogTab draft/append date guard', () => {
+  it('does not apply a Draft response to a day the user switched away from', async () => {
+    let releaseDraft;
+    api.draftActivityDigest.mockImplementation(() => new Promise((resolve) => {
+      releaseDraft = () => resolve({
+        entry: entryFor(TODAY, 'drafted content'),
+        drafted: true,
+        usedLlm: false,
+      });
+    }));
+    await renderTab();
+
+    fireEvent.click(screen.getByLabelText('Draft activity digest'));
+    // Switch to yesterday while the draft is still in flight.
+    fireEvent.click(screen.getByTitle('Previous day'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(editor().value).toBe('old day');
+
+    // The draft resolves after the switch — it must not overwrite yesterday's
+    // textarea/entry, only reflect the write to today in the history summary
+    // and tell the user where the result actually landed.
+    await act(async () => { releaseDraft(); await vi.advanceTimersByTimeAsync(0); });
+    expect(editor().value).toBe('old day');
+    expect(mockToast.success).toHaveBeenCalledWith(expect.stringMatching(/^Draft saved to /));
+  });
+
+  it('applies a Draft response normally when the user stays on the same day', async () => {
+    api.draftActivityDigest.mockResolvedValue({
+      entry: entryFor(TODAY, 'drafted content'),
+      drafted: true,
+      usedLlm: true,
+    });
+    await renderTab();
+
+    fireEvent.click(screen.getByLabelText('Draft activity digest'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(editor().value).toBe('drafted content');
+    expect(mockToast.success).toHaveBeenCalledWith('Drafted with AI narrative');
+  });
+
+  it('does not apply a Quick Append response to a day the user switched away from', async () => {
+    let releaseAppend;
+    api.appendDailyLog.mockImplementation(() => new Promise((resolve) => {
+      releaseAppend = () => resolve({ entry: entryFor(TODAY, 'existing\n\nappended text') });
+    }));
+    await renderTab();
+
+    fireEvent.change(screen.getByLabelText('Quick append a paragraph to the daily log'), {
+      target: { value: 'appended text' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Append' }));
+    fireEvent.click(screen.getByTitle('Previous day'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(editor().value).toBe('old day');
+
+    await act(async () => { releaseAppend(); await vi.advanceTimersByTimeAsync(0); });
+    expect(editor().value).toBe('old day');
+    expect(mockToast).toHaveBeenCalledWith(expect.stringMatching(/^Appended to /), expect.anything());
+  });
+});
+
 // The toolbar used to be one flat `flex-wrap` row of 11 controls, which spilled
 // into 4+ stacked rows on a 375px viewport and pushed the textarea below the
 // fold (#3526). jsdom has no layout engine, so these assert the structure that
