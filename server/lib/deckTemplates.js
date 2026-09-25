@@ -191,6 +191,21 @@ const PLAYING_SUIT_SHAPES = Object.freeze({
   clubs: Object.freeze({ color: 'black', noun: 'club', shape: 'three rounded lobes and a short stem' }),
 });
 
+// The traditional pip layout for each numbered rank. Naming the arrangement
+// gives an image model a concrete structure to fill, which it follows far more
+// reliably than a bare count — "exactly 6" alone kept rendering 8–10 pips.
+const PIP_LAYOUTS = Object.freeze({
+  2: 'one pip at the top center and one at the bottom center',
+  3: 'a single vertical column of three pips down the center',
+  4: 'two vertical columns of two pips, one pip near each corner of the central field',
+  5: 'two vertical columns of two pips plus one pip in the exact center',
+  6: 'two vertical columns of three pips, left and right, with nothing between them',
+  7: 'two vertical columns of three pips plus one pip centered between the top and middle rows',
+  8: 'two vertical columns of three pips plus two center pips, one between the top and middle rows and one between the middle and bottom rows',
+  9: 'two vertical columns of four pips plus one pip in the exact center',
+  10: 'two vertical columns of four pips plus two center pips, one in the upper gap and one in the lower gap',
+});
+
 /**
  * The fixed visual identity a playing-card render must preserve. The stable
  * roster key is authoritative, so this also repairs renders from older saved
@@ -208,12 +223,13 @@ export function deckCardIdentityPrompt(deck, card) {
 
   const pip = PLAYING_SUIT_SHAPES[suitKey];
   const cardName = `${rank.name} of ${suit.name}`;
-  const cornerIndex = `Both corner indices show the exact rank ${rankKey} beside one matching ${suit.symbol} suit mark.`;
+  const cornerIndex = `Both corner indices show the exact rank ${rankKey} beside one small matching ${suit.symbol} suit mark.`;
   if (rankKey === 'A') {
-    return `Fixed identity: ${cardName}. Show one large ornate ${pip.color} ${pip.noun} emblem (${suit.symbol}), shaped as a ${pip.shape}, in the center; do not repeat it as a pip field. ${cornerIndex} Show no other suit.`;
+    return `Fixed identity: ${cardName}. Show one large ornate ${pip.color} ${pip.noun} emblem (${suit.symbol}), shaped as a ${pip.shape}, in the center; do not repeat it as a pip field. ${cornerIndex} Apart from that emblem and the two corner marks, no other ${pip.noun} shapes appear anywhere. Show no other suit.`;
   }
   if (/^\d+$/.test(rankKey)) {
-    return `Fixed identity: ${cardName}. Show exactly ${rankKey} separate ${pip.color} ${pip.noun}-shaped pips in the central field, each a ${pip.shape}; count them literally, with none missing or added. ${cornerIndex} Show no other suit or pip count.`;
+    const total = Number(rankKey) + 2;
+    return `Fixed identity: ${cardName}. Exactly ${rankKey} large ${pip.color} ${pip.noun} pips (${suit.symbol}), each a ${pip.shape}, printed flat on the card face in the classic playing-card arrangement: ${PIP_LAYOUTS[rankKey]}. The pips are graphic suit symbols, not objects in the scene; any illustration sits behind or between them and contains no ${pip.noun} shapes. ${cornerIndex} The whole card shows exactly ${total} ${pip.noun} symbols in total (${rankKey} pips plus the 2 corner marks) and no ${pip.noun} motifs in the border, background or scene. Show no other suit.`;
   }
   return `Fixed identity: ${cardName}. Show one full ${rank.name.toLowerCase()} figure as the central subject, with ${pip.color} ${pip.noun} emblems shaped as a ${pip.shape}. ${cornerIndex} Do not replace the face rank with a numbered pip field or show another suit.`;
 }
@@ -352,7 +368,7 @@ export function composeCardRenderPrompt(deck, card) {
     ? [identity, trimmed(card?.prompt)].filter(Boolean).join(' ')
     : [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
   const body = [layout, orientation, subject].filter(Boolean).join('. ');
-  const identityNegative = identity ? 'wrong card rank, wrong card suit, incorrect pip count, missing pips, extra pips' : '';
+  const identityNegative = identity ? 'wrong card rank, wrong card suit, incorrect pip count, missing pips, extra pips, extra suit symbols, suit symbols in the border or background, pips disguised as scene objects' : '';
   const cardNegative = [trimmed(card?.negativePrompt), orientationNegative, identityNegative].filter(Boolean).join(', ');
   const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
   return { ...composed, parts: { style, layout, orientation, subject } };

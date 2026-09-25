@@ -126,8 +126,8 @@ export function buildCardPromptsPrompt({ deck, roster, targets, universe }) {
     ? `${buildUniverseStyleContext(universe, { includePremise: true, includeEmbrace: false, escape: true, headerSuffix: 'the deck illustrates this universe' })}\n# Canon this deck draws on\n${renderCanonRoster(universe) || '(none)'}\n`
     : '';
   const kindRules = deck.kind === DECK_KIND.TAROT
-    ? '- Keep each card recognizable as its tarot archetype (use the traditional motif as the skeleton) while dressing it in the deck\'s world; numbered pips show that many of the suit\'s emblem arranged meaningfully.'
-    : '- Playing-card identity is exact: for each numbered rank 2–10, describe exactly that many distinct pips of the named suit; name the suit shape and color, and never add, omit or substitute pips. Aces show one large suit pip, face cards show the named rank as a full figure, and Jokers are jesters of this world.';
+    ? '- Keep each card recognizable as its tarot archetype (use the traditional motif as the skeleton) while dressing it in the deck\'s world; numbered pips show that many of the suit\'s emblem arranged meaningfully.\n- Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.'
+    : '- Playing-card identity is exact: for each numbered rank 2–10, state exactly that many pips of the named suit in the classic arrangement given on its target line, with the suit shape and color; never add, omit or substitute pips. Pips are flat printed suit symbols on the card face — never disguise them as scene objects (lanterns, pennants, windows, leaves), and never put any other suit-shaped object in the scene, border or background, because every extra suit shape reads as an extra pip. The world or canon scene is a restrained vignette behind or between the pips. Aces show one large suit pip, face cards show the named rank as a full figure, and Jokers are jesters of this world.\n- Cards of one suit share a visual through-line (a recurring setting, color accent or non-suit-shaped emblem) so the suit reads as a family.';
   const targetLines = targets.map((c) => {
     const canon = c.canonRef?.name ? ` → depict ${safe(c.canonRef.name)} (${c.canonRef.kind})` : '';
     const identity = deckCardIdentityPrompt(deck, c);
@@ -148,9 +148,8 @@ Return a SINGLE JSON object: { "prompts": [ { "key": "<card key>", "prompt": "<s
 # Rules
 - "prompt" describes the SUBJECT of the card only — figures, pose, setting, symbols, composition, the suit emblem count — as comma-separated renderable phrases. The deck's style tokens, shared layout and face-orientation instructions are prepended automatically at render time, so do NOT repeat style, medium, palette, border, index/title or orientation instructions.
 ${kindRules}
-- For playing cards, the REQUIRED VISUAL IDENTITY on each target line is authoritative; include its exact pip count and suit description in the subject prompt even when the canon scene or visual motif suggests another arrangement.
+- For playing cards, the REQUIRED VISUAL IDENTITY on each target line is authoritative; open the subject prompt with its exact pip count, arrangement and suit description even when the canon scene or visual motif suggests another arrangement.
 - When a card is cast with a canon entry, depict that entry faithfully to its description; otherwise invent a subject that belongs in this deck's world.
-- Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.
 - No text instructions, no camera jargon. Never use double-quote characters inside a prompt string.
 - Output JUST the JSON object — no markdown, no commentary.`;
 }
