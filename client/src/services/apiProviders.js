@@ -1,29 +1,86 @@
 import { request } from './apiCore.js';
+import socket from './socket.js';
+import toast from '../components/ui/Toast';
 
 // Providers
-// `options` (e.g. { silent: true }) lets callers that own their own error UI
-// suppress the helper's default error toast.
-export const getProviders = (options) => request('/providers', options);
+let generation = 0;
+let snapshot = null;
+let expiresAt = 0;
+let pending = null;
+
+const invalidateProviders = () => {
+  generation += 1;
+  snapshot = null;
+  pending = null;
+  expiresAt = 0;
+};
+let listenersInstalled = false;
+const listenForProviderChanges = () => {
+  if (listenersInstalled) return;
+  socket.on('providers:changed', invalidateProviders);
+  socket.on('connect', invalidateProviders);
+  listenersInstalled = true;
+};
+
+const providerMutation = (path, options) => request(path, options).then(result => {
+  invalidateProviders();
+  return result;
+});
+
+// The shared request has no caller's signal: aborting one picker must not
+// cancel another. Toasting remains per caller, including mixed silent callers.
+export const getProviders = (options = {}) => {
+  listenForProviderChanges();
+  const { fresh = false, signal, silent = false, ...rest } = options;
+  if (fresh) invalidateProviders();
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+  if (!snapshot || Date.now() >= expiresAt) {
+    if (!pending) {
+      const readGeneration = generation;
+      const read = request('/providers', { ...rest, silent: true }).then(data => {
+        if (readGeneration === generation) {
+          snapshot = data;
+          expiresAt = Date.now() + 60_000;
+        }
+        return data;
+      }).finally(() => { if (pending === read) pending = null; });
+      pending = read;
+    }
+  }
+  const read = snapshot && Date.now() < expiresAt ? Promise.resolve(snapshot) : pending;
+  const detached = signal ? Promise.race([
+    read,
+    new Promise((_, reject) => {
+      const abort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', abort, { once: true });
+      read.finally(() => signal.removeEventListener('abort', abort)).catch(() => {});
+    }),
+  ]) : read;
+  return detached.then(data => structuredClone(data), error => {
+    if (!silent && error?.name !== 'AbortError' && error?.code !== 'AUTH_REQUIRED') toast.error(error.message);
+    throw error;
+  });
+};
 export const getActiveProvider = () => request('/providers/active');
-export const setActiveProvider = (id) => request('/providers/active', {
+export const setActiveProvider = (id) => providerMutation('/providers/active', {
   method: 'PUT',
   body: JSON.stringify({ id })
 });
-export const createProvider = (data) => request('/providers', {
+export const createProvider = (data) => providerMutation('/providers', {
   method: 'POST',
   body: JSON.stringify(data)
 });
-export const updateProvider = (id, data, options = {}) => request(`/providers/${id}`, {
+export const updateProvider = (id, data, options = {}) => providerMutation(`/providers/${id}`, {
   method: 'PUT',
   body: JSON.stringify(data),
   ...options,
 });
-export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
+export const deleteProvider = (id) => providerMutation(`/providers/${id}`, { method: 'DELETE' });
 // Mint the TUI half of an existing CLI provider's harness. No body: the sibling
 // is built from the stored record plus the harness recipe's interactive argv,
 // so the connection details never get retyped (and never get retyped WRONG,
 // which would leave two unrelated routes instead of one CLI / TUI card).
-export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id}/modes/tui`, {
+export const addProviderTuiMode = (id, options = {}) => providerMutation(`/providers/${id}/modes/tui`, {
   method: 'POST',
   ...options,
 });
@@ -38,7 +95,7 @@ export const getProviderCatalog = (options) => request('/providers/catalog', opt
 // Presets (#7565): "Convert to derived preset" stamps a legacy record with the
 // service it already runs on — refused (409) when re-deriving it would change
 // how it runs.
-export const deriveProviderPreset = (id, options = {}) => request(`/providers/${encodeURIComponent(id)}/derive`, {
+export const deriveProviderPreset = (id, options = {}) => providerMutation(`/providers/${encodeURIComponent(id)}/derive`, {
   method: 'POST',
   ...options,
 });
@@ -46,7 +103,7 @@ export const deriveProviderPreset = (id, options = {}) => request(`/providers/${
 // composite id (plus the model/effort the user picked while composing) into a
 // stored, enabled derived preset. A 400 names the composite's own ineligibility
 // code/reason; never a stored record that cannot run.
-export const createProviderPreset = (body, options) => request('/providers/presets', {
+export const createProviderPreset = (body, options) => providerMutation('/providers/presets', {
   method: 'POST',
   body: JSON.stringify(body),
   ...options,
@@ -62,7 +119,7 @@ export const testProvider = (id) => request(`/providers/${id}/test`, { method: '
 // and toggling are local reads and writes.
 
 /** The user's word on one harness. `direct` cannot be switched off; the server refuses it. */
-export const setProviderHarnessEnabled = (harnessId, enabled, options) => request(
+export const setProviderHarnessEnabled = (harnessId, enabled, options) => providerMutation(
   `/providers/harnesses/${encodeURIComponent(harnessId)}`,
   { method: 'PUT', body: JSON.stringify({ enabled }), ...options },
 );
@@ -70,7 +127,7 @@ export const setProviderHarnessEnabled = (harnessId, enabled, options) => reques
 /** The credential-bootstrap table, keyed by slug — command lines included, for the editor. */
 export const getProviderBootstraps = (options) => request('/providers/bootstraps', options);
 /** Replace the whole table. Saving never spawns anything. */
-export const saveProviderBootstraps = (bootstraps, options) => request('/providers/bootstraps', {
+export const saveProviderBootstraps = (bootstraps, options) => providerMutation('/providers/bootstraps', {
   method: 'PUT', body: JSON.stringify({ bootstraps }), ...options,
 });
 
@@ -79,7 +136,7 @@ export const getProviderServiceDefinitions = (options) => request('/providers/se
 /** Every service instance, sanitized. */
 export const getProviderServices = (options) => request('/providers/services', options);
 /** Create an instance from a definition. Nothing is probed; the catalog starts `unknown`. */
-export const createProviderService = (body, options) => request('/providers/services', {
+export const createProviderService = (body, options) => providerMutation('/providers/services', {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 /**
@@ -87,27 +144,27 @@ export const createProviderService = (body, options) => request('/providers/serv
  * is required; a 409 means the row moved. Omit a credential key to preserve it,
  * send `null` to clear it — never send back the redacted placeholder.
  */
-export const updateProviderService = (slug, body, options) => request(
+export const updateProviderService = (slug, body, options) => providerMutation(
   `/providers/services/${encodeURIComponent(slug)}`,
   { method: 'PATCH', body: JSON.stringify(body), ...options },
 );
 /** Delete an instance no preset uses. Refused with a 409 while one still does. */
-export const deleteProviderService = (slug, options) => request(
+export const deleteProviderService = (slug, options) => providerMutation(
   `/providers/services/${encodeURIComponent(slug)}`,
   { method: 'DELETE', ...options },
 );
 /** List the instance's models through its definition's strategy — an explicit discovery request. */
-export const refreshProviderServiceCatalog = (slug, options) => request(
+export const refreshProviderServiceCatalog = (slug, options) => providerMutation(
   `/providers/services/${encodeURIComponent(slug)}/refresh-catalog`,
   { method: 'POST', ...options },
 );
-export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
+export const refreshProviderModels = (id, options) => providerMutation(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
 // Stored model pins naming a model their provider no longer lists (#7315).
 // Derived on read, so it reflects a pin cleared a moment ago without a refresh.
 export const getModelPinWarnings = (options) => request('/providers/model-pins', options);
 // Clear ONE stale pin back to "inherit". PortOS never rewrites a user's pin on
 // its own — it surfaces the retirement and this is the user's one-click undo.
-export const clearModelPin = (pinId, options) => request('/providers/model-pins/clear', {
+export const clearModelPin = (pinId, options) => providerMutation('/providers/model-pins/clear', {
   method: 'POST',
   body: JSON.stringify({ pinId }),
   ...options,

@@ -272,7 +272,7 @@ export default function AIProviders() {
     setLoadError(false);
     let providersFailed = false;
     const [providersData, appsData, statusData, orchestrationProfilesData] = await Promise.all([
-      api.getProviders().catch(() => {
+      api.getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),

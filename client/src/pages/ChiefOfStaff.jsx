@@ -140,7 +140,6 @@ export default function ChiefOfStaff() {
   queryRef.current = queryKey;
   const inFlight = useRef(null);
   const queuePending = useRef(null);
-  const providersReadRef = useRef(null);
   const appsReadRef = useRef(null);
 
   const [status, setStatus] = useState(null);
@@ -321,8 +320,8 @@ export default function ChiefOfStaff() {
         applyHealth(data, { merge: true });
         return data;
       });
-      // Reference data commits independently and remains cached until invalidated.
-      const providersRead = needsProviders ? readReference(providersReadRef, api.getProviders, applyProviders) : Promise.resolve();
+      // The API shares its provider snapshot across all pages and pickers.
+      const providersRead = needsProviders ? api.getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
       // Same rationale as providersRead above: apps commits on its own settle
       // instead of waiting on the slower siblings in secondaryRead.
       const appsRead = needsApps ? readReference(appsReadRef, api.getApps, applyApps) : Promise.resolve();
@@ -458,7 +457,6 @@ export default function ChiefOfStaff() {
     if (socket.connected) subscribe();
     const reconnect = () => {
       subscribe();
-      providersReadRef.current = null;
       appsReadRef.current = null;
       fetchData();
       setCompletedRevision(value => value + 1);
@@ -611,8 +609,7 @@ export default function ChiefOfStaff() {
       if (needsApps) readReference(appsReadRef, api.getApps, applyApps);
     }, 400);
     const handleProvidersChanged = coalesce(() => {
-      providersReadRef.current = null;
-      if (needsProviders) readReference(providersReadRef, api.getProviders, applyProviders);
+      if (needsProviders) api.getProviders().then(applyProviders).catch(() => {});
     }, 400);
     const handleConfigChanged = () => fetchData();
     socket.on('providers:changed', handleProvidersChanged);
