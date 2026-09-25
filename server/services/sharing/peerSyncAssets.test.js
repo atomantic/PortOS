@@ -413,6 +413,16 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
     expect(listAssetFiles('audio')).toEqual([]);
   });
 
+  it('rejects unsupported extensions even when the pull worker is called directly', async () => {
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'peer.svg', kind: 'image', sha256: 'unused' },
+      { filename: 'peer.html', kind: 'image', sha256: 'unused' },
+    ]));
+    expect(peerFetch).not.toHaveBeenCalled();
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('images')).toEqual([]);
+  });
+
   it('discards a truncated response without leaving destination or temporary files', async () => {
     const body = Buffer.from('partial');
     vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(body, body.length + 10));

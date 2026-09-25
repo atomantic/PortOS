@@ -136,6 +136,18 @@ describe('the server-owned namespace terminators', () => {
     expect(res.text).toBe('PNGBYTES');
   });
 
+  it('sandboxes directly opened peer asset files on every media mount', async () => {
+    for (const dir of ['images', 'image-refs', 'videos', 'music', 'audio']) {
+      mkdirSync(join(tempRoot, dir), { recursive: true });
+      writeFileSync(join(tempRoot, dir, 'peer.html'), '<script>window.exploited = true</script>');
+      const res = await request(app).get(`/data/${dir}/peer.html`);
+      expect(res.status, dir).toBe(200);
+      expect(res.headers['x-content-type-options'], dir).toBe('nosniff');
+      expect(res.headers['content-security-policy'], dir).toContain('sandbox');
+      expect(res.headers['content-security-policy'], dir).toContain("default-src 'none'");
+    }
+  });
+
   it('serves a local voice-profile benchmark from its dedicated mount', async () => {
     const res = await request(app).get('/data/voice-profiles/voice-profile-1/benchmarks/v1/01-identity.wav');
     expect(res.status).toBe(200);

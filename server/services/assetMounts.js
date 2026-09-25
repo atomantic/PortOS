@@ -28,7 +28,15 @@ import { escapeRegExp } from '../lib/textUtils.js';
 // URLs and relies on HTTP Range to resume partial downloads over flaky
 // Tailnet links — losing range support here would silently force every
 // retry to restart from byte 0 on a multi-MB PNG / video.
-const ASSET_STATIC_OPTS = { acceptRanges: true };
+const ASSET_STATIC_OPTS = {
+  acceptRanges: true,
+  setHeaders: (res) => {
+    // A peer can supply asset bytes. Keep even a directly opened HTML/SVG file
+    // from executing with the PortOS origin's host-control privileges.
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self'; style-src 'unsafe-inline'");
+  },
+};
 
 // Vite names every chunk, entry, stylesheet and imported asset it emits under
 // `dist/assets/` by content hash (`index-B5J1S4I5.js`), so the bytes behind one
