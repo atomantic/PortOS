@@ -64,6 +64,9 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
     await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
     const initialCalls = getTombstoneSweepStatus.mock.calls.length;
 
+    // The page data can render before the child subscription's passive effect
+    // runs, especially while the full client suite is under load.
+    await waitFor(() => expect(socket.on).toHaveBeenCalledWith('connect', expect.any(Function)));
     const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
     expect(connectHandler).toBeTypeOf('function');
     socket.emit.mockClear();
