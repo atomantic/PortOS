@@ -66,7 +66,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
-import { updateTask, getAgents } from './cos.js';
+import { updateTask, addTask, getAgents } from './cos.js';
 import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
@@ -241,6 +241,20 @@ describe('prepareAgentWorkspace', () => {
     expect(r.outcome).toBe('deferred');
     expect(r.deferReason).toBe('git-conflict');
     expect(r.branch).toBe('feature/x');
+    // A timed pause, not `pending` — pending was re-dequeued every few seconds.
+    const [, patch] = updateTask.mock.calls.find(([id]) => id === 't-conflict');
+    expect(patch.status).toBe('blocked');
+    expect(patch.metadata.blockedCategory).toBe('git-conflict-wait');
+    expect(Date.parse(patch.metadata.cooldownUntil)).toBeGreaterThan(Date.now());
+    expect(addTask.mock.calls[0][0].metadata).toEqual({ gitConflictResolution: true });
+  });
+
+  it('lets the conflict-resolver task skip the pull it exists to fix', async () => {
+    ensureLatest.mockResolvedValue({ conflict: true, branch: 'main', error: 'rebase failed' });
+    const task = { id: 't-resolver', taskType: 'internal', metadata: { gitConflictResolution: true } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-r', task });
+    expect(r.outcome).toBe('ready');
+    expect(ensureLatest).not.toHaveBeenCalled();
   });
 
   it('proceeds in the shared workspace when the pull is clean and no conflict is detected', async () => {

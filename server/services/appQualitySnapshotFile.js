@@ -25,11 +25,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { atomicWrite } from '../lib/fileCore.js';
 import {
   APP_QUALITY_LEGACY_SNAPSHOT_FILENAME,
+  APP_QUALITY_SNAPSHOT_FILENAME,
   classifyQualitySnapshot,
   qualityFileFromWireSnapshot,
 } from './appQualitySnapshotFormat.js';
 
-export const APP_QUALITY_SNAPSHOT_FILENAME = '.quality.json';
+export { APP_QUALITY_SNAPSHOT_FILENAME };
 export const APP_QUALITY_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 export const QUALITY_SNAPSHOT_BRANCH = 'portos/quality-snapshot';
 
