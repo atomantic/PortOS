@@ -2,80 +2,42 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import * as path from 'path';
 
-describe('memoryClassifier — config env-derived defaults', () => {
+// With no shipped seed (#8444), an install without data/memory-classifier-config.json
+// must get the endpoint derived from LM_STUDIO_URL rather than a hard-coded localhost.
+describe('memoryClassifier getConfig — env-derived endpoint', () => {
   let tempDir;
+  let oldLmStudioUrl;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'memory-classifier-test-'));
-    // Mock PATHS.data to point to our temp directory
+    oldLmStudioUrl = process.env.LM_STUDIO_URL;
     vi.resetModules();
+    vi.doMock('../lib/fileUtils.js', async () => {
+      const actual = await vi.importActual('../lib/fileUtils.js');
+      return { ...actual, PATHS: { ...actual.PATHS, data: tempDir } };
+    });
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    vi.doUnmock('../lib/fileUtils.js');
     vi.resetModules();
+    if (oldLmStudioUrl === undefined) delete process.env.LM_STUDIO_URL;
+    else process.env.LM_STUDIO_URL = oldLmStudioUrl;
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('honors LM_STUDIO_URL env var when no config file exists', async () => {
-    const customLmStudioUrl = 'http://192.168.1.100:1234';
-    const oldLmStudioUrl = process.env.LM_STUDIO_URL;
-
-    try {
-      process.env.LM_STUDIO_URL = customLmStudioUrl;
-
-      // Dynamically import with the env var set
-      const module = await import('./memoryClassifier.js');
-      const DEFAULT_CONFIG = module.DEFAULT_CONFIG;
-
-      // The endpoint should be derived from LM_STUDIO_URL
-      const expectedEndpoint = `${customLmStudioUrl}/v1/chat/completions`;
-      expect(DEFAULT_CONFIG.endpoint).toBe(expectedEndpoint);
-    } finally {
-      if (oldLmStudioUrl) {
-        process.env.LM_STUDIO_URL = oldLmStudioUrl;
-      } else {
-        delete process.env.LM_STUDIO_URL;
-      }
-    }
+  it('uses LM_STUDIO_URL when no config file exists', async () => {
+    process.env.LM_STUDIO_URL = 'http://192.0.2.10:1234/v1/';
+    const { getConfig } = await import('./memoryClassifier.js');
+    const config = await getConfig();
+    expect(config.endpoint).toBe('http://192.0.2.10:1234/v1/chat/completions');
   });
 
-  it('uses default endpoint when LM_STUDIO_URL is not set', async () => {
-    const oldLmStudioUrl = process.env.LM_STUDIO_URL;
-
-    try {
-      delete process.env.LM_STUDIO_URL;
-
-      // Dynamically import with no env var
-      const module = await import('./memoryClassifier.js');
-      const DEFAULT_CONFIG = module.DEFAULT_CONFIG;
-
-      expect(DEFAULT_CONFIG.endpoint).toBe('http://localhost:1234/v1/chat/completions');
-    } finally {
-      if (oldLmStudioUrl) {
-        process.env.LM_STUDIO_URL = oldLmStudioUrl;
-      }
-    }
-  });
-
-  it('strips trailing slashes and /v1 from LM_STUDIO_URL', async () => {
-    const oldLmStudioUrl = process.env.LM_STUDIO_URL;
-
-    try {
-      process.env.LM_STUDIO_URL = 'http://192.168.1.100:1234/v1/';
-
-      // Force re-evaluation by dynamic import
-      const module = await import('./memoryClassifier.js');
-      const DEFAULT_CONFIG = module.DEFAULT_CONFIG;
-
-      expect(DEFAULT_CONFIG.endpoint).toBe('http://192.168.1.100:1234/v1/chat/completions');
-    } finally {
-      if (oldLmStudioUrl) {
-        process.env.LM_STUDIO_URL = oldLmStudioUrl;
-      } else {
-        delete process.env.LM_STUDIO_URL;
-      }
-    }
+  it('falls back to localhost when LM_STUDIO_URL is unset', async () => {
+    delete process.env.LM_STUDIO_URL;
+    const { getConfig } = await import('./memoryClassifier.js');
+    const config = await getConfig();
+    expect(config.endpoint).toBe('http://localhost:1234/v1/chat/completions');
   });
 });
