@@ -186,6 +186,51 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.negativePrompt.match(/gore/g)).toHaveLength(1);
   });
 
+  it('strips a series style override the browser prepended so the tokens survive exactly once (#8442)', async () => {
+    // Mirrors what `universeStylePreset(universe, series)` composes in the
+    // browser (client/src/lib/universeStylePreset.js, now a re-export of the
+    // server's) for a 'prepend'-mode (the default) series override: the
+    // override leads, the universe embrace tokens trail.
+    const loom = loomWith(lockedBinding);
+    loom.seriesId = 'series-1';
+    const series = { id: 'series-1', universeId: universe.id, stylePromptOverride: 'washed sepia tone', stylePromptOverrideMode: 'prepend' };
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', model: { id: 'gpt-image' }, inputBudget: 4 }),
+      authoredPrompt: 'washed sepia tone. ligne claire, flat matte color fields. A cautious arrival',
+      loadSeries: vi.fn(async () => series),
+      ...deps(loom),
+    });
+
+    expect(result.prompt.startsWith('Universe style: washed sepia tone. ligne claire, flat matte color fields')).toBe(true);
+    expect(result.prompt.match(/ligne claire/g)).toHaveLength(1);
+    expect(result.prompt.match(/flat matte color fields/g)).toHaveLength(1);
+    expect(result.prompt.match(/washed sepia tone/g)).toHaveLength(1);
+    expect(result.prompt).toContain('A cautious arrival');
+  });
+
+  it('drops the universe embrace tokens entirely for a series in override mode (#8442)', async () => {
+    const loom = loomWith(lockedBinding);
+    loom.seriesId = 'series-1';
+    const series = { id: 'series-1', universeId: universe.id, stylePromptOverride: 'washed sepia tone', stylePromptOverrideMode: 'override' };
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' },
+      kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', model: { id: 'gpt-image' }, inputBudget: 4 }),
+      authoredPrompt: 'washed sepia tone. A cautious arrival',
+      loadSeries: vi.fn(async () => series),
+      ...deps(loom),
+    });
+
+    expect(result.prompt.startsWith('Universe style: washed sepia tone')).toBe(true);
+    expect(result.prompt).not.toContain('ligne claire');
+    expect(result.prompt).not.toContain('flat matte color fields');
+    expect(result.prompt).toContain('A cautious arrival');
+    // Avoid tokens still come from the universe regardless of override mode.
+    expect(result.negativePrompt).toContain('photoreal');
+  });
+
   it('still contributes the curated style tokens a render prompt has not already named', async () => {
     const loom = loomWith(lockedBinding);
     const result = await compileFableLoomVisualRequest({
