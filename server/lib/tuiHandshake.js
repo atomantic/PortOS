@@ -27,6 +27,9 @@ import { detectTuiRetryBanner, describeTuiRetryStall } from './aiToolkit/errorDe
 export const READY_POLL_INTERVAL_MS = 300;
 export const READY_IDLE_THRESHOLD_MS = 1200;
 export const PASTE_DEADLINE_MS = 10000;
+// Give Claude Code time to switch into /low-priority mode before retrying a
+// prompt rejected by its session limit. Shared by both TUI execution paths.
+export const CLAUDE_LOW_PRIORITY_RESUBMIT_DELAY_MS = 1500;
 // How long to wait for claude's POSITIVE input-ready footer (createInputReadyTracker)
 // before giving up and surfacing a startup failure. Generous because a cold
 // claude start can spend many seconds on banner + MCP-server + model init
