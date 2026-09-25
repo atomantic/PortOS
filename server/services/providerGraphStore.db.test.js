@@ -170,6 +170,28 @@ describe.skipIf(!runDb)('ai_* connection graph store', () => {
     expect(await store.deleteConnection(conn.id)).toEqual({ deleted: true });
   });
 
+  it('folds a duplicate service: the binding moves on its freed variant key and the emptied row goes', async () => {
+    // Both rows carry a `default` Claude binding, so the move must land on the
+    // variant key the planner freed or the partial unique index refuses it.
+    const keeper = connection();
+    const twin = connection();
+    const kept = binding(keeper.id);
+    const moved = binding(twin.id);
+    await store.writeGraph({ connections: [keeper, twin], bindings: [kept, moved], routes: [route(moved.id, 'claude-ollama')] });
+
+    await store.mergeServiceInstances({
+      keeper: { ...keeper, label: 'Ollama', catalog: { state: 'known', models: ['example-model', 'other-model'] } },
+      absorbedIds: [twin.id],
+      bindingMoves: [{ bindingId: moved.id, variantKey: `variant:${moved.id}` }],
+    });
+
+    const read = await store.readGraph();
+    expect(read.connections.map((row) => row.id)).toEqual([keeper.id]);
+    expect(read.connections[0]).toMatchObject({ label: 'Ollama', revision: 2, catalog: { models: ['example-model', 'other-model'] } });
+    expect(read.bindings.find((row) => row.id === moved.id)).toMatchObject({ connectionId: keeper.id, variantKey: `variant:${moved.id}` });
+    expect(read.routes[0]).toMatchObject({ providerId: 'claude-ollama', bindingId: moved.id });
+  });
+
   it('stages, then acknowledges, a projection', async () => {
     const conn = connection();
     const bind = binding(conn.id);

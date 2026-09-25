@@ -25,6 +25,7 @@ const store = vi.hoisted(() => ({
   readGraph: vi.fn(async () => structuredClone(graphState.current)),
   applyReconciliation: vi.fn(async () => {}),
   applyServiceColumnBackfill: vi.fn(async () => {}),
+  mergeServiceInstances: vi.fn(async () => {}),
 }));
 vi.mock('./providerGraphStore.js', () => store);
 vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
@@ -147,8 +148,10 @@ describe('derivePreset', () => {
     await providerService().createProvider(legacy);
     // The record is unmapped, so the pass its save fires imports it — as its
     // own fragment, a second instance of the daemon (import never auto-links),
-    // which is the service it is then derived from in that same pass. The store
-    // double records the plan and the next read serves it back.
+    // which is the service it is then derived from in that same pass; the same
+    // pass then folds that copy into the `ollama` instance it duplicates, so
+    // the preset ends up naming the one service. The store double records the
+    // plan and the next read serves it back.
     store.applyReconciliation.mockImplementation(async (plan) => {
       const imported = plan.imports;
       graphState.current = {
@@ -158,7 +161,8 @@ describe('derivePreset', () => {
       };
     });
     const derived = await presets.derivePreset('claude-ollama');
-    expect(derived).toMatchObject({ harnessId: 'claude', method: 'cli', serviceId: 'ollama-2', command: 'claude', args: ['--print'] });
+    expect(derived).toMatchObject({ harnessId: 'claude', method: 'cli', serviceId: 'ollama', command: 'claude', args: ['--print'] });
+    expect(store.mergeServiceInstances).toHaveBeenCalledWith(expect.objectContaining({ absorbedSlugs: ['ollama-2'], keeper: expect.objectContaining({ slug: 'ollama' }) }));
 
     await providerService().createProvider({ ...legacy, id: 'claude-path', command: '/opt/bin/claude' });
     await expect(presets.derivePreset('claude-path')).rejects.toMatchObject({ status: 409, code: 'PRESET_NOT_DERIVABLE' });
