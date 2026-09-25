@@ -14,14 +14,18 @@ services:
     ports:
       - "127.0.0.1:${PGPORT_DOCKER:-5561}:5432"
     environment:
-      POSTGRES_DB: portos
-      POSTGRES_USER: portos
+      POSTGRES_DB: ${PGDATABASE:-portos}
+      POSTGRES_USER: ${PGUSER:-portos}
       POSTGRES_PASSWORD: ${PGPASSWORD:-portos}
     volumes:
       - portos-pgdata:/var/lib/postgresql/data
       - ./server/scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U portos"]
+      # $$ escapes Compose's own ${...} interpolation so the shell inside the
+      # container substitutes it from POSTGRES_USER (set above, in the
+      # container's own env) instead — keeping the probe's user in sync with
+      # whatever POSTGRES_USER actually provisioned.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-portos}"]
       interval: 5s
       timeout: 3s
       retries: 5
