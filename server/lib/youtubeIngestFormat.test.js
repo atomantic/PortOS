@@ -8,6 +8,10 @@ import {
   buildIngestNote,
   buildAgentTaskContext,
   resolveObsidianPointer,
+  compareIngestsDesc,
+  encodeIngestCursor,
+  decodeIngestCursor,
+  paginateIngests,
 } from './youtubeIngestFormat.js';
 
 const META = {
@@ -246,5 +250,68 @@ describe('resolveObsidianPointer', () => {
     expect(resolveObsidianPointer({
       written: null, vaultId: 'v1', notePath: 'x.md', prior: null,
     })).toBeNull();
+  });
+});
+
+describe('ingest history cursor pagination (#8267)', () => {
+  // Two records ingested in the same instant — the case that would repeat or
+  // skip a row if the sort/cursor only compared `ingestedAt`.
+  const RECORDS = [
+    { videoId: 'aaaaaaaaaaa', ingestedAt: '2026-01-03T00:00:00.000Z' },
+    { videoId: 'ccccccccccc', ingestedAt: '2026-01-02T00:00:00.000Z' },
+    { videoId: 'bbbbbbbbbbb', ingestedAt: '2026-01-02T00:00:00.000Z' },
+    { videoId: 'ddddddddddd', ingestedAt: '2026-01-01T00:00:00.000Z' },
+  ];
+
+  it('sorts newest ingestedAt first, and breaks same-instant ties by videoId descending', () => {
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    expect(sorted.map((r) => r.videoId)).toEqual([
+      'aaaaaaaaaaa', // 01-03
+      'ccccccccccc', // 01-02, c > b
+      'bbbbbbbbbbb', // 01-02
+      'ddddddddddd', // 01-01
+    ]);
+  });
+
+  it('round-trips a cursor through encode/decode', () => {
+    const record = { ingestedAt: '2026-01-02T00:00:00.000Z', videoId: 'ccccccccccc' };
+    const decoded = decodeIngestCursor(encodeIngestCursor(record));
+    expect(decoded).toEqual({ ingestedAt: record.ingestedAt, videoId: record.videoId });
+  });
+
+  it('decodeIngestCursor returns null (never throws) on garbage input', () => {
+    expect(decodeIngestCursor('not-base64url-json')).toBeNull();
+    expect(decodeIngestCursor(Buffer.from(JSON.stringify({ v: 1 })).toString('base64url'))).toBeNull();
+    expect(decodeIngestCursor(Buffer.from(JSON.stringify({ v: 2, ingestedAt: 'x', videoId: 'y' })).toString('base64url'))).toBeNull();
+  });
+
+  it('pages without a cursor, returning a nextCursor keyed to the last row', () => {
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    const page = paginateIngests(sorted, { limit: 2 });
+    expect(page.items.map((r) => r.videoId)).toEqual(['aaaaaaaaaaa', 'ccccccccccc']);
+    expect(decodeIngestCursor(page.nextCursor)).toEqual({ ingestedAt: '2026-01-02T00:00:00.000Z', videoId: 'ccccccccccc' });
+  });
+
+  it('continues from a cursor without repeating or skipping the same-instant tie', () => {
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    const first = paginateIngests(sorted, { limit: 2 });
+    const second = paginateIngests(sorted, { limit: 2, cursor: decodeIngestCursor(first.nextCursor) });
+    expect(second.items.map((r) => r.videoId)).toEqual(['bbbbbbbbbbb', 'ddddddddddd']);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('returns no items once the cursor is past the last record', () => {
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    const lastCursor = { ingestedAt: '2026-01-01T00:00:00.000Z', videoId: 'ddddddddddd' };
+    expect(paginateIngests(sorted, { limit: 10, cursor: lastCursor })).toEqual({ items: [], nextCursor: null });
+  });
+
+  it('tolerates a cursor whose record was deleted between page fetches', () => {
+    // The deleted record sorted between b and d; continuation still resumes
+    // strictly after it rather than erroring or replaying b/c.
+    const sorted = [...RECORDS].sort(compareIngestsDesc);
+    const deletedCursor = { ingestedAt: '2026-01-01T12:00:00.000Z', videoId: 'zzzzzzzzzzz' };
+    const page = paginateIngests(sorted, { limit: 10, cursor: deletedCursor });
+    expect(page.items.map((r) => r.videoId)).toEqual(['ddddddddddd']);
   });
 });
