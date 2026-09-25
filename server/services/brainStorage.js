@@ -1322,7 +1322,28 @@ export const deleteThread = (id) => remove('threads', id);
 // signal (see emitRecordChanged) — it never leaves this instance.
 
 /**
- * Apply a remote record to a store (last-writer-wins by updatedAt)
+ * The LWW rejection for an incoming op whose clock is not newer than ours.
+ *
+ * `local_current` means we already hold exactly the state the op carries — same
+ * LWW clock, same delete-ness — so the op is ALREADY APPLIED here (an echo, or a
+ * delta re-pulled after a crash between our save and our relay append). The
+ * wire-shape of our copy rides along so the caller can relay it if our sync log
+ * lacks it (#8316). Anything else is `local_newer`: a genuinely stale op.
+ */
+function rejectedAgainst(existing, record, incomingIsDelete) {
+  if (existing.updatedAt !== record.updatedAt || isTombstone(existing) !== incomingIsDelete) {
+    return { applied: false, reason: 'local_newer' };
+  }
+  const current = isTombstone(existing)
+    ? { updatedAt: existing.updatedAt, originInstanceId: existing.originInstanceId }
+    : { ...existing };
+  return { applied: false, reason: 'local_current', current };
+}
+
+/**
+ * Apply a remote record to a store (last-writer-wins by updatedAt).
+ * Rejections carry `reason` `local_newer` (stale op) or `local_current` (op
+ * already applied — `current` is our copy in wire shape); see rejectedAgainst.
  */
 export async function applyRemoteRecord(type, id, record, op) {
   const store = storeFor(type);
@@ -1347,7 +1368,7 @@ export async function applyRemoteRecord(type, id, record, op) {
       // new as the incoming delete. The tombstone-vs-tombstone case makes a
       // repeated delete idempotent → not relayed → the echo loop converges.
       if (existing && existing.updatedAt >= record.updatedAt) {
-        return { applied: false, reason: 'local_newer' };
+        return rejectedAgainst(existing, record, true);
       }
       // Tombstone in place even when no local record exists. A delete that
       // arrives before we ever saw a create still leaves a marker, so a later
@@ -1369,7 +1390,7 @@ export async function applyRemoteRecord(type, id, record, op) {
       // resurrection loop. A genuinely newer create (later updatedAt than the
       // tombstone) still wins and legitimately revives the record.
       if (existing && existing.updatedAt >= record.updatedAt) {
-        return { applied: false, reason: 'local_newer' };
+        return rejectedAgainst(existing, record, record._deleted === true);
       }
       // Defense-in-depth: a create carrying `_deleted` (a future peer, or a
       // direct caller bypassing brainSync's reroute) must persist as a proper

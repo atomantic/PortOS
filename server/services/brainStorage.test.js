@@ -35,6 +35,7 @@ vi.mock('./brainSyncLog.js', async () => {
 
 import * as brainStorage from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
+import { applyRemoteChanges } from './brainSync.js';
 import { readJSONFile } from '../lib/fileUtils.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
@@ -174,7 +175,8 @@ describe('brainStorage tombstones', () => {
       'links', 'l1', { updatedAt: ISO('2026-01-01') }, 'delete'
     );
     expect(again.applied).toBe(false);
-    expect(again.reason).toBe('local_newer');
+    // Same clock, same delete-ness: already applied, not stale.
+    expect(again.reason).toBe('local_current');
   });
 
   it('update() treats a tombstone as not-found', async () => {
@@ -204,6 +206,74 @@ describe('brainStorage tombstones', () => {
     expect(await rawRecord('memories', 'old')).toBeUndefined();
     expect((await rawRecord('memories', freshCreated.id))._deleted).toBe(true);
     expect(await brainStorage.getById('memories', live.id)).toMatchObject({ content: 'alive' });
+  });
+});
+
+// What a delta-only (legacy) peer pulling from this instance would receive for
+// one record: every sync-log entry after `sinceSeq` naming it.
+async function relayedEntries(sinceSeq, id) {
+  const { changes } = await brainSyncLog.getChangesSince(sinceSeq, 1000);
+  return changes.filter((c) => c.id === id);
+}
+
+describe('inbound brain changes keep relaying across a crash (#8316)', () => {
+  it('relays a saved-but-unrelayed change when the source re-serves it', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const changes = [
+      { op: 'create', type: 'ideas', id: 'relay-up', record: { title: 'From B', updatedAt: ISO('2026-03-01') }, originInstanceId: 'peer-b' },
+      { op: 'delete', type: 'ideas', id: 'relay-del', record: { updatedAt: ISO('2026-03-02') }, originInstanceId: 'peer-b' },
+    ];
+
+    // The records land, then the relay append is rejected: the call must fail
+    // so the caller keeps its source cursor rather than advancing past them.
+    brainSyncLog.appendChanges.mockRejectedValueOnce(new Error('disk full'));
+    await expect(applyRemoteChanges(changes)).rejects.toThrow('disk full');
+    expect(await brainStorage.getById('ideas', 'relay-up')).toMatchObject({ title: 'From B' });
+    expect((await rawRecord('ideas', 'relay-del'))._deleted).toBe(true);
+    expect(await relayedEntries(sinceSeq, 'relay-up')).toEqual([]);
+
+    // A restart rebuilds the log index from disk, then the source re-serves the
+    // same sequence. LWW skips the re-apply, but the op is relayed.
+    await brainSyncLog.initSyncLog();
+    const retry = await applyRemoteChanges(changes);
+    expect(retry.skipped).toBe(2);
+
+    const up = await relayedEntries(sinceSeq, 'relay-up');
+    expect(up).toHaveLength(1);
+    expect(up[0]).toMatchObject({ op: 'create', record: { title: 'From B', updatedAt: ISO('2026-03-01') } });
+    const del = await relayedEntries(sinceSeq, 'relay-del');
+    expect(del).toHaveLength(1);
+    expect(del[0]).toMatchObject({ op: 'delete', record: { updatedAt: ISO('2026-03-02') } });
+  });
+
+  it('retries a change whose relay already landed without a second log entry', async () => {
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+    const change = { op: 'update', type: 'people', id: 'relay-once', record: { name: 'Bo', updatedAt: ISO('2026-04-01') }, originInstanceId: 'peer-b' };
+
+    await applyRemoteChanges([change]);
+    // Crash before the cursor save: restart, then the source re-serves it —
+    // twice, as another cycle would.
+    await brainSyncLog.initSyncLog();
+    await applyRemoteChanges([change]);
+    await applyRemoteChanges([change]);
+
+    expect(await relayedEntries(sinceSeq, 'relay-once')).toHaveLength(1);
+  });
+
+  it('neither applies nor relays a genuinely stale change', async () => {
+    const local = await brainStorage.create('ideas', { title: 'Local' });
+    const sinceSeq = brainSyncLog.getCurrentSeq();
+
+    const result = await applyRemoteChanges([
+      // Older clock than our copy.
+      { op: 'update', type: 'ideas', id: local.id, record: { title: 'Stale', updatedAt: ISO('2000-01-01') }, originInstanceId: 'peer-b' },
+      // Same clock, but a delete of a record we hold live — not our state.
+      { op: 'delete', type: 'ideas', id: local.id, record: { updatedAt: local.updatedAt }, originInstanceId: 'peer-b' },
+    ]);
+
+    expect(result.skipped).toBe(2);
+    expect(await brainStorage.getById('ideas', local.id)).toMatchObject({ title: 'Local', updatedAt: local.updatedAt });
+    expect(await relayedEntries(sinceSeq, local.id)).toEqual([]);
   });
 });
 

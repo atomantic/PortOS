@@ -106,7 +106,7 @@ describe('brainSync', () => {
 
     expect(appendChanges).toHaveBeenCalledWith([
       { op: 'create', type: 'people', id: 'p1', record: { name: 'A' }, originInstanceId: 'peer-1' }
-    ]);
+    ], { skipLogged: true });
   });
 
   it('does not log skipped changes to sync log', async () => {
