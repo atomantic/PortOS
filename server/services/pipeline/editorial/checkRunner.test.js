@@ -86,6 +86,9 @@ vi.mock('../manuscriptReview.js', () => ({
   seedReviewFromFindings: (...a) => seedReviewFromFindings(...a),
   getReview: async () => reviewState,
 }));
+// A trend snapshot is telemetry owned by editorialScore's own tests; keep this
+// suite's behavioral checks isolated from the install's on-disk data tree.
+vi.mock('../editorialScore.js', () => ({ recordTrendSnapshot: vi.fn().mockResolvedValue({}) }));
 // Reverse-outline source (#1296) — backed by a mutable fixture; default empty so
 // the scene.component-balance check is gated off unless a test populates scenes.
 let outlineState = { scenes: [] };
