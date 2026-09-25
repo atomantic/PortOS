@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, it, expect } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import migration from './398-apple-video-model-options.js';
@@ -9,8 +9,6 @@ let path;
 beforeEach(async () => {
   rootDir = await mkdtemp(join(tmpdir(), 'video-options-upgrade-'));
   await mkdir(join(rootDir, 'data'));
-  await mkdir(join(rootDir, 'data.reference'));
-  await copyFile(new URL('../../data.reference/media-models.json', import.meta.url), join(rootDir, 'data.reference/media-models.json'));
   path = join(rootDir, 'data/media-models.json');
 });
 afterEach(async () => { await rm(rootDir, { recursive: true, force: true }); });

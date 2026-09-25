@@ -1,6 +1,6 @@
 /**
  * Add the never-before-shipped MiniMax H3 CUDA profile to existing CUDA-bucket
- * registries. Fresh installs receive it from data.reference/media-models.json.
+ * registries. Fresh installs seed it from DEFAULT_REGISTRY on first load.
  *
  * Same reason migration 242 exists for the MLX profile: a registry whose
  * `_shippedDefaults.video.cuda` snapshot (pre-#4142: `.windows`) predates this
@@ -16,17 +16,13 @@
  */
 
 import { readFile } from 'fs/promises';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import { VIDEO_BUCKET_CUDA, readVideoBucket } from '../../server/lib/mediaModelBuckets.js';
 
 const REL_PATH = 'data/media-models.json';
 const CUDA_ID = 'minimax_h3_cuda';
-const REFERENCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..', '..', 'data.reference', 'media-models.json',
-);
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -53,23 +49,7 @@ export default {
     const cudaEntries = readVideoBucket(config?.video, VIDEO_BUCKET_CUDA);
     if (!Array.isArray(cudaEntries)) return;
 
-    // Load the CUDA H3 model definition. The seed file may not exist on fresh installs
-    // (it's no longer committed), so gracefully skip if it's missing — the model
-    // will be added by seedIfMissing() when the server boots and loads
-    // DEFAULT_REGISTRY. Existing installs have it either in their registry already
-    // or will pick it up here from the reference copy.
-    const seedRaw = await readFile(REFERENCE_PATH, 'utf-8').catch((err) => {
-      if (err.code === 'ENOENT') return null;
-      throw err;
-    });
-    if (seedRaw === null) {
-      // Seed file missing and cuda entries exist → old install with existing models.
-      // Skip this migration; the model is new in this release and will be added by
-      // a later update if needed. A fresh install will get the model from
-      // DEFAULT_REGISTRY on first boot via seedIfMissing().
-      return;
-    }
-    const reference = parseJson(seedRaw, 'data.reference/media-models.json');
+    const reference = getShippedMediaRegistry();
     const referenceCuda = readVideoBucket(reference?.video, VIDEO_BUCKET_CUDA);
     const cuda = (Array.isArray(referenceCuda) ? referenceCuda : []).find((entry) => entry?.id === CUDA_ID);
     if (!cuda) throw new Error(`Cannot migrate ${REL_PATH}: shipped ${CUDA_ID} reference is missing`);

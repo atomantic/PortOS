@@ -515,8 +515,7 @@ const DEFAULT_REGISTRY = {
   video: {
     // `applyVideoDisclosures` attaches the shipped provenance/licensing block
     // (lib/videoDisclosure.js) to each entry, so the seed written on a fresh
-    // install, the in-memory defaults, and data.reference/media-models.json all
-    // carry the same disclosure without repeating it inline here.
+    // install and the in-memory defaults carry the same disclosure without repeating it inline here.
     // `applyVideoFinishProfiles` attaches the shipped draft → delivery
     // `finishModelId` edges (lib/videoFinishProfiles.js) the same way, so the
     // Finish relationship is declared in one place instead of inline here.
@@ -1171,6 +1170,10 @@ const ensureDir = (file) => {
   const dir = dirname(file);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 };
+
+// The shipped default registry, cloned so a caller (a migration adding a new
+// shipped row to an existing install) can never mutate the in-memory defaults.
+export const getShippedMediaRegistry = () => structuredClone(DEFAULT_REGISTRY);
 
 const seedIfMissing = () => {
   if (existsSync(REGISTRY_FILE)) return;

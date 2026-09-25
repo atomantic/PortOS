@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 
 const NEW_IDS = ['fasth3_v2_int8', 'fasth3_v2_int6', 'minimax_h3_6bit', 'minimax_h3_4bit'];
 
@@ -19,7 +20,7 @@ export default {
     const key = Array.isArray(registry.video?.mlx) ? 'mlx'
       : Array.isArray(registry.video?.macos) ? 'macos' : null;
     if (!key) return;
-    const seed = JSON.parse(await readFile(join(rootDir, 'data.reference/media-models.json'), 'utf8'));
+    const seed = getShippedMediaRegistry();
     const defaults = seed.video.mlx;
     const entries = registry.video[key];
     const recorded = registry._shippedDefaults?.video?.mlx ?? registry._shippedDefaults?.video?.macos;
