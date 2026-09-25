@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as fsPromises from 'fs/promises';
+import { pinPlatform } from '../../testHelper.js';
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
@@ -15,21 +16,22 @@ vi.mock('fs/promises', async (importOriginal) => {
 import { atomicWrite } from './atomicWrite.js';
 
 const realFsPromises = await vi.importActual('fs/promises');
-const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 const RETRY_ATTEMPTS = 5;
 const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
 let tmpRoot;
+let restorePlatform = () => {};
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'ai-toolkit-atomicwrite-'));
-  Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+  restorePlatform = pinPlatform('win32');
   fsPromises.rename.mockClear();
   fsPromises.rename.mockImplementation((...args) => realFsPromises.rename(...args));
 });
 
 afterEach(() => {
-  Object.defineProperty(process, 'platform', originalPlatform);
+  restorePlatform();
+  restorePlatform = () => {};
   fsPromises.rename.mockReset();
   fsPromises.rename.mockImplementation((...args) => realFsPromises.rename(...args));
   rmSync(tmpRoot, { recursive: true, force: true });
