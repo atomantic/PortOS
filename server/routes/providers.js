@@ -8,6 +8,7 @@ import {
   linkBinding,
   presetSkipReason,
   previewBindingLink,
+  providerGraphEnabled,
   refreshConnectionCatalog,
   removeConnection,
   unlinkBinding,
@@ -85,6 +86,7 @@ import {
 } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { presetDerivable, presetKind } from '../lib/providerPresets.js';
+import { isDerivedPreset } from '../lib/providerGraphRecords.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
@@ -1193,7 +1195,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
     // to its harness instead would silently move where its catalog comes from.
     const harness = canRefreshModels(stored) ? null : harnessCatalogRuntime(stored);
     let provider;
-    if (harness) {
+    if (isDerivedPreset(stored) && providerGraphEnabled()) {
+      // A DERIVED preset's models are its service's catalog (#7565). Writing a
+      // probe onto the record alone leaves that catalog stale, so the next
+      // derivation discards what was found — refresh the service instead, which
+      // re-derives every preset on it.
+      const { service } = await refreshServiceCatalog(stored.serviceId);
+      if (service.catalog?.state === 'failed') {
+        throw new ServerError(service.catalog.error || 'The service could not list its models; its catalog was preserved.', { status: 502 });
+      }
+      provider = await providerService.getProviderById(stored.id);
+    } else if (harness) {
       // Scoped to THIS record: the harness is probed once per bootstrap
       // credential (services/harnesses.js), and a card's button must not spawn
       // another record's credential CLI to answer for its own.

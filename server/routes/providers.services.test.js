@@ -45,6 +45,9 @@ const providerService = {
   getAllProviders: vi.fn(),
   applyProviderPatches: vi.fn(),
   refreshProviderModelsBatch: vi.fn(),
+  fetchProviderModels: vi.fn(),
+  getProviderById: vi.fn(),
+  refreshProviderModels: vi.fn(),
 };
 vi.mock('../lib/aiToolkitState.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -300,6 +303,34 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     harnessModels.mockResolvedValue({ ok: true, models: ['claude-a', 'claude-b'], updated: [] });
     const ok = await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog');
     expect(ok.body.service.catalog).toMatchObject({ state: 'known', models: ['claude-a', 'claude-b'] });
+  });
+
+  it('falls back to a bound route\'s own lister when the harness has no models command', async () => {
+    const withRoute = graphFixture();
+    withRoute.bindings.push({ id: '99999999-9999-4999-8999-999999999999', revision: 1, connectionId: CLAUDE_SUB, harnessId: 'claude', variantKey: 'default', label: 'Claude', enabled: true, selectedModels: [] });
+    withRoute.routes.push({ providerId: 'example-claude-tui', bindingId: '99999999-9999-4999-8999-999999999999' });
+    store.readGraph.mockResolvedValue(withRoute);
+    harnessModels.mockResolvedValue({ ok: false, reason: 'Claude Code has no command for listing its models.', noLister: true, models: [], updated: [] });
+    providerService.fetchProviderModels.mockResolvedValue(['claude-new', 'claude-example']);
+
+    const res = await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog');
+    expect(providerService.fetchProviderModels).toHaveBeenCalledWith('example-claude-tui');
+    expect(res.body.service.catalog).toMatchObject({ state: 'known', models: ['claude-new', 'claude-example'] });
+  });
+
+  it('refreshes a derived preset through its service catalog, never onto the record alone', async () => {
+    const preset = { id: 'example-claude-tui', name: 'Claude', type: 'tui', command: 'claude', models: ['claude-example'], harnessId: 'claude', method: 'tui', serviceId: 'claude-subscription' };
+    providerService.getProviderById.mockResolvedValue(preset);
+    harnessModels.mockResolvedValue({ ok: true, models: ['claude-a', 'claude-b'], updated: [] });
+    const res = await request(app()).post('/api/providers/example-claude-tui/refresh-models');
+    expect(res.status).toBe(200);
+    expect(providerService.refreshProviderModels).not.toHaveBeenCalled();
+    expect(store.saveConnectionSettings).toHaveBeenCalledWith(expect.objectContaining({ id: CLAUDE_SUB, catalog: expect.objectContaining({ state: 'known', models: ['claude-a', 'claude-b'] }) }));
+
+    harnessModels.mockResolvedValue({ ok: false, reason: 'Claude Code is not installed on this host.', models: [], updated: [] });
+    const failed = await request(app()).post('/api/providers/example-claude-tui/refresh-models');
+    expect(failed.status).toBe(502);
+    expect(failed.body.error).toContain('not installed');
   });
 
   it('refuses a row with no definition to list through, and 404s an unknown slug', async () => {
