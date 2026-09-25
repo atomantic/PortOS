@@ -115,6 +115,7 @@ import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
 import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
 import { startTribePurge } from './tribePurge.js';
+import { startScreenshotsGc } from './screenshotsGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
@@ -569,6 +570,10 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // identities, memory links and audit snapshots — and expire older tribe audit
   // snapshots (#8459). Deleting a contact must eventually erase a third party's data.
   startTribePurge();
+  // Periodically expire images handed to agents via data/screenshots: shell
+  // image drops after 7 days, other screenshots after 30 unless a live CoS task
+  // still references them (issue #8461). Fails closed on an unreadable task store.
+  startScreenshotsGc();
   // Warm the catalog user-type registry from the user-type store (Postgres as of
   // #1001; the settings.json slice under the escape hatch) before any catalog
   // request can land, so user-defined types validate + mint ids immediately on
