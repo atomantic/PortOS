@@ -4,10 +4,8 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import migration from './244-minimax-h3-image-to-video.js';
+import { getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 
-const REFERENCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)), '..', '..', 'data.reference', 'media-models.json',
-);
 
 const H3_ID = 'minimax_h3_8bit';
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
@@ -70,12 +68,12 @@ describe('migration 244 — MiniMax H3 image-to-video', () => {
   // live seed would let a later seed edit retroactively change what 244 does),
   // so pin it here — otherwise fresh installs and migrated installs could end
   // up downloading different files with nothing failing.
-  it('migrates to exactly what data.reference ships today', async () => {
+  it('migrates to exactly what the shipped registry carries today', async () => {
     writeJson(path, registryWith(shippedH3()));
     await migration.up({ rootDir });
 
     const migrated = h3In(readJson(path));
-    const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'))
+    const seeded = getShippedMediaRegistry()
       .video.mlx.find((entry) => entry.id === H3_ID);
     expect(migrated.supportedModes).toEqual(seeded.supportedModes);
     expect(migrated.requiredWeights[0].files.filter((f) => f.startsWith('FL2VA/processor/')))
@@ -132,7 +130,7 @@ describe('migration 244 — MiniMax H3 image-to-video', () => {
     expect(readJson(path)).toEqual(before);
   });
 
-  it('skips a missing registry file (fresh install seeds from data.reference)', async () => {
+  it('skips a missing registry file (fresh install seeds from DEFAULT_REGISTRY)', async () => {
     await expect(migration.up({ rootDir })).resolves.toBeUndefined();
   });
 

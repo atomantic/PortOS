@@ -4,9 +4,9 @@ import { tmpdir, homedir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { pinPlatform } from './testHelper.js';
+import { getShippedMediaRegistry } from './mediaModels.js';
 
 const __dirname_self = dirname(fileURLToPath(import.meta.url));
-const SAMPLE_REGISTRY_PATH = join(__dirname_self, '..', '..', 'data.reference', 'media-models.json');
 
 let tmpDir;
 let registryFile;
@@ -23,16 +23,15 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// data.reference/media-models.json must mirror the in-code DEFAULT_REGISTRY so
-// `npm run setup:data` (which copies data.reference → data on fresh installs)
-// produces the same starting state as the runtime `seedIfMissing()` fallback.
-// Compares the seed file to a freshly-bootstrapped registry with
-// _shippedDefaults stripped (that's a runtime-only field).
-describe('data.reference seed file', () => {
-  it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', () => {
-    const seeded = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf8'));
-    expect(seeded.video.defaultMlx).toBe('fastmetal_5b_qad');
-    expect(seeded.video.mlx.some((entry) => entry.id === seeded.video.defaultMlx)).toBe(true);
+// Fresh installs bootstrap the registry from DEFAULT_REGISTRY, applied at the
+// first server boot via seedIfMissing(). This suite verifies that the runtime
+// registry matches the expected guarantees without depending on a committed file.
+describe('media model registry freshly loaded', () => {
+  it('defaults fresh Apple Silicon installs to FastMetal 5B when shipped', async () => {
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    expect(registry.video.defaultMlx).toBe('fastmetal_5b_qad');
+    expect(registry.video.mlx.some((entry) => entry.id === registry.video.defaultMlx)).toBe(true);
   });
 
   it('appends new Apple video choices to an existing registry and preserves later removals', async () => {
@@ -68,12 +67,15 @@ describe('data.reference seed file', () => {
     expect(upgraded.image.find((m) => m.id === 'qwen-image')).toEqual(legacy);
   });
 
-  it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
-    const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
+  it('seeds a fresh install with exactly the shipped default registry', async () => {
     const { loadMediaModels } = await import('./mediaModels.js');
+    expect(existsSync(registryFile)).toBe(false);
     const live = loadMediaModels();
+    // Load persists the runtime-only _shippedDefaults ledger beside the seed.
+    const { _shippedDefaults: _ledger, ...seeded } = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(seeded).toEqual(getShippedMediaRegistry());
     const { _shippedDefaults: _omit, ...liveSeed } = live;
-    expect(sample).toEqual(liveSeed);
+    expect(liveSeed).toEqual(seeded);
   });
 });
 
@@ -840,7 +842,7 @@ describe('mediaModels registry', () => {
     // _shippedDefaults claims every current built-in so appendNewlyShippedEntries
     // adds nothing — these cases are about what the load REMOVES, and an
     // "everything else is new" fixture would bury it under a dozen appends.
-    const shippedMlxIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
+    const shippedMlxIds = getShippedMediaRegistry()
       .video.mlx.map((e) => e.id).concat(RETIRED_ID);
 
     const writeRegistry = (mlx, defaultMlx = 'ltx23_distilled_q4') => writeFileSync(
@@ -924,7 +926,7 @@ describe('mediaModels registry', () => {
   // persist the cached object wholesale later in the same boot.
   describe('MiniMax H3 output-control upgrade', () => {
     const OLD_FRAMES = [124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362];
-    const shippedMlxIds = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'))
+    const shippedMlxIds = getShippedMediaRegistry()
       .video.mlx.map((entry) => entry.id);
     const legacyH3 = (extra = {}) => ({
       id: 'minimax_h3_8bit',
@@ -1542,7 +1544,7 @@ describe('video bucket selection is an MLX/CUDA axis, not an OS one', () => {
   // installs that upgrade on their own schedule.
   // _shippedDefaults claims every current built-in so appendNewlyShippedEntries
   // adds nothing and each bucket holds exactly the one probe entry.
-  const seed = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
+  const seed = getShippedMediaRegistry();
   const shippedMlx = [...seed.video.mlx.map((m) => m.id), MLX_ONLY.id];
   const shippedCuda = [...seed.video.cuda.map((m) => m.id), CUDA_ONLY.id];
   const shippedImage = seed.image.map((m) => m.id);
