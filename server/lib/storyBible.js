@@ -437,44 +437,75 @@ export function characterIdentityPackReadiness(character) {
   };
 }
 
-// Additive character fields an older peer's sanitizer cannot represent, keyed
+// Additive bible-entry fields an older peer's sanitizer cannot represent, keyed
 // by the `universes` wire version that introduced each one. A sender AT or
 // ABOVE that version omitting the field means the author cleared it; a sender
 // BELOW it omitted the field only because its code has no slot for it.
 const ADDITIVE_CHARACTER_FIELD_VERSIONS = Object.freeze({
+  // v6 — structured character-to-character links (#1287).
+  relationshipLinks: 6,
   // v10 — portable production canon (#5378).
   voiceCanon: 10,
   identityPack: 10,
   // v11 — optional structured psychology profile (#6414).
   psychology: 11,
 });
+const ADDITIVE_OBJECT_FIELD_VERSIONS = Object.freeze({
+  // v7 — structured object↔character attachments (#1288).
+  attachments: 7,
+});
+
+// "The sender carried nothing here." Covers both absent-when-empty fields
+// (voiceCanon, psychology) and always-present list fields a behind sender's
+// sanitizer defaults to `[]` (relationshipLinks, attachments).
+export function isLegacyAbsentValue(value) {
+  return value === undefined || value === null || value === false || value === ''
+    || (Array.isArray(value) && value.length === 0);
+}
 
 /**
- * Preserve additive character fields when an older peer wins LWW with a
- * character shape that could not represent them. Each field is restored ONLY
+ * Restore, onto each remote entry, the local entry's value for every additive
+ * field the sender's version could not represent. Each field is restored ONLY
  * from a sender behind the version that introduced it — a version-aware
  * sender's omission is an intentional clear and must pass through unchanged.
+ * Entries pair by id; a remote entry with no local counterpart is untouched.
  */
-export function preserveLegacyCharacterFields(remoteCharacters, localCharacters, senderUniversesVersion) {
+function preserveLegacyEntryFields(remoteEntries, localEntries, fieldVersions, senderUniversesVersion) {
   const sender = Number(senderUniversesVersion) || 0;
-  const unrepresentable = Object.entries(ADDITIVE_CHARACTER_FIELD_VERSIONS)
+  const unrepresentable = Object.entries(fieldVersions)
     .filter(([, since]) => sender < since)
     .map(([field]) => field);
   if (unrepresentable.length === 0
-    || !Array.isArray(remoteCharacters)
-    || !Array.isArray(localCharacters)) return remoteCharacters;
+    || !Array.isArray(remoteEntries)
+    || !Array.isArray(localEntries)) return remoteEntries;
   const localById = new Map(
-    localCharacters.filter((character) => character?.id).map((character) => [character.id, character]),
+    localEntries.filter((entry) => entry?.id).map((entry) => [entry.id, entry]),
   );
-  return remoteCharacters.map((character) => {
-    const localCharacter = localById.get(character?.id);
-    if (!localCharacter) return character;
+  return remoteEntries.map((entry) => {
+    const localEntry = localById.get(entry?.id);
+    if (!localEntry) return entry;
     const restored = {};
     for (const field of unrepresentable) {
-      if (!character?.[field] && localCharacter[field]) restored[field] = localCharacter[field];
+      if (isLegacyAbsentValue(entry?.[field]) && !isLegacyAbsentValue(localEntry[field])) {
+        restored[field] = localEntry[field];
+      }
     }
-    return Object.keys(restored).length ? { ...character, ...restored } : character;
+    return Object.keys(restored).length ? { ...entry, ...restored } : entry;
   });
+}
+
+/** Preserve additive character fields when an older peer wins LWW. */
+export function preserveLegacyCharacterFields(remoteCharacters, localCharacters, senderUniversesVersion) {
+  return preserveLegacyEntryFields(
+    remoteCharacters, localCharacters, ADDITIVE_CHARACTER_FIELD_VERSIONS, senderUniversesVersion,
+  );
+}
+
+/** Preserve additive object fields when an older peer wins LWW. */
+export function preserveLegacyObjectFields(remoteObjects, localObjects, senderUniversesVersion) {
+  return preserveLegacyEntryFields(
+    remoteObjects, localObjects, ADDITIVE_OBJECT_FIELD_VERSIONS, senderUniversesVersion,
+  );
 }
 
 // The legacy 'standard' variant lives in `character.referenceSheetImageRef`;

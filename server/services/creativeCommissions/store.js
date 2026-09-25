@@ -351,6 +351,38 @@ function preserveLocalCommissionFields(remote, local) {
   return out;
 }
 
+// Federated generation keys introduced by `creativeCommissions` v3 (#3135) —
+// the per-commission render-backend pin. A v2 sender's sanitizer keeps only the
+// generation keys it knows, so its record ALWAYS carries the default here.
+const COMMISSION_BACKEND_PIN_KEYS = ['imageMode', 'videoMode', 'imageModelId', 'videoModelId'];
+
+/**
+ * Carry the local brief's additive federated fields onto a winning remote from a
+ * sender too old to represent them (#8414). The version gate only rejects AHEAD
+ * senders, so a behind sender's brief reaches this LWW merge with those fields
+ * already sanitized away — its omission means "no slot", not "cleared". A sender
+ * at or above the introducing version passes through untouched, so a real clear
+ * still applies. A missing/unparseable sender version counts as 0.
+ */
+function preserveLegacyCommissionFields(remote, local, senderVersion) {
+  const sender = Number(senderVersion) || 0;
+  let out = remote;
+  if (sender < 3 && remote.generation && local.generation) {
+    // Only the keys BOTH shapes carry: a sender that also switched the output
+    // type has no slot for the old type's pin, and the new type never had one.
+    const pins = {};
+    for (const key of COMMISSION_BACKEND_PIN_KEYS) {
+      if (key in remote.generation && key in local.generation) pins[key] = local.generation[key];
+    }
+    if (Object.keys(pins).length) out = { ...out, generation: { ...out.generation, ...pins } };
+  }
+  // v4 — Digital Twin musicTaste config (#4347), persisted only when set.
+  if (sender < 4 && !out.brief?.musicTaste && local.brief?.musicTaste) {
+    out = { ...out, brief: { ...out.brief, musicTaste: local.brief.musicTaste } };
+  }
+  return out;
+}
+
 /**
  * LWW merge decision for one incoming commission (mirrors mergeWorkRecord): the
  * remote is sanitized here (drop-on-floor → null); a missing local INSERTS the
@@ -358,8 +390,10 @@ function preserveLocalCommissionFields(remote, local) {
  * on the receiver until the user opts in; else the newer BRIEF clock wins, and the
  * receiver's machine-local schedule/runs/assignment/enabled/feedback carry forward
  * (they never travel), so a peer's brief edit can't arm or reset this machine.
+ * `senderSchemaVersions` lets a behind sender's win keep the additive brief
+ * fields its version cannot represent (see preserveLegacyCommissionFields).
  */
-export function mergeCommissionRecord(local, remoteRaw) {
+export function mergeCommissionRecord(local, remoteRaw, { senderSchemaVersions = null } = {}) {
   const remote = sanitizeCommissionForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) {
@@ -370,7 +404,12 @@ export function mergeCommissionRecord(local, remoteRaw) {
   }
   const sanitizedLocal = sanitizeCommission(local);
   const remoteWins = compareNewerWins(remote.briefUpdatedAt, sanitizedLocal.briefUpdatedAt);
-  const next = remoteWins ? preserveLocalCommissionFields(remote, sanitizedLocal) : local;
+  const next = remoteWins
+    ? preserveLocalCommissionFields(
+      preserveLegacyCommissionFields(remote, sanitizedLocal, senderSchemaVersions?.creativeCommissions),
+      sanitizedLocal,
+    )
+    : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }
@@ -935,7 +974,7 @@ export async function listCommissionIdsForSync(options = {}) {
  * scheduler (a merged brief/tombstone can change what's armed). Mirrors
  * writersRoom's `mergeBodylessFromSync`, minus the PG row lock.
  */
-export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 'sync', peerId: null } } = {}) {
+export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 'sync', peerId: null }, senderSchemaVersions = null } = {}) {
   if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
   const store = commissionStore();
   let changed = 0;
@@ -951,7 +990,7 @@ export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 
     if (!isStr(id) || !COMMISSION_ID_RE.test(id)) continue;
     const applied = await store.queueRecordWrite(id, async () => {
       const local = await store.readRaw(id, { includeDeleted: true });
-      const { next, inserted, remoteWins, changed: didChange } = mergeCommissionRecord(local, remote);
+      const { next, inserted, remoteWins, changed: didChange } = mergeCommissionRecord(local, remote, { senderSchemaVersions });
       if (!next) return false;
       if (!inserted && (!remoteWins || !didChange)) return false;
       if (!inserted) {
