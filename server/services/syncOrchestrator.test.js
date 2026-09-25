@@ -250,6 +250,18 @@ describe('syncOrchestrator', () => {
       applyRemote.mockResolvedValue({ applied: false, count: 0 });
     });
 
+    it('does not fetch or store a peer-supplied SVG avatar', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+        data: { avatarPath: '/data/images/peer.svg' }, checksum: 'avatar',
+      }) });
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
+      expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/data/images/peer.svg'))).toBe(false);
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
     it.each([
       ['non-success response', () => new Response('unavailable', { status: 503 })],
       ['malformed JSON', () => new Response('{')],

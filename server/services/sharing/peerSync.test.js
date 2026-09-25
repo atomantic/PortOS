@@ -3363,6 +3363,28 @@ describe('peerSync', () => {
       expect(result.missingAssets).toHaveLength(1);
     });
 
+    it('never schedules a navigable peer asset from an incoming push', async () => {
+      const result = await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        assetManifest: [
+          { filename: 'peer.html', kind: 'image', sha256: 'a'.repeat(64) },
+          { filename: 'peer.svg', kind: 'image', sha256: 'b'.repeat(64) },
+          { filename: 'peer.png', kind: 'image', sha256: 'c'.repeat(64) },
+          { filename: 'memo.webm', kind: 'audio', sha256: 'd'.repeat(64) },
+          { filename: 'clip.ogv', kind: 'video', sha256: 'e'.repeat(64) },
+        ],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.missingAssets).toEqual([
+        { filename: 'peer.png', kind: 'image', sha256: 'c'.repeat(64) },
+        { filename: 'memo.webm', kind: 'audio', sha256: 'd'.repeat(64) },
+        { filename: 'clip.ogv', kind: 'video', sha256: 'e'.repeat(64) },
+      ]);
+      expect(await readFile(join(PATHS.images, 'peer.html')).catch(() => null)).toBeNull();
+      expect(await readFile(join(PATHS.images, 'peer.svg')).catch(() => null)).toBeNull();
+    });
+
     it('returns ackedDeletesUpTo for the sender (does NOT advance the local cursor on receive)', async () => {
       // Cursors track "what peer X has acked of OUR local deletions" so
       // tombstoneGc can prune our local tombstones once every subscribed

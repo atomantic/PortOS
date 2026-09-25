@@ -9,7 +9,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { join } from 'path';
+import { extname, join } from 'path';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
@@ -192,6 +192,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
     if (!safeName) continue;
+    if (!hasAllowedAssetExtension(entry.kind, safeName)) continue;
     // Build a sanitized projection: only the known fields the receiver needs
     // to pull. Echoing the raw peer-supplied entry would amplify any
     // junk fields it shipped (large strings, extra kinds, prototype-pollution
@@ -252,6 +253,24 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     }
   }
   return missing;
+}
+
+// The receiving peer must never persist navigable HTML or SVG into an asset
+// mount on the PortOS origin. Keep these in step with the writers into each
+// directory, including catalog voice memos (.webm) and video uploads (.ogv).
+const ASSET_KIND_EXTENSIONS = {
+  image: new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
+  'image-ref': new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
+  video: new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']),
+  music: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus']),
+  audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
+};
+
+function hasAllowedAssetExtension(kind, filename) {
+  if (ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase())) return true;
+  // Do not echo a peer-controlled filename into the log (it can contain CR/LF).
+  console.warn(`peerSync: skipped unsupported ${kind} asset extension`);
+  return false;
 }
 
 export function directoryForAssetKind(kind) {
@@ -933,6 +952,7 @@ async function pullOneAsset(peer, base, entry) {
   // against any future refactor that bypasses the diff path.
   const safeName = sanitizeAssetFilename(entry.filename);
   if (!urlPrefix || !localDir || !safeName) return;
+  if (!hasAllowedAssetExtension(entry.kind, safeName)) return;
   // Dedup in-flight pulls — if the same (peer, kind, filename) is already
   // being downloaded, skip rather than starting a second concurrent pull.
   // The first pull's `asset-arrived` event will resolve the UI for both
