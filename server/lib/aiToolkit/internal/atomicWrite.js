@@ -22,15 +22,20 @@ import { dirname } from 'path';
 
 const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
+const WIN_BACKUP_RETRY_ATTEMPTS = 20;
+const WIN_BACKUP_RETRY_DELAY_MS = 25;
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
 const isWindows = () => process.platform === 'win32';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function renameWithWindowsRetries(from, to) {
+async function renameWithWindowsRetries(from, to, {
+  attempts = WIN_RETRY_ATTEMPTS,
+  delayMs = WIN_RETRY_DELAY_MS,
+} = {}) {
   let err = await rename(from, to).then(() => null, (e) => e);
   if (isWindows()) {
-    for (let attempt = 1; err && attempt < WIN_RETRY_ATTEMPTS && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
-      await sleep(WIN_RETRY_DELAY_MS);
+    for (let attempt = 1; err && attempt < attempts && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
+      await sleep(delayMs);
       err = await rename(from, to).then(() => null, (e) => e);
     }
   }
@@ -53,7 +58,10 @@ export async function atomicWrite(filePath, data) {
     if (!err) return;
     if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
       const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      const backupError = await renameWithWindowsRetries(filePath, bak);
+      const backupError = await renameWithWindowsRetries(filePath, bak, {
+        attempts: WIN_BACKUP_RETRY_ATTEMPTS,
+        delayMs: WIN_BACKUP_RETRY_DELAY_MS,
+      });
       if (backupError && backupError.code !== 'ENOENT') throw backupError;
       const hadExisting = !backupError;
       const renameErr = await renameWithWindowsRetries(tmp, filePath);

@@ -1415,6 +1415,7 @@ describe('fileUtils', () => {
 describe('Windows swap-window retries (#4095)', () => {
   // Matches WIN_RETRY_ATTEMPTS in fileCore.js.
   const RETRY_ATTEMPTS = 5;
+  const BACKUP_RETRY_ATTEMPTS = 20;
   const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
   let tmpRoot;
@@ -1509,12 +1510,12 @@ describe('Windows swap-window retries (#4095)', () => {
       writeFileSync(target, JSON.stringify({ v: 1 }));
       fakePlatform('win32');
       for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-      fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
 
       await atomicWrite(target, { v: 2 });
 
       expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
-      expect(fsPromises.rename.mock.calls.filter(([from]) => from === target)).toHaveLength(2);
+      expect(fsPromises.rename.mock.calls.filter(([from]) => from === target)).toHaveLength(RETRY_ATTEMPTS + 1);
       expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
     });
 
@@ -1523,12 +1524,12 @@ describe('Windows swap-window retries (#4095)', () => {
       writeFileSync(target, JSON.stringify({ v: 1 }));
       fakePlatform('win32');
       for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
-      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+      for (let i = 0; i < BACKUP_RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
 
       await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({ code: 'EBUSY' });
 
       expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
-      expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS * 2);
+      expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS + BACKUP_RETRY_ATTEMPTS);
       expect(readdirSync(tmpRoot)).toEqual(['persistent-backup-lock.json']);
     });
 
