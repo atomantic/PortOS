@@ -1,8 +1,8 @@
 /**
  * Code-rendered music: the Music Designer's "Code" engine.
  *
- *   writeMusicCode()       musical description → Strudel code the LLM wrote
- *                          (fence-stripped and size-checked; nothing runs here).
+ *   writeMusicCode()       musical description → Strudel or Tone.js code the LLM
+ *                          wrote (fence-stripped and size-checked; nothing runs here).
  *   saveCodeTakeToTrack()  a WAV the browser recorded from that code → the
  *                          shared music library, appended to the track's render
  *                          history as an `engine: 'code'` take.
@@ -24,8 +24,9 @@ import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } fro
 import * as tracks from './tracks/index.js';
 
 const CODE_ENGINE = 'code';
-// Strudel is the first language. Tone.js joins this list as a second choice.
-export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel']);
+// Strudel was the first language; Tone.js is the second (client/src/components/music/strudelFrame.js
+// mounts a frame document per language, same postMessage protocol for both).
+export const MUSIC_CODE_LANGUAGES = Object.freeze(['strudel', 'tonejs']);
 // Longest code the designer accepts, from the LLM or back from the editor.
 export const MUSIC_CODE_MAX = 20000;
 
@@ -60,6 +61,33 @@ Return ONLY the Strudel code: no prose and no markdown fence. It is evaluated ex
 Compose real music: a memorable melody, a bassline that moves, harmony, and percussion that grooves unless the description asks otherwise. Stay in key, and use "<...>" alternation over several cycles so the piece develops instead of looping one bar.`;
 }
 
+/** The Tone.js writing contract sent to the LLM. */
+function buildTonejsPrompt({ description, lyrics, guidance, current }) {
+  return `You are a composer who writes music as plain JavaScript against the Tone.js library (tonejs.github.io/), running against the global \`Tone\`. The code IS the whole piece: there is no audio model and no DAW, and it runs once per play.${
+    section('MUSIC TO WRITE', trimTo(description, MAX_DESCRIPTION) || '(none given)')
+  }${
+    section('LYRICS / THEME (mood only; nothing is sung, so instruments carry the melody)', trimTo(lyrics, MAX_LYRICS))
+  }${
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE))
+  }${
+    current ? section('CURRENT CODE (revise it per the request above; keep what works, change what is asked)', current) : ''
+  }
+
+Return ONLY the JavaScript: no prose and no markdown fence. Rules for the code:
+- The host has already unlocked audio and reset the transport before your code runs; do not call Tone.start().
+- Build the graph, schedule the music (Tone.Transport.schedule, Tone.Transport.scheduleRepeat, or a Tone.Part/Tone.Sequence), then call Tone.Transport.start() as the LAST statement so playback actually begins.
+- Only these built-in instruments exist, all playable with no external files: Tone.Synth, Tone.AMSynth, Tone.FMSynth, Tone.MonoSynth, Tone.DuoSynth, Tone.PluckSynth, Tone.MembraneSynth (kick/toms), Tone.MetalSynth (hats/cymbals), Tone.NoiseSynth (noise/snare), and Tone.PolySynth(Tone.Synth) (or another synth) for chords. NEVER use Tone.Player, Tone.GrainPlayer, Tone.Sampler, Tone.UserMedia, or any URL/buffer/sample loading — there is no network access and no sample files, so they always fail.
+- Shape and route sound with the built-in effects: Tone.Filter, Tone.EQ3, Tone.Distortion, Tone.Chorus, Tone.FeedbackDelay, Tone.Reverb, Tone.Compressor, Tone.Gain, Tone.Panner. Chain with .connect() or .chain(), and end every audible chain with .toDestination().
+- Note names are strings like "C3", "Eb4", "G#2"; durations are Tone.js notation like "8n", "4n.", "16t". Use Tone.Time/Tone.Frequency helpers as needed.
+- Set the tempo with Tone.Transport.bpm.value = BPM before scheduling.
+- Keep levels sensible: set instrument/gain .volume around -12 to -6 dB per layer so a full mix doesn't clip.
+- Wrap the whole body in a try/catch only if you need to recover from an error yourself; otherwise let errors propagate so they can be reported.
+
+Compose real music: a memorable melody, a bassline that moves, harmony, and percussion that grooves unless the description asks otherwise. Stay in key, and vary the pattern over multiple bars (with scheduleRepeat callbacks or a Part with several events) so the piece develops instead of looping one bar forever.`;
+}
+
+const PROMPT_BUILDERS = { strudel: buildStrudelPrompt, tonejs: buildTonejsPrompt };
+
 // A reply usually arrives bare, but a fenced block (with or without prose
 // around it) is common. Take the first fence's body when there is one.
 const FENCE_RE = /```[^\n`]*\n([\s\S]*?)\n?```/;
@@ -77,11 +105,12 @@ export async function writeMusicCode({ description, lyrics, guidance, current, l
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, { message: 'No AI provider available to write the music code', code: 'NO_PROVIDER' });
 
+  const buildPrompt = PROMPT_BUILDERS[language] || buildStrudelPrompt;
   const run = await runPromptThroughProvider({
     provider,
     model: selectedModel ?? undefined,
     effort,
-    prompt: buildStrudelPrompt({ description, lyrics, guidance, current: trimTo(current, MUSIC_CODE_MAX) }),
+    prompt: buildPrompt({ description, lyrics, guidance, current: trimTo(current, MUSIC_CODE_MAX) }),
     source: 'music-code',
   });
 
