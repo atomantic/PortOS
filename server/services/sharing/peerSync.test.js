@@ -43,6 +43,7 @@ vi.mock('../pipeline/series.js', async () => ({
   getSeries: vi.fn(),
   mergeSeriesFromSync: vi.fn(),
   listSeries: vi.fn(),
+  SERIES_ID_RE: /^ser-[A-Za-z0-9-]+$/,
 }));
 
 vi.mock('../pipeline/issues.js', async () => ({
@@ -627,7 +628,7 @@ describe('peerSync', () => {
     beforeEach(() => {
       // No push side effects — we only assert on the returned coverage map.
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z' });
       vi.mocked(getCollection).mockResolvedValue({ id: 'c1', name: 'Col', updatedAt: '2026-01-01T00:00:00Z' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(findCollectionByUniverseId).mockResolvedValue(null);
@@ -637,12 +638,12 @@ describe('peerSync', () => {
 
     it('groups outbound subs by snapshot category (series → pipeline)', async () => {
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       await subscribePeer({ peerId: 'peer-a', recordKind: 'mediaCollection', recordId: 'c1' });
       const cov = await getOutboundCoverageForPeer('peer-a');
       expect([...cov.universe]).toEqual(['u1']);
       // series rolls into the pipeline category (series + child issues bundle).
-      expect([...cov.pipeline]).toEqual(['s1']);
+      expect([...cov.pipeline]).toEqual(['ser-1']);
       expect([...cov.mediaCollections]).toEqual(['c1']);
     });
 
@@ -684,9 +685,9 @@ describe('peerSync', () => {
       const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       vi.mocked(listUniverses).mockRejectedValue(new Error('private database details'));
       vi.mocked(listAuthors).mockRejectedValue(new Error('private author contents'));
-      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }]);
+      vi.mocked(listSeries).mockResolvedValue([{ id: 'ser-1' }]);
       await writeFile(join(tmp, 'sharing', 'peer_subscriptions.json'), JSON.stringify({
-        subscriptions: [{ id: 'sub-s1', peerId: 'peer-a', recordKind: 'series', recordId: 's1', lastConfirmedPushedAt: Date.now() }],
+        subscriptions: [{ id: 'sub-s1', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1', lastConfirmedPushedAt: Date.now() }],
       }));
       const cov = await getFullSyncCoverageForPeer('peer-a');
       expect(cov).toMatchObject({ available: false, partial: true, fullyMirrored: false, total: 1, confirmed: 1, pending: 0 });
@@ -788,11 +789,11 @@ describe('peerSync', () => {
 
     it('keeps the peer cursor when other subscriptions to the same peer remain', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Bar' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Bar' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       const sub1 = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       await unsubscribePeer(sub1.id);
       const cursors = await listCursors();
       expect(cursors['peer-a']).toBeDefined();
@@ -808,11 +809,11 @@ describe('peerSync', () => {
   describe('unsubscribeAllForPeer', () => {
     it('removes every subscription targeting a peer', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       const result = await unsubscribeAllForPeer('peer-a');
       expect(result.removed).toHaveLength(2);
       expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
@@ -908,7 +909,7 @@ describe('peerSync', () => {
   describe('pruneOrphanedPeerSubscriptions', () => {
     beforeEach(() => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
     });
@@ -956,7 +957,7 @@ describe('peerSync', () => {
       // Default these so the push triggered by subscribePeer doesn't 500
       // when the underlying buildPushPayload runs.
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
     });
@@ -1013,7 +1014,7 @@ describe('peerSync', () => {
         { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: false } },
         { instanceId: 'peer-b', enabled: true, syncCategories: { universe: false, pipeline: true } },
       ]);
-      const created = await autoSubscribeRecordToAllPeers('series', 's1');
+      const created = await autoSubscribeRecordToAllPeers('series', 'ser-1');
       expect(created.map(c => c.peerId)).toEqual(['peer-b']);
     });
 
@@ -1062,7 +1063,7 @@ describe('peerSync', () => {
   describe('autoSubscribePeerToAllRecords', () => {
     beforeEach(() => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       // Default: peer is registered + outbound-capable + has both categories
@@ -1081,9 +1082,9 @@ describe('peerSync', () => {
     });
 
     it('subscribes every local non-deleted series to the peer', async () => {
-      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
+      vi.mocked(listSeries).mockResolvedValue([{ id: 'ser-1' }, { id: 'ser-2' }]);
       const created = await autoSubscribePeerToAllRecords('peer-a', 'series');
-      expect(created.map(c => c.recordId).sort()).toEqual(['s1', 's2']);
+      expect(created.map(c => c.recordId).sort()).toEqual(['ser-1', 'ser-2']);
     });
 
     it('backfills every local FableLoom when its category is enabled', async () => {
@@ -1274,15 +1275,15 @@ describe('peerSync', () => {
       const { installPeerSyncListener } = await import('./peerSync.js');
       installPeerSyncListener();
       vi.mocked(listUniverses).mockRejectedValue(new Error('private inventory details'));
-      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }]);
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(listSeries).mockResolvedValue([{ id: 'ser-1' }]);
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
       instanceEvents.emit('peer:online', {
         instanceId: 'peer-a', enabled: true, syncEnabled: true,
         directions: ['outbound'], syncCategories: { universe: true, pipeline: true },
       });
       await __drainForTests();
-      expect(await findPeerSubscription('peer-a', 'series', 's1')).not.toBeNull();
+      expect(await findPeerSubscription('peer-a', 'series', 'ser-1')).not.toBeNull();
       expect(errorLog).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
       expect([...log.mock.calls, ...errorLog.mock.calls].flat().join(' ')).not.toContain('private inventory details');
       log.mockRestore();
@@ -1690,9 +1691,9 @@ describe('peerSync', () => {
     it('includes live child issue assets in a series integrity summary', async () => {
       await writeFile(join(PATHS.images, 'issue-panel.png'), Buffer.from('issue image bytes'));
       vi.mocked(listIssuesForSeries).mockResolvedValue([
-        { id: 'i1', seriesId: 's1', stages: { storyboards: { panels: [{ imageRefs: ['issue-panel.png'] }] } } },
+        { id: 'i1', seriesId: 'ser-1', stages: { storyboards: { panels: [{ imageRefs: ['issue-panel.png'] }] } } },
       ]);
-      const summary = await assetIntegrityForRecord('series', { id: 's1', name: 'Series' });
+      const summary = await assetIntegrityForRecord('series', { id: 'ser-1', name: 'Series' });
       expect(summary.assetHashes).toHaveLength(1);
       expect(summary.metadataMissing).toBe(true);
     });
@@ -2066,13 +2067,13 @@ describe('peerSync', () => {
       // so a series push where only an issue field changed (a common case —
       // every panel edit propagates as an issue update under a series sub)
       // would collapse to reason: 'unchanged' and never propagate.
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValueOnce([
-        { id: 'i1', seriesId: 's1', number: 1, title: 'First' },
+        { id: 'i1', seriesId: 'ser-1', number: 1, title: 'First' },
       ]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       const sub = await subscribePeer(
-        { peerId: 'peer-a', recordKind: 'series', recordId: 's1' },
+        { peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' },
         { adoptedFromReverse: true },
       );
       const first = await pushRecordToPeer(sub);
@@ -2080,10 +2081,10 @@ describe('peerSync', () => {
 
       // Series record identical, but child issue title changed → MUST re-push.
       vi.mocked(listIssuesForSeries).mockResolvedValueOnce([
-        { id: 'i1', seriesId: 's1', number: 1, title: 'Revised' },
+        { id: 'i1', seriesId: 'ser-1', number: 1, title: 'Revised' },
       ]);
       vi.mocked(peerFetch).mockClear();
-      const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+      const refreshed = await findPeerSubscription('peer-a', 'series', 'ser-1');
       const second = await pushRecordToPeer(refreshed);
       expect(second.pushed).toBe(true);
       expect(second.reason).not.toBe('unchanged');
@@ -2091,10 +2092,10 @@ describe('peerSync', () => {
     });
 
     it('bundles child issues with a series push', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValue([
-        { id: 'i1', seriesId: 's1', number: 1 },
-        { id: 'i1001', seriesId: 's1', number: 1001 },
+        { id: 'i1', seriesId: 'ser-1', number: 1 },
+        { id: 'i1001', seriesId: 'ser-1', number: 1001 },
       ]);
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
@@ -2102,16 +2103,16 @@ describe('peerSync', () => {
         return { ok: true, json: async () => ({}) };
       });
       await pushRecordToPeer({
-        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
       });
       expect(captured.kind).toBe('series');
       expect(captured.issues).toHaveLength(2);
       expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i1001']);
-      expect(listIssuesForSeries).toHaveBeenCalledWith('s1', { includeDeleted: true });
+      expect(listIssuesForSeries).toHaveBeenCalledWith('ser-1', { includeDeleted: true });
     });
 
     it('bundles the manuscript review with a series push so review-only edits propagate', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(getReview).mockResolvedValue({
         schemaVersion: 1,
         comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -2121,7 +2122,7 @@ describe('peerSync', () => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.kind).toBe('series');
       expect(captured.manuscriptReview).toBeTruthy();
       expect(captured.manuscriptReview.comments).toHaveLength(1);
@@ -2129,33 +2130,33 @@ describe('peerSync', () => {
     });
 
     it('omits the manuscriptReview key when the series has an empty review', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(getReview).mockResolvedValue({ schemaVersion: 1, comments: [] });
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.manuscriptReview).toBeUndefined();
     });
 
     it('does not fetch a review for a tombstone series push', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.manuscriptReview).toBeUndefined();
       expect(vi.mocked(getReview)).not.toHaveBeenCalled();
     });
 
     it('bundles the reverse outline with a series push so regenerate-only edits propagate', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(getStoredOutline).mockResolvedValue({
-        seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+        seriesId: 'ser-1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
         plotlines: [{ id: 'a', label: 'A-plot', kind: 'main', color: '#3b82f6' }],
         scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
       });
@@ -2164,39 +2165,39 @@ describe('peerSync', () => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.reverseOutline).toBeTruthy();
       expect(captured.reverseOutline.scenes).toHaveLength(1);
       expect(captured.reverseOutline.generatedAt).toBe('2026-06-02T00:00:00Z');
     });
 
     it('omits the reverseOutline key when no complete outline exists', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       // A never-generated / in-progress outline (status !== 'complete') is not shipped.
-      vi.mocked(getStoredOutline).mockResolvedValue({ seriesId: 's1', schemaVersion: 1, status: 'none', plotlines: [], scenes: [] });
+      vi.mocked(getStoredOutline).mockResolvedValue({ seriesId: 'ser-1', schemaVersion: 1, status: 'none', plotlines: [], scenes: [] });
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.reverseOutline).toBeUndefined();
     });
 
     it('does not fetch an outline for a tombstone series push', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' });
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
         captured = JSON.parse(opts.body);
         return { ok: true, json: async () => ({}) };
       });
-      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await pushRecordToPeer({ id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
       expect(captured.reverseOutline).toBeUndefined();
       expect(vi.mocked(getStoredOutline)).not.toHaveBeenCalled();
     });
 
     it('re-pushes when only the manuscript review changes (series record byte-identical)', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(getReview)
         .mockResolvedValueOnce({
           schemaVersion: 1,
@@ -2209,14 +2210,14 @@ describe('peerSync', () => {
         });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
       const sub = await subscribePeer(
-        { peerId: 'peer-a', recordKind: 'series', recordId: 's1' },
+        { peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' },
         { adoptedFromReverse: true },
       );
       const first = await pushRecordToPeer(sub);
       expect(first.pushed).toBe(true);
 
       vi.mocked(peerFetch).mockClear();
-      const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+      const refreshed = await findPeerSubscription('peer-a', 'series', 'ser-1');
       const second = await pushRecordToPeer(refreshed);
       expect(second.pushed).toBe(true);
       expect(second.reason).not.toBe('unchanged');
@@ -2382,16 +2383,16 @@ describe('peerSync', () => {
       // image / video filenames onto the wire. The receiver would then
       // background-fetch those bytes — defeating the "local-only" intent
       // of ephemeral.
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValue([
         // Live issue with a referenced image.
         {
-          id: 'i1', seriesId: 's1', number: 1,
+          id: 'i1', seriesId: 'ser-1', number: 1,
           stages: { storyboards: { scenes: [{ imageJobId: 'job-live' }] } },
         },
         // Ephemeral issue — must NOT leak its image into the manifest.
         {
-          id: 'i2', seriesId: 's1', number: 2, ephemeral: true,
+          id: 'i2', seriesId: 'ser-1', number: 2, ephemeral: true,
           stages: { storyboards: { scenes: [{ imageJobId: 'job-secret' }] } },
         },
       ]);
@@ -2401,7 +2402,7 @@ describe('peerSync', () => {
         return { ok: true, json: async () => ({}) };
       });
       await pushRecordToPeer({
-        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
       });
       // Sanitized issues: only the live one.
       expect(captured.issues).toHaveLength(1);
@@ -2485,16 +2486,16 @@ describe('peerSync', () => {
       // the receiver's delete cascade runs), but their asset filenames
       // must NOT appear in the manifest — the receiver would otherwise
       // pull bytes for issues it's about to orphan.
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
       vi.mocked(listIssuesForSeries).mockResolvedValue([
         // Live issue (no manifest leak — buildAssetManifest doesn't yet
         // resolve imageJobId → filename, that's a Stage 3 thing).
-        { id: 'i1', seriesId: 's1', number: 1 },
+        { id: 'i1', seriesId: 'ser-1', number: 1 },
         // Deleted issue with a sentinel filename that would surface
         // through buildAssetManifest's directVideoFilenames path if it
         // were fed to the manifest builder.
         {
-          id: 'i2', seriesId: 's1', number: 2,
+          id: 'i2', seriesId: 'ser-1', number: 2,
           deleted: true, deletedAt: '2026-01-01T00:00:00Z',
         },
       ]);
@@ -2504,7 +2505,7 @@ describe('peerSync', () => {
         return { ok: true, json: async () => ({}) };
       });
       await pushRecordToPeer({
-        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
       });
       // Both issues' tombstones/wire-records propagate.
       expect(captured.issues.map(i => i.id).sort()).toEqual(['i1', 'i2']);
@@ -3171,19 +3172,19 @@ describe('peerSync', () => {
       };
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         manuscriptReview,
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeReviewFromSync).toHaveBeenCalledWith('s1', manuscriptReview);
+      expect(mergeReviewFromSync).toHaveBeenCalledWith('ser-1', manuscriptReview);
     });
 
     it('skips mergeReviewFromSync when no manuscriptReview is bundled', async () => {
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -3194,7 +3195,7 @@ describe('peerSync', () => {
     it('refuses to merge manuscriptReview when the incoming series record is a tombstone', async () => {
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
+        record: { id: 'ser-1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
         issues: [],
         manuscriptReview: { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] },
         assetManifest: [],
@@ -3204,10 +3205,10 @@ describe('peerSync', () => {
     });
 
     it('skips mergeReviewFromSync when the LOCAL series is ephemeral', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', ephemeral: true });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', ephemeral: true });
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         manuscriptReview: { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] },
         assetManifest: [],
@@ -3220,19 +3221,19 @@ describe('peerSync', () => {
       const reverseOutline = sampleOutline();
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         reverseOutline,
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeOutlineFromSync).toHaveBeenCalledWith('s1', reverseOutline);
+      expect(mergeOutlineFromSync).toHaveBeenCalledWith('ser-1', reverseOutline);
     });
 
     it('skips mergeOutlineFromSync when no reverseOutline is bundled', async () => {
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         assetManifest: [],
         sourceInstanceId: 'peer-a',
@@ -3243,7 +3244,7 @@ describe('peerSync', () => {
     it('refuses to merge reverseOutline when the incoming series record is a tombstone', async () => {
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
+        record: { id: 'ser-1', deleted: true, deletedAt: '2026-06-02T00:00:00Z', updatedAt: '2026-06-02T00:00:00Z' },
         issues: [],
         reverseOutline: sampleOutline(),
         assetManifest: [],
@@ -3253,12 +3254,42 @@ describe('peerSync', () => {
     });
 
     it('skips mergeOutlineFromSync when the LOCAL series is ephemeral', async () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', ephemeral: true });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', ephemeral: true });
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+        record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
         issues: [],
         reverseOutline: sampleOutline(),
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeOutlineFromSync).not.toHaveBeenCalled();
+    });
+
+    it('skips mergeReviewFromSync and marks pending when the series id is malformed (security: #8355)', async () => {
+      // A series id containing `../` or not matching the required "ser-" prefix
+      // must not trigger a merge that could write files outside the series directory.
+      const manuscriptReview = { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] };
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: '../../../etc/passwd', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        manuscriptReview,
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeReviewFromSync).not.toHaveBeenCalled();
+    });
+
+    it('skips mergeOutlineFromSync and marks pending when the series id is malformed (security: #8355)', async () => {
+      // A series id not matching the required "ser-" prefix pattern must not
+      // trigger a merge that could write files outside the series directory.
+      const reverseOutline = sampleOutline();
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 'evil/../../etc/passwd', name: 'S', deleted: false, deletedAt: null },
+        issues: [],
+        reverseOutline,
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
@@ -3301,15 +3332,15 @@ describe('peerSync', () => {
     it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
       await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', deleted: false, deletedAt: null },
-        issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+        record: { id: 'ser-1', deleted: false, deletedAt: null },
+        issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
       // Goes through the record-kind table (#6843), which passes
       // senderSchemaVersions uniformly (harmless for series — ignored).
       expect(mergeSeriesFromSync).toHaveBeenCalledWith(
-        [expect.objectContaining({ id: 's1' })],
+        [expect.objectContaining({ id: 'ser-1' })],
         expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeIssuesFromSync).toHaveBeenCalledWith(
@@ -3353,7 +3384,7 @@ describe('peerSync', () => {
       // never be acknowledged until a separate push lands.
       const result = await applyIncomingPush({
         kind: 'series',
-        record: { id: 's1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' },
+        record: { id: 'ser-1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' },
         issues: [
           { id: 'i1', deleted: true, deletedAt: '2026-03-01T00:00:00Z' },
           { id: 'i2', deleted: false },
@@ -3652,10 +3683,10 @@ describe('peerSync', () => {
 
     it('does NOT bundle catalog rows on a series push (only universe)', async () => {
       vi.mocked(getBackendName).mockReturnValue('postgres');
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z', deleted: false, deletedAt: null });
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Ser', updatedAt: '2026-01-01T00:00:00Z', deleted: false, deletedAt: null });
       vi.mocked(listIssues).mockResolvedValue([]);
 
-      const payload = await getRecordPayloadForPeer('series', 's1');
+      const payload = await getRecordPayloadForPeer('series', 'ser-1');
 
       expect(getCatalogBundleForRef).not.toHaveBeenCalled();
       expect(payload.catalogBundle).toBeUndefined();
@@ -3906,7 +3937,7 @@ describe('peerSync', () => {
         // No issues ride along, so pipelineIssues is not a transferred category.
         await applyIncomingPush({
           kind: 'series',
-          record: { id: 's1', name: 'Foo' },
+          record: { id: 'ser-1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
@@ -3920,8 +3951,8 @@ describe('peerSync', () => {
         // gate the push — otherwise the receiver merges issues it can't parse.
         const rejection = await applyIncomingPush({
           kind: 'series',
-          record: { id: 's1', name: 'Foo' },
-          issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+          record: { id: 'ser-1', name: 'Foo' },
+          issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
@@ -4018,8 +4049,8 @@ describe('peerSync', () => {
         // NOT; gate pipelineIssues so they can't corrupt an older receiver.
         const rejection = await applyIncomingPush({
           kind: 'series',
-          record: { id: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
-          issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+          record: { id: 'ser-1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+          issues: [{ id: 'i1', seriesId: 'ser-1', deleted: false, deletedAt: null }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 1, pipelineIssues: 4 } },
@@ -4036,8 +4067,8 @@ describe('peerSync', () => {
         // even though the sender is ahead on both pipelineSeries and pipelineIssues.
         await applyIncomingPush({
           kind: 'series',
-          record: { id: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
-          issues: [{ id: 'i1', seriesId: 's1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' }],
+          record: { id: 'ser-1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' },
+          issues: [{ id: 'i1', seriesId: 'ser-1', deleted: true, deletedAt: '2026-05-22T03:00:00Z' }],
           assetManifest: [],
           sourceInstanceId: 'peer-a',
           portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 5, pipelineSeries: 9, pipelineIssues: 9 } },
@@ -4282,15 +4313,15 @@ describe('peerSync', () => {
       // stripped form so an unchanged record settles; these two cases cover
       // what moves it again.
       it('re-pushes when the bundled review actually changes after a stripped push (#3928)', async () => {
-        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 'ser-1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
         });
         mockPeerRejecting('manuscriptReview');
         const sub = await subscribePeer({
-          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+          peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
         }, { adoptedFromReverse: true });
         const first = await pushRecordToPeer(sub);
         const callsAfterFirst = vi.mocked(peerFetch).mock.calls.length;
@@ -4300,30 +4331,30 @@ describe('peerSync', () => {
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'resolved', updatedAt: '2026-06-03T00:00:00Z' }],
         });
-        const second = await pushRecordToPeer(await findPeerSubscription('peer-a', 'series', 's1'));
+        const second = await pushRecordToPeer(await findPeerSubscription('peer-a', 'series', 'ser-1'));
         expect(second.pushed).toBe(true);
         expect(second.hash).not.toBe(first.hash);
         expect(vi.mocked(peerFetch).mock.calls.length).toBe(callsAfterFirst + 2);
-        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        const refreshed = await findPeerSubscription('peer-a', 'series', 'ser-1');
         expect(refreshed.lastPushedLegacyHash).toBe(second.hash);
       });
 
       it('re-attempts the full push on a peer:online re-probe even when the legacy hash matches (#3928)', async () => {
-        vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 'ser-1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
         });
         mockPeerRejecting('manuscriptReview');
         const sub = await subscribePeer({
-          peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+          peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1',
         }, { adoptedFromReverse: true });
         await pushRecordToPeer(sub);
         // The peer upgraded and came back online — it now accepts the review.
         vi.mocked(peerFetch).mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({}) }));
         const upgraded = await pushRecordToPeer(
-          await findPeerSubscription('peer-a', 'series', 's1'),
+          await findPeerSubscription('peer-a', 'series', 'ser-1'),
           { bypassSchemaCooldown: true },
         );
         expect(upgraded.pushed).toBe(true);
@@ -4331,7 +4362,7 @@ describe('peerSync', () => {
         expect(payload.manuscriptReview).toBeDefined();
         // Fully delivered → the normal hash takes over and the legacy
         // water-mark clears.
-        const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+        const refreshed = await findPeerSubscription('peer-a', 'series', 'ser-1');
         expect(refreshed.lastPushedHash).toBe(upgraded.hash);
         expect(refreshed.lastPushedLegacyHash).toBeFalsy();
       });
@@ -4454,8 +4485,8 @@ describe('peerSync', () => {
     const PENDING_KEYS = Object.values(ENVELOPE_PENDING_KEYS);
 
     const armSeries = () => {
-      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-      vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1', name: 'Series' });
+      vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 'ser-1', number: 1 }]);
     };
     // How the sender comes to carry each key on the wire. Every table row MUST
     // have a carrier (guarded below) — that is what makes this suite grow with
@@ -4477,7 +4508,7 @@ describe('peerSync', () => {
         },
       },
       manuscriptReview: {
-        recordKind: 'series', recordId: 's1',
+        recordKind: 'series', recordId: 'ser-1',
         arm: async () => {
           armSeries();
           vi.mocked(getReview).mockResolvedValue({
@@ -4487,11 +4518,11 @@ describe('peerSync', () => {
         },
       },
       reverseOutline: {
-        recordKind: 'series', recordId: 's1',
+        recordKind: 'series', recordId: 'ser-1',
         arm: async () => {
           armSeries();
           vi.mocked(getStoredOutline).mockResolvedValue({
-            seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+            seriesId: 'ser-1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
             plotlines: [{ id: 'a', label: 'A', kind: 'main', color: '#3b82f6' }],
             scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
           });
@@ -4696,7 +4727,7 @@ describe('peerSync', () => {
           merge: mergeReviewFromSync,
           payload: () => ({
             kind: 'series',
-            record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+            record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
             issues: [],
             manuscriptReview: { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] },
             assetManifest: [],
@@ -4707,7 +4738,7 @@ describe('peerSync', () => {
           merge: mergeOutlineFromSync,
           payload: () => ({
             kind: 'series',
-            record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+            record: { id: 'ser-1', name: 'S', deleted: false, deletedAt: null },
             issues: [],
             reverseOutline: sampleOutline(),
             assetManifest: [],

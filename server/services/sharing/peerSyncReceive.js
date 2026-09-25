@@ -22,6 +22,7 @@ import {
 } from '../../lib/schemaVersions.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';
+import { SERIES_ID_RE } from '../pipeline/series.js';
 import { diffWorkBodyManifest } from '../writersRoom/sync.js';
 import {
   ackDeletesUpTo,
@@ -275,6 +276,12 @@ export async function applyIncomingPush(payload, authorization) {
     if (!localEphemeral && Array.isArray(issues) && issues.length > 0) {
       await mergeIssuesFromSync(issues, { source, senderSchemaVersions });
     }
+    // Bundled sidecar docs (manuscript-review, reverse-outline) are only valid
+    // if the series id matches the expected format. A malformed id (e.g.
+    // containing `../`) could traverse directories and write files outside the
+    // series store. Skip merges for invalid ids — the series record itself is
+    // already merged, so mark the bundle as pending to retry next cycle.
+    const seriesIdValid = SERIES_ID_RE.test(record.id);
     // Merge the bundled manuscript-review sibling doc, LWW-per-comment. Same
     // guards as the issue batch + linkedCollection below: skip for local-
     // ephemeral records (the user opted this series out of sync) and tombstone
@@ -285,18 +292,22 @@ export async function applyIncomingPush(payload, authorization) {
     // lastPushedHash. Raise the row's pending flag so the sender withholds the
     // hash (mirrors the missing-assets guard) and retries next cycle.
     // Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
+    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
       const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
       await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
+    } else if (!seriesIdValid && isPlainObject(manuscriptReview)) {
+      markPending('manuscriptReview')(new Error('Invalid series id'));
     }
     // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
     // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
     // the review above: a merge failure must withhold the sender's hash so the
     // outline (which has no independent reconciliation cycle) re-sends next
     // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
-    if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
+    if (seriesIdValid && !localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
       const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
       await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
+    } else if (!seriesIdValid && isPlainObject(reverseOutline)) {
+      markPending('reverseOutline')(new Error('Invalid series id'));
     }
   } else if (kind === 'writersRoomWork') {
     // Did the receiver accept the remote work (insert / remote-won LWW)? This
