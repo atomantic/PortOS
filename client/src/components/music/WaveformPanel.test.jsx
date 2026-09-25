@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import WaveformPanel from './WaveformPanel';
 import * as api from '../../services/api';
 
@@ -139,7 +139,11 @@ describe('<WaveformPanel>', () => {
   it('plays and stops the synthesized drawing', async () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: /Draw it/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /Play drawing/ }));
+    const playButton = await screen.findByRole('button', { name: /Play drawing/ });
+    await act(async () => {
+      fireEvent.click(playButton);
+      await Promise.resolve();
+    });
 
     await screen.findByRole('button', { name: /Stop/ });
     const [source] = audio.sources;
