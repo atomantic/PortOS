@@ -124,6 +124,21 @@ describe('materializeStoredPreset', () => {
     await expect(presets.materializeStoredPreset({ ...stored, serviceId: 'nowhere' })).rejects.toMatchObject({ status: 400, code: 'service-unknown' });
   });
 
+  it('never lets a stale service catalog shrink a preset: an echoed list is not a narrowing, and a narrowing keeps ids not listed yet', async () => {
+    const created = await presets.createPresetFromComposite({ compositeId: 'pi.tui@nvidia-nim-free' });
+    // A record whose models got ahead of its service catalog (a newer listing
+    // written onto the record). Saving the editor echoes that list back.
+    const previous = { ...(await providerService().getProviderById(created.id)), models: ['meta/example-llama', 'meta/example-new'] };
+    const echoed = await presets.materializeStoredPreset({ ...previous, name: 'Renamed' }, { updates: { name: 'Renamed', models: previous.models }, previous });
+    expect(echoed.catalogNarrowing ?? null).toBeNull();
+    expect(echoed.models).toEqual(['nvidia/example-nemotron', 'meta/example-llama']);
+
+    const updates = { models: ['meta/example-llama', 'meta/example-new'] };
+    const narrowed = await presets.materializeStoredPreset({ ...previous, ...updates }, { updates, previous: { ...previous, models: ['meta/example-llama'] } });
+    expect(narrowed.catalogNarrowing).toEqual(['meta/example-llama', 'meta/example-new']);
+    expect(narrowed.models).toEqual(['meta/example-llama']);
+  });
+
   it('accepts an ordinary preset save after its NVIDIA service key changes and stores the new service value', async () => {
     const created = await presets.createPresetFromComposite({ compositeId: 'pi.tui@nvidia-nim-free' });
     const previous = await providerService().getProviderById(created.id);

@@ -714,7 +714,7 @@ function requireSettledRoutes(routes) {
 }
 
 /** Every binding on a connection, and the executable routes those bindings own. */
-function connectionFanout(graph, connectionId) {
+export function connectionFanout(graph, connectionId) {
   const bindings = graph.bindings.filter((binding) => binding.connectionId === connectionId);
   const bindingIds = new Set(bindings.map((binding) => binding.id));
   return { bindings, routes: graph.routes.filter((route) => bindingIds.has(route.bindingId)) };

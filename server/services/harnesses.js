@@ -371,6 +371,7 @@ export async function refreshHarnessModels(id, { run = commandOutput, providerId
     return {
       ok: false,
       reason: `${runtime.label} has no command for listing its models, so PortOS cannot refresh them from here.`,
+      noLister: true,
       models: [],
       updated: [],
     };

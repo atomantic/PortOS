@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { ServerError } from '../lib/errorHandler.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import { isDerivedPreset } from '../lib/providerGraphRecords.js';
@@ -65,10 +66,14 @@ export async function materializeStoredPreset(candidate, { updates = {}, previou
   const record = { ...candidate, method: candidate.method ?? candidate.type };
   const { harness, connection, instance, bootstrap } = await presetInputs(record);
   const listed = listedModels(instance, connection.catalog);
-  if (Array.isArray(updates.models) && listed.length > 0) {
-    const known = new Set(listed);
-    const narrowing = updates.models.filter((model) => known.has(model));
-    record.catalogNarrowing = narrowing.length === listed.length ? null : narrowing;
+  // An editor Save echoes the stored list back; only a CHANGED list is a
+  // narrowing. And a narrowing keeps ids the catalog does not list yet
+  // (`derivedPresetModels` filters them at derivation) — dropping them here
+  // turned a stale instance catalog into a permanent one-model preset.
+  if (Array.isArray(updates.models) && listed.length > 0
+    && !(previous && isDeepStrictEqual(updates.models, previous.models))) {
+    const chosen = new Set(updates.models);
+    record.catalogNarrowing = listed.every((model) => chosen.has(model)) ? null : [...chosen];
   }
   const { record: derived, error, ownedEnvNames } = materializeDerivedPreset({
     record, harness, instance, catalog: connection.catalog, bootstrap,
