@@ -18,7 +18,7 @@
  * drawing into the track's render history.
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Brush, Loader2, Play, Save, Square, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
@@ -186,8 +186,10 @@ export default function WaveformPanel({
     if (mountedRef.current) setPlaying(false);
   };
 
-  // A new drawing (or leaving the panel) silences the old one.
-  useEffect(() => stop, [sketch]);
+  // Stop the previous drawing before the new Play button can be used. A
+  // deferred passive cleanup can otherwise cancel a play clicked immediately
+  // after drawing finishes.
+  useLayoutEffect(() => stop, [sketch]);
 
   const play = async () => {
     if (!pcm) return;
