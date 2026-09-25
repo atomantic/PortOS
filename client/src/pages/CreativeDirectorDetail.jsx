@@ -45,6 +45,17 @@ const TABS = [
 
 export default function CreativeDirectorDetail({ basePath = '/creative-director' } = {}) {
   const { id } = useParams();
+  // Give each route identity its own state and callbacks, including confirmations
+  // and child saves. A late callback from a prior visit cannot update this visit.
+  return <CreativeDirectorProject key={id} id={id} basePath={basePath} />;
+}
+
+function CreativeDirectorProject({ id, basePath }) {
+  const active = useRef(false);
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const editingDraft = searchParams.get('draft') === '1';
@@ -119,7 +130,8 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
 
   const fetchProject = useCallback(async () => {
     const p = await getCreativeDirectorProject(id).catch(() => null);
-    setProject(p);
+    if (!active.current) return null;
+    setProject(p?.id === id ? p : null);
     setLoading(false);
     return null;
   }, [id]);
@@ -129,6 +141,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
   // Filter by `taskId` prefix `cd-<projectId>-` (agentBridge's id scheme).
   const fetchAgents = useCallback(async () => {
     const data = await getCosAgents().catch(() => []);
+    if (!active.current) return null;
     const prefix = `cd-${id}-`;
     const mine = (data || []).filter((a) => a.status === 'running' && (a.taskId || '').startsWith(prefix));
     setActiveAgents(mine);
@@ -185,6 +198,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
   const [deleting, setDeleting] = useState(false);
 
   const handleAction = async (kind) => {
+    if (!active.current || project?.id !== id) return;
     // Map action → past-tense label and optimistic status up-front.
     const successMessages = {
       start: 'Started', pause: 'Paused', resume: 'Resumed',
@@ -202,20 +216,24 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
       else if (kind === 'pause') await pauseCreativeDirectorProject(id, { silent: true });
       else if (kind === 'resume') await resumeCreativeDirectorProject(id, { silent: true });
       else if (kind === 'stop') await stopCreativeDirectorProject(id, { silent: true });
+      if (!active.current) return;
       toast.success(successMessages[kind] || kind);
       if (optimisticStatus) setProject((p) => p ? { ...p, status: optimisticStatus } : p);
     } catch (err) {
-      toast.error(err.message || `Failed to ${kind}`);
+      if (active.current) toast.error(err.message || `Failed to ${kind}`);
     }
   };
 
   const handleDelete = async () => {
+    if (!active.current || project?.id !== id) return;
     setDeleting(true);
     try {
       await deleteCreativeDirectorProject(id, { silent: true });
+      if (!active.current) return;
       toast.success('Creative Director project deleted');
       navigate(basePath);
     } catch (err) {
+      if (!active.current) return;
       toast.error(err.message || 'Failed to delete project');
       setDeleting(false);
     }
@@ -240,7 +258,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
       />
     );
   }
-  if (!project) return <div className="p-6 text-port-error">Project not found.</div>;
+  if (!project || project.id !== id) return <div className="p-6 text-port-error">Project not found.</div>;
 
   const goTo = (tabId) => navigate(`${basePath}/${id}/${tabId}`);
 
