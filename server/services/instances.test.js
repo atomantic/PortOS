@@ -60,6 +60,7 @@ import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 import {
   getPeers,
   getAssignableInstances,
@@ -1502,6 +1503,32 @@ describe('instances.js', () => {
       expect(peer).toEqual(before);
       await applyReciprocalSync('peer-a', { universe: true }, { fullSync: true });
       expect(peer).toEqual(before);
+    });
+
+    it('ignores host/port/name/status from an announce whose address does not match the stored peer, even without a syncSecret', async () => {
+      // instanceId is public (GET /api/system/health, unauthenticated), so a caller
+      // that only knows it — but isn't calling from the peer's real address — must
+      // not be able to redirect this peer record to a host of their choosing.
+      const peer = {
+        id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        host: 'configured.example.com', name: 'configured.example.com', status: 'offline',
+        directions: ['outbound']
+      };
+      const before = structuredClone(peer);
+      readJSONFile.mockResolvedValue({ self: { instanceId: 'local-instance' }, peers: [peer] });
+
+      const result = await handleAnnounce({
+        instanceId: 'peer-a', address: '198.51.100.99', port: 443,
+        host: 'attacker.example.com', name: 'attacker'
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.peer.host).toBe(before.host);
+      expect(result.peer.port).toBe(before.port);
+      expect(result.peer.name).toBe(before.name);
+      expect(result.peer.status).toBe(before.status);
+      expect(result.peer.directions).toEqual(before.directions);
+      expect(peerBaseUrl(result.peer)).toBe(peerBaseUrl(before));
     });
 
     it('preserves the managed tailcat endpoint when the remote announces its own host and port', async () => {
