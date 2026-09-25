@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join, sep } from 'path';
-import { DATA_ROOT_ENV, resolveInstallRoot, isWorktreeRoot } from './dataRoot.js';
+import { DATA_ROOT_ENV, DISPOSABLE_ROOT_MARKER, resolveInstallRoot, isWorktreeRoot } from './dataRoot.js';
 
 const REAL_ROOT = join(sep, 'Users', 'me', 'PortOS');
 
@@ -57,6 +59,30 @@ describe('resolveInstallRoot', () => {
     process.env[DATA_ROOT_ENV] = REAL_ROOT;
     const worktreeFallback = join(REAL_ROOT, 'data', 'cos', 'worktrees', 'agent-abc');
     expect(resolveInstallRoot(worktreeFallback)).toBe(worktreeFallback);
+  });
+
+  describe('disposable roots (boot smoke, #8343)', () => {
+    let disposable;
+    afterEach(() => {
+      if (disposable) rmSync(disposable, { recursive: true, force: true });
+      disposable = undefined;
+    });
+    const worktreeFallback = join(REAL_ROOT, 'data', 'cos', 'worktrees', 'claim-issue-1');
+
+    it('lets a worktree-executing process honor a pin to a marked disposable root', () => {
+      // Without this the smoke, run from a worktree, would boot on the
+      // worktree's own data/ instead of its throwaway tree.
+      disposable = mkdtempSync(join(tmpdir(), 'portos-dataroot-test-'));
+      writeFileSync(join(disposable, DISPOSABLE_ROOT_MARKER), '');
+      process.env[DATA_ROOT_ENV] = disposable;
+      expect(resolveInstallRoot(worktreeFallback)).toBe(disposable);
+    });
+
+    it('still refuses an UNMARKED pin from a worktree — the live install carries no marker', () => {
+      disposable = mkdtempSync(join(tmpdir(), 'portos-dataroot-test-'));
+      process.env[DATA_ROOT_ENV] = disposable;
+      expect(resolveInstallRoot(worktreeFallback)).toBe(worktreeFallback);
+    });
   });
 });
 

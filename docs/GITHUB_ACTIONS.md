@@ -416,7 +416,11 @@ The selected work is split across parallel jobs:
 
 - **Server tests** — full, related, or explicit feature test files. Smoke-boots
   the server on the same job when server source changed (the smoke path uses the
-  file backend under `NODE_ENV=test` and does not need Postgres). The install
+  file backend under `NODE_ENV=test` and does not need Postgres). The smoke is
+  hermetic (#8343): `scripts/smoke-boot.js` boots against a disposable install
+  root seeded like a fresh install, with an allowlisted environment and
+  `PORTOS_SMOKE_BOOT=1` so no scheduler, agent recovery, or peer sync starts —
+  `npm run smoke` behaves the same on a clean checkout and on a live install. The install
   and the native-addon rebuild are skipped when a `server/node_modules` cache is
   restored and its trusted-rebuild mark checks out. This job also runs
   `npm ci --prefix autofixer` — uncached and never skipped, because resolving
