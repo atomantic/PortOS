@@ -8,7 +8,7 @@
 
 import { createReadStream } from 'fs';
 import { unlink } from 'fs/promises';
-import { extractDateStr, readDayFile, writeDayFile } from './appleHealthIngest.js';
+import { extractDateStr, readDayFile, writeDayFile, upsertPoints, queueDayWrite } from './appleHealthIngest.js';
 import { createAppleHealthRecordStream } from './appleHealthXmlParser.js';
 
 // === Mapping Tables ===
@@ -207,6 +207,7 @@ const FLUSH_INTERVAL = 200000; // Flush to disk every 200K records to stay under
 
 /**
  * Flush accumulated day buckets to disk: aggregate, merge with existing, write, clear.
+ * Uses upsert to handle re-imports that update existing day totals.
  *
  * @param {Object} dayBuckets - { [dateStr]: { [metricName]: [...dataPoints] } }
  * @returns {Promise<Set<string>>} Set of date strings that were flushed
@@ -216,31 +217,33 @@ async function flushDayBuckets(dayBuckets) {
   const allDates = Object.keys(dayBuckets);
 
   for (const dateStr of allDates) {
-    const metrics = dayBuckets[dateStr];
+    await queueDayWrite(dateStr, async () => {
+      const metrics = dayBuckets[dateStr];
 
-    // Aggregate step_count: sum all qty values into single daily total
-    if (metrics.step_count) {
-      metrics.step_count = aggregateStepCount(metrics.step_count);
-    }
-
-    // Aggregate sleep_analysis: sum stage durations into daily summary
-    if (metrics.sleep_analysis) {
-      metrics.sleep_analysis = aggregateSleepAnalysis(metrics.sleep_analysis);
-    }
-
-    const dayData = await readDayFile(dateStr);
-
-    for (const [metricName, newPoints] of Object.entries(metrics)) {
-      const existing = dayData.metrics[metricName] || [];
-      const existingDates = new Set(existing.map(p => p.date));
-      const uniquePoints = newPoints.filter(p => !existingDates.has(p.date));
-      if (uniquePoints.length > 0) {
-        dayData.metrics[metricName] = existing.concat(uniquePoints);
+      // Aggregate step_count: sum all qty values into single daily total
+      if (metrics.step_count) {
+        metrics.step_count = aggregateStepCount(metrics.step_count);
       }
-    }
 
-    await writeDayFile(dateStr, dayData);
-    flushedDates.add(dateStr);
+      // Aggregate sleep_analysis: sum stage durations into daily summary
+      if (metrics.sleep_analysis) {
+        metrics.sleep_analysis = aggregateSleepAnalysis(metrics.sleep_analysis);
+      }
+
+      const dayData = await readDayFile(dateStr);
+
+      for (const [metricName, newPoints] of Object.entries(metrics)) {
+        const existing = dayData.metrics[metricName] || [];
+        const { result } = upsertPoints(existing, newPoints);
+        if (result.length > 0) {
+          dayData.metrics[metricName] = result;
+        }
+      }
+
+      await writeDayFile(dateStr, dayData);
+      flushedDates.add(dateStr);
+    });
+
     delete dayBuckets[dateStr];
   }
 
