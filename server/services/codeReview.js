@@ -77,6 +77,8 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   const code = typeof result.code === 'string' ? result.code : null
   const isConfigFault = isReviewerConfigFault(code)
   if (!isConfigFault && !isReviewerQuotaFailure(message)) return false
+  // Reviewer telemetry is not a user action. The standalone claim bridge must
+  // not initialize the live user-action database while updating local health.
   await updateSettingsWith((settings) => ({
     ...settings,
     codeReview: {
@@ -88,7 +90,7 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
           : { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
       },
     },
-  }))
+  }), { skipUserAction: true })
   cachedDefaults = null
   return true
 }
@@ -110,7 +112,7 @@ export async function reportReviewerSuccess(reviewer, now = Date.now()) {
         ...(Object.keys(remaining).length ? { reviewerHealth: remaining } : {}),
       },
     }
-  })
+  }, { skipUserAction: true })
   if (cleared) cachedDefaults = null
   return cleared
 }
