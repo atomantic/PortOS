@@ -28,12 +28,11 @@ import {
   writersRoomPlaceUpdateSchema,
   writersRoomObjectCreateSchema,
   writersRoomObjectUpdateSchema,
-  isPaginationRequested,
-  paginateArray,
+  writersRoomWorksQuerySchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
-  listWorks, getWorkWithBody, createWork, updateWork, deleteWork,
+  listWorks, listWorksPage, getWorkWithBody, createWork, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
 } from '../services/writersRoom/local.js';
@@ -85,15 +84,12 @@ router.delete('/folders/:id', asyncHandler(async (req, res) => {
 
 // ---------- works ----------
 
-// Backward-compatible by default: returns the full works array. When a client
-// passes `limit`/`offset`, the response becomes the bounded
-// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+// No paging query preserves the legacy response for older callers.
 router.get('/works', asyncHandler(async (req, res) => {
-  const works = await listWorks();
-  if (!isPaginationRequested(req.query)) {
-    return res.json(works);
+  if (req.query.limit === undefined && req.query.offset === undefined && req.query.cursor === undefined) {
+    return res.json(await listWorks());
   }
-  res.json(paginateArray(works, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(await listWorksPage(validateRequest(writersRoomWorksQuerySchema, req.query)));
 }));
 
 router.post('/works', asyncHandler(async (req, res) => {

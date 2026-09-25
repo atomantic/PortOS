@@ -152,6 +152,8 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     // Live reads filter the tombstone out…
     expect(await db.readWork('wr-work-2')).toBeNull();
     expect(await db.listWorkIds()).toEqual(['wr-work-1']);
+    expect(await db.listOrderedWorkIds()).toEqual(['wr-work-1']);
+    expect(await db.readWorksPage(['wr-work-2', 'wr-work-1'])).toEqual(works);
     // …but the row, its draft rows, and the tombstone trio survive until prune.
     expect((await query(`SELECT deleted FROM writers_room_works WHERE id = 'wr-work-2'`)).rows[0].deleted).toBe(true);
     expect((await query(`SELECT 1 FROM writers_room_draft_versions WHERE work_id = 'wr-work-2'`)).rows).toHaveLength(1);

@@ -12,6 +12,7 @@ import {
   getWritersRoomWork,
 } from '../services/apiWritersRoom';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import { usePagedCollection } from '../hooks/usePagedCollection';
 import useMounted from '../hooks/useMounted';
 
 const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
@@ -20,7 +21,10 @@ export default function WritersRoom() {
   const { workId } = useParams();
   const navigate = useNavigate();
   const [folders, setFolders] = useState([]);
-  const [works, setWorks] = useState([]);
+  const fetchWorks = useCallback(({ cursor, signal }) =>
+    listWritersRoomWorks({ limit: 50, cursor }, { signal, silent: true }), []);
+  const worksPage = usePagedCollection(fetchWorks);
+  const { items: works, setItems: setWorks, reload: reloadWorks } = worksPage;
   const [activeWork, setActiveWork] = useState(null);
   const [creatingWork, setCreatingWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
@@ -39,13 +43,9 @@ export default function WritersRoom() {
   const mountedRef = useMounted();
 
   const refreshLibrary = useCallback(async () => {
-    const [foldersList, worksList] = await Promise.all([
-      listWritersRoomFolders().catch(() => []),
-      listWritersRoomWorks().catch(() => []),
-    ]);
+    const foldersList = await listWritersRoomFolders().catch(() => []);
     if (!mountedRef.current) return;
     setFolders(foldersList);
-    setWorks(worksList);
   }, []);
 
   useEffect(() => { refreshLibrary(); }, [refreshLibrary]);
@@ -179,7 +179,21 @@ export default function WritersRoom() {
               works={works}
               activeWorkId={activeWork?.id}
               onSelectWork={selectWork}
-              onRefresh={refreshLibrary}
+              onRefresh={(change) => {
+                if (change?.work) {
+                  const updated = change.work;
+                  const draft = updated.drafts?.find(item => item.id === updated.activeDraftVersionId);
+                  setWorks(prev => [{ ...updated, wordCount: draft?.wordCount ?? 0 }, ...prev.filter(item => item.id !== updated.id)]);
+                } else if (change?.deletedWorkId) {
+                  setWorks(prev => prev.filter(item => item.id !== change.deletedWorkId));
+                } else if (change?.folder) {
+                  setFolders(prev => [...prev, change.folder]);
+                } else if (change?.deletedFolderId) {
+                  refreshLibrary();
+                  setWorks(prev => prev.map(item => item.folderId === change.deletedFolderId ? { ...item, folderId: null } : item));
+                } else { refreshLibrary(); reloadWorks(); }
+              }}
+              paging={worksPage}
               onCollapse={toggleLibrary}
               creatingWork={creatingWork}
               onCreatingWorkChange={setCreatingWork}

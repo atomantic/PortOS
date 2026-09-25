@@ -14,6 +14,8 @@
  * the manifest shape are unchanged. See docs/features/writers-room.md.
  */
 
+import { ServerError } from '../../lib/errorHandler.js';
+import { writersRoomWorksQuerySchema } from '../../lib/pipelineValidation.js';
 import { randomUUID, createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
@@ -275,6 +277,24 @@ export async function ensureWorkMediaCollection(workId) {
   return collection;
 }
 
+function summarizeWork(manifest) {
+  const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
+  return {
+    id: manifest.id,
+    folderId: manifest.folderId,
+    title: manifest.title,
+    kind: manifest.kind,
+    status: manifest.status,
+    activeDraftVersionId: manifest.activeDraftVersionId,
+    wordCount: activeDraft?.wordCount ?? 0,
+    draftCount: (manifest.drafts || []).length,
+    pipelineSeriesId: manifest.pipelineSeriesId || null,
+    pipelineIssueId: manifest.pipelineIssueId || null,
+    createdAt: manifest.createdAt,
+    updatedAt: manifest.updatedAt,
+  };
+}
+
 export async function listWorks() {
   // The store returns full manifests (rebuilt with drafts[] on the PG backend),
   // dropping any work with a corrupted manifest on the file backend so one bad
@@ -282,24 +302,42 @@ export async function listWorks() {
   const manifests = await store().listWorks();
   return manifests
     .filter(Boolean)
-    .map((manifest) => {
-      const activeDraft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
-      return {
-        id: manifest.id,
-        folderId: manifest.folderId,
-        title: manifest.title,
-        kind: manifest.kind,
-        status: manifest.status,
-        activeDraftVersionId: manifest.activeDraftVersionId,
-        wordCount: activeDraft?.wordCount ?? 0,
-        draftCount: (manifest.drafts || []).length,
-        pipelineSeriesId: manifest.pipelineSeriesId || null,
-        pipelineIssueId: manifest.pipelineIssueId || null,
-        createdAt: manifest.createdAt,
-        updatedAt: manifest.updatedAt,
-      };
-    })
+    .map(summarizeWork)
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+}
+
+// Membership snapshots retain IDs only, never prose or draft histories. They are
+// process-local and expire after five minutes (including after a server restart).
+const workSnapshots = new Map();
+const SNAPSHOT_TTL = 5 * 60 * 1000;
+const MAX_SNAPSHOTS = 32;
+
+export async function listWorksPage(query = {}) {
+  const { limit, offset, cursor } = writersRoomWorksQuerySchema.parse(query);
+  const now = Date.now();
+  for (const [id, entry] of workSnapshots) if (entry.expires <= now) workSnapshots.delete(id);
+  let snapshot;
+  let position = offset;
+  if (cursor) {
+    const [id, index] = cursor.split('.');
+    snapshot = workSnapshots.get(id);
+    if (!snapshot) throw new ServerError('Library page expired. Restart the library to continue.', {
+      status: 409, code: 'CURSOR_EXPIRED',
+    });
+    position = Number(index);
+    if (!Number.isSafeInteger(position) || position > snapshot.ids.length) {
+      throw new ServerError('Invalid library cursor', { status: 400, code: 'INVALID_CURSOR' });
+    }
+  } else {
+    snapshot = { id: randomUUID(), ids: await store().listOrderedWorkIds(), expires: now + SNAPSHOT_TTL };
+    while (workSnapshots.size >= MAX_SNAPSHOTS) workSnapshots.delete(workSnapshots.keys().next().value);
+    workSnapshots.set(snapshot.id, snapshot);
+  }
+  const ids = snapshot.ids.slice(position, position + limit);
+  const items = (await store().readWorksPage(ids)).map(summarizeWork);
+  const next = position + ids.length;
+  return { items, total: snapshot.ids.length, limit, offset: position,
+    nextCursor: next < snapshot.ids.length ? `${snapshot.id}.${next}` : null };
 }
 
 /**
