@@ -98,6 +98,7 @@ describe('POST /api/code-animation/brief', () => {
     runPromptThroughProvider.mockResolvedValue(briefResponse({
       title: 'The Brass Wick',
       concept: 'Mira climbs the flooded arcade as the lamps go out one by one.',
+      cast: 'Mira — tall, oil-stained coat; lantern pole that dips when she is afraid.',
       onScreenText: '0:02 "One light remains"',
       styleNotes: 'colder blues at the climax',
     }));
@@ -109,6 +110,7 @@ describe('POST /api/code-animation/brief', () => {
     expect(res.body.brief).toEqual({
       title: 'The Brass Wick',
       concept: 'Mira climbs the flooded arcade as the lamps go out one by one.',
+      cast: 'Mira — tall, oil-stained coat; lantern pole that dips when she is afraid.',
       onScreenText: '0:02 "One light remains"',
       styleNotes: 'colder blues at the climax',
     });
@@ -176,6 +178,16 @@ describe('POST /api/code-animation/prompt', () => {
     expect(res.body.prompt).not.toContain('Mira');
     expect(res.body.prompt).not.toContain('A drowned city keeps its lamps lit');
     expect(JSON.stringify(res.body)).not.toContain(PATHS.data);
+  });
+
+  it('rigs the brief\'s character bible into the coding prompt', async () => {
+    const res = await request(makeApp()).post('/api/code-animation/prompt').send({
+      ...brief,
+      cast: 'Wick — a palm-sized paper lantern whose wire handle droops when sad.',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.prompt).toContain('CHARACTERS — the design bible');
+    expect(res.body.prompt).toContain('Wick — a palm-sized paper lantern whose wire handle droops when sad.');
   });
 
   it('skips the board when the user explicitly picks none', async () => {

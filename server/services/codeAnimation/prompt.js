@@ -6,7 +6,9 @@
  * produced by code. The art style comes from the universe's style guide (its
  * curated embrace/avoid tokens, style references, and tone notes), refined by a
  * mood board's notes/captions/analyses, reference images, optional per-film
- * style notes, and an audio track.
+ * style notes, and an audio track. A character design bible, when the brief
+ * has one, becomes rigging instructions, and a fixed direction section and
+ * self-review pass hold the output to a studio-short craft bar.
  *
  * The prompt also pins a small RUNTIME CONTRACT the PortOS preview host relies
  * on — a deterministic `renderFrame(t)`, `ANIMATION_META`, the audio URL hook,
@@ -60,6 +62,7 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   titleMax: 200,
   seedIdeaMax: 2_000,
   conceptMax: 6_000,
+  castMax: 4_000,
   textMax: 4_000,
   styleNotesMax: 2_000,
   referenceImagesMax: 8,
@@ -177,10 +180,53 @@ function audioSection({ audio, soundtrack, durationSeconds }) {
     return lines.join('\n');
   }
   if (soundtrack === 'procedural') {
-    return 'No audio file was supplied. Compose a procedural soundtrack with the Web Audio API (oscillators, noise, envelopes, a simple sequencer) that matches the mood and is synchronized to the visual beats. Start it on the first user gesture (Play/Record); resume a suspended AudioContext.';
+    return [
+      'No audio file was supplied. Design an original procedural soundtrack with the Web Audio API (oscillators, FM, filtered noise, envelopes, a simple sequencer), scheduled from the same timeline as the picture so every sound lands on its frame. Start it on the first user gesture (Play/Record); resume a suspended AudioContext.',
+      '- Voice: wordless characters get a small emotional vocabulary of synthesized chirps, boops, hums, or warbles (sine/FM tones with pitch bends) — e.g. a curious rising chirp, a happy trill, a worried wobble, a startled squeak, a grumpy buzz, a sigh — cued to their expressions.',
+      '- Foley: motion has sound — servo whirs, footsteps or wheel crunch, cloth or spring creaks, clicks — matched to the moves that cause it.',
+      '- Score: a light, loopable bed whose instrumentation or filter shifts with each scene or world, plus a distinct sound for the signature transition.',
+      '- Silence is a beat: cut all audio for a freeze, a reveal, or a punchline, then bring the room tone back.',
+    ].join('\n');
   }
   return 'The animation is silent — no audio.';
 }
+
+// The character bible turned into rigging instructions. A studio short lives or
+// dies on its lead reading as the same character in every frame and every
+// style, so the model builds the character once, as a parameterized rig, and
+// animates that rig rather than redrawing a figure per shot.
+function castSection(cast) {
+  return `CHARACTERS — the design bible (non-negotiable; every frame must stay on-model):
+${trimTo(cast, CODE_ANIMATION_LIMITS.castMax)}
+
+Build each lead ONCE as a cutout rig (2D, or its equivalent in your renderer) before animating anything:
+- A part hierarchy with pivots (root → body → head → face; limbs as segmented chains; appendages like antennae, tails, ears, or scarves as their own joints), drawn from functions that take pose parameters.
+- A procedural face: eyes, lids, pupils, brows, and mouth driven by parameters (size, lid cuts, pupil position, highlight, squash/stretch, special shapes such as hearts, stars, spirals, flat lines). Implement every named expression as a parameter preset and blend between presets; blink in 3–4 frames.
+- Secondary motion on damped springs — appendages, hair, cloth, suspension, head lag when the body accelerates or brakes — so nothing moves rigidly.
+- Reusable cycles (move, idle breathing with blinks and twitches, react) and turnaround views for turns.
+- A style/skin parameter (line weight, fill, texture, shading, outline boil) that restyles the rig without changing its geometry, so the character stays recognizable when the world changes style.
+- Locomotion that is physically honest: wheels rotate by distance traveled, feet plant without sliding, stops land with weight.`;
+}
+
+// The pacing bar both halves hold a film to — the brief writer plans to it and
+// the coding model stages to it — stated once so the two can't drift apart.
+export const PACING_RULE = 'open cold, mid-action, and hook within two seconds; give the audience a new visual payoff every 3–5 seconds; vary each repeated device (direction, noise seed, timing) so it never feels copy-pasted';
+
+// The craft bar. A one-shot HTML file can't run a multi-session render-and-
+// review loop, so the loop is folded into how the model structures the code
+// and what it checks before answering.
+const DIRECTION = `DIRECTION — make it feel like a studio short, not a tech demo:
+- Structure the code like a production: a shot/beat timeline (an array of { start, end, … } entries at the brief's timestamps; where it gives none, time the beats yourself: establish → develop → climax → resolve), a virtual camera (position, zoom, rotation, seeded handheld micro-shake, shake impulses, tilts, dolly moves, with shot scale varied between beats), a scene/world layer system shared by every shot, the character rigs, the transitions, and a final finish pass.
+- Depth and scale (unless the art style is deliberately flat): at least four parallax layers per scene with atmospheric perspective (haze and desaturation with distance), a shallow-focus feel (blurred foreground elements), and a camera height chosen to sell the characters' scale.
+- Lighting: key, fill, and rim on the characters (gradient overlays and multiplied shadow layers in 2D, shader terms in WebGL); glowing elements cast light on nearby surfaces. Finish the whole frame with a pass that suits the style (e.g. subtle grain and a gentle vignette).
+- Performance: anticipation, squash and stretch, overlap, easing, and deliberate holds — a held reaction (a one-second deadpan, a freeze) is what lets a gag land. Emotion reads through the eyes, posture, and signature appendage, never through captions.
+- Pacing: ${PACING_RULE}.
+- Readability: compose on thirds, and keep faces, eyes, and any text legible at phone size (about 360px wide); typed on-screen text types at a human rhythm with small pauses.
+- Endings: the player loops the film — when the brief ends by returning to its opening, match the final frame's framing, lighting, and motion to t=0 so the cut back feels intentional.`;
+
+// The critique pass the reference workflow runs on rendered stills, as a
+// pre-answer check against the failures one-shot animation code shows most.
+const SELF_REVIEW = `SELF-REVIEW before you answer: step through renderFrame at every beat's key frame in your head and score it honestly on character on-model, emotion readable from the face and body alone, story clear without sound, composition, depth, scale, lighting, and phone-size readability. Fix anything that would score below 8/10. Hunt especially for: stiff or dead secondary motion, sliding feet or wheels, faces that look like stickers, missing weight on stops and landings, identical-looking transitions, muddy or unreadable text, off-model proportions, empty or static stretches, and beats the brief asked for that never made it on screen.`;
 
 function runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio }) {
   const m = CODE_ANIMATION_MESSAGES;
@@ -210,6 +256,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
  * @param {object} input
  * @param {string} [input.title]
  * @param {string} input.concept - what happens in the film (required upstream)
+ * @param {string} [input.cast] - the character design bible the rig is built from
  * @param {string} [input.onScreenText] - titles, captions, narration beats
  * @param {string} [input.styleNotes] - refinements on top of the universe style
  * @param {{ durationSeconds: number, aspectRatio: string, resolution: string, fps: number }} input.format
@@ -226,6 +273,7 @@ ${interactive ? '10' : '9'}. Hold ${fps}fps: pre-render static layers and textur
 export function buildCodeAnimationPrompt({
   title = '',
   concept,
+  cast = '',
   onScreenText = '',
   styleNotes = '',
   format,
@@ -241,9 +289,10 @@ export function buildCodeAnimationPrompt({
   const { width, height } = resolveFrameSize(format.aspectRatio, format.resolution);
   const { durationSeconds, fps } = format;
   const sections = [
-    `You are an award-winning creative coder and motion designer. Write ONE complete, self-contained HTML file that renders a ${durationSeconds}-second animated film entirely in code — no image, video, font, or library assets. Every shape, texture, character, and effect is drawn procedurally in the browser, in the art style below, with the craft of a finished title sequence rather than a tech demo.`,
+    `You are the director, animator, rigger, compositor, sound designer, and render engineer of a ${durationSeconds}-second animated short made entirely in code. Write ONE complete, self-contained HTML file that renders it — no image, video, font, or library assets. Every shape, texture, character, and effect is drawn procedurally in the browser, in the art style below. The bar: it looks like a real studio short that people share, not a tech demo.`,
     `BRIEF${isNonBlankStr(title) ? ` — "${trimTo(title, 200)}"` : ''}:\n${trimTo(concept, CODE_ANIMATION_LIMITS.conceptMax)}`,
   ];
+  if (isNonBlankStr(cast)) sections.push(castSection(cast));
   if (isNonBlankStr(onScreenText)) {
     sections.push(`ON-SCREEN TEXT / NARRATION BEATS (render typography procedurally, timed to the story; system fonts only):\n${trimTo(onScreenText, CODE_ANIMATION_LIMITS.textMax)}`);
   }
@@ -253,9 +302,10 @@ export function buildCodeAnimationPrompt({
   const imagesText = referenceImagesSection(referenceImages, delivery);
   if (imagesText) sections.push(imagesText);
   sections.push(`SOUND:\n${audioSection({ audio, soundtrack, durationSeconds })}`);
-  sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}
-Plan the film as a sequence of beats with clear timestamps (establish → develop → climax → resolve) and build smooth transitions between them. Use easing curves, anticipation, overlap, and secondary motion; vary shot scale and camera movement (pan, zoom, parallax) so it feels directed.`);
+  sections.push(`FORMAT: ${format.aspectRatio} at ${width}×${height}px, ${fps}fps, ${durationSeconds}s. ${RENDERER_GUIDANCE[renderer] || RENDERER_GUIDANCE.auto}`);
+  sections.push(DIRECTION);
   sections.push(runtimeContract({ width, height, fps, durationSeconds, interactive, hasAudio: !!audio }));
+  sections.push(SELF_REVIEW);
   sections.push(`OUTPUT: Return ONLY the finished HTML document in a single \`\`\`html fenced code block, starting with <!DOCTYPE html>. No explanation before or after it.${delivery === 'cli' ? ' Do not create or edit any files — print the document as your final answer.' : ''}`);
   return sections.join('\n\n');
 }

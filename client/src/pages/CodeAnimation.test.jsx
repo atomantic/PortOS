@@ -133,6 +133,7 @@ describe('Code Animation page', () => {
       brief: {
         title: 'The Brass Wick',
         concept: 'Mira climbs the flooded arcade as the lamps go out.',
+        cast: 'Mira — tall, oil-stained coat',
         onScreenText: '0:02 "One light remains"',
         styleNotes: 'colder blues at the climax',
       },
@@ -157,24 +158,27 @@ describe('Code Animation page', () => {
     });
     expect(await screen.findByLabelText(/what happens/i)).toHaveValue('Mira climbs the flooded arcade as the lamps go out.');
     expect(screen.getByLabelText(/^title/i)).toHaveValue('The Brass Wick');
+    expect(screen.getByLabelText(/^characters/i)).toHaveValue('Mira — tall, oil-stained coat');
     expect(screen.getByLabelText(/on-screen text/i)).toHaveValue('0:02 "One light remains"');
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('colder blues at the climax');
   });
 
-  it('keeps the artist\'s own style refinements when the writer asks for none', async () => {
+  it('keeps the artist\'s own style refinements and characters when the writer adds none', async () => {
     const user = userEvent.setup();
     generateCodeAnimationBrief.mockResolvedValue({
-      brief: { title: '', concept: 'Fireflies gather over the water.', onScreenText: '', styleNotes: '' },
+      brief: { title: '', concept: 'Fireflies gather over the water.', cast: '', onScreenText: '', styleNotes: '' },
       moodBoardId: null,
       llm: { provider: 'api-1', model: null, runId: null },
     });
     await renderPage();
     await user.type(screen.getByLabelText(/style refinements/i), 'more fog');
+    await user.type(screen.getByLabelText(/^characters/i), 'Wick, a paper lantern');
     await user.type(screen.getByLabelText(/starting idea/i), 'fireflies');
     await user.click(screen.getByRole('button', { name: /write brief/i }));
     await waitFor(() => expect(generateCodeAnimationBrief).toHaveBeenCalled());
     expect(await screen.findByLabelText(/what happens/i)).toHaveValue('Fireflies gather over the water.');
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('more fog');
+    expect(screen.getByLabelText(/^characters/i)).toHaveValue('Wick, a paper lantern');
   });
 
   it('preserves brief fields edited while Write Brief is in flight', async () => {

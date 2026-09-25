@@ -207,6 +207,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
   const promptInput = {
     title: input.title,
     concept: input.concept,
+    cast: input.cast,
     onScreenText: input.onScreenText,
     styleNotes: input.styleNotes,
     format: input.format,
@@ -234,8 +235,8 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
 }
 
 /**
- * Write the brief itself: ask a model for a title / concept / on-screen text /
- * style refinement grounded in the universe's bible and canon cast, the same
+ * Write the brief itself: ask a model for a title / beat sheet / character
+ * bible / on-screen text / style refinement grounded in the universe's bible and canon cast, the same
  * way a series or story is generated from a universe. Synchronous — a few
  * hundred words comes back inside one request, unlike the HTML generation.
  *

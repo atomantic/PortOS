@@ -272,6 +272,22 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       return [field, savedValue];
     })));
 
+    setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
+      ([domainId, mode]) => getDomainMode(config, domainId) !== mode,
+    )));
+    setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
+      const savedBudget = getDomainBudget(config, domainId);
+      const remaining = Object.fromEntries(Object.entries(fields).filter(([field, value]) => (savedBudget[field] ?? null) !== value));
+      return Object.keys(remaining).length ? [[domainId, remaining]] : [];
+    })));
+  }, [config, avatarStyle]);
+
+  // Kept apart from the form resync above: this one also re-runs when the
+  // provider hook's setters change identity (they do once its providers load,
+  // and it re-applies the saved embedding pick over the hook's initial one).
+  // Every write here is a primitive, so a re-run with nothing new settles
+  // instead of rebuilding the form object and re-rendering without end.
+  useEffect(() => {
     const savedProviderId = config?.embeddingProviderId;
     if (savedProviderId !== undefined) {
       const pendingProviderId = pendingConfigFieldsRef.current.get('embeddingProviderId');
@@ -290,16 +306,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
         setModelHook(savedModel);
       }
     }
-
-    setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
-      ([domainId, mode]) => getDomainMode(config, domainId) !== mode,
-    )));
-    setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
-      const savedBudget = getDomainBudget(config, domainId);
-      const remaining = Object.fromEntries(Object.entries(fields).filter(([field, value]) => (savedBudget[field] ?? null) !== value));
-      return Object.keys(remaining).length ? [[domainId, remaining]] : [];
-    })));
-  }, [config, avatarStyle, setProviderHook, setModelHook]);
+  }, [config, setProviderHook, setModelHook]);
 
   const displayConfig = useMemo(() => {
     const domainBudgets = { ...(config?.domainBudgets || {}) };

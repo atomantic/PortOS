@@ -35,6 +35,7 @@ const DEFAULT_DRAFT = {
   title: '',
   seedIdea: '',
   concept: '',
+  cast: '',
   onScreenText: '',
   styleNotes: '',
   universeId: '',
@@ -47,6 +48,10 @@ const DEFAULT_DRAFT = {
   renderer: 'auto',
   interactive: false,
 };
+
+// Brief fields where a blank from the brief writer means "nothing to add"
+// rather than "clear it" (on-screen text, by contrast, can be deliberately none).
+const KEEP_ON_BLANK = new Set(['styleNotes', 'cast']);
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -81,6 +86,7 @@ const loadDraft = () => {
     title: stringField('title'),
     seedIdea: stringField('seedIdea'),
     concept: stringField('concept'),
+    cast: stringField('cast'),
     onScreenText: stringField('onScreenText'),
     styleNotes: stringField('styleNotes'),
     universeId: stringField('universeId'),
@@ -113,6 +119,7 @@ function toBrief(draft) {
   return {
     title: draft.title,
     concept: draft.concept,
+    cast: draft.cast,
     onScreenText: draft.onScreenText,
     styleNotes: draft.styleNotes,
     format: draft.format,
@@ -138,6 +145,7 @@ function toBriefIdeaInput(draft) {
     current: {
       title: draft.title,
       concept: draft.concept,
+      cast: draft.cast,
       onScreenText: draft.onScreenText,
       styleNotes: draft.styleNotes,
     },
@@ -159,6 +167,7 @@ function draftFromJob(job) {
     title: input.title || '',
     seedIdea: input.seedIdea || '',
     concept: input.concept || '',
+    cast: input.cast || '',
     onScreenText: input.onScreenText || '',
     styleNotes: input.styleNotes || '',
     universeId: input.universeId || '',
@@ -405,15 +414,11 @@ export default function CodeAnimation() {
   // builds the prompt.
   const handleWriteBrief = async () => {
     if (!canWriteBrief) return;
-    const startingBrief = {
-      title: draft.title,
-      concept: draft.concept,
-      onScreenText: draft.onScreenText,
-      styleNotes: draft.styleNotes,
-    };
+    const ideaInput = toBriefIdeaInput(draft);
+    const startingBrief = ideaInput.current;
     setWritingBrief(true);
     const result = await generateCodeAnimationBrief({
-      ...toBriefIdeaInput(draft),
+      ...ideaInput,
       providerId: briefProviderId || undefined,
       model: briefModel || undefined,
       effort: briefEffort || undefined,
@@ -423,16 +428,19 @@ export default function CodeAnimation() {
     });
     setWritingBrief(false);
     if (!result?.brief) return;
-    const { title, concept, onScreenText, styleNotes } = result.brief;
-    // Style refinements live in the Style section, not the brief — only replace
-    // the artist's own notes when the writer actually asked for a refinement.
-    setDraft((previous) => ({
-      ...previous,
-      ...(previous.title === startingBrief.title ? { title } : {}),
-      ...(previous.concept === startingBrief.concept ? { concept } : {}),
-      ...(previous.onScreenText === startingBrief.onScreenText ? { onScreenText } : {}),
-      ...(styleNotes && previous.styleNotes === startingBrief.styleNotes ? { styleNotes } : {}),
-    }));
+    // Fill only the fields the artist left untouched while the writer ran.
+    setDraft((previous) => {
+      const next = { ...previous };
+      for (const [key, before] of Object.entries(startingBrief)) {
+        const written = result.brief[key];
+        if (typeof written !== 'string' || previous[key] !== before) continue;
+        // A blank refinement or character bible means the writer had nothing to
+        // add — never let it wipe what the artist already wrote there.
+        if (KEEP_ON_BLANK.has(key) && !written) continue;
+        next[key] = written;
+      }
+      return next;
+    });
     toast.success('Brief written — edit it before building the prompt');
   };
 
@@ -662,7 +670,11 @@ export default function CodeAnimation() {
             </div>
             <div>
               <label htmlFor="ca-concept" className={labelClass}>What happens</label>
-              <textarea id="ca-concept" rows={4} value={draft.concept} maxLength={limits?.conceptMax} onChange={(event) => update({ concept: event.target.value })} placeholder="A paper lantern drifts over a sleeping harbor town, gathers fireflies, and bursts into a constellation at the climax." className={`${inputClass} resize-y`} />
+              <textarea id="ca-concept" rows={6} value={draft.concept} maxLength={limits?.conceptMax} onChange={(event) => update({ concept: event.target.value })} placeholder={'A paper lantern drifts over a sleeping harbor town, gathers fireflies, and bursts into a constellation.\n0:00–0:04 Low tracking shot: the lantern bobs past rooftops, curious…'} className={`${inputClass} resize-y`} />
+            </div>
+            <div>
+              <label htmlFor="ca-cast" className={labelClass}>Characters <span className="text-gray-600">(optional; design bible the animation rigs)</span></label>
+              <textarea id="ca-cast" rows={4} value={draft.cast} maxLength={limits?.castMax} onChange={(event) => update({ cast: event.target.value })} placeholder="Wick — a palm-sized paper lantern: round body, bent-wire handle that droops when sad; palette cream #F3E6C4, ember #E8763A; face: two ink-dot eyes (curious, sleepy, startled, delighted, determined). Identity lock: silhouette and handle never change." className={`${inputClass} resize-y`} />
             </div>
             <div>
               <label htmlFor="ca-text" className={labelClass}>On-screen text / narration <span className="text-gray-600">(optional)</span></label>
