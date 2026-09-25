@@ -1659,6 +1659,10 @@ export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
 
+export const appIconQuerySchema = z.object({
+  size: z.enum(['64', '128', '256']).default('128').transform(Number),
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.
