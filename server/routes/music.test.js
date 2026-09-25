@@ -344,6 +344,27 @@ describe('music routes', () => {
       expect(args.prompt).toContain('124 BPM');
     });
 
+    it('writes Tone.js code with its own prompt contract when language is tonejs', async () => {
+      promptRunner.runPromptThroughProvider.mockResolvedValue({
+        text: 'const synth = new Tone.Synth().toDestination();\nTone.getTransport().start();',
+        model: 'fake-model',
+      });
+      const r = await request(app).post('/api/music/code').send({
+        description: 'ambient pad drone', language: 'tonejs', providerId: 'fake-provider',
+      });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({
+        language: 'tonejs',
+        code: 'const synth = new Tone.Synth().toDestination();\nTone.getTransport().start();',
+        llm: { provider: 'fake-provider', model: 'fake-model' },
+      });
+      const prompt = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
+      expect(prompt).toContain('Tone.js');
+      expect(prompt).toContain('ambient pad drone');
+      expect(prompt).toContain('Tone.Transport.start()');
+      expect(prompt).not.toContain('Strudel');
+    });
+
     it('sends the editor code back as the revision target', async () => {
       promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'note("c3").s("sine")' });
       const r = await request(app).post('/api/music/code').send({

@@ -39,8 +39,13 @@ const refuseDuringDrain = (req, res) => {
 // Upgrade requests never reach Express — there is no `res` to write through,
 // only the raw socket handed to every 'upgrade' listener.
 const refuseUpgradeDuringDrain = (req, socket) => {
-  if (socket.writable) socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
-  socket.destroy();
+  if (!socket.writable) {
+    socket.destroy();
+    return;
+  }
+  // Destroy only once the refusal has flushed: destroying right after a queued
+  // write discards it, and the client reads an empty response (#8389).
+  socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n', () => socket.destroy());
 };
 
 export const createHttpDrain = (servers) => {

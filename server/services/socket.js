@@ -95,15 +95,30 @@ function registerSubscriber(socket, namespace, set) {
   });
 }
 
+// A peer relay (server/services/peerSocketRelay.js) authenticates the socket
+// handshake with the paired peer token or the legacy Basic password (#8386) —
+// never a session — so it can never satisfy the per-event re-check below on
+// its own. This is the ONLY carve-out: a minimal, read-only allowlist of the
+// subscribe/unsubscribe events the relay needs to receive `cos:agent:*`
+// broadcasts. Every other event, including any `shell:*`/host-control event,
+// still requires a real operator session and disconnects a peer-authenticated
+// socket exactly as it did before. Keep this list minimal — do not add a
+// mutating or host-affecting event here.
+const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
+
 function registerAuthHandlers(socket, _io) {
   // Per-event auth re-check: the handshake gate only runs once at connection
   // time, so every inbound event re-verifies an enabled session.
   if (typeof socket.use === 'function') {
-    socket.use(async ([_event, ..._args], next) => {
+    socket.use(async ([event, ..._args], next) => {
       try {
         if (!(await isAuthEnabled())) return next();
         const token = extractToken({ headers: socket.handshake?.headers || {} });
         if (await verifySession(token)) return next();
+        const peerAuthMethod = socket.data?.portosAuthMethod;
+        if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {
+          return next();
+        }
         socket.disconnect(true);
       } catch (err) {
         console.error(`❌ Socket auth middleware error: ${err?.message ?? err}`);
@@ -338,6 +353,11 @@ function setupProactiveSpeechForwarding() {
 export function broadcast(io, event, data) {
   io.emit(event, data);
 }
+
+// Test-only seam (mirrors the `__testing` convention in authGate.js): lets an
+// integration test wire the real per-event auth re-check onto a live
+// Socket.IO server without pulling in every other registrar's dependencies.
+export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, registerSubscriptionHandlers };
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {
