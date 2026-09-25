@@ -58,13 +58,13 @@ vi.mock('../videoGen/local.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
-vi.mock('./projects.js', () => ({ getProject: vi.fn(), updateProject: vi.fn(async () => ({})) }));
+vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})) }));
 
 import { renderMusicVideo, getRenderJobStatus } from './render.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, updateProject } from './projects.js';
+import { getProject, listProjects, updateProject } from './projects.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
@@ -172,80 +172,77 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
   });
 });
 
-describe('recoverStuckMusicVideoRenders', () => {
-  it('demotes stuck rendering projects to complete when they have a renderHistoryId', async () => {
-    const { recoverStuckMusicVideoRenders } = await import('./render.js');
 
-    // Mock getProject to return a list with a stuck rendering project
-    getProject.mockResolvedValue([
-      { id: 'proj-1', status: 'rendering', renderHistoryId: 'hist-1' },
-    ]);
+describe('status write failures are logged, not swallowed (#8430)', () => {
+  it('logs a failed status→complete write and still finishes the job', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pid = 'write-1';
+    prime(pid);
+    updateProject.mockImplementation(async (_id, patch) => {
+      if (patch.status === 'complete') throw new Error('disk full');
+      return {};
+    });
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    proc.emit('close', 0, null);
+    await tick();
 
-    await recoverStuckMusicVideoRenders();
-
-    expect(updateProject).toHaveBeenCalledWith('proj-1', { status: 'complete' });
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
+      && line.includes(pid) && line.includes('status→complete'))).toBe(true);
+    updateProject.mockImplementation(async () => ({}));
+    errorSpy.mockRestore();
   });
+});
 
-  it('demotes stuck rendering projects to ready when they lack a renderHistoryId', async () => {
+describe('recoverStuckMusicVideoRenders (#8430)', () => {
+  it('demotes stale renders by history, skips live jobs and other statuses', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
-
-    getProject.mockResolvedValue([
-      { id: 'proj-2', status: 'rendering' },
-    ]);
-
-    await recoverStuckMusicVideoRenders();
-
-    expect(updateProject).toHaveBeenCalledWith('proj-2', { status: 'ready' });
-  });
-
-  it('skips projects with active render jobs in the projectRenders map', async () => {
-    const { recoverStuckMusicVideoRenders, renderMusicVideo } = await import('./render.js');
-
-    // Start a render to put the project in the projectRenders map
-    prime('proj-3');
-    const { jobId } = await renderMusicVideo('proj-3');
-
-    // Mock getProject to return that project as rendering
-    getProject.mockResolvedValue([
-      { id: 'proj-3', status: 'rendering', renderHistoryId: 'hist-1' },
-    ]);
-
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prime('live-1');
+    await renderMusicVideo('live-1');
     updateProject.mockClear();
+    listProjects.mockResolvedValueOnce([
+      { id: 'done-1', status: 'rendering', renderHistoryId: 'hist-1' },
+      { id: 'fresh-1', status: 'rendering' },
+      { id: 'live-1', status: 'rendering' },
+      { id: 'idle-1', status: 'ready' },
+    ]);
+
     await recoverStuckMusicVideoRenders();
 
-    // Should NOT update a project with an active job
-    expect(updateProject).not.toHaveBeenCalledWith('proj-3', expect.anything());
+    expect(updateProject.mock.calls).toEqual([
+      ['done-1', { status: 'complete' }],
+      ['fresh-1', { status: 'ready' }],
+    ]);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 2/2'))).toBe(true);
+    logSpy.mockRestore();
   });
 
-  it('handles list failure gracefully without reporting zero recovered', async () => {
+  it('propagates a list failure instead of reporting zero recovered', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
-
-    getProject.mockRejectedValue(new Error('DB unavailable'));
-
-    // Should not throw
-    await expect(recoverStuckMusicVideoRenders()).resolves.toBeUndefined();
-
-    // Should log the error (verified via console.error mock if available)
+    listProjects.mockRejectedValueOnce(new Error('DB unavailable'));
+    await expect(recoverStuckMusicVideoRenders()).rejects.toThrow('DB unavailable');
     expect(updateProject).not.toHaveBeenCalled();
   });
 
-  it('logs summary when multiple projects are recovered', async () => {
+  it('logs a failed demotion and keeps recovering the rest', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
-    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    getProject.mockResolvedValue([
-      { id: 'proj-4', status: 'rendering', renderHistoryId: 'hist-1' },
-      { id: 'proj-5', status: 'rendering' },
-      { id: 'proj-6', status: 'ready' }, // Should be skipped
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    listProjects.mockResolvedValueOnce([
+      { id: 'bad-1', status: 'rendering' },
+      { id: 'good-1', status: 'rendering' },
     ]);
+    updateProject.mockRejectedValueOnce(new Error('write failed'));
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject).toHaveBeenCalledTimes(2);
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining('demoted 2 stuck render(s)'),
-    );
-
-    consoleLogSpy.mockRestore();
+    expect(updateProject).toHaveBeenCalledWith('good-1', { status: 'ready' });
+    expect(errorSpy.mock.calls.some(([line]) => line.includes('bad-1'))).toBe(true);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 1/2'))).toBe(true);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 });

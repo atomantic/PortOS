@@ -34,7 +34,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, updateProject } from './projects.js';
+import { getProject, listProjects, updateProject } from './projects.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -433,32 +433,21 @@ export async function renderMusicVideo(projectId) {
   }
 }
 
-// Recovery: after a server restart, a persisted 'rendering' status is stale if
-// the project has no live render job. Demote it based on whether it has a
-// renderHistoryId already recorded.
+// Boot recovery: a render job cannot survive a restart, so a persisted
+// 'rendering' status with no live job is stale. Demote it to 'complete' when a
+// finished render is already recorded, otherwise to 'ready'. A list failure
+// propagates to the bootstrap caller's logBootstrapFailure rather than
+// reporting zero recovered.
 export async function recoverStuckMusicVideoRenders() {
-  try {
-    // List all projects (implementation note: a project list read may fail; we
-    // report it and return cleanly to avoid crashing boot).
-    const projects = await getProject(null);
-    const rendering = Array.isArray(projects) ? projects.filter(p => p && p.status === 'rendering') : [];
-
-    let recovered = 0;
-    for (const project of rendering) {
-      // Skip projects that still have live jobs.
-      if (projectRenders.has(project.id)) continue;
-
-      // Demote to 'complete' if the project already has a rendered video in
-      // history, otherwise to 'ready' (user needs to generate clips first).
-      const targetStatus = project.renderHistoryId ? 'complete' : 'ready';
-      await updateProject(project.id, { status: targetStatus });
-      recovered++;
-    }
-
-    if (recovered > 0) {
-      console.log(`🎬 Music Video boot recovery: demoted ${recovered} stuck render(s) to ready/complete`);
-    }
-  } catch (err) {
-    console.error(`❌ Music Video recovery failed: ${err.message}`);
+  const stuck = (await listProjects()).filter((p) => p?.status === 'rendering' && !projectRenders.has(p.id));
+  let recovered = 0;
+  for (const project of stuck) {
+    const targetStatus = project.renderHistoryId ? 'complete' : 'ready';
+    const ok = await updateProject(project.id, { status: targetStatus }).then(() => true, (err) => {
+      console.error(`❌ Music Video recovery: project ${project.id.slice(0, 8)} status→${targetStatus} write failed: ${err.message}`);
+      return false;
+    });
+    if (ok) recovered++;
   }
+  if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
 }
