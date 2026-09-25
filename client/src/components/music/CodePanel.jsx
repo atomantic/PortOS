@@ -1,22 +1,22 @@
 /**
  * CodePanel — the Music Designer's "Code" engine.
  *
- * The chosen AI provider writes the track as Strudel code (strudel.cc). The code
- * lands in an editable box, and Play runs it in a sandboxed player frame
- * (`strudelFrame.js`): an opaque-origin `<iframe sandbox="allow-scripts">`
- * whose CSP blocks all network access. LLM code therefore never runs in the
- * PortOS origin, and an error it throws is reported back and shown inline
- * without breaking the page.
+ * The chosen AI provider writes the track as code in the picked language
+ * (Strudel or Tone.js). The code lands in an editable box, and Play runs it
+ * in a sandboxed player frame (`strudelFrame.js`): an opaque-origin
+ * `<iframe sandbox="allow-scripts">` whose CSP blocks all network access. LLM
+ * code therefore never runs in the PortOS origin, and an error it throws is
+ * reported back and shown inline without breaking the page.
  *
  * "Save as take" records the code in the frame for the chosen length and
  * uploads the WAV into the track's render history (`engine: 'code'`).
  *
  * The LLM call fires only from the Write/Revise buttons (no cold-bootstrap LLM
- * calls). The latest code is remembered per viewer in localStorage so a reload
- * doesn't lose it.
+ * calls). The latest code is remembered per viewer in localStorage, tagged
+ * with the language it was written in, so a reload doesn't lose it.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, Loader2, Play, Save, Square, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
@@ -24,7 +24,9 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 import { clamp, formatTimecode } from '../../utils/formatters';
 import { FIELD_CLASS, GHOST_BTN, LABEL_CLASS, PRIMARY_BTN } from './designerStyles';
 import { renderTrackCode, writeMusicCode } from '../../services/api';
-import { CODE_FRAME_SOURCE, STRUDEL_VERSION, buildStrudelFrameDoc } from './strudelFrame';
+import {
+  CODE_FRAME_SOURCE, STRUDEL_VERSION, TONE_VERSION, buildStrudelFrameDoc, buildToneFrameDoc,
+} from './strudelFrame';
 
 const CODE_KEY = 'portos.musicDesigner.strudelCode';
 // Mirrors MUSIC_CODE_MAX in server/services/musicCode.js.
@@ -32,12 +34,35 @@ const CODE_MAX = 20000;
 // Recording length. At 120s a 48 kHz stereo WAV is ~23 MB, under the 50 MB
 // music upload cap.
 const TAKE_SEC = { MIN: 4, MAX: 120, DEFAULT: 30 };
-const FRAME_DOC = buildStrudelFrameDoc();
 
-// Only the most recent code is kept (one key, tagged with its draft track).
+// Both languages' frame documents are static per version, so build each once.
+const LANGUAGES = {
+  strudel: {
+    label: 'Strudel',
+    docsUrl: 'https://strudel.cc',
+    version: STRUDEL_VERSION,
+    frameDoc: buildStrudelFrameDoc(),
+    placeholder: 'setcps(0.5)\nstack(\n  note("<c3 ab2 f2 g2>").s("sawtooth").lpf(600),\n  s("sbd*4"),\n)',
+  },
+  tonejs: {
+    label: 'Tone.js',
+    docsUrl: 'https://tonejs.github.io/',
+    version: TONE_VERSION,
+    frameDoc: buildToneFrameDoc(),
+    placeholder: 'const synth = new Tone.PolySynth(Tone.Synth).toDestination();\nconst pattern = new Tone.Pattern((time, note) => {\n  synth.triggerAttackRelease(note, "8n", time);\n}, ["C3", "Eb3", "G3", "Bb3"]);\npattern.start(0);\nTone.getTransport().bpm.value = 120;\nTone.getTransport().start();',
+  },
+};
+const DEFAULT_LANGUAGE = 'strudel';
+
+// Only the most recent code (and the language it was written in) is kept —
+// one key, tagged with its draft track.
 const readStoredCode = (trackId) => {
   const stored = safeReadJsonStorage(CODE_KEY);
-  return trackId && stored?.trackId === trackId && typeof stored.code === 'string' ? stored.code : '';
+  if (!trackId || stored?.trackId !== trackId) return { code: '', language: DEFAULT_LANGUAGE };
+  return {
+    code: typeof stored.code === 'string' ? stored.code : '',
+    language: LANGUAGES[stored.language] ? stored.language : DEFAULT_LANGUAGE,
+  };
 };
 
 export default function CodePanel({
@@ -46,7 +71,9 @@ export default function CodePanel({
 }) {
   const mountedRef = useMounted();
   const frameRef = useRef(null);
-  const [code, setCode] = useState(() => readStoredCode(trackId));
+  const initialStored = useMemo(() => readStoredCode(trackId), [trackId]);
+  const [code, setCode] = useState(initialStored.code);
+  const [language, setLanguage] = useState(initialStored.language);
   const [guidance, setGuidance] = useState('');
   // Raw field text, clamped only when used (same as the waveform panel).
   const [lengthInput, setLengthInput] = useState(String(TAKE_SEC.DEFAULT));
@@ -60,6 +87,7 @@ export default function CodePanel({
   const [takeSec, setTakeSec] = useState(TAKE_SEC.DEFAULT);
   const saveContextRef = useRef({});
   saveContextRef.current = { trackId, description, title, onRendered };
+  const busy = !!writing || !!savePhase;
 
   const post = (msg) => frameRef.current?.contentWindow?.postMessage(msg, '*');
 
@@ -101,7 +129,19 @@ export default function CodePanel({
     // Subscribed once; uploadTake reads the latest props through saveContextRef.
   }, []);
 
-  const rememberCode = (next) => safeWriteJsonStorage(CODE_KEY, { trackId, code: next });
+  const rememberCode = (next, lang = language) => safeWriteJsonStorage(CODE_KEY, { trackId, code: next, language: lang });
+
+  // Switching languages invalidates the code in the box (it's the wrong
+  // dialect for the new frame), so clear it and remount the player fresh.
+  const switchLanguage = (next) => {
+    if (next === language || busy) return;
+    setLanguage(next);
+    setCode('');
+    setFrameError('');
+    setFrameReady(false);
+    setFrameState('stopped');
+    rememberCode('', next);
+  };
 
   const write = async (mode) => {
     if (!description.trim()) { toast.error('Write the musical description first'); return; }
@@ -111,7 +151,7 @@ export default function CodePanel({
       lyrics: lyrics.trim() || undefined,
       guidance: guidance.trim() || undefined,
       ...(mode === 'revise' && code.trim() ? { current: code } : {}),
-      language: 'strudel',
+      language,
       providerId: providerId || undefined,
       model: model || undefined,
       effort: effort || undefined,
@@ -144,15 +184,30 @@ export default function CodePanel({
     post({ type: 'record', code, seconds });
   };
 
-  const busy = !!writing || !!savePhase;
   const hasCode = !!code.trim();
   const playing = frameState === 'playing';
+  const lang = LANGUAGES[language];
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-gray-400">
-        No audio model: the AI writes the piece as <a href="https://strudel.cc" target="_blank" rel="noreferrer" className="text-port-accent hover:underline">Strudel</a> code, and your browser plays it in a sandboxed player. Edit the code freely, then save a recording of it as a take.
+        No audio model: the AI writes the piece as <a href={lang.docsUrl} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">{lang.label}</a> code, and your browser plays it in a sandboxed player. Edit the code freely, then save a recording of it as a take.
       </p>
+
+      <div role="group" aria-label="Code language" className="flex gap-2">
+        {Object.entries(LANGUAGES).map(([id, { label }]) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={language === id}
+            onClick={() => switchLanguage(id)}
+            disabled={disabled || busy}
+            className={language === id ? PRIMARY_BTN : GHOST_BTN}
+          >
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
         <label htmlFor="music-code-guidance" className="block">
@@ -201,7 +256,7 @@ export default function CodePanel({
       </div>
 
       <label htmlFor="music-code-editor" className="block">
-        <span className={LABEL_CLASS}>Strudel code</span>
+        <span className={LABEL_CLASS}>{lang.label} code</span>
         <textarea
           id="music-code-editor"
           value={code}
@@ -211,7 +266,7 @@ export default function CodePanel({
           rows={12}
           maxLength={CODE_MAX}
           spellCheck={false}
-          placeholder={'setcps(0.5)\nstack(\n  note("<c3 ab2 f2 g2>").s("sawtooth").lpf(600),\n  s("sbd*4"),\n)'}
+          placeholder={lang.placeholder}
           className={`${FIELD_CLASS} font-mono text-xs leading-relaxed`}
         />
       </label>
@@ -224,13 +279,14 @@ export default function CodePanel({
 
       <div className="space-y-2">
         <iframe
+          key={language}
           ref={frameRef}
-          title={`Strudel ${STRUDEL_VERSION} player`}
+          title={`${lang.label} ${lang.version} player`}
           // Opaque origin (no allow-same-origin): the LLM's code gets no access
           // to PortOS cookies, storage, or DOM. Do not widen this.
           sandbox="allow-scripts"
           allow="autoplay"
-          srcDoc={FRAME_DOC}
+          srcDoc={lang.frameDoc}
           className="h-10 w-full rounded border border-port-border bg-port-bg"
         />
         <div className="flex flex-wrap items-center gap-2">

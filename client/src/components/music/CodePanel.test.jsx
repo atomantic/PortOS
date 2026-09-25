@@ -8,12 +8,14 @@ vi.mock('../../services/api', () => ({
   renderTrackCode: vi.fn(),
 }));
 
-// The real frame document loads Strudel from a CDN; the tests stub the frame
-// and speak its postMessage protocol directly.
+// The real frame documents load Strudel/Tone.js from a CDN; the tests stub
+// both frames and speak their shared postMessage protocol directly.
 vi.mock('./strudelFrame', () => ({
   CODE_FRAME_SOURCE: 'portos-code-frame',
   STRUDEL_VERSION: '0.0.0-test',
-  buildStrudelFrameDoc: () => '<!doctype html><title>stub</title>',
+  TONE_VERSION: '0.0.0-test',
+  buildStrudelFrameDoc: () => '<!doctype html><title>stub-strudel</title>',
+  buildToneFrameDoc: () => '<!doctype html><title>stub-tonejs</title>',
 }));
 
 const CODE = 'setcps(0.5)\nnote("c3 e3 g3").s("sawtooth")';
@@ -70,6 +72,26 @@ describe('<CodePanel>', () => {
     const bundle = doc.querySelector('script[src]');
     expect(bundle.getAttribute('src')).toBe(real.STRUDEL_BUNDLE_URL);
     expect(bundle.getAttribute('integrity')).toMatch(/^sha384-/);
+  });
+
+  it('switches the code language, clearing the code and remounting the matching frame', async () => {
+    window.localStorage.setItem('portos.musicDesigner.strudelCode', JSON.stringify({ trackId: 'track-1', code: CODE, language: 'strudel' }));
+    await mountReady();
+    expect(screen.getByLabelText('Strudel code')).toHaveValue(CODE);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tone.js' }));
+    expect(screen.getByRole('button', { name: 'Tone.js' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Strudel' })).toHaveAttribute('aria-pressed', 'false');
+    // The old language's code is invalid in the new frame, so it's cleared.
+    expect(screen.getByLabelText('Tone.js code')).toHaveValue('');
+    expect(screen.getByTitle(/Tone\.js .* player/)).toBeInTheDocument();
+
+    api.writeMusicCode.mockResolvedValueOnce({ language: 'tonejs', code: 'Tone.getTransport().start();', llm: {} });
+    fireEvent.click(screen.getByRole('button', { name: /Write the code/ }));
+    await waitFor(() => expect(api.writeMusicCode).toHaveBeenCalledWith(
+      expect.objectContaining({ language: 'tonejs' }),
+      { silent: true },
+    ));
   });
 
   it('writes code from the description with the chosen provider, then revises the edited code', async () => {
