@@ -1,15 +1,19 @@
-// Graceful request drain for the HTTP listeners at shutdown (#8323).
+// Graceful request drain for the HTTP listeners at shutdown (#8323, #8350).
 //
 // `createHttpDrain(servers)` starts tracking every ordinary request the given
-// servers accept (upgrades never emit 'request', so WebSockets are not tracked —
-// their owners close them). `begin(windowMs)` is the synchronous "stop intake"
-// step the signal handler calls before it first awaits:
+// servers accept. `begin(windowMs)` is the synchronous "stop intake" step the
+// signal handler calls before it first awaits:
 //
 //   - each listener stops accepting connections (`server.close()`, which also
 //     drops idle keep-alive sockets);
 //   - every request listener is swapped for a 503 + `Connection: close` refusal,
 //     so a request that arrives on a still-open keep-alive socket is never
 //     handed to the app — `server.close()` alone keeps serving those;
+//   - every upgrade listener (engine.io, remote-desktop, Eidoverse) is swapped
+//     the same way, so a WebSocket `Upgrade:` request on a still-open
+//     keep-alive socket gets a raw 503 instead of reaching those handlers.
+//     Sockets already upgraded before the drain began never emit 'upgrade'
+//     again — their owners close them;
 //   - in-flight responses are told not to keep their socket alive, and an open
 //     SSE stream (which never ends on its own) is dropped outright.
 //
@@ -30,6 +34,13 @@ const refuseDuringDrain = (req, res) => {
   res.shouldKeepAlive = false;
   res.writeHead(503, { 'Content-Type': 'application/json', Connection: 'close', 'Retry-After': '5' });
   res.end(JSON.stringify({ error: 'Server is shutting down', code: 'SHUTTING_DOWN' }));
+};
+
+// Upgrade requests never reach Express — there is no `res` to write through,
+// only the raw socket handed to every 'upgrade' listener.
+const refuseUpgradeDuringDrain = (req, socket) => {
+  if (socket.writable) socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+  socket.destroy();
 };
 
 export const createHttpDrain = (servers) => {
@@ -72,6 +83,8 @@ export const createHttpDrain = (servers) => {
     for (const server of listeners) {
       server.removeAllListeners('request');
       server.on('request', refuseDuringDrain);
+      server.removeAllListeners('upgrade');
+      server.on('upgrade', refuseUpgradeDuringDrain);
       // Already-closed (never listened) is fine — the refusal gate above is
       // what matters for sockets that are still open.
       server.close(() => {});
