@@ -35,7 +35,7 @@ const isWindows = () => process.platform === 'win32';
 // to avoid both the writer's destination-missing backup swap and the reader's
 // phantom "nothing here yet".
 const WIN_RETRY_ATTEMPTS = 5;
-const WIN_RETRY_DELAY_MS = 10;
+const WIN_RETRY_DELAY_MS = 100;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];

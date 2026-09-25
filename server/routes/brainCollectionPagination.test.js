@@ -97,7 +97,7 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
   });
 
   afterAll(() => {
-    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   describe('Inbox pagination & bounds', () => {
