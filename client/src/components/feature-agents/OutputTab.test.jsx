@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-const getFeatureAgentOutput = vi.fn();
+const { getFeatureAgentOutput, mockSocketOn, mockSocketOff } = vi.hoisted(() => {
+  return {
+    getFeatureAgentOutput: vi.fn(),
+    mockSocketOn: vi.fn(),
+    mockSocketOff: vi.fn(),
+  };
+});
 
 vi.mock('../../services/api', () => ({
   getFeatureAgentOutput: (...args) => getFeatureAgentOutput(...args),
@@ -9,8 +15,8 @@ vi.mock('../../services/api', () => ({
 
 vi.mock('../../services/socket', () => ({
   default: {
-    on: vi.fn(),
-    off: vi.fn(),
+    on: mockSocketOn,
+    off: mockSocketOff,
   },
 }));
 
@@ -18,6 +24,8 @@ import OutputTab from './OutputTab.jsx';
 
 beforeEach(() => {
   getFeatureAgentOutput.mockReset();
+  mockSocketOn.mockReset();
+  mockSocketOff.mockReset();
 });
 
 describe('OutputTab staleness', () => {
@@ -118,5 +126,89 @@ describe('OutputTab staleness', () => {
 
     await act(async () => { resolveB({ output: 'B output', agentId: 'run-b' }); });
     expect(screen.getByText(/B output/)).toBeInTheDocument();
+  });
+});
+
+describe('OutputTab live socket output', () => {
+  it('appends cos:agent:output frames with matching agentId', async () => {
+    getFeatureAgentOutput.mockResolvedValue({ output: 'initial', agentId: 'run-1' });
+
+    render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    await act(async () => {});
+
+    expect(screen.getByText(/initial/)).toBeInTheDocument();
+
+    // Get the socket handler that was registered
+    const handler = mockSocketOn.mock.calls.find(call => call[0] === 'cos:agent:output')?.[1];
+    expect(handler).toBeDefined();
+
+    // Emit a line from the agent
+    await act(async () => {
+      handler({ agentId: 'run-1', line: 'line 1' });
+    });
+
+    expect(screen.getByText(/line 1/).textContent).toBe('initial\nline 1\n');
+
+    // Emit another line
+    await act(async () => {
+      handler({ agentId: 'run-1', line: 'line 2' });
+    });
+
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
+    expect(screen.getByText(/line 2/)).toBeInTheDocument();
+  });
+
+  it('ignores cos:agent:output frames for other agent ids', async () => {
+    getFeatureAgentOutput.mockResolvedValue({ output: 'initial', agentId: 'run-1' });
+
+    render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    await act(async () => {});
+
+    const handler = mockSocketOn.mock.calls.find(call => call[0] === 'cos:agent:output')?.[1];
+
+    // Emit a line from a different agent
+    await act(async () => {
+      handler({ agentId: 'run-2', line: 'other agent output' });
+    });
+
+    // Should still only show initial output
+    expect(screen.getByText(/initial/)).toBeInTheDocument();
+    expect(screen.queryByText(/other agent output/)).not.toBeInTheDocument();
+  });
+
+  it('caps output to 500 lines to prevent unbounded growth', async () => {
+    getFeatureAgentOutput.mockResolvedValue({ output: '', agentId: 'run-1' });
+
+    render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    await act(async () => {});
+
+    const handler = mockSocketOn.mock.calls.find(call => call[0] === 'cos:agent:output')?.[1];
+
+    // Emit 510 lines
+    await act(async () => {
+      for (let i = 0; i < 510; i++) {
+        handler({ agentId: 'run-1', line: `line ${i}` });
+      }
+    });
+
+    const text = screen.getByText(/line 509/).textContent;
+    expect(text.split('\n').filter(Boolean)).toHaveLength(500);
+    expect(text).not.toMatch(/line 9\n/);
+  });
+
+  it('unsubscribes from socket when component unmounts', async () => {
+    getFeatureAgentOutput.mockResolvedValue({ output: 'test', agentId: 'run-1' });
+
+    const { unmount } = render(<OutputTab agent={{ id: 'agent-a', currentAgentId: 'run-1' }} />);
+    await act(async () => {});
+
+    const registerCall = mockSocketOn.mock.calls.find(call => call[0] === 'cos:agent:output');
+    expect(registerCall).toBeDefined();
+
+    unmount();
+    await act(async () => {});
+
+    const unregisterCall = mockSocketOff.mock.calls.find(call => call[0] === 'cos:agent:output');
+    expect(unregisterCall).toBeDefined();
   });
 });
