@@ -1208,6 +1208,59 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('uses the provider opt-in to send Claude low-priority once after a session-limit banner', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = {
+        id: 'claude', type: 'tui', command: 'claude', lowPriorityOnUsageLimit: true, tuiPromptDelayMs: 50,
+      };
+      const promise = executeTuiRun({
+        runId: 'run-low-priority', provider, prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('\x1b[?2004h');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData('[Pasted text #1 +0 lines]');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData("\n⏺ You've hit your session limit · resets 6:00 PM");
+      pty.emitData("\n⏺ You've hit your session limit · resets 6:00 PM");
+
+      expect(pty.write).toHaveBeenCalledWith('/low-priority\r');
+      expect(pty.write.mock.calls.filter(([keys]) => keys === '/low-priority\r')).toHaveLength(1);
+      expect(pty.kill).not.toHaveBeenCalled();
+      expect(runnerMocks.finalizeRunRecord).not.toHaveBeenCalled();
+
+      pty.emitExit({ exitCode: 1, signal: 0 });
+      await promise;
+    });
+
+    it('falls back on Claude session-limit chrome when low-priority is not enabled', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      const provider = { id: 'claude', type: 'tui', command: 'claude', tuiPromptDelayMs: 50 };
+      const promise = executeTuiRun({
+        runId: 'run-low-priority-off', provider, prompt: 'complete this task', workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.emitData('\x1b[?2004h');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData('[Pasted text #1 +0 lines]');
+      await vi.advanceTimersByTimeAsync(300);
+      pty.emitData("\n⏺ You've hit your session limit · resets 6:00 PM");
+      await flushAsync();
+      await promise;
+
+      expect(pty.write).not.toHaveBeenCalledWith('/low-priority\r');
+      expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+        runId: 'run-low-priority-off',
+        success: false,
+        error: expect.stringContaining('Claude Code session usage limit reached'),
+        extras: expect.objectContaining({ completionReason: 'fallback-signal' }),
+      }));
+    });
+
     // ── agy account-eligibility banner: a WAIT, not a verdict ─────────────────
     // The banner paints while agy's `loadCodeAssist` handshake is still retrying
     // and the CLI generates normally once it settles, so a self-clearing signal

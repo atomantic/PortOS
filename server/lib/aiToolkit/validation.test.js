@@ -101,6 +101,19 @@ describe('providerSchema', () => {
     }).success).toBe(false);
   });
 
+  it('accepts only a boolean for Claude TUI low-priority continuation', () => {
+    expect(providerSchema.safeParse({
+      ...minimalProvider,
+      type: 'tui',
+      command: 'claude',
+      lowPriorityOnUsageLimit: true,
+    }).success).toBe(true);
+    expect(providerSchema.safeParse({
+      ...minimalProvider,
+      lowPriorityOnUsageLimit: 'true',
+    }).success).toBe(false);
+  });
+
   describe('endpoint empty-string/null → undefined coercion', () => {
     it('coerces endpoint: "" to undefined so the URL check is skipped for CLI providers', () => {
       const r = providerSchema.safeParse({ ...minimalProvider, endpoint: '' });

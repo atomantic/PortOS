@@ -42,6 +42,7 @@ import { access } from 'node:fs/promises';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import {
+  createClaudeSessionLimitBannerDetector,
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createTerminalRequestTimeoutDetector,
@@ -375,6 +376,7 @@ ${prompt}`;
   let outputBuffer = '';
   let rawBuffer = '';
   let promptSentAt = null;
+  let promptSubmittedAt = null;
   // ANSI-stripped post-paste accumulator for paste-marker detection. The marker
   // renders with absolute-column cursor moves between glyphs, so it only matches
   // after stripping — testing the raw stream never matched and left the fast
@@ -386,6 +388,11 @@ ${prompt}`;
   let firstResponseAt = null;
   let finalized = false;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
+  const mayUseClaudeLowPriority = provider.type === 'tui'
+    && provider.lowPriorityOnUsageLimit === true
+    && isClaudeCommand(command);
+  let lowPriorityCommandAttempted = false;
   // One-shot-only: a terminal model-id rejection (Bedrock 400 / Anthropic 404)
   // leaves the TUI idle at an unanswered prompt, so without this the run idles to
   // a false success and the error screen is scraped as the "response". Scoped here
@@ -635,7 +642,22 @@ ${prompt}`;
           console.log(`✅ TUI run ${runId} provider signal cleared — generating again`);
         }
 
-        const fallbackSignal = detectImmediateFallbackSignal(stripped)
+        const sessionLimit = isClaudeCommand(command) && promptSubmittedAt
+          && (!mayUseClaudeLowPriority || !lowPriorityCommandAttempted)
+          ? detectClaudeSessionLimitBanner(stripped)
+          : null;
+        let sentLowPriorityCommand = false;
+        if (sessionLimit && mayUseClaudeLowPriority && !lowPriorityCommandAttempted) {
+          lowPriorityCommandAttempted = true;
+          try {
+            ptyProcess.write(`/low-priority${SUBMIT_KEY}`);
+            sentLowPriorityCommand = true;
+            console.log(`⏳ TUI run ${runId} reached Claude's session limit; sent /low-priority from the provider opt-in`);
+          } catch (err) {
+            sessionLimit.message = `Claude Code session limit reached and /low-priority could not be sent: ${err?.message || err}`;
+          }
+        }
+        const fallbackSignal = sentLowPriorityCommand ? null : (sessionLimit || detectImmediateFallbackSignal(stripped))
           || detectTerminalModelError(stripped)
           || detectTerminalRequestTimeout(stripped);
         // Branch on the SIGNAL's own grace window, never on gate state: the
@@ -842,6 +864,7 @@ ${prompt}`;
             () => { try { ptyProcess.write(SUBMIT_KEY); } catch { /* PTY may have already exited */ } },
             () => finalized
           );
+          promptSubmittedAt = Date.now();
         }
       }, PASTE_MARKER_POLL_MS);
     };

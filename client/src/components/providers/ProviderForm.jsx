@@ -74,6 +74,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
+    lowPriorityOnUsageLimit: provider?.lowPriorityOnUsageLimit === true,
     // The FULL advertised catalog, never the model-access-scoped `models` the
     // payload carries. This textarea is saved verbatim, so seeding it from the
     // scoped list would let an ordinary Save persist the narrowed catalog over
@@ -158,6 +159,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // from it, so `formData.type` remains a real type and every type-derived
   // control below behaves exactly as it does for a plain CLI provider.
   const createsModePair = canPairModes && alsoTui;
+  const isClaudeTui = formData.type === 'tui'
+    && isClaudeCommandProvider({ ...provider, ...formData, id: provider?.id });
 
   // Live installed Ollama/LM Studio models, folded into the model pickers so a
   // local provider shows what's actually installed — not just the stale `models`
@@ -478,6 +481,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // `--ignore-user-config` is a Codex flag. Never stamp it onto a record
     // running another vendor's binary, where it would be a stored lie.
     if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
+    // `/low-priority` is a Claude TUI-only command. Do not persist a dormant
+    // toggle on a CLI/headless or another vendor's provider record.
+    if (formData.type !== 'tui' || !isClaudeCommandProvider({ ...provider, ...data, id: provider?.id })) {
+      delete data.lowPriorityOnUsageLimit;
+    }
 
     // Fold the five flat scratch fields into the nested shape the server
     // schema expects. Only a CLI/TUI provider carries the field at all (the
@@ -866,6 +874,26 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       </FormField>
                       <p className="sm:col-span-2 text-xs text-gray-500">
                         TUI providers stay attached while the provider is silent; they finish on the completion sentinel, process exit, or explicit failure.
+                      </p>
+                    </div>
+                  )}
+                  {isClaudeTui && (
+                    <div className="space-y-1">
+                      <label htmlFor="lowPriorityOnUsageLimit" className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          id="lowPriorityOnUsageLimit"
+                          type="checkbox"
+                          aria-describedby="lowPriorityOnUsageLimit-help"
+                          checked={formData.lowPriorityOnUsageLimit}
+                          onChange={(e) => setFormData(prev => ({ ...prev, lowPriorityOnUsageLimit: e.target.checked }))}
+                          className="mt-1"
+                        />
+                        <span className="text-sm text-gray-300">
+                          Continue with Claude Code&apos;s <code>/low-priority</code> mode at its session usage limit
+                        </span>
+                      </label>
+                      <p id="lowPriorityOnUsageLimit-help" className="text-xs text-gray-500 ml-6">
+                        This may use weekly allowance and pause while capacity is unavailable. Claude Code must offer the mode for that session.
                       </p>
                     </div>
                   )}

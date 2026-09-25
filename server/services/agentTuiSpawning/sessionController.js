@@ -37,7 +37,7 @@ import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
-import { createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector } from '../../lib/aiToolkit/errorDetection.js';
+import { createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
 import { isClaudeCommand } from '../../lib/providerModels.js';
@@ -521,6 +521,11 @@ export function createTuiSessionController({
   let mergeGateReprompted = false;
   let immediateFallbackAnalysis = null;
   const detectImmediateFallbackSignal = createImmediateFallbackSignalDetector();
+  const detectClaudeSessionLimitBanner = createClaudeSessionLimitBannerDetector();
+  const mayUseClaudeLowPriority = provider?.type === 'tui'
+    && provider?.lowPriorityOnUsageLimit === true
+    && isClaudeCommand(tuiConfig.command);
+  let lowPriorityCommandAttempted = false;
   // Holds the wait-it-out window for a provider signal carrying a `graceMs`
   // (agy's account-eligibility banner). The provider-signal timer below resolves
   // its deadline and drives the re-submission cadence.
@@ -1177,6 +1182,37 @@ export function createTuiSessionController({
         if (firstOutputAt === null) firstOutputAt = lastOutputAt;
       }
       recordFirstOutput('tui-pty');
+
+      // `/low-priority` is a hidden Claude Code TUI command, not a CLI startup
+      // argument or a supported --print/SDK prompt. Only type it after this
+      // session's submitted prompt produced the session-limit banner, and only
+      // for the provider's explicit opt-in. Latch before writing so a repaint
+      // of the same banner never toggles the command back off.
+      if (isClaudeCommand(tuiConfig.command) && promptSubmittedAt && !lowPriorityCommandAttempted) {
+        const sessionLimit = detectClaudeSessionLimitBanner(stripped);
+        if (sessionLimit) {
+          if (!mayUseClaudeLowPriority) {
+            await failOverToFallback(sessionLimit);
+            return;
+          }
+          lowPriorityCommandAttempted = true;
+          let submitted = false;
+          try {
+            submitted = session.write(sessionId, `/low-priority${SUBMIT_KEY}`) !== false;
+          } catch (err) {
+            emitLog('warn', `TUI agent ${agentId} could not send Claude low-priority command: ${err?.message || err}`, { agentId });
+          }
+          if (submitted) {
+            appendLine('⏳ Claude Code session limit reached — sent /low-priority from the provider opt-in');
+          } else {
+            await failOverToFallback({
+              ...sessionLimit,
+              message: 'Claude Code session limit reached and /low-priority could not be sent',
+            });
+          }
+          return;
+        }
+      }
 
       if (!hasStartedWorking) {
         hasStartedWorking = true;

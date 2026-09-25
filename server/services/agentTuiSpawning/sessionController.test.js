@@ -37,7 +37,14 @@ const TUI_CONFIG = {
  * assert on. `sentinelSummary` non-null makes the run look like it wrote a real
  * `.agent-done`, which is what opens the merge-gate branch.
  */
-function makeController({ mergeGateIsOwed = false, sentinelSummary = null, prProbe = null } = {}) {
+function makeController({
+  mergeGateIsOwed = false,
+  sentinelSummary = null,
+  prProbe = null,
+  provider = { id: 'codex-tui', name: 'Codex' },
+  tuiConfig = TUI_CONFIG,
+  prompt = 'do the work',
+} = {}) {
   // A DISTINCT closer per arm: the merge-gate case below has to tell the
   // re-armed watcher apart from the one it replaced, which one shared spy
   // cannot do.
@@ -54,6 +61,7 @@ function makeController({ mergeGateIsOwed = false, sentinelSummary = null, prPro
     runCompletionCleanup: vi.fn().mockResolvedValue({}),
     finalizeAgent: vi.fn().mockResolvedValue({ success: true }),
     remove: vi.fn().mockResolvedValue(undefined),
+    write: vi.fn(),
     paste: vi.fn(() => ({ /* a live submit-Enter interval handle */ })),
     kill: vi.fn(),
   };
@@ -62,9 +70,9 @@ function makeController({ mergeGateIsOwed = false, sentinelSummary = null, prPro
     task: TASK,
     runId: 'run-1',
     model: 'gpt-5-codex',
-    provider: { id: 'codex-tui', name: 'Codex' },
-    prompt: 'do the work',
-    tuiConfig: TUI_CONFIG,
+    provider,
+    prompt,
+    tuiConfig,
     cwd: '/tmp/workspace',
     rawFile: '/tmp/workspace/raw.txt',
     executionId: 'exec-1',
@@ -82,7 +90,7 @@ function makeController({ mergeGateIsOwed = false, sentinelSummary = null, prPro
       getOutputBuffer: () => '',
     },
     session: {
-      write: vi.fn(),
+      write: seams.write,
       paste: (_sessionId, text, options) => seams.paste(text, options),
       isAlive: () => true,
       kill: seams.kill,
@@ -165,5 +173,53 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(closers[0], 'the replaced watcher already closed itself').not.toHaveBeenCalled();
     expect(closers[1]).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sends Claude low-priority once after an opted-in session-limit banner', async () => {
+    const { controller, write } = makeController({
+      provider: {
+        id: 'claude-code-tui',
+        name: 'Claude Code TUI',
+        type: 'tui',
+        command: 'claude',
+        lowPriorityOnUsageLimit: true,
+      },
+      tuiConfig: { ...TUI_CONFIG, command: 'claude', spawnCommand: '/usr/local/bin/claude', promptDelayMs: 250 },
+      prompt: 'A sufficiently long prompt for this controller test',
+    });
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('\x1b[?2004h');
+    await vi.advanceTimersByTimeAsync(300);
+    await controller.handleData('A sufficiently long prompt for this controller test');
+    await vi.advanceTimersByTimeAsync(300);
+
+    const banner = "\n⏺ You've hit your session limit · resets 6:00 PM";
+    await controller.handleData(banner);
+    await controller.handleData(banner);
+
+    expect(write).toHaveBeenCalledWith('session-abcdef12', '/low-priority\r');
+    expect(write.mock.calls.filter(([, keys]) => keys === '/low-priority\r')).toHaveLength(1);
+    await controller.handleExit({ exitCode: 1, killed: false });
+  });
+
+  it('does not send Claude low-priority without the provider opt-in', async () => {
+    const { controller, write } = makeController({
+      provider: { id: 'claude-code-tui', name: 'Claude Code TUI', type: 'tui', command: 'claude' },
+      tuiConfig: { ...TUI_CONFIG, command: 'claude', spawnCommand: '/usr/local/bin/claude', promptDelayMs: 250 },
+      prompt: 'A sufficiently long prompt for this controller test',
+    });
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    controller.markCommandInjected();
+    await controller.handleData('\x1b[?2004h');
+    await vi.advanceTimersByTimeAsync(300);
+    await controller.handleData('A sufficiently long prompt for this controller test');
+    await vi.advanceTimersByTimeAsync(300);
+    await controller.handleData("\n⏺ You've hit your session limit · resets 6:00 PM");
+
+    expect(write).not.toHaveBeenCalledWith('session-abcdef12', '/low-priority\r');
+    await controller.handleExit({ exitCode: 1, killed: false });
   });
 });

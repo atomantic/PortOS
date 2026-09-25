@@ -253,6 +253,10 @@ export const providerSchema = z.object({
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
   tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // Claude Code's hidden `/low-priority` command is available only from its
+  // interactive TUI after a session usage limit. It is an explicit opt-in
+  // because continuation can draw on weekly usage.
+  lowPriorityOnUsageLimit: z.boolean().optional(),
   // PRESET structure (#7565): a record carrying all three of `harnessId`,
   // `method` and `serviceId` is a DERIVED preset — its connection-owned values
   // are re-materialized from the named service instance on every save by the
