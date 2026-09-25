@@ -99,7 +99,6 @@ async function scenario(route) {
       await delay(500, undefined, { signal: abort.signal });
       await Promise.all([...inspections]);
       if (details !== 1) failures.push({ endpoint: '/api/messages/:account/:message', reason: 'detail-request-count', count: details, bytes: 0 });
-      await page.getByRole('button', { name: 'Back', exact: true }).click();
       advance('sibling');
       await page.getByRole('tab', { name: 'Contacts', exact: true }).click();
       await page.waitForURL('**/messages/contacts');
@@ -117,6 +116,7 @@ async function scenario(route) {
     await Promise.all([...inspections]);
     result.phases = traffic.snapshot();
     result.pendingRequests = traffic.pending();
+    if (result.pendingRequests) failures.push({ endpoint: '/requests', reason: 'unfinished-requests', count: result.pendingRequests, bytes: 0 });
     result.listResponses = listResponses;
     result.returnedRows = returnedRows;
     result.details = details;
@@ -153,6 +153,11 @@ try {
 }
 report.passed = report.failures.length === 0;
 const serialized = JSON.stringify(report, null, 2) + '\n';
-if (output) await writeFile(output, serialized, { flag: 'wx' });
-else process.stdout.write(serialized);
 process.exitCode = report.passed ? 0 : 1;
+try {
+  if (output) await writeFile(output, serialized, { flag: 'wx' });
+  else process.stdout.write(serialized);
+} catch {
+  console.error('Could not write aggregate report; choose a new writable output file.');
+  process.exitCode = 1;
+}
