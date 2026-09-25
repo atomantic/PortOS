@@ -17,6 +17,10 @@ const { socketHandlers, socketMock } = vi.hoisted(() => {
 });
 
 vi.mock('../../../services/socket', () => ({ default: socketMock }));
+vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
+  ...await importOriginal(),
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 
 // Label chips grade their color against the ACTIVE theme mode, so the mode has
 // to be steerable per test. The real provider runs a settings fetch on mount,

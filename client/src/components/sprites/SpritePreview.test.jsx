@@ -4,9 +4,14 @@
  * path, which turns the box into a button that opens a SpriteLightbox.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+// The lightbox's best-effort provenance lookup has a separate API contract.
+vi.mock('../../services/apiSprites.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getSpriteAssetPrompt: vi.fn().mockResolvedValue(null),
+}));
 import SpritePreview from './SpritePreview.jsx';
 
 describe('SpritePreview', () => {

@@ -10,6 +10,10 @@ vi.mock('../../../services/api', () => ({
   getProviders: vi.fn(),
   addCosTask: vi.fn(),
 }));
+vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
+  ...await importOriginal(),
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 vi.mock('../../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
 }));

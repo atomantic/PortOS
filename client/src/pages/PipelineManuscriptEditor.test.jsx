@@ -21,6 +21,10 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
+vi.mock('../services/apiLocalLlm', async (importOriginal) => ({
+  ...await importOriginal(),
+  getLocalLlmStatus: vi.fn().mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } }),
+}));
 vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 import PipelineManuscriptEditor from './PipelineManuscriptEditor';

@@ -43,6 +43,10 @@ vi.mock('../services/apiPrompts', () => ({
 vi.mock('../services/apiProviders', () => ({
   getProviders: vi.fn(() => Promise.resolve({ providers: [], activeProvider: null })),
 }));
+vi.mock('../services/api', async (importOriginal) => ({
+  ...await importOriginal(),
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
+}));
 
 vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },

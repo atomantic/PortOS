@@ -16,6 +16,15 @@ vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   patchSettingsSlice: vi.fn(),
 }));
+// The nested schedule control reads these modules directly, outside the API barrel.
+vi.mock('../../services/apiSystem', async (importOriginal) => ({
+  ...await importOriginal(),
+  getSettings: vi.fn().mockResolvedValue({ seriesAutopilot: { schedules: [] } }),
+}));
+vi.mock('../../services/apiAgents', async (importOriginal) => ({
+  ...await importOriginal(),
+  getCosConfig: vi.fn().mockResolvedValue({ domainAutonomy: { cos: 'execute' }, domainBudgets: {} }),
+}));
 // The default export is CALLABLE (a neutral toast) as well as carrying the
 // typed helpers — the panel uses the bare call for the self-improvement line.
 vi.mock('../ui/Toast', () => ({
