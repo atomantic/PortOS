@@ -168,6 +168,7 @@ export const CATEGORIES = {
   'update-detached': { label: 'Update Control', description: 'Control files for a detached self-update run — safe to purge when no update is running', archivable: false, deletable: true, purgeScope: 'category', busyCheck: updateDetachedBusy },
   'uploads': { label: 'Uploads', description: 'Files uploaded through the UI and referenced by records', archivable: true, deletable: false },
   'video-thumbnails': { label: 'Video Thumbnails', description: 'JPEG thumbnails for generated videos', archivable: false, deletable: true, purgeScope: 'category' },
+  'image-thumbnails': { label: 'Image Thumbnails', description: 'Regenerable WebP previews for generated images', archivable: false, deletable: true, purgeScope: 'category' },
   'videos': { label: 'Videos', description: 'Locally generated videos — delete individually; the render is the only copy and re-rendering costs provider spend', archivable: true, deletable: true, purgeScope: 'items' },
   'voice-profiles': { label: 'Voice Profiles', description: 'Machine-local voice profile source recordings, benchmarks, and local engine artifacts', archivable: true, deletable: false },
   'writers-room': { label: 'Writers Room', description: 'Writers Room works and story bibles', archivable: true, deletable: false },

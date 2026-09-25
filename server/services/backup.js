@@ -151,6 +151,7 @@ const queueStateWrite = createFileWriteQueue();
 // matches any `loras/` directory anywhere under data/ (e.g. a user's
 // brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
+  { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
   { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },

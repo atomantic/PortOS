@@ -29,6 +29,7 @@
 /** Every `/data/**` static mount, in the order `server/index.js` mounts them. */
 export const ASSET_ROUTE_PREFIXES = [
   '/data/images',
+  '/data/image-thumbnails',
   '/data/image-refs',
   '/data/lora-datasets',
   '/data/videos',

@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { getRenderConfigForItem, normalizeImage, normalizeVideo } from './normalize.js';
 
+describe('image grid thumbnail URL', () => {
+  it('uses a derivative only for local gallery images while keeping originals for actions', () => {
+    const local = normalizeImage({ filename: 'example.png' });
+    expect(local.thumbnailUrl).toBe('/data/image-thumbnails/example.webp');
+    expect(local.previewUrl).toBe('/data/images/example.png');
+    expect(local.downloadUrl).toBe(local.previewUrl);
+    const external = normalizeImage({ filename: 'remote.png', path: 'https://example.com/remote.png' });
+    expect(external.thumbnailUrl).toBe(external.previewUrl);
+  });
+});
+
 // These tests pin the sidecar field-name knowledge in normalize.js. If a new
 // field surfaces in a render sidecar, surface it here so the requeue path in
 // <PromptRefineModal> stays in lockstep with the writers.
