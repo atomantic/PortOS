@@ -3,6 +3,8 @@ import { Terminal, RefreshCw } from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 
+const MAX_LIVE_LINES = 500;
+
 export default function OutputTab({ agent }) {
   const [output, setOutput] = useState('');
   const [agentId, setAgentId] = useState(null);
@@ -37,16 +39,23 @@ export default function OutputTab({ agent }) {
     loadOutput(agent.id);
 
     const handler = (data) => {
-      if (data.agentId === agent.currentAgentId || data.featureAgentId === agent.id) {
-        setOutput(prev => prev + (data.chunk || data.output || ''));
+      if (data.agentId === agent.currentAgentId && data.line) {
+        setOutput(prev => {
+          // The fetched snapshot may not end in a newline; keep the first
+          // streamed line from gluing onto its last line.
+          const sep = prev && !prev.endsWith('\n') ? '\n' : '';
+          const next = `${prev}${sep}${data.line}\n`;
+          // Keep the last MAX_LIVE_LINES lines (the trailing newline leaves one
+          // empty entry after the split) so a long run can't grow unbounded.
+          const lines = next.split('\n');
+          return lines.length > MAX_LIVE_LINES + 1 ? lines.slice(-(MAX_LIVE_LINES + 1)).join('\n') : next;
+        });
       }
     };
     socket.on('cos:agent:output', handler);
-    socket.on('cos:feature-agent:output', handler);
 
     return () => {
       socket.off('cos:agent:output', handler);
-      socket.off('cos:feature-agent:output', handler);
     };
   }, [agent.id, agent.currentAgentId, loadOutput]);
 
