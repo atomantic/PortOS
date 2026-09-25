@@ -40,7 +40,7 @@ import { cleanupSocketStreams, registerLogHandlers } from '../sockets/logs.js';
 import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
-import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
+import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
 import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
 
@@ -113,8 +113,7 @@ function registerAuthHandlers(socket, _io) {
     socket.use(async ([event, ..._args], next) => {
       try {
         if (!(await isAuthEnabled())) return next();
-        const token = extractToken({ headers: socket.handshake?.headers || {} });
-        if (await verifySession(token)) return next();
+        if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();
         const peerAuthMethod = socket.data?.portosAuthMethod;
         if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {
           return next();

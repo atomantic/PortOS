@@ -8,7 +8,9 @@ import { createManagedVisitorBroker, managedVisitorContract } from '../services/
 import { request } from '../lib/testHelper.js';
 const shared = vi.hoisted(() => ({ enabled: false, broker: null }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => shared.enabled, extractToken: req => req.headers.authorization?.slice(7),
-  verifySession: async token => token === 'owner-session', verifyPassword: async () => false }));
+  verifySession: async token => token === 'owner-session',
+  verifyRequestSession: async req => (req.headers.authorization?.slice(7) === 'owner-session' ? 'owner-session' : null),
+  verifyPassword: async () => false }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}), settingsEvents: new EventEmitter() }));
 vi.mock('../services/managedVisitors.js', async () => {
   const actual = await vi.importActual('../services/managedVisitors.js');

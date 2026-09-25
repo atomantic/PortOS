@@ -11,9 +11,12 @@ import {
   constantEqual,
   createLoginThrottle,
   extractToken,
+  extractTokens,
   hashPassword,
   hashToken,
   parseCookieToken,
+  parseSessionCookies,
+  sessionCookieNameFor,
 } from '../../lib/portosAuthCore.js';
 import { getSettings, readSettingsStrict, settingsEvents, updateSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -335,6 +338,17 @@ export const verifySession = async (token) => {
   return true;
 };
 
+// Authorize a request against every candidate token it carries (all PortOS
+// session cookies + Bearer — see extractTokens). Returns the first token that
+// verifies, or null. A stale or foreign same-host cookie (another PortOS on a
+// different port of the same host) must never mask this install's valid one.
+export const verifyRequestSession = async (req) => {
+  for (const token of extractTokens(req)) {
+    if (await verifySession(token)) return token;
+  }
+  return null;
+};
+
 export const revokeSession = async (token) => {
   await ensureLoaded();
   if (sessions.delete(hashToken(token))) {
@@ -376,15 +390,17 @@ export const clearLoginFailures = (ip) => loginThrottle.clear(ip);
 
 // Cookie parsing + token extraction are shared with sidecars. Re-exported here
 // so existing importers of this module keep working unchanged.
-export { parseCookieToken, extractToken };
+export { parseCookieToken, parseSessionCookies, extractToken, extractTokens, sessionCookieNameFor };
 
-export const buildSessionCookie = (token, { secure = false } = {}) => {
+export const buildSessionCookie = (token, { secure = false, name = COOKIE_NAME } = {}) => {
   // HttpOnly so XSS can't read it; SameSite=Lax so cross-origin GETs from the
   // browser address bar work but cross-site POSTs are blocked. `Secure` is
   // toggled by the caller based on the loopback-mirror vs HTTPS scheme of the
   // request — a `Secure` cookie on a plain-http request is silently dropped.
+  // `name` is port-scoped by the caller (sessionCookieNameFor) so two
+  // installs reached on one host never share a cookie slot.
   const parts = [
-    `${COOKIE_NAME}=${encodeURIComponent(token)}`,
+    `${name}=${encodeURIComponent(token)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
@@ -394,14 +410,14 @@ export const buildSessionCookie = (token, { secure = false } = {}) => {
   return parts.join('; ');
 };
 
-export const buildClearCookie = ({ secure = false } = {}) => {
+export const buildClearCookie = ({ secure = false, name = COOKIE_NAME } = {}) => {
   // Mirror the `Secure` attribute on the clear so RFC 6265bis-conformant
   // browsers can match-and-delete by full attribute set. Today most
   // browsers still clear by name+path+domain alone; Chrome has been
   // tightening this, and a future change could leave the cookie
   // un-deletable on HTTPS sessions if we drop the attribute here.
   const parts = [
-    `${COOKIE_NAME}=`,
+    `${name}=`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',

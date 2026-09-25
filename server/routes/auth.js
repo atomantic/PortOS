@@ -7,16 +7,19 @@ import {
   clearLoginFailures,
   clearPassword,
   createSession,
-  extractToken,
+  extractTokens,
   getAuthStatus,
   isAuthEnabled,
   isLoginRateLimited,
   listSessions,
+  parseSessionCookies,
   recordLoginFailure,
   revokeSession,
   revokeSessionById,
+  sessionCookieNameFor,
   setPassword,
   verifyPassword,
+  verifyRequestSession,
   verifySession,
 } from '../services/auth.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -38,6 +41,33 @@ const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a
 // deployment topology.
 const isSecure = (req) => !!req.secure;
 
+// The session cookie name is port-scoped from the browser-facing `Host` (see
+// sessionCookieNameFor in lib/portosAuthCore.js) — e.g. `portos_auth_15555`
+// behind a `tailcat forward 15555:5555` — so this install never shares (or is
+// blocked by a `Secure`) cookie slot with another PortOS on the same host.
+const sessionCookieFor = (req, token) =>
+  buildSessionCookie(token, { secure: isSecure(req), name: sessionCookieNameFor(req.headers?.host) });
+
+// Names of this install's OTHER session cookies on the request (e.g. a legacy
+// bare `portos_auth` minted before the port-scoped name) — only those whose
+// token is live HERE, so we never clear a sibling install's cookie that
+// happens to share the host.
+const ownedStaleCookieNames = async (req) => {
+  const own = sessionCookieNameFor(req.headers?.host);
+  const names = [];
+  for (const { name, value } of parseSessionCookies(req.headers?.cookie)) {
+    if (name === own || names.includes(name)) continue;
+    if (await verifySession(value)) names.push(name);
+  }
+  return names;
+};
+
+const clearCookiesFor = (req, extraNames = []) => {
+  const secure = isSecure(req);
+  const names = [sessionCookieNameFor(req.headers?.host), ...extraNames];
+  return [...new Set(names)].map((name) => buildClearCookie({ secure, name }));
+};
+
 // GET /api/auth/status — always reachable. The UI uses this to know whether
 // to render the login gate at all.
 router.get('/status', asyncHandler(async (_req, res) => {
@@ -58,8 +88,7 @@ router.get('/whoami', asyncHandler(async (req, res) => {
     res.json({ authenticated: true, required: false });
     return;
   }
-  const token = extractToken(req);
-  const authenticated = await verifySession(token);
+  const authenticated = !!(await verifyRequestSession(req));
   res.json({ authenticated, required: true });
 }));
 
@@ -87,16 +116,19 @@ router.post('/login', asyncHandler(async (req, res) => {
   // it right isn't kept locked out.
   clearLoginFailures(clientIp);
   const { token } = await createSession();
-  res.setHeader('Set-Cookie', buildSessionCookie(token, { secure: isSecure(req) }));
+  res.setHeader('Set-Cookie', sessionCookieFor(req, token));
   res.json({ authenticated: true });
 }));
 
 // POST /api/auth/logout — best-effort revoke + clear cookie. Idempotent so a
 // double-click on Sign Out doesn't 401.
 router.post('/logout', asyncHandler(async (req, res) => {
-  const token = extractToken(req);
-  if (token) await revokeSession(token);
-  res.setHeader('Set-Cookie', buildClearCookie({ secure: isSecure(req) }));
+  // Revoke every live token the request carries (port-scoped cookie, a
+  // pre-upgrade legacy cookie, Bearer) so signing out can't leave a second
+  // valid cookie behind. revokeSession is a no-op for foreign tokens.
+  const stale = await ownedStaleCookieNames(req);
+  for (const token of extractTokens(req)) await revokeSession(token);
+  res.setHeader('Set-Cookie', clearCookiesFor(req, stale));
   res.json({ ok: true });
 }));
 
@@ -110,11 +142,16 @@ router.post('/password', asyncHandler(async (req, res) => {
   // First-time set is the ONLY public mutation here — once auth is on, the
   // route is gated by the API auth middleware in server/index.js, so we
   // reach this branch only with a valid session.
+  const stale = await ownedStaleCookieNames(req);
   const { token } = await setPassword({
     newPassword: body.newPassword,
     currentPassword: alreadyEnabled ? body.currentPassword : null,
   });
-  res.setHeader('Set-Cookie', buildSessionCookie(token, { secure: isSecure(req) }));
+  const secure = isSecure(req);
+  res.setHeader('Set-Cookie', [
+    sessionCookieFor(req, token),
+    ...stale.map((name) => buildClearCookie({ secure, name })),
+  ]);
   res.json({ enabled: true });
 }));
 
@@ -123,8 +160,9 @@ router.post('/password', asyncHandler(async (req, res) => {
 // silently disable the gate.
 router.delete('/password', asyncHandler(async (req, res) => {
   const { currentPassword } = validateRequest(clearPasswordSchema, req.body || {});
+  const stale = await ownedStaleCookieNames(req);
   await clearPassword({ currentPassword });
-  res.setHeader('Set-Cookie', buildClearCookie({ secure: isSecure(req) }));
+  res.setHeader('Set-Cookie', clearCookiesFor(req, stale));
   res.json({ enabled: false });
 }));
 

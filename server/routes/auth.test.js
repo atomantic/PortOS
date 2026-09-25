@@ -4,7 +4,7 @@ import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
-import { request } from '../lib/testHelper.js';
+import { closeLoopbackServer, request, startLoopbackServer } from '../lib/testHelper.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-auth-routes-' });
 
@@ -81,7 +81,8 @@ describe('auth routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ enabled: true });
     const setCookie = res.headers['set-cookie'];
-    expect(setCookie).toMatch(/portos_auth=/);
+    // Port-scoped from Host (the harness listens on a random loopback port).
+    expect(setCookie).toMatch(/portos_auth_\d+=/);
     expect(setCookie).toMatch(/HttpOnly/);
   });
 
@@ -121,7 +122,7 @@ describe('auth routes', () => {
     const good = await request(app).post('/api/auth/login').send({ password: 'correct-horse' });
     expect(good.status).toBe(200);
     expect(good.body).toEqual({ authenticated: true });
-    expect(good.headers['set-cookie']).toMatch(/portos_auth=/);
+    expect(good.headers['set-cookie']).toMatch(/portos_auth_\d+=/);
   });
 
   it('POST /api/auth/logout always clears the cookie', async () => {
@@ -130,6 +131,64 @@ describe('auth routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expect(res.headers['set-cookie']).toMatch(/Max-Age=0/);
+  });
+
+  it('POST /api/auth/login names the cookie after the browser-facing port and never marks plain HTTP Secure', async () => {
+    let app = await buildApp();
+    await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    app = await buildApp();
+    const res = await request(app).post('/api/auth/login').send({ password: 'correct-horse' });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers['set-cookie'];
+    // One cookie, `portos_auth_<port>`, host-only (no Domain), Path=/, Lax,
+    // and NOT Secure over plain HTTP — a Secure cookie would be dropped on
+    // http://127.0.0.1:15555 behind a tailcat forward.
+    expect(setCookie).toMatch(/^portos_auth_\d+=[a-f0-9]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=\d+$/);
+    expect(setCookie).not.toMatch(/Secure|Domain=/);
+  });
+
+  it('GET /api/auth/whoami accepts a valid session even when a sibling install\'s same-host cookie comes first', async () => {
+    let app = await buildApp();
+    await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    app = await buildApp();
+    const login = await request(app).post('/api/auth/login').send({ password: 'correct-horse' });
+    const [, name, token] = /^(portos_auth_\d+)=([a-f0-9]+)/.exec(login.headers['set-cookie']);
+    // e.g. the Mac's own PortOS on 127.0.0.1:5555 left `portos_auth` and
+    // `portos_auth_5555` behind — cookies ignore port, so both ride along.
+    const res = await request(app).get('/api/auth/whoami')
+      .set('Cookie', `portos_auth=${'a'.repeat(64)}; portos_auth_5555=${'b'.repeat(64)}; ${name}=${token}`);
+    expect(res.body).toEqual({ authenticated: true, required: true });
+    const foreignOnly = await request(app).get('/api/auth/whoami')
+      .set('Cookie', `portos_auth=${'a'.repeat(64)}; portos_auth_5555=${'b'.repeat(64)}`);
+    expect(foreignOnly.body).toEqual({ authenticated: false, required: true });
+  });
+
+  it('POST /api/auth/logout revokes a pre-upgrade legacy cookie and leaves a sibling install\'s cookie alone', async () => {
+    let app = await buildApp();
+    const { token: legacy } = await (await import('../services/auth.js')).setPassword({ newPassword: 'correct-horse' });
+    app = await buildApp();
+    const foreign = 'c'.repeat(64);
+    // A real socket + getSetCookie(): the shared request() helper collapses
+    // repeated Set-Cookie headers to the last one.
+    const server = await startLoopbackServer(app);
+    const { port } = server.address();
+    let setCookies;
+    try {
+      const out = await fetch(`http://127.0.0.1:${port}/api/auth/logout`, {
+        method: 'POST',
+        headers: { cookie: `portos_auth=${legacy}; portos_auth_5555=${foreign}` },
+      });
+      setCookies = out.headers.getSetCookie();
+    } finally {
+      await closeLoopbackServer(server);
+    }
+    expect(setCookies).toEqual([
+      `portos_auth_${port}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+      // Our pre-upgrade legacy cookie is cleared; the sibling's is not.
+      'portos_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0',
+    ]);
+    const after = await request(app).get('/api/auth/whoami').set('Cookie', `portos_auth=${legacy}`);
+    expect(after.body).toEqual({ authenticated: false, required: true });
   });
 
   it('GET /api/auth/sessions lists live sessions without leaking the token', async () => {

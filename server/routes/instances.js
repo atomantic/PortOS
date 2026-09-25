@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { extractToken, verifySession } from '../services/auth.js';
+import { verifyRequestSession } from '../services/auth.js';
 import { isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
@@ -33,7 +33,7 @@ router.use(asyncHandler(async (req, _res, next) => {
   // Vite and other private transports can forward a remote request over a
   // loopback socket. Neither that socket nor supplied Origin/Host proves the
   // operator's identity. Verify the existing session even when auth is off.
-  if (!isCrossOrigin(req) && await verifySession(extractToken(req))) {
+  if (!isCrossOrigin(req) && await verifyRequestSession(req)) {
     req.peerSettingsOperator = true;
     return next();
   }

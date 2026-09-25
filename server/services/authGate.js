@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './auth.js';
+import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
@@ -169,8 +169,7 @@ export const authGate = async (req, res, next) => {
   // introduced here so a Settings toggle takes effect on the very next request.
   const settings = await getSettings();
   if (isRegistryPublic(settings, path)) return next();
-  const token = extractToken(req);
-  if (await verifySession(token)) {
+  if (await verifyRequestSession(req)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
     return next();
   }
@@ -268,8 +267,7 @@ export const socketAuthGate = async (socket, next) => {
     err.data = { code: 'CROSS_ORIGIN_BLOCKED' };
     return next(err);
   }
-  const token = extractToken(fakeReq);
-  if (await verifySession(token)) {
+  if (await verifyRequestSession(fakeReq)) {
     markAuthMethod(socket, 'session');
     return next();
   }
