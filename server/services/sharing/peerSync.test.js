@@ -211,8 +211,9 @@ vi.mock('../decks.js', () => ({
   pruneTombstonedDecks: vi.fn().mockResolvedValue({ pruned: 0, ids: [] }),
 }));
 
-vi.mock('../../lib/peerHttpClient.js', async () => ({
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
   peerFetch: vi.fn(),
+  readPeerBody: (await importOriginal()).readPeerBody,
   peerSocketOptions: {},
 }));
 
@@ -317,6 +318,13 @@ import { getCatalogBundleForRef } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 import { contentHashForRecord, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+
+// A chunked body with no Content-Length that never ends; only the streaming
+// cap in readPeerBody can stop it.
+const endlessChunkedRes = () => {
+  const chunk = new Uint8Array(8 * 1024 * 1024);
+  return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
+};
 
 let originalDataPath;
 let originalImagesPath;
@@ -1566,6 +1574,12 @@ describe('peerSync', () => {
         headers: { get: (h) => (h.toLowerCase() === 'content-length' ? String(64 * 1024 * 1024) : null) },
         json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
       });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
+    it('payload-too-large when a chunked body with no Content-Length streams past the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
       expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
         .toEqual({ pulled: false, reason: 'payload-too-large' });
     });
@@ -5120,6 +5134,12 @@ describe('media-library federation (#1566)', () => {
         json: async () => ({ schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'a'.repeat(64), assets: [] }),
       });
       const res = await syncMediaLibraryFromPeer(mkPeer('fs-huge'));
+      expect(res.skipped).toBe('too-large');
+    });
+
+    it('skips a chunked manifest with no Content-Length that streams past the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-chunked'));
       expect(res.skipped).toBe('too-large');
     });
 

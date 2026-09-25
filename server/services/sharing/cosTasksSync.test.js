@@ -29,7 +29,10 @@ vi.mock('../mediaCollections.js', async () => ({
   findCollectionBySeriesId: vi.fn(), mergeMediaCollectionsFromSync: vi.fn(),
 }));
 vi.mock('../mediaAssetIndex/index.js', () => ({ reconcileMediaAssets: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('../../lib/peerHttpClient.js', async () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
+  peerFetch: vi.fn(),
+  readPeerBody: (await importOriginal()).readPeerBody,
+}));
 // cosTaskStore is dynamic-imported by both the sender (getUserTasks/getCosTasks)
 // and the receiver (mergePeerTasks). Spy it so the wire build + merge are
 // observable AND can't read/write the real task files.
@@ -46,6 +49,12 @@ import {
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
+// A chunked body with no Content-Length that never ends; only the streaming
+// cap in readPeerBody can stop it.
+const endlessChunkedRes = () => {
+  const chunk = new Uint8Array(8 * 1024 * 1024);
+  return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
+};
 import { getUserTasks, getCosTasks, mergePeerTasks } from '../cosTaskStore.js';
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
@@ -141,6 +150,12 @@ describe('syncCosTasksFromPeer', () => {
     }));
     const r = await syncCosTasksFromPeer(PEER);
     expect(r).toEqual({ merged: 0, skipped: 'schema-ahead' });
+    expect(mergePeerTasks).not.toHaveBeenCalled();
+  });
+
+  it('skips a chunked payload that streams past the byte cap', async () => {
+    vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
+    expect(await syncCosTasksFromPeer(PEER)).toEqual({ merged: 0, skipped: 'too-large' });
     expect(mergePeerTasks).not.toHaveBeenCalled();
   });
 
