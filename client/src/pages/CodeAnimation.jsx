@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Globe, ImagePlus,
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
 import useProviderModels from '../hooks/useProviderModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -14,6 +15,7 @@ import {
   getCodeAnimationOptions,
   listCodeAnimationJobs,
   listMoodBoardNames,
+  listTracks,
   listUniverseNames,
   listUniverseStyles,
   startCodeAnimationGeneration,
@@ -69,17 +71,28 @@ const loadDraft = () => {
         url: `/api/uploads/${encodeURIComponent(image.filename)}`,
       }))
     : [];
-  const audio = isRecord(stored.audio)
-    && typeof stored.audio.filename === 'string'
-    && stored.audio.filename.trim()
-    ? {
-      filename: stored.audio.filename,
-      label: typeof stored.audio.label === 'string' ? stored.audio.label : stored.audio.filename,
-      durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
-      notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
-      url: `/api/uploads/${encodeURIComponent(stored.audio.filename)}`,
+  let audio = null;
+  if (isRecord(stored.audio)) {
+    if (stored.audio.source === 'track' && typeof stored.audio.trackId === 'string' && stored.audio.trackId.trim()) {
+      audio = {
+        source: 'track',
+        trackId: stored.audio.trackId.trim(),
+        label: typeof stored.audio.label === 'string' ? stored.audio.label : 'Music track',
+        durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
+        notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
+        url: typeof stored.audio.url === 'string' ? stored.audio.url : '',
+      };
+    } else if (typeof stored.audio.filename === 'string' && stored.audio.filename.trim()) {
+      audio = {
+        source: 'upload',
+        filename: stored.audio.filename.trim(),
+        label: typeof stored.audio.label === 'string' ? stored.audio.label : stored.audio.filename,
+        durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
+        notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
+        url: `/api/uploads/${encodeURIComponent(stored.audio.filename)}`,
+      };
     }
-    : null;
+  }
   const stringField = (key) => typeof stored[key] === 'string' ? stored[key] : DEFAULT_DRAFT[key];
   return {
     ...DEFAULT_DRAFT,
@@ -130,7 +143,20 @@ function toBrief(draft) {
     includeMoodBoardImages: draft.includeMoodBoardImages,
     referenceImages: draft.referenceImages.map(({ filename, label, note }) => ({ filename, label, note })),
     audio: draft.audio
-      ? { filename: draft.audio.filename, label: draft.audio.label, durationSeconds: draft.audio.durationSeconds ?? null, notes: draft.audio.notes }
+      ? draft.audio.source === 'track'
+        ? {
+          source: 'track',
+          trackId: draft.audio.trackId,
+          ...(draft.audio.label ? { label: draft.audio.label } : {}),
+          ...(draft.audio.durationSeconds != null ? { durationSeconds: draft.audio.durationSeconds } : {}),
+          notes: draft.audio.notes || '',
+        }
+        : {
+          filename: draft.audio.filename,
+          label: draft.audio.label,
+          durationSeconds: draft.audio.durationSeconds ?? null,
+          notes: draft.audio.notes,
+        }
       : null,
     ...moodBoardSelection(draft),
   };
@@ -178,7 +204,20 @@ function draftFromJob(job) {
       url: `/api/uploads/${encodeURIComponent(image.filename)}`,
     })),
     audio: input.audio
-      ? { ...input.audio, url: `/api/uploads/${encodeURIComponent(input.audio.filename)}` }
+      ? input.audio.source === 'track'
+        ? {
+          source: 'track',
+          trackId: input.audio.trackId,
+          label: input.audio.label || 'Music track',
+          durationSeconds: input.audio.durationSeconds ?? null,
+          notes: input.audio.notes || '',
+          url: job.audioUrl || '',
+        }
+        : {
+          source: 'upload',
+          ...input.audio,
+          url: `/api/uploads/${encodeURIComponent(input.audio.filename)}`,
+        }
       : null,
     soundtrack: input.soundtrack || 'none',
     format: { ...DEFAULT_DRAFT.format, ...(input.format || {}) },
@@ -240,6 +279,8 @@ export default function CodeAnimation() {
   const [universes, setUniverses] = useState([]);
   const [universeStyles, setUniverseStyles] = useState({});
   const [boards, setBoards] = useState([]);
+  const [libraryTracks, setLibraryTracks] = useState([]);
+  const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [draft, setDraft] = useState(loadDraft);
   const [uploading, setUploading] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -306,6 +347,9 @@ export default function CodeAnimation() {
       .then((rows) => setUniverseStyles(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.id, row]))))
       .catch(() => {});
     listMoodBoardNames({ silent: true }).then((rows) => setBoards(Array.isArray(rows) ? rows : [])).catch(() => {});
+    listTracks({ silent: true })
+      .then((rows) => setLibraryTracks(Array.isArray(rows) ? rows : rows?.tracks || []))
+      .catch(() => {});
   }, []);
 
   const brief = useMemo(() => toBrief(draft), [draft]);
@@ -398,6 +442,22 @@ export default function CodeAnimation() {
     referenceImages: prev.referenceImages.map((ref) => (ref.filename === filename ? { ...ref, ...patch } : ref)),
   }));
 
+  const playableTracks = useMemo(() => libraryTracks.filter((t) => Boolean(t.audioFilename)), [libraryTracks]);
+
+  const handlePickTrack = (track) => {
+    if (!track) return;
+    update({
+      audio: {
+        source: 'track',
+        trackId: track.id,
+        label: track.title || 'Untitled track',
+        durationSeconds: track.durationSec ?? null,
+        notes: '',
+        url: track.audioFilename ? `/data/music/${encodeURIComponent(track.audioFilename)}` : '',
+      },
+    });
+  };
+
   const handleAudio = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -405,7 +465,7 @@ export default function CodeAnimation() {
     setUploading(true);
     const [durationSeconds, saved] = await Promise.all([readAudioDuration(file), uploadOrToast(file)]);
     setUploading(false);
-    if (saved) update({ audio: { filename: saved.filename, label: file.name, durationSeconds, notes: '', url: saved.path } });
+    if (saved) update({ audio: { source: 'upload', filename: saved.filename, label: file.name, durationSeconds, notes: '', url: saved.path } });
   };
 
   // Ask a model to write the brief from the universe's bible and canon cast,
@@ -706,13 +766,25 @@ export default function CodeAnimation() {
                   <div className="flex items-center gap-2 text-sm text-gray-200">
                     <span className="min-w-0 truncate">{draft.audio.label}</span>
                     {draft.audio.durationSeconds ? <span className="text-xs text-gray-500">{draft.audio.durationSeconds.toFixed(1)}s</span> : null}
+                    <span className="rounded bg-port-card-hover px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
+                      {draft.audio.source === 'track' ? 'Library track' : 'Upload'}
+                    </span>
                     <button type="button" aria-label="Remove audio track" onClick={() => update({ audio: null })} className="ml-auto text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
                   </div>
                   <textarea aria-label="Audio notes" rows={2} value={draft.audio.notes} maxLength={limits?.audioNotesMax} onChange={(event) => update({ audio: { ...draft.audio, notes: event.target.value } })} placeholder="120 BPM; soft intro, drop at 0:16, fade at 0:40" className={`${inputClass} resize-y`} />
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <input id="ca-audio" type="file" accept={audioAccept} onChange={handleAudio} disabled={uploading} className={fileInputClass} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input id="ca-audio" type="file" accept={audioAccept} onChange={handleAudio} disabled={uploading} className={`${fileInputClass} flex-1 min-w-[200px]`} />
+                    <button
+                      type="button"
+                      onClick={() => setTrackPickerOpen(true)}
+                      className={buttonSecondary}
+                    >
+                      <Music2 className="h-3.5 w-3.5" /> Pick from music library
+                    </button>
+                  </div>
                   <label className="flex items-center gap-2 text-xs text-gray-300">
                     <input type="checkbox" checked={draft.soundtrack === 'procedural'} onChange={(event) => update({ soundtrack: event.target.checked ? 'procedural' : 'none' })} />
                     No track? Have the code compose a procedural soundtrack
@@ -808,6 +880,16 @@ export default function CodeAnimation() {
           </section>
         </div>
       </div>
+      <AlbumTrackPicker
+        open={trackPickerOpen}
+        tracks={playableTracks}
+        onClose={() => setTrackPickerOpen(false)}
+        onAdd={([selected]) => {
+          if (selected) handlePickTrack(selected);
+        }}
+        single
+        title="Pick soundtrack track"
+      />
     </div>
   );
 }

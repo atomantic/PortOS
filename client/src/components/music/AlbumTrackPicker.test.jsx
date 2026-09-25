@@ -31,4 +31,24 @@ describe('AlbumTrackPicker', () => {
     render(<AlbumTrackPicker open tracks={tracks} onAdd={() => {}} onClose={() => {}} />);
     expect(screen.getByRole('button', { name: /add selected/i })).toBeDisabled();
   });
+
+  it('supports single-selection mode and custom title', () => {
+    const onAdd = vi.fn();
+    const onClose = vi.fn();
+    render(<AlbumTrackPicker open tracks={tracks} onAdd={onAdd} onClose={onClose} single title="Pick soundtrack track" />);
+
+    expect(screen.getByRole('heading', { name: 'Pick soundtrack track' })).toBeTruthy();
+    const selectBtn = screen.getByRole('button', { name: /select track/i });
+    expect(selectBtn).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText('Select Daybreak'));
+    expect(selectBtn).not.toBeDisabled();
+
+    // Selecting another replaces the selection in single mode
+    fireEvent.click(screen.getByLabelText('Select Northern Lights'));
+    fireEvent.click(selectBtn);
+
+    expect(onAdd).toHaveBeenCalledWith([tracks[0]]);
+    expect(onClose).toHaveBeenCalled();
+  });
 });

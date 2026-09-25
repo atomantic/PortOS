@@ -46,6 +46,24 @@ const formatSchema = z.object({
   fps: z.number().int().refine((fps) => L.fpsOptions.includes(fps), 'Unsupported frame rate').default(30),
 });
 
+const uploadAudioSchema = z.object({
+  source: z.literal('upload').optional().default('upload'),
+  filename: uploadFilenameSchema,
+  label: z.string().trim().max(200).default(''),
+  durationSeconds: z.number().positive().max(60 * 60).nullable().optional(),
+  notes: z.string().trim().max(L.audioNotesMax).default(''),
+});
+
+const trackAudioSchema = z.object({
+  source: z.literal('track'),
+  trackId: z.string().trim().min(1).max(128),
+  label: z.string().trim().max(200).optional(),
+  durationSeconds: z.number().positive().max(60 * 60).nullable().optional(),
+  notes: z.string().trim().max(L.audioNotesMax).default(''),
+});
+
+const audioSchema = z.union([trackAudioSchema, uploadAudioSchema]).nullable().optional();
+
 const briefSchema = z.object({
   title: z.string().trim().max(L.titleMax).default(''),
   concept: z.string().trim().min(1, 'Describe what happens in the animation').max(L.conceptMax),
@@ -67,12 +85,7 @@ const briefSchema = z.object({
     label: z.string().trim().max(200).default(''),
     note: z.string().trim().max(L.referenceNoteMax).default(''),
   })).max(L.referenceImagesMax).default([]),
-  audio: z.object({
-    filename: uploadFilenameSchema,
-    label: z.string().trim().max(200).default(''),
-    durationSeconds: z.number().positive().max(60 * 60).nullable().optional(),
-    notes: z.string().trim().max(L.audioNotesMax).default(''),
-  }).nullable().optional(),
+  audio: audioSchema,
 }).strict();
 
 const generateSchema = briefSchema.extend({

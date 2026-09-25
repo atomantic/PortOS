@@ -12,6 +12,7 @@ vi.mock('../services/api', () => ({
   getCodeAnimationOptions: vi.fn(),
   listCodeAnimationJobs: vi.fn().mockResolvedValue([]),
   listMoodBoardNames: vi.fn(),
+  listTracks: vi.fn().mockResolvedValue([]),
   listUniverseNames: vi.fn(),
   listUniverseStyles: vi.fn(),
   startCodeAnimationGeneration: vi.fn(),
@@ -43,6 +44,7 @@ import {
   getCodeAnimationJob,
   getCodeAnimationOptions,
   listMoodBoardNames,
+  listTracks,
   listUniverseNames,
   listUniverseStyles,
   startCodeAnimationGeneration,
@@ -80,6 +82,7 @@ describe('Code Animation page', () => {
     listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
     listUniverseStyles.mockResolvedValue([{ id: 'u1', name: 'Example Universe', influences: { embrace: ['ink wash'], avoid: ['photorealism'] } }]);
     listMoodBoardNames.mockResolvedValue([{ id: 'b1', name: 'Dusk' }]);
+    listTracks.mockResolvedValue([]);
     buildCodeAnimationPrompt.mockResolvedValue({
       prompt: 'You are an award-winning creative coder…',
       attachments: [{ label: 'Night markets', origin: 'universe', url: '/data/image-refs/style-ref.png' }],
@@ -233,5 +236,57 @@ describe('Code Animation page', () => {
     await user.click(screen.getByRole('button', { name: /build prompt/i }));
     await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
     expect(buildCodeAnimationPrompt.mock.calls[0][0].moodBoardId).toBe('');
+  });
+
+  it('picks a track from the music library, shows library badge, and sends track audio in brief', async () => {
+    const user = userEvent.setup();
+    listTracks.mockResolvedValue([
+      { id: 'track-1', title: 'Neon Rain', audioFilename: 'neon-rain.mp3', durationSec: 42.5 },
+    ]);
+    await renderPage();
+
+    expect(screen.getByRole('button', { name: /pick from music library/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /pick from music library/i }));
+
+    expect(screen.getByText('Pick soundtrack track')).toBeInTheDocument();
+    expect(screen.getByText('Neon Rain')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /select neon rain/i }));
+    await user.click(screen.getByRole('button', { name: /select track/i }));
+
+    expect(screen.getByText('Neon Rain')).toBeInTheDocument();
+    expect(screen.getByText('42.5s')).toBeInTheDocument();
+    expect(screen.getByText('Library track')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/what happens/i), 'Robots dancing');
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
+    expect(buildCodeAnimationPrompt.mock.calls[0][0].audio).toEqual({
+      source: 'track',
+      trackId: 'track-1',
+      label: 'Neon Rain',
+      durationSeconds: 42.5,
+      notes: '',
+    });
+
+    await user.click(screen.getByRole('button', { name: /remove audio track/i }));
+    expect(screen.getByRole('button', { name: /pick from music library/i })).toBeInTheDocument();
+  });
+
+  it('restores draft with library track audio from localStorage', async () => {
+    localStorage.setItem('portos.codeAnimation.draft', JSON.stringify({
+      audio: {
+        source: 'track',
+        trackId: 'track-stored',
+        label: 'Ambient Drone',
+        durationSeconds: 60,
+      },
+    }));
+
+    await renderPage();
+
+    expect(screen.getByText('Ambient Drone')).toBeInTheDocument();
+    expect(screen.getByText('60.0s')).toBeInTheDocument();
+    expect(screen.getByText('Library track')).toBeInTheDocument();
   });
 });

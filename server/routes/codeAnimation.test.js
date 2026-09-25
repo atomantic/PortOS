@@ -24,6 +24,7 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../services/tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('../services/promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
   resolveProviderAndModel: vi.fn(),
@@ -34,6 +35,7 @@ import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
 import { getProviderById } from '../services/providers.js';
+import { getTrack } from '../services/tracks/index.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import routes from './codeAnimation.js';
 
@@ -74,11 +76,14 @@ beforeAll(() => {
   mkdirSync(PATHS.uploads, { recursive: true });
   mkdirSync(PATHS.imageRefs, { recursive: true });
   mkdirSync(PATHS.images, { recursive: true });
+  mkdirSync(PATHS.music, { recursive: true });
   writeFileSync(join(PATHS.uploads, 'abc12345-hero.png'), 'png');
   writeFileSync(join(PATHS.uploads, 'abc12345-theme.mp3'), 'mp3');
   writeFileSync(join(PATHS.imageRefs, 'style-ref.png'), 'png');
   writeFileSync(join(PATHS.images, 'pin.png'), 'png');
   writeFileSync(join(PATHS.imageRefs, 'sheet.png'), 'png');
+  writeFileSync(join(PATHS.music, 'track-active.mp3'), 'mp3');
+  writeFileSync(join(PATHS.music, 'wavesketch-active.wav'), 'wav');
 });
 afterAll(cleanupTempDataRoots);
 
@@ -208,6 +213,79 @@ describe('POST /api/code-animation/prompt', () => {
     expect(traversal.status).toBe(400);
     getUniverse.mockRejectedValueOnce(Object.assign(new Error('Universe not found'), { code: 'NOT_FOUND' }));
     expect((await request(app).post('/api/code-animation/prompt').send(brief)).status).toBe(404);
+  });
+
+  it('creates an animation with a music-library track and gets the resolved music URL and duration', async () => {
+    getTrack.mockResolvedValueOnce({
+      id: 'track-1',
+      title: 'Neon Drift',
+      audioFilename: 'track-active.mp3',
+      durationSec: 45,
+      waveSketch: null,
+    });
+    const res = await request(makeApp()).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-1' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.audioUrl).toBe('/data/music/track-active.mp3');
+    expect(res.body.prompt).toContain('"Neon Drift" (45.0s long)');
+    expect(res.body.prompt).not.toContain('Drawn waveform timing cues');
+  });
+
+  it('appends timing cues when the track has a waveSketch, but not for a plain diffusion track', async () => {
+    const sketch = {
+      version: 1,
+      title: 'Glass Tide',
+      durationSec: 2,
+      shapes: { glass: [0, 0.8, 1, 0.3, 0, -0.5, -1, -0.2] },
+      voices: [{ name: 'lead', shape: 'glass', notes: [{ t: 0, d: 1, pitch: 'A4' }, { t: 1, d: 1, pitch: 'E5' }] }],
+      contour: [0.1, 0.8, 0.4],
+    };
+    getTrack.mockResolvedValueOnce({
+      id: 'track-wave',
+      title: 'Glass Tide',
+      audioFilename: 'wavesketch-active.wav',
+      durationSec: 2,
+      waveSketch: sketch,
+    });
+    const res = await request(makeApp()).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-wave' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.audioUrl).toBe('/data/music/wavesketch-active.wav');
+    expect(res.body.prompt).toContain('Drawn waveform timing cues:');
+    expect(res.body.prompt).toContain('- Section/onset times:');
+    expect(res.body.prompt).toContain('- Strongest onsets:');
+    expect(res.body.prompt).toContain('- Loudness contour:');
+  });
+
+  it('returns 400 AUDIO_NOT_FOUND for unknown, deleted, or missing audio file track', async () => {
+    const app = makeApp();
+    getTrack.mockResolvedValueOnce(null);
+    const unknown = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-missing' },
+    });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.code).toBe('AUDIO_NOT_FOUND');
+
+    getTrack.mockResolvedValueOnce({ id: 'track-deleted', deletedAt: '2026-01-01T00:00:00Z', audioFilename: 'track-active.mp3' });
+    const deleted = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-deleted' },
+    });
+    expect(deleted.status).toBe(400);
+    expect(deleted.body.code).toBe('AUDIO_NOT_FOUND');
+
+    getTrack.mockResolvedValueOnce({ id: 'track-no-file', audioFilename: 'ghost-file.mp3' });
+    const missingFile = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-no-file' },
+    });
+    expect(missingFile.status).toBe(400);
+    expect(missingFile.body.code).toBe('AUDIO_NOT_FOUND');
   });
 });
 
