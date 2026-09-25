@@ -2090,6 +2090,15 @@ describe('claim worktree per-app namespacing', () => {
 describe('buildClaimWorkTask reviewer pin', () => {
   const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
 
+  it('passes the strict claim policy through the generated provider request', async () => {
+    const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
+    expect(prompt).toContain('kind: "claim-review"');
+    expect(prompt).toContain('toolFree: true');
+    expect(prompt).toContain('a provider without that profile returns REVIEWER_UNSUPPORTED before launch');
+    expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
+    expect(prompt).toContain('an optional inconclusive result remains non-blocking');
+  });
+
   it('persists the reviewers its prompt names so the pin has one owner', async () => {
     const { prompt, taskMetadata } = await buildClaimWorkTask(app);
     // The configured claim-work reviewers reach the prompt body...

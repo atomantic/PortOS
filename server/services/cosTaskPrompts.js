@@ -106,7 +106,7 @@ export const appendTargetWorkItemBlock = (promptTaskType, ref, excludeLabelsBloc
 export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels) =>
   appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels }));
 
-export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false } = {}) {
+export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false, enforceIsolation = false } = {}) {
   const localReviewers = (reviewers || []).filter((reviewer) => isToolFreeReviewer(reviewer));
   const cliOutcomeInstructions = appendBlock(buildCliReviewerOutcomeInstructions(reviewers || []));
   if (!localReviewers.length) return cliOutcomeInstructions;
@@ -177,11 +177,15 @@ fi
     const jqObject = [
       ...Object.keys(pinned).map((key) => `${key}: $${key}`),
       ...(isProviderReviewer(reviewer) ? ['inheritDefaults: false'] : []),
+      ...(enforceIsolation ? ['kind: "claim-review"', 'toolFree: true'] : []),
     ].join(', ');
     return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\nif ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
   }).join('\n\n');
 
-  return `${claimCommentGateBlock}\n\n## Local Reviewer Procedure\n\nConfigured provider and local-model reviews run before standalone CLI reviewers. CLI providers can inspect the checkout; API providers review the supplied diff. Run each configured local reviewer in its listed order using the command below. Only a successfully extracted non-empty \`.findings\` string is a review result. Timeout, transport failure, malformed JSON, an error response, or missing/empty findings is INCONCLUSIVE: do not substitute a self-review. For a required local reviewer, record \`REVIEW_STATUS=review-blocked\`, continue to publish the MR/PR, then leave it open and do not merge until the required review completes; an optional inconclusive result remains non-blocking. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} This remains non-blocking when every reviewer is marked \`~opt\`; do not use that wording when any reviewer produces a verdict. Substantive findings, failed tests/build, unpushed fixes, or publication failures still block.\n\n${commands}${cliOutcomeInstructions}`;
+  const accessPolicy = enforceIsolation
+    ? 'Claim reviews send only the supplied diff. Provider CLIs run through a maintained no-tool profile in an isolated directory; a provider without that profile returns REVIEWER_UNSUPPORTED before launch. API and local-model providers receive the diff without tools.'
+    : 'CLI providers can inspect the checkout; API providers review the supplied diff.';
+  return `${claimCommentGateBlock}\n\n## Local Reviewer Procedure\n\nConfigured provider and local-model reviews run before standalone CLI reviewers. ${accessPolicy} Run each configured local reviewer in its listed order using the command below. Only a successfully extracted non-empty \`.findings\` string is a review result. Timeout, transport failure, malformed JSON, an error response, or missing/empty findings is INCONCLUSIVE: do not substitute a self-review. For a required local reviewer, record \`REVIEW_STATUS=review-blocked\`, continue to publish the MR/PR, then leave it open and do not merge until the required review completes; an optional inconclusive result remains non-blocking. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} This remains non-blocking when every reviewer is marked \`~opt\`; do not use that wording when any reviewer produces a verdict. Substantive findings, failed tests/build, unpushed fixes, or publication failures still block.\n\n${commands}${cliOutcomeInstructions}`;
 }
 
 /**
