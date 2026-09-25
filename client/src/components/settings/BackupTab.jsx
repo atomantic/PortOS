@@ -1,5 +1,5 @@
 import { useState, useEffect, useId, useRef } from 'react';
-import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, Trash2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
@@ -8,11 +8,19 @@ import { useBackupRun } from '../../hooks/useBackupRun';
 import Modal from '../ui/Modal';
 import Banner from '../ui/Banner';
 import CollapsibleSection from '../ui/CollapsibleSection';
-import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase } from '../../services/api';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
+import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase, deleteBackupSnapshot } from '../../services/api';
 import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
+
+// Mirrors MIN_RETENTION_COUNT/MAX_RETENTION_COUNT in server/lib/backupConfig.js —
+// the server is the source of truth and re-validates on save; these only bound
+// the input control.
+const MIN_RETENTION_COUNT = 1;
+const MAX_RETENTION_COUNT = 365;
+const DEFAULT_RETENTION_COUNT = 30;
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
@@ -36,6 +44,7 @@ const snapshotSourceLabel = (snapshot) =>
 
 export function BackupTab() {
   const destPathId = useId();
+  const retentionId = useId();
   const additionalExcludeId = useId();
   const defaultExcludesPanelId = useId();
   const effectiveExcludesPanelId = useId();
@@ -60,6 +69,16 @@ export function BackupTab() {
   const [savedEnabled, setSavedEnabled] = useState(null);
   const [cronExpression, setCronExpression] = useState(null);
   const [savedCronExpression, setSavedCronExpression] = useState(null);
+  // `null` = unlimited. Undefined only before the initial load resolves.
+  const [retentionCount, setRetentionCount] = useState(undefined);
+  const [savedRetentionCount, setSavedRetentionCount] = useState(undefined);
+  // The number input's own DISPLAYED text, decoupled from the committed
+  // `retentionCount`. A controlled `value` bound directly to a clamped
+  // number snaps back to the old value the instant the field is cleared
+  // (parseInt('') is NaN), which makes it impossible to select-all and type
+  // a replacement. Free-typing lives here; `retentionCount` (used for dirty
+  // checking and the save payload) only updates once the text parses.
+  const [retentionInputText, setRetentionInputText] = useState('');
   const [excludePaths, setExcludePaths] = useState([]);
   const [savedExcludePaths, setSavedExcludePaths] = useState([]);
   const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
@@ -75,6 +94,9 @@ export function BackupTab() {
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
   const restorePreviewGenerationRef = useRef(0);
+  const [deleteTarget, setDeleteTarget] = useState(null); // snapshot pending delete confirm
+  const [deletingIds, setDeletingIds] = useState(new Set());
+  const pendingDeletes = useRef(new Set());
   // The default-exclusions catalog is a 15+ row reference list the user rarely
   // edits — collapsed by default so the fields they came to change (destination,
   // enabled, schedule) and the action bar are what the tab actually shows.
@@ -113,12 +135,22 @@ export function BackupTab() {
           || !backup.cronExpression.trim()) {
           throw new Error('Settings response did not include a resolved backup schedule');
         }
+        // retentionCount is resolved server-side too (null = unlimited), so
+        // an absent KEY (not merely a null/number value) means the same
+        // unresolved-response case as enabled/cronExpression above.
+        if (!('retentionCount' in backup)) {
+          throw new Error('Settings response did not include a resolved backup schedule');
+        }
         const savedEnabledValue = backup.enabled;
         const savedCron = backup.cronExpression;
+        const savedRetention = backup.retentionCount;
         setEnabled(savedEnabledValue);
         setSavedEnabled(savedEnabledValue);
         setCronExpression(savedCron);
         setSavedCronExpression(savedCron);
+        setRetentionCount(savedRetention);
+        setSavedRetentionCount(savedRetention);
+        setRetentionInputText(savedRetention === null ? '' : String(savedRetention));
         setExcludePaths(savedExcludes);
         setSavedExcludePaths(savedExcludes);
         setDisabledDefaultExcludes(savedDisabled);
@@ -138,10 +170,11 @@ export function BackupTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths, disabledDefaultExcludes } }, { silent: true });
+      await updateSettings({ backup: { destPath, enabled, cronExpression, retentionCount, excludePaths, disabledDefaultExcludes } }, { silent: true });
       setSavedDestPath(destPath);
       setSavedEnabled(enabled);
       setSavedCronExpression(cronExpression);
+      setSavedRetentionCount(retentionCount);
       setSavedExcludePaths(excludePaths);
       setSavedDisabledDefaultExcludes(disabledDefaultExcludes);
       toast.success('Settings saved');
@@ -208,6 +241,7 @@ export function BackupTab() {
   const dirty = destPath !== savedDestPath
     || enabled !== savedEnabled
     || cronExpression !== savedCronExpression
+    || retentionCount !== savedRetentionCount
     || !sameSet(excludePaths, savedExcludePaths)
     || !sameSet(disabledDefaultExcludes, savedDisabledDefaultExcludes);
   const canRun = !!savedDestPath && !running && !saving && !dirty;
@@ -316,6 +350,31 @@ export function BackupTab() {
     setRestorePreview(null);
   };
 
+  const handleDeleteSnapshot = (snapshot) => {
+    setDeleteTarget({
+      identity: snapshotIdentity(snapshot),
+      snapshotId: snapshot.id,
+      source: snapshot.source,
+      sourceLabel: snapshotSourceLabel(snapshot),
+    });
+  };
+
+  const confirmDeleteSnapshot = async () => {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (!target || pendingDeletes.current.has(target.identity)) return;
+    pendingDeletes.current.add(target.identity);
+    const result = await deleteBackupSnapshot(target.snapshotId, target.source, { silent: true })
+      .catch(err => ({ deleted: false, error: err }));
+    pendingDeletes.current.delete(target.identity);
+    if (!result?.deleted) {
+      toast.error(result?.error?.message || 'Failed to delete snapshot');
+      return;
+    }
+    toast.success(`Deleted snapshot ${target.snapshotId}`);
+    setDeletingIds(previous => new Set(previous).add(target.identity));
+  };
+
   return (
     <section
       aria-labelledby="backup-settings-heading"
@@ -402,6 +461,51 @@ export function BackupTab() {
               <span className="block text-sm text-gray-400">Schedule</span>
               <CronSchedulePicker value={cronExpression} onChange={setCronExpression} cronAriaLabel="Schedule (cron)" />
               <p className="text-xs text-gray-500">Default: 2:00 AM daily. Times use the configured timezone.</p>
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={retentionId} className="block text-sm text-gray-400">Retention (snapshots kept on this machine)</label>
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  id={retentionId}
+                  type="number"
+                  min={MIN_RETENTION_COUNT}
+                  max={MAX_RETENTION_COUNT}
+                  step={1}
+                  disabled={retentionCount === null}
+                  value={retentionInputText}
+                  onChange={e => {
+                    const raw = e.target.value;
+                    // Let the field show exactly what was typed — including a
+                    // momentarily empty or out-of-range value — so clearing it to
+                    // type a replacement never snaps back to the old digits.
+                    setRetentionInputText(raw);
+                    const parsed = Number.parseInt(raw, 10);
+                    if (Number.isNaN(parsed)) return;
+                    setRetentionCount(Math.min(MAX_RETENTION_COUNT, Math.max(MIN_RETENTION_COUNT, parsed)));
+                  }}
+                  onBlur={() => {
+                    // Reconcile the displayed text with the committed (clamped)
+                    // value once editing stops, so an out-of-range or blank entry
+                    // doesn't linger on screen looking accepted.
+                    setRetentionInputText(retentionCount === null ? '' : String(retentionCount));
+                  }}
+                  className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                />
+                <span className="inline-flex items-center gap-2 text-sm text-gray-400">
+                  <ToggleSwitch
+                    enabled={retentionCount === null}
+                    onChange={() => {
+                      const next = retentionCount === null ? DEFAULT_RETENTION_COUNT : null;
+                      setRetentionCount(next);
+                      setRetentionInputText(next === null ? '' : String(next));
+                    }}
+                    size="sm"
+                    ariaLabel="Unlimited retention"
+                  />
+                  Unlimited
+                </span>
+              </div>
+              <p className="text-xs text-gray-500">After each successful backup, the oldest completed snapshots on this machine beyond this count are deleted. Other machines&apos; snapshots in a shared destination are never affected.</p>
             </div>
           </div>
         </div>
@@ -586,28 +690,57 @@ export function BackupTab() {
           ) : (
             <>
               <ul className="space-y-1.5">
-                {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => (
-                  <li key={snapshotIdentity(snap)} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
-                    <span className="min-w-0">
-                      <span className="block text-gray-300 truncate">{snap.id}</span>
-                      <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
-                      {snap.failed && (
-                        <span className="block text-port-error">Backup failed — download only</span>
-                      )}
-                      {snap.incomplete && (
-                        <span className="block text-gray-500">Still being written…</span>
-                      )}
-                    </span>
-                    <button
-                      onClick={() => handleRestoreDb(snap)}
-                      disabled={snap.failed || snap.incomplete}
-                      title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
-                      className="shrink-0 px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Restore DB
-                    </button>
-                  </li>
-                ))}
+                {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => {
+                  const identity = snapshotIdentity(snap);
+                  return (
+                    <li key={identity}>
+                      <CollapsibleListItem
+                        removing={deletingIds.has(identity)}
+                        spacing="0.375rem"
+                        onExited={() => {
+                          setSnapshots(previous => previous.filter(s => snapshotIdentity(s) !== identity));
+                          setDeletingIds(previous => {
+                            const next = new Set(previous);
+                            next.delete(identity);
+                            return next;
+                          });
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
+                          <span className="min-w-0">
+                            <span className="block text-gray-300 truncate">{snap.id}</span>
+                            <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
+                            {snap.failed && (
+                              <span className="block text-port-error">Backup failed — download only</span>
+                            )}
+                            {snap.incomplete && (
+                              <span className="block text-gray-500">Still being written…</span>
+                            )}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              onClick={() => handleRestoreDb(snap)}
+                              disabled={snap.failed || snap.incomplete}
+                              title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                              className="px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Restore DB
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSnapshot(snap)}
+                              disabled={snap.incomplete}
+                              title="Permanently delete this snapshot"
+                              aria-label={`Delete snapshot ${snap.id}`}
+                              className="p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </span>
+                        </div>
+                      </CollapsibleListItem>
+                    </li>
+                  );
+                })}
               </ul>
               {snapshots.length > 10 && (
                 <button
@@ -642,6 +775,26 @@ export function BackupTab() {
           <div className="flex justify-end gap-2">
             <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
             <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        size="sm"
+        usePortal
+        ariaLabel="Delete snapshot"
+      >
+        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
+          <h3 className="text-white text-sm font-medium">Delete snapshot?</h3>
+          <p className="text-sm text-gray-400">
+            This permanently deletes snapshot <code className="text-gray-300">{deleteTarget?.snapshotId}</code>
+            {' '}on <span className="text-gray-300">{deleteTarget?.sourceLabel}</span>, including its files and database dump. This cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setDeleteTarget(null)} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+            <button onClick={confirmDeleteSnapshot} className="px-3 py-2 text-sm bg-port-error hover:bg-port-error/80 text-white font-medium rounded-lg transition-colors">Delete</button>
           </div>
         </div>
       </Modal>

@@ -1,5 +1,5 @@
 import { CREDENTIALS } from './credentialRegistry.js';
-import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
+import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
 
 export const gitDeleteBranchBodySchema = z.object({
@@ -1001,7 +1001,13 @@ export const backupConfigSchema = z.object({
     z.string().trim().min(1).max(EXCLUDE_PATTERN_MAX_LENGTH + 1)
       .refine(isSafeExcludePattern, { message: `Exclude pattern must be at most ${EXCLUDE_PATTERN_MAX_LENGTH} characters once anchored, and may not contain ".." or a NUL byte` })
   ).optional().default([]),
-  disabledDefaultExcludes: z.array(z.string()).optional().default([])
+  disabledDefaultExcludes: z.array(z.string()).optional().default([]),
+  // Per-source completed-snapshot retention. `null` (and an omitted field, via
+  // `resolveRetentionCount`) both mean unlimited — see backupConfig.js for why
+  // an existing install must never see this default itself. `.nullable()`
+  // rather than `emptyToUndefined`: the UI's explicit "Unlimited" choice IS a
+  // value worth persisting distinctly from "never touched this setting".
+  retentionCount: z.number().int().min(MIN_RETENTION_COUNT).max(MAX_RETENTION_COUNT).nullable().optional()
 });
 
 // Automatic PortOS self-update (Update tab). Stored under the top-level

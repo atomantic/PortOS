@@ -51,5 +51,8 @@
       "maxQueuedJobs": 2,
       "audioModels": []
     }
+  },
+  "backup": {
+    "retentionCount": 30
   }
 }

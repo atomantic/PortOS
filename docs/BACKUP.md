@@ -116,6 +116,16 @@ A non-dry-run restore requires a reachable DB first (`checkHealth()`), so a rest
 
 Separate from snapshot restore: `server/routes/database.js` can copy data **between** the native (port 5432) and Docker (port 5561) Postgres backends. It exports the active backend with `pg_dump`, ensures the target backend has the `portos` role/database/extensions, then imports under `ON_ERROR_STOP=1 --single-transaction`. `POST /api/database/export` produces an on-demand dump under `data/db-dumps/`. These power the Database settings tab's mode-switch/sync flows; they are independent of the rsync snapshot backups above.
 
+## Retention & deletion
+
+Left unbounded, `snapshots/<hostname>/` grows forever — every prior full DB dump stays reachable, so a record deleted from the live database (including `privacy_vault_records`, `privacy_consents`, and `privacy_broker_cases`) remains restorable from an old snapshot indefinitely. `server/lib/backupConfig.js` resolves a per-source `retentionCount`, and `runBackup()` prunes with it after every successful run (`pruneOldSnapshots()` in `backup.js`).
+
+- **New installs default to 30 completed snapshots per source.** The default ships as `backup.retentionCount: 30` in `data.reference/settings.json`, copied only into an install that has no `data/settings.json` yet — see the comment on `resolveRetentionCount()` for why this, not a migration, is what keeps an existing install from silently losing its archive. Operators choose 1–365, or Unlimited, from the Backup settings tab.
+- **`retentionCount` absent or explicitly `null` both mean unlimited** — no pruning runs. This is why an install that predates this setting keeps every snapshot until the operator saves a choice: it has no stored value, and absence resolves to unlimited, not to the new-install default.
+- **Pruning runs only after a run reaches a completed snapshot** (rsync finished and a `pg_dump` was attempted, even if it degraded) — a run that fails before that point takes `runBackup()`'s `fail()` path and never prunes. A prune failure is logged and does not fail an otherwise-successful backup.
+- **Pruning is scoped to the CURRENT machine's namespace** (`snapshots/<hostname>/`) and only ever deletes snapshots whose `snapshotState()` reports neither `incomplete` nor `failed`. It never touches another machine's namespace in a shared destination, the legacy pre-namespace root, or an in-progress/failed snapshot — those stay until the operator deletes them explicitly.
+- **`DELETE /api/backup/snapshots/:snapshotId?source=<source>`** (`backup.deleteSnapshot()`) permanently removes exactly the selected source/ID pair, immediately — there is no undo and it is never automatic. It shares `resolveSnapshotPath()`'s path-traversal and symlink guards with restore/download, and refuses a snapshot that is still being written (`SNAPSHOT_INCOMPLETE`); unlike restore, a `.failed` snapshot **is** deletable. The Backup settings tab's snapshot history exposes this as a per-row delete action behind a confirmation dialog.
+
 ## Scheduling & status
 
 - Daily backups are driven by `backupScheduler.js` via the `backup-daily` cron event; `getNextRunTime()` reports the next run.
@@ -131,6 +141,7 @@ The backup settings slice is stored **sparsely** — an install where the user o
 | `enabled` absent | **enabled** — an omitted toggle has never meant "off" on the server, and changing that would silently stop nightly backups on existing installs |
 | `cronExpression` absent or blank | `0 0 * * *` (midnight, in the user's timezone) |
 | `destPath` absent or blank | **nothing is scheduled**, whatever `enabled` says |
+| `retentionCount` absent or `null` | **unlimited** — nothing is pruned. A NEW install ships an explicit `30` in `data/settings.json` (see [Retention & deletion](#retention--deletion)); an existing install's absence is never reinterpreted as that default. |
 
 `GET /api/settings` projects these effective values over the stored slice, so the Backup settings tab renders exactly what the scheduler will do. **The client owns no fallback of its own** — it used to read the same sparse config as "disabled at 02:00" while the scheduler read it as "enabled at midnight", so saving an unrelated preference wrote that misreading back and cancelled a live schedule (#6632). If a settings response ever arrives without a resolved schedule the tab shows a load error instead of a form, rather than saving invented values.
 

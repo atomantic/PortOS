@@ -8,7 +8,7 @@
 
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
 import { hostname } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
@@ -494,7 +494,7 @@ export function computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes
  * @param {string} destPath - Path to external drive backup root
  * @param {object|null} io - Socket.IO instance for real-time events (optional)
  */
-export async function runBackup(destPath, io = null, { excludePaths = [], disabledDefaultExcludes = [] } = {}) {
+export async function runBackup(destPath, io = null, { excludePaths = [], disabledDefaultExcludes = [], retentionCount = null } = {}) {
   if (isRunning) {
     console.log('💾 Backup already running — skipping');
     return { skipped: true };
@@ -612,7 +612,22 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       }
     }
 
-    return complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
+    const result = await complete({ snapshotId, filesChanged: changedFiles.length, status, lastRun, manifest, pgBackup: pgResult });
+
+    // Prune only after `complete()` has cleared this snapshot's own
+    // `.in-progress` marker and released `activeSnapshotId` — pruning any
+    // earlier would make the run's OWN fresh snapshot read as incomplete
+    // (via `snapshotState`) and drop out of the retention count entirely,
+    // silently keeping one snapshot MORE than configured. A run that throws
+    // before this point takes the `fail()` path below and never reaches
+    // here, so a failed or in-progress snapshot is never a prune candidate.
+    // Retention failures must not fail an otherwise-successful backup.
+    const pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
+      console.error(`❌ Backup retention prune failed: ${err.message}`);
+      return { pruned: 0 };
+    });
+
+    return { ...result, prunedSnapshots: pruned.pruned };
   } catch (err) {
     return fail(err);
   }
@@ -887,6 +902,59 @@ export async function listSnapshots(destPath) {
   });
 }
 
+/**
+ * Delete the oldest COMPLETED snapshots in the CURRENT machine's source
+ * namespace beyond `retentionCount`. Called only from `runBackup()` after a
+ * run reaches a completed snapshot (rsync + a pg_dump attempt, even a
+ * degraded one) — a run that fails earlier never reaches this call, so an
+ * in-progress or `.failed` snapshot is never a candidate; both are re-checked
+ * here anyway via `snapshotState` in case an unrelated run left one behind.
+ * Only ever walks `snapshots/<MACHINE_HOST>/` — never another machine's
+ * namespace and never the legacy pre-namespace root, both of which this
+ * install has no authority to prune.
+ * `retentionCount` of `null`/`undefined` means unlimited: no-op.
+ * @param {string} destPath
+ * @param {number|null} retentionCount
+ * @returns {Promise<{ pruned: number }>}
+ */
+async function pruneOldSnapshots(destPath, retentionCount) {
+  if (retentionCount === null || retentionCount === undefined) return { pruned: 0 };
+
+  const sourceRoot = join(destPath, 'snapshots', MACHINE_HOST);
+  const entries = await readdir(sourceRoot, { withFileTypes: true }).catch(() => []);
+  const candidateIds = entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(entry.name))
+    .map(entry => entry.name);
+
+  const descriptors = (await Promise.all(candidateIds.map(async (id) => {
+    const snapshotDir = join(sourceRoot, id);
+    const { incomplete, failed } = await snapshotState(snapshotDir, id, true);
+    if (incomplete || failed) return null;
+    // Read-only listing metadata; matches listSnapshots' own read.
+    const manifest = await readJSONFile(join(snapshotDir, 'manifest.json'), null, { logError: false });
+    return { id, snapshotDir, createdAt: manifest?.generatedAt ?? null };
+  }))).filter(Boolean);
+
+  // Newest-first, same tiebreak as listSnapshots: dated entries by date, then
+  // undated (pre-manifest legacy-in-namespace) entries by id.
+  descriptors.sort((a, b) => {
+    if (a.createdAt && b.createdAt) return b.createdAt.localeCompare(a.createdAt);
+    if (a.createdAt) return -1;
+    if (b.createdAt) return 1;
+    return b.id.localeCompare(a.id);
+  });
+
+  const toDelete = descriptors.slice(retentionCount);
+  for (const { snapshotDir, id } of toDelete) {
+    await rm(snapshotDir, { recursive: true, force: true }).catch(err =>
+      console.error(`❌ Backup retention: failed to remove snapshot ${id}: ${err.message}`));
+  }
+  if (toDelete.length) {
+    console.log(`💾 Backup retention: pruned ${toDelete.length} snapshot(s), keeping ${retentionCount}`);
+  }
+  return { pruned: toDelete.length };
+}
+
 function resolveSnapshotPath(destPath, snapshotId, source) {
   if (!snapshotId || !SNAPSHOT_ID_PATTERN.test(snapshotId)) {
     throw new ServerError(`Invalid snapshotId: ${snapshotId}`, {
@@ -929,6 +997,7 @@ function resolveSnapshotPath(destPath, snapshotId, source) {
     snapshotsRoot: sourceRoot,
     snapshotsBase: snapshotsRoot,
     snapshotDir,
+    resolvedSource,
     currentSource: resolvedSource === MACHINE_HOST,
     explicitSource: source !== undefined,
   };
@@ -955,6 +1024,41 @@ async function assertExplicitSnapshotSourceSafe({
       code: 'VALIDATION_ERROR',
     });
   }
+}
+
+/**
+ * Permanently delete one snapshot, identified by its (source, id) pair.
+ * Immediate — there is no undo — so this is reserved for an explicit operator
+ * action, never automatic retention (see `pruneOldSnapshots`, which shares the
+ * traversal/symlink guards through `resolveSnapshotPath` but is driven by
+ * `runBackup()` instead). Refuses a snapshot that is still being written
+ * (`.in-progress`), matching the guard that blocks restore and download,
+ * because the partial directory may still be owned by an in-flight
+ * `runBackup()`. A `.failed` snapshot IS deletable — unlike restore, deletion
+ * has no reason to require a successful backup.
+ * @param {string} destPath - Path to external drive backup root
+ * @param {string} snapshotId - Snapshot ID to delete
+ * @param {{ source?: string }} [options]
+ * @returns {Promise<{ deleted: true, snapshotId: string, source: string }>}
+ */
+export async function deleteSnapshot(destPath, snapshotId, { source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotDir, currentSource, resolvedSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  const info = await stat(snapshotDir).catch(() => null);
+  if (!info?.isDirectory?.()) {
+    throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
+  }
+  const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
+  if (incomplete) {
+    throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
+      status: 409,
+      code: 'SNAPSHOT_INCOMPLETE',
+    });
+  }
+  await rm(snapshotDir, { recursive: true, force: true });
+  console.log(`💾 Backup snapshot deleted: ${resolvedSource}/${snapshotId}`);
+  return { deleted: true, snapshotId, source: resolvedSource };
 }
 
 /**
