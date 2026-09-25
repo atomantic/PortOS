@@ -106,6 +106,16 @@ async function start() {
   // Bounded record hydration the migrated Media History detail view uses.
   // Lookup is a POST read; every other non-GET image-gen call stays refused.
   gallery.post('/gallery/lookup', express.json({ limit: '64kb' }), galleryReads.lookup);
+  // The lazy-detail read the lightbox actually makes on open (#8341):
+  // hydration and the original-vs-cleaned toggle both resolve from this
+  // group, which always carries the opened filename's own record, instead of
+  // the `gallery/lookup` POST above.
+  gallery.get('/:filename/variants', asyncHandler(async (req, res) => {
+    const { assertGalleryFilename } = await import('../../server/services/imageGen/local.js');
+    assertGalleryFilename(req.params.filename);
+    const { listImageVariants } = await import('../../server/services/mediaAssetIndex/gallery.js');
+    res.json({ items: await listImageVariants(req.params.filename) });
+  }));
   app.use('/api/image-gen', (req, res, next) => req.method === 'GET' || req.path === '/gallery/lookup' ? next() : res.sendStatus(405), gallery);
   app.get('/api/video-gen/history/:id', createVideoHistoryItemRead());
   const messages = express.Router();

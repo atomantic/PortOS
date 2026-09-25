@@ -116,7 +116,7 @@ export function trafficFailures(phases) {
       if (['sibling', 'idle'].includes(phase) && endpoint === '/api/messages/inbox' && row.requests) {
         failures.push({ endpoint, reason: 'sibling-inbox-fetch', count: row.requests, bytes: row.encodedBytes });
       }
-      if (phase === 'cold' && ['/api/messages/:account/:message', '/api/video-gen/history/:record', '/api/image-gen/gallery/lookup'].includes(endpoint) && row.requests) {
+      if (phase === 'cold' && ['/api/messages/:account/:message', '/api/video-gen/history/:record', '/api/image-gen/:record/variants'].includes(endpoint) && row.requests) {
         failures.push({ endpoint, reason: 'eager-detail-request', count: row.requests, bytes: row.encodedBytes });
       }
       if (['/api/video-gen/history', '/api/image-gen/history'].includes(endpoint) && row.requests) {

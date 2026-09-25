@@ -191,7 +191,10 @@ describe('MediaPreview variant toggle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open image' }));
 
     await waitFor(() => expect(screen.getByRole('button', { name: otherLabel })).toBeInTheDocument());
-    expect(listImageVariants).toHaveBeenCalledWith(open.filename, expect.objectContaining({ signal: expect.anything() }));
+    // No AbortSignal: the read is de-duped with `useHydratedPreviewRoute`
+    // (mediaDetail.js's `fetchImageVariantGroup`, #8341), and aborting one
+    // caller's copy would also cancel the other's share of it.
+    expect(listImageVariants).toHaveBeenCalledWith(open.filename);
 
     // Selecting the other variant must OPEN it — the host cannot resolve that
     // filename from its own list, so usePreviewRoute's seeding carries it.

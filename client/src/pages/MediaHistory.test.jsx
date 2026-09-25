@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
-const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem } = vi.hoisted(() => ({ fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn() }));
-vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem }));
+const { fetchPage, deleteImage, saveAnnotation, getGalleryImages, getVideoHistoryItem, listImageVariants } = vi.hoisted(() => ({ fetchPage: vi.fn(), deleteImage: vi.fn(), saveAnnotation: vi.fn(), getGalleryImages: vi.fn(), getVideoHistoryItem: vi.fn(), listImageVariants: vi.fn() }));
+vi.mock('../services/apiImageVideo', () => ({ listMediaGalleryPage: fetchPage, getGalleryImages, getVideoHistoryItem, listImageVariants }));
 vi.mock('../services/api', () => ({ listMediaGalleryPage: fetchPage, deleteImage, deleteVideoHistoryItem: vi.fn(), stitchVideos: vi.fn() }));
 vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: () => {} }));
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: saveAnnotation, getCardProps: () => ({}) }) }));
@@ -23,6 +23,11 @@ beforeEach(() => {
     return { items: matches.slice(offset, offset + limit), total: matches.length, offset, limit, counts: { all: matches.length, image: matches.length, video: 0 } };
   });
   getGalleryImages.mockImplementation(async filenames => rows.filter(row => filenames.includes(row.data.filename)).map(row => row.data));
+  // Hydration tries the variants group first (mediaDetail.js's
+  // `fetchImageVariantGroup`, #8341); resolving "not indexed" by default
+  // falls back to `getGalleryImages` so the existing hydration tests below
+  // exercise that fallback exactly as before.
+  listImageVariants.mockImplementation(async () => ({ items: [] }));
   deleteImage.mockImplementation(async filename => { rows = rows.filter(row => row.data.filename !== filename); return { ok: true }; });
 });
 const open = (url = '/media/history') => render(<MemoryRouter initialEntries={[url]}><MediaHistory /></MemoryRouter>);
@@ -74,6 +79,28 @@ describe('bounded media history', () => {
     expect(await screen.findByRole('dialog')).toHaveTextContent(full.trim());
     expect(getGalleryImages).toHaveBeenCalledTimes(1);
     expect(getGalleryImages).toHaveBeenCalledWith(['0.png'], { silent: true });
+  });
+
+  // #8341: opening an image used to cost two full-record reads (this
+  // hydration's `gallery/lookup` PLUS the lightbox's own `variants` read for
+  // the original-vs-cleaned toggle). The variants group always carries the
+  // opened filename's own record, so hydration takes it from there and never
+  // falls back to `getGalleryImages`.
+  it('hydrates an opened image from the variants group without a separate gallery lookup', async () => {
+    const full = 'Picture 0 ' + 'with a long stored prompt '.repeat(30);
+    rows[0].data.prompt = full;
+    fetchPage.mockImplementation(async ({ offset = 0 }) => ({
+      items: rows.slice(offset, offset + 60).map(row => ({ kind: row.kind, data: { ...row.data, compact: true, prompt: row.data.prompt.slice(0, 12) + '…' } })),
+      total: rows.length, offset, limit: 60, counts: { all: rows.length, image: rows.length, video: 0 },
+    }));
+    listImageVariants.mockImplementation(async filename => ({
+      items: filename === '0.png' ? [rows[0].data] : [],
+    }));
+    open();
+    fireEvent.click(await screen.findByRole('button', { name: 'Picture 0 wi…' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent(full.trim());
+    expect(listImageVariants).toHaveBeenCalledWith('0.png');
+    expect(getGalleryImages).not.toHaveBeenCalled();
   });
 
   it('marks a compact record whose detail read fails instead of passing its preview off as complete', async () => {
