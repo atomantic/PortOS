@@ -50,7 +50,7 @@ export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
     'initSharing',
     'recoverCreativeDirectorProjects'
   ]),
-  postListen: Object.freeze(['startPolling', 'initSyncOrchestrator'])
+  postListen: Object.freeze(['relayUnloggedBrainRecords', 'startPolling', 'initSyncOrchestrator'])
 });
 
 /**
@@ -390,12 +390,15 @@ export const runPostRouteSequence = ({
  * Inside the `listen()` callback: announce the URLs, arm the process-level
  * safety net, then backfill origin tags before peer polling + sync start — the
  * backfill stamps `originInstanceId` on legacy rows, and polling a peer before
- * it completes would ship untagged records.
+ * it completes would ship untagged records. The brain relay sweep (#8351) also
+ * waits for the backfill, so the entries it appends carry the stamped origin;
+ * it runs in the background because nothing after it reads its result.
  */
 export const runPostListenSequence = ({
   announceListening,
   setupProcessErrorHandlers,
   backfillOriginInstanceId,
+  relayUnloggedBrainRecords,
   startPolling,
   initSyncOrchestrator
 }) => {
@@ -403,6 +406,7 @@ export const runPostListenSequence = ({
   setupProcessErrorHandlers();
   return bestEffort(
     Promise.resolve(backfillOriginInstanceId()).then(() => {
+      bestEffort(relayUnloggedBrainRecords(), logFailure('Brain relay sweep failed'));
       startPolling();
       initSyncOrchestrator();
     }),

@@ -179,6 +179,9 @@ function firstIndexAfter(sinceSeq) {
 export async function initSyncLog() {
   await ensureBrainDir();
   indexLoaded = false;
+  // A fresh process holds no queued retries; a re-init (tests) drops any
+  // left from a previous one, the same way a restart would.
+  pendingAppends = [];
   await loadIndex();
   console.log(`🔄 Sync log initialized at seq ${currentSeq} (${offsets.length} entries)`);
 }
@@ -248,6 +251,67 @@ export async function appendChanges(entries, { skipLogged = false } = {}) {
     currentSeq = nextSeq;
     await writeIndexedLines(lines);
     return results;
+  });
+}
+
+// Local-write relays whose append failed (#8351). A local brain write must
+// succeed for the user even when the log append rejects, so the entry waits
+// here and is retried — deduplicated, so an append that landed bytes before
+// throwing never mints a second entry — before the next local append and on
+// every sync-orchestrator cycle. In memory only: a restart loses the list, and
+// the boot sweep (brainReconcile.relayUnloggedRecords) recovers those ops from
+// the stored records instead. The cap bounds memory while the disk stays
+// broken; the sweep also covers anything dropped past it.
+const MAX_PENDING_APPENDS = 1000;
+let pendingAppends = [];
+
+function queuePendingAppends(entries) {
+  pendingAppends = [...entries, ...pendingAppends];
+  const overflow = pendingAppends.length - MAX_PENDING_APPENDS;
+  if (overflow > 0) {
+    pendingAppends = pendingAppends.slice(overflow);
+    console.warn(`⚠️ Brain sync log retry queue full: dropped ${overflow} oldest entries (the boot sweep relays them)`);
+  }
+}
+
+/**
+ * Retry the local-write relays a failed append left behind. Never rejects: a
+ * batch that fails again goes back on the queue for the next attempt.
+ * Resolves to the number of entries written.
+ */
+export async function retryPendingAppends() {
+  if (pendingAppends.length === 0) return 0;
+  const batch = pendingAppends;
+  pendingAppends = [];
+  return appendChanges(batch, { skipLogged: true }).then(
+    (written) => {
+      console.log(`🔄 Brain sync log retry relayed ${written.length} of ${batch.length} queued entries`);
+      return written.length;
+    },
+    (err) => {
+      queuePendingAppends(batch);
+      console.error(`❌ Brain sync log retry failed (${batch.length} entries queued): ${err.message}`);
+      return 0;
+    },
+  );
+}
+
+/**
+ * Append the relay entries of a LOCAL brain write. Never rejects — the record
+ * is already saved, so a failed append is queued for retry instead of failing
+ * the user's write. Earlier failures are retried first so local ops keep their
+ * order in the log; while those still fail, the new entries queue behind them.
+ */
+export async function appendLocalChanges(entries) {
+  if (!entries?.length) return;
+  if (pendingAppends.length > 0) await retryPendingAppends();
+  if (pendingAppends.length > 0) {
+    queuePendingAppends(entries);
+    return;
+  }
+  await appendChanges(entries).catch((err) => {
+    queuePendingAppends(entries);
+    console.error(`❌ Brain sync log append failed (${entries.length} entries queued for retry): ${err.message}`);
   });
 }
 

@@ -21,7 +21,8 @@ vi.mock('./instanceIdentity.js', () => ({
 vi.mock('./brainSyncLog.js', () => ({
   getChangesSince: vi.fn(),
   getCurrentSeq: vi.fn(() => 0),
-  compactLog: vi.fn().mockResolvedValue(0)
+  compactLog: vi.fn().mockResolvedValue(0),
+  retryPendingAppends: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
@@ -1052,6 +1053,24 @@ describe('syncOrchestrator', () => {
       expect(applyBrainSnapshot).toHaveBeenCalledTimes(1);
       // delta(0) + reconcile merge(3 upd + 1 del) = 4
       expect(result.brain.totalApplied).toBe(4);
+    });
+
+    it('does NOT cache the peer checksum when the snapshot relay append fails (#8351)', async () => {
+      // A cached checksum short-circuits every later cycle, so caching it over
+      // a merge whose relay never reached our log would strand those records
+      // outside the log for good. The failure must leave the cursor untouched.
+      getBrainChecksum.mockResolvedValue('local-AAA');
+      applyBrainSnapshot.mockRejectedValueOnce(new Error('disk full'));
+      routeFetch({
+        checksum: { checksum: 'peer-BBB' },
+        snapshot: { records: { links: {} }, checksum: 'peer-BBB' },
+      });
+      await expect(syncWithPeer(mockPeer)).rejects.toThrow('disk full');
+
+      const cachedPeerChecksum = atomicWrite.mock.calls
+        .filter(([path]) => String(path).includes('instances_sync_cursors'))
+        .some(([, cursors]) => cursors?.[mockPeer.instanceId]?.brainChecksum === 'peer-BBB');
+      expect(cachedPeerChecksum).toBe(false);
     });
 
     it('SKIPS the snapshot fetch when peer checksum equals our local checksum', async () => {

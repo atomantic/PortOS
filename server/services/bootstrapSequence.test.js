@@ -727,6 +727,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       announceListening: step('announceListening'),
       setupProcessErrorHandlers: step('setupProcessErrorHandlers'),
       backfillOriginInstanceId: step('backfillOriginInstanceId', () => Promise.resolve()),
+      relayUnloggedBrainRecords: step('relayUnloggedBrainRecords', () => Promise.resolve(0)),
       startPolling: step('startPolling'),
       initSyncOrchestrator: step('initSyncOrchestrator'),
       ...overrides
@@ -740,6 +741,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       'announceListening',
       'setupProcessErrorHandlers',
       'backfillOriginInstanceId',
+      'relayUnloggedBrainRecords',
       'startPolling',
       'initSyncOrchestrator'
     ]);
@@ -763,6 +765,16 @@ describe('runPostListenSequence — inside the listen callback', () => {
     gate.resolve();
     await done;
     expect(recorder.calls).toContain('startPolling');
+  });
+
+  it('starts peer sync even when the brain relay sweep fails', async () => {
+    const recorder = createRecorder();
+    await runPostListenSequence(buildDeps(recorder, {
+      relayUnloggedBrainRecords: recorder.step('relayUnloggedBrainRecords', () => Promise.reject(new Error('sweep boom')))
+    }));
+    await flush();
+    expect(recorder.calls).toContain('initSyncOrchestrator');
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Brain relay sweep failed'));
   });
 
   it('logs and continues when the backfill fails', async () => {
