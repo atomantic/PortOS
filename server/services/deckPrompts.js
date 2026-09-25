@@ -21,7 +21,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { stripPromptControlChars, buildUniverseStyleContext } from './universeBuilder/compile.js';
 import { truncDesc } from '../lib/universePromptRenderers.js';
 import {
-  DECK_KIND, DECK_KIND_LABELS, deckCardOrientation, deckCardOrientationPrompt,
+  DECK_KIND, DECK_KIND_LABELS, deckCardIdentityPrompt, deckCardOrientation, deckCardOrientationPrompt,
 } from '../lib/deckTemplates.js';
 import { DECK_CARD_PROMPT_MAX } from '../lib/deckValidation.js';
 
@@ -127,14 +127,20 @@ export function buildCardPromptsPrompt({ deck, roster, targets, universe }) {
     : '';
   const kindRules = deck.kind === DECK_KIND.TAROT
     ? '- Keep each card recognizable as its tarot archetype (use the traditional motif as the skeleton) while dressing it in the deck\'s world; numbered pips show that many of the suit\'s emblem arranged meaningfully.'
-    : '- Face cards show a full figure; numbered cards arrange that many suit pips into a scene or emblem; Aces are a single large ornate pip; Jokers are jesters of this world.';
+    : '- Playing-card identity is exact: for each numbered rank 2–10, describe exactly that many distinct pips of the named suit; name the suit shape and color, and never add, omit or substitute pips. Aces show one large suit pip, face cards show the named rank as a full figure, and Jokers are jesters of this world.';
+  const targetLines = targets.map((c) => {
+    const canon = c.canonRef?.name ? ` → depict ${safe(c.canonRef.name)} (${c.canonRef.kind})` : '';
+    const identity = deckCardIdentityPrompt(deck, c);
+    const fixedIdentity = identity ? ` — REQUIRED VISUAL IDENTITY: ${safe(identity)}` : '';
+    return `  - ${c.key}: ${safe(c.name)}${canon}${fixedIdentity}`;
+  });
   return `You are a prompt engineer writing image-generation prompts for the cards of a ${DECK_KIND_LABELS[deck.kind] || deck.kind} deck.
 ${deckContext(deck)}${universeBlock}
 # Full roster (for consistency — "→" marks a canon entry already cast on that card)
 ${roster.map(rosterLine).join('\n')}
 
 # Write prompts for THESE cards only
-${targets.map((c) => `  - ${c.key}: ${safe(c.name)}${c.canonRef?.name ? ` → depict ${safe(c.canonRef.name)} (${c.canonRef.kind})` : ''}`).join('\n')}
+${targetLines.join('\n')}
 
 # Output contract
 Return a SINGLE JSON object: { "prompts": [ { "key": "<card key>", "prompt": "<string, max 600 chars>" } ] } — exactly one entry per card in the list above.
@@ -142,6 +148,7 @@ Return a SINGLE JSON object: { "prompts": [ { "key": "<card key>", "prompt": "<s
 # Rules
 - "prompt" describes the SUBJECT of the card only — figures, pose, setting, symbols, composition, the suit emblem count — as comma-separated renderable phrases. The deck's style tokens, shared layout and face-orientation instructions are prepended automatically at render time, so do NOT repeat style, medium, palette, border, index/title or orientation instructions.
 ${kindRules}
+- For playing cards, the REQUIRED VISUAL IDENTITY on each target line is authoritative; include its exact pip count and suit description in the subject prompt even when the canon scene or visual motif suggests another arrangement.
 - When a card is cast with a canon entry, depict that entry faithfully to its description; otherwise invent a subject that belongs in this deck's world.
 - Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.
 - No text instructions, no camera jargon. Never use double-quote characters inside a prompt string.
