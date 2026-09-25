@@ -36,12 +36,13 @@ describe('voice health Piper probe', () => {
   });
 
   it('uses the platform-specific Piper binary name for local detection', async () => {
-    await checkAll({
+    const result = await checkAll({
       stt: { engine: 'web-speech', endpoint: '' },
       llm: { provider: 'lmstudio' },
       tts: { engine: 'piper', piper: { voicePath: '/voice/en.onnx' } },
     });
 
     expect(mocks.existsSync).toHaveBeenCalledWith(join('/voice', 'piper', 'piper.exe'));
+    expect(result.piper).toEqual({ ok: true, state: 'ready' });
   });
 });
