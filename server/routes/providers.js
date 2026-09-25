@@ -1173,7 +1173,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
     // A DERIVED preset (#7565) stores what its service derives — see
     // `storableProviderRecord` for what is refused and what is read as a narrowing.
     const { storableProviderRecord } = await presetService();
-    const stored = await storableProviderRecord({ ...existing, ...updates, id: req.params.id }, updates);
+    const stored = await storableProviderRecord({ ...existing, ...updates, id: req.params.id }, updates, existing);
 
     const provider = await providerService.updateProvider(req.params.id, stored);
     res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));

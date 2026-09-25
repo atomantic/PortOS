@@ -18,9 +18,9 @@ import { transportsFromDraft } from '../../lib/providerManagement';
  *
  * Family decides which step applies:
  *   - `subscription` — auth lives in the harness; neither a key nor an endpoint.
- *   - `api-key` — a key (stored here, read from the environment, or minted by
- *     a bootstrap wrapper at spawn) plus the transport's default endpoint,
- *     overridable for a self-hosted gateway.
+ *   - `api-key` — an optional key for a bare OpenAI-compatible endpoint, or a
+ *     required vendor key (stored here, read from the environment, or minted
+ *     by a bootstrap wrapper at spawn) plus the transport's default endpoint.
  *   - `local` / `fleet` — an endpoint, required, because a daemon's port is
  *     decided per install and the definition declares none.
  */
@@ -72,7 +72,8 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
     });
   };
 
-  const needsKey = definition?.family === 'api-key' && definition.envVars.length > 0;
+  const supportsApiKey = definition?.family === 'api-key';
+  const hasCredentialSources = supportsApiKey && definition.envVars.length > 0;
   const declaredTransports = Object.entries(draft.transports);
   const endpointRequired = definition && definition.family !== 'subscription'
     && declaredTransports.length > 0 && declaredTransports.every(([, baseUrl]) => !baseUrl.trim());
@@ -95,8 +96,8 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
       ...(draft.label.trim() ? { label: draft.label.trim() } : {}),
       ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}),
       ...(Object.keys(transports).length > 0 ? { transports } : {}),
-      ...(needsKey ? { credentialVia: draft.credentialVia } : {}),
-      ...(needsKey && draft.credentialVia === 'stored' && draft.apiKey.trim() ? { credentials: { apiKey: draft.apiKey.trim() } } : {}),
+      ...(supportsApiKey ? { credentialVia: draft.credentialVia } : {}),
+      ...(supportsApiKey && draft.credentialVia === 'stored' && draft.apiKey.trim() ? { credentials: { apiKey: draft.apiKey.trim() } } : {}),
     };
     setBusy(true);
     const result = await api.createProviderService(body, { silent: true }).catch((err) => ({ error: err?.message || 'Could not add the service' }));
@@ -146,27 +147,29 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
               </Banner>
             )}
 
-            {needsKey && (
+            {supportsApiKey && (
               <fieldset className="space-y-2">
                 <legend className="text-sm text-gray-400">Credential</legend>
-                <div className="flex flex-wrap gap-3 text-sm text-gray-300">
-                  {[['stored', 'Store a key here'], ['env', `Read ${definition.envVars[0]} from the environment`], ['bootstrap', 'A bootstrap wrapper supplies it at spawn']].map(([via, label]) => (
-                    <label key={via} htmlFor={`service-via-${via}`} className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        id={`service-via-${via}`}
-                        type="radio"
-                        name="service-credential-via"
-                        value={via}
-                        checked={draft.credentialVia === via}
-                        onChange={() => setDraft((prev) => ({ ...prev, credentialVia: via }))}
-                        className="accent-port-accent"
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </div>
+                {hasCredentialSources && (
+                  <div className="flex flex-wrap gap-3 text-sm text-gray-300">
+                    {[['stored', 'Store a key here'], ['env', `Read ${definition.envVars[0]} from the environment`], ['bootstrap', 'A bootstrap wrapper supplies it at spawn']].map(([via, label]) => (
+                      <label key={via} htmlFor={`service-via-${via}`} className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          id={`service-via-${via}`}
+                          type="radio"
+                          name="service-credential-via"
+                          value={via}
+                          checked={draft.credentialVia === via}
+                          onChange={() => setDraft((prev) => ({ ...prev, credentialVia: via }))}
+                          className="accent-port-accent"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                )}
                 {draft.credentialVia === 'stored' && (
-                  <FormField label="API key" compact>
+                  <FormField label={hasCredentialSources ? 'API key' : 'API key (optional)'} compact>
                     <input
                       id="service-api-key"
                       type="password"
@@ -177,6 +180,11 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
                       placeholder="Paste the key, or leave blank to add it later"
                     />
                   </FormField>
+                )}
+                {!hasCredentialSources && (
+                  <p className="text-xs text-gray-500">
+                    This endpoint may require a key. It is stored on this service and used for requests to its endpoint.
+                  </p>
                 )}
                 {definition.keyUrl && (
                   <a href={definition.keyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline">

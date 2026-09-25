@@ -306,28 +306,39 @@ export function derivedPresetDrift(record, derived, harness) {
 /**
  * The keys of `updates` that would move a connection-owned value away from
  * what the service derives — the edits a derived preset refuses, pointing at
- * the service instead. Equal values are a no-op, not a refusal: the editor
- * sends the whole record back on every save.
+ * the service instead. Values matching either the current derivation or the
+ * persisted record are a no-op: the editor sends the whole record back on
+ * every save, and service changes can make that saved copy stale.
  *
  * @param {object} updates - the patch a client sent (secrets already restored)
  * @param {object} derived - the record materialization would store
  * @param {Set<string>} ownedEnvNames - from {@link materializeDerivedPreset}
+ * @param {object|null} [previous] - the persisted record before this update
  * @returns {string[]}
  */
-export function refusedDerivedEdits(updates, derived, ownedEnvNames) {
+export function refusedDerivedEdits(updates, derived, ownedEnvNames, previous = null) {
   const refused = [];
   for (const key of DERIVED_PRESET_OWNED_KEYS) {
     if (!Object.hasOwn(updates, key)) continue;
     if (key === 'secretEnvVars') {
-      if (!sameSet(Array.isArray(updates[key]) ? updates[key] : [], derived[key])) refused.push(key);
+      const updated = Array.isArray(updates[key]) ? updates[key] : [];
+      const current = Array.isArray(derived[key]) ? derived[key] : [];
+      const before = Array.isArray(previous?.[key]) ? previous[key] : [];
+      if (!sameSet(updated, current) && (!previous || !sameSet(updated, before))) refused.push(key);
       continue;
     }
     const normalize = key === 'apiKey' ? (value) => value ?? '' : orNull;
-    if (!isDeepStrictEqual(normalize(updates[key]), normalize(derived[key]))) refused.push(key);
+    const updated = normalize(updates[key]);
+    const matchesCurrent = isDeepStrictEqual(updated, normalize(derived[key]));
+    const matchesPrevious = previous && isDeepStrictEqual(updated, normalize(previous[key]));
+    if (!matchesCurrent && !matchesPrevious) refused.push(key);
   }
   if (updates.envVars && typeof updates.envVars === 'object') {
     for (const name of ownedEnvNames) {
-      if ((updates.envVars[name] ?? null) !== (derived.envVars[name] ?? null)) refused.push(`envVars.${name}`);
+      const updated = updates.envVars[name] ?? null;
+      const matchesCurrent = updated === (derived.envVars[name] ?? null);
+      const matchesPrevious = previous && updated === (previous.envVars?.[name] ?? null);
+      if (!matchesCurrent && !matchesPrevious) refused.push('envVars.' + name);
     }
   }
   return refused;

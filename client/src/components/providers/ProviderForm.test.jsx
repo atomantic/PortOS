@@ -365,7 +365,8 @@ describe('ProviderForm model access', () => {
     it('explains a derived preset, links its service, hides the connection-owned fields and offers no conversion', () => {
       renderForm({ provider: { ...legacy, presetKind: 'derived', presetDerivable: false, harnessId: 'claude', method: 'cli', serviceId: 'ollama' } });
       expect(screen.getByText(/Derived from service/)).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+      expect(screen.getByRole('link', { name: 'service settings for ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+      expect(screen.getByText(/To edit this service's credentials/)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Convert to derived preset/ })).not.toBeInTheDocument();
       // The service owns type, command and the inline bootstrap (#7567); the
       // preset keeps its name and arguments.

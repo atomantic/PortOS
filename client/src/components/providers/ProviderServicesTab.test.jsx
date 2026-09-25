@@ -270,6 +270,7 @@ describe('ProviderServicesTab', () => {
 describe('add service drawer', () => {
   const definitions = [
     { id: 'nvidia-nim', label: 'NVIDIA NIM', family: 'api-key', plans: ['free', 'paid'], catalogStrategy: 'probe', harnessOnly: null, keyUrl: 'https://build.nvidia.com', envVars: ['NVIDIA_API_KEY'], transports: { openai: { defaultBaseUrl: 'https://integrate.api.nvidia.com/v1' } } },
+    { id: 'openai-compatible', label: 'OpenAI-compatible endpoint', family: 'api-key', plans: ['free', 'paid'], catalogStrategy: 'probe', harnessOnly: null, keyUrl: null, envVars: [], transports: { openai: { defaultBaseUrl: null } } },
     { id: 'lmstudio', label: 'LM Studio', family: 'local', plans: ['local'], catalogStrategy: 'daemon', harnessOnly: null, keyUrl: null, envVars: [], transports: { openai: { defaultBaseUrl: null } } },
     { id: 'claude-subscription', label: 'Claude subscription', family: 'subscription', plans: ['subscription'], catalogStrategy: 'harness', harnessOnly: 'claude', keyUrl: null, envVars: [], transports: {} },
   ];
@@ -300,6 +301,40 @@ describe('add service drawer', () => {
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/ai/services/nvidia-nim-paid'));
     expect(await screen.findByRole('article', { name: /NVIDIA paid/ })).toBeInTheDocument();
     expect(api.refreshProviderServiceCatalog).not.toHaveBeenCalled();
+  });
+
+  it('lets a bare OpenAI-compatible service store an optional API key when created', async () => {
+    api.createProviderService.mockResolvedValue({
+      service: {
+        ...nvidia,
+        id: 'uuid-openai-compatible',
+        kind: 'api',
+        label: 'OpenAI-compatible endpoint',
+        slug: 'openai-compatible',
+        definitionId: 'openai-compatible',
+        hasCredentials: true,
+        credentialSource: 'settings',
+        readiness: 'ready',
+        transports: { openai: { baseUrl: 'https://api.example.com/v1' } },
+        definition: definitions.find((entry) => entry.id === 'openai-compatible'),
+      },
+    });
+    renderTab('/ai/services/new');
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Service *'), { target: { value: 'openai-compatible' } });
+    expect(within(dialog).getByLabelText(/API key \(optional\)/)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/Read .* from the environment/)).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText(/openai endpoint/), { target: { value: 'https://api.example.com/v1' } });
+    fireEvent.change(within(dialog).getByLabelText(/API key \(optional\)/), { target: { value: 'example-api-key' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add service' }));
+
+    await waitFor(() => expect(api.createProviderService).toHaveBeenCalledWith({
+      definitionId: 'openai-compatible',
+      plan: 'free',
+      transports: { openai: { baseUrl: 'https://api.example.com/v1' } },
+      credentialVia: 'stored',
+      credentials: { apiKey: 'example-api-key' },
+    }, { silent: true }));
   });
 
   it('demands an endpoint for a local runtime that declares no default, and none for a subscription', async () => {

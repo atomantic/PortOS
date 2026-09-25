@@ -112,6 +112,28 @@ describe('refusedDerivedEdits', () => {
       .toEqual(['command', 'apiKey', 'envVars.ANTHROPIC_BASE_URL']);
   });
 
+  it('allows stale service-owned values that match the saved preset, but still rejects edits', () => {
+    const previous = {
+      ...derived,
+      command: '/old/bin/claude',
+      apiKey: 'old-test-key',
+      envVars: { ...derived.envVars, ANTHROPIC_BASE_URL: 'https://old.example/v1' },
+    };
+    const updates = {
+      command: previous.command,
+      apiKey: previous.apiKey,
+      envVars: previous.envVars,
+    };
+
+    expect(refusedDerivedEdits(updates, derived, ownedEnvNames, previous)).toEqual([]);
+    expect(refusedDerivedEdits({ ...updates, command: '/custom/bin/claude' }, derived, ownedEnvNames, previous))
+      .toEqual(['command']);
+    expect(refusedDerivedEdits({
+      ...updates,
+      envVars: { ...updates.envVars, ANTHROPIC_BASE_URL: 'https://elsewhere.example/v1' },
+    }, derived, ownedEnvNames, previous)).toEqual(['envVars.ANTHROPIC_BASE_URL']);
+  });
+
   it('lets the preset\'s own env vars, argv, pins and effort through', () => {
     expect(refusedDerivedEdits({ args: ['--print', '--verbose'], effort: 'low', envVars: { ...derived.envVars, ANTHROPIC_SMALL_FAST_MODEL: 'other' } }, derived, ownedEnvNames)).toEqual([]);
   });
