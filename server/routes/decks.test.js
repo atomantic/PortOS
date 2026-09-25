@@ -20,10 +20,16 @@ vi.mock('../services/decks.js', () => ({
 }));
 vi.mock('../services/deckStyleAnalysis.js', () => ({ analyzeDeckSample: vi.fn() }));
 vi.mock('../services/deckPrompts.js', () => ({
+  PROMPTS_PER_CALL: 12,
   castDeckFromUniverse: vi.fn(),
   generateDeckCardPrompts: vi.fn(),
 }));
 vi.mock('../services/deckRender.js', () => ({ renderDeckCards: vi.fn() }));
+vi.mock('../services/deckPromptProgress.js', () => ({
+  attachClient: vi.fn(() => true),
+  emitPromptProgress: vi.fn(),
+  finishPromptProgress: vi.fn(),
+}));
 vi.mock('../services/universeBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('./universeBuilder/shared.js', () => ({
   resolveGalleryImageOrThrow: vi.fn((f) => ({ imageFilename: f, imagePath: `/abs/${f}` })),
@@ -32,6 +38,7 @@ vi.mock('./universeBuilder/shared.js', () => ({
 import * as svc from '../services/decks.js';
 import { analyzeDeckSample } from '../services/deckStyleAnalysis.js';
 import { castDeckFromUniverse, generateDeckCardPrompts } from '../services/deckPrompts.js';
+import { attachClient, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
 import { renderDeckCards } from '../services/deckRender.js';
 import { getUniverse } from '../services/universeBuilder.js';
 import deckRoutes from './decks.js';
@@ -138,6 +145,34 @@ describe('deck routes', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('DECK_NO_PROMPT_TARGETS');
     expect(generateDeckCardPrompts).not.toHaveBeenCalled();
+  });
+
+  it('generate-prompts streams start/chunk/complete progress frames', async () => {
+    const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({});
+    expect(res.status).toBe(200);
+    expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({ type: 'start', requested: 2 }));
+    expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
+      type: 'chunk', chunk: 1, written: 1, requested: 2, keys: [C0],
+    }));
+    expect(finishPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
+      type: 'complete', written: 1, requested: 2,
+    }));
+  });
+
+  it('generate-prompts finishes with an error frame when the run throws', async () => {
+    generateDeckCardPrompts.mockRejectedValueOnce(new Error('model blew up'));
+    const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({});
+    expect(res.status).toBe(500);
+    expect(finishPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({ type: 'error' }));
+  });
+
+  it('generate-prompts/progress attaches the deck channel', async () => {
+    // The real handler holds the SSE stream open; end it from the mock so
+    // the request settles.
+    attachClient.mockImplementationOnce((_id, res) => { res.status(200).end(); return true; });
+    const res = await request(makeApp()).get(`/api/decks/${D1}/generate-prompts/progress`);
+    expect(attachClient).toHaveBeenCalledWith(D1, expect.anything());
+    expect(res.status).toBe(200);
   });
 
   it('single-card render narrows the batch to that card', async () => {

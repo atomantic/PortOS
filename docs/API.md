@@ -668,6 +668,7 @@ Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and 
 | POST | `/decks/:id/samples` | Persist a reviewed sample; `adopt` applies the proposal in the same write |
 | DELETE | `/decks/:id/samples/:sampleId` | Remove a sample |
 | POST | `/decks/:id/generate-prompts` | Cast a linked universe onto the cards, then write subject prompts (`cardIds`, `overwrite`, `cast`, provider/model/effort) |
+| GET | `/decks/:id/generate-prompts/progress` | SSE stream of the prompt run (`start` → per-chunk `written`/`requested` → `complete`/`error`); subscribe before the POST, no-op when nobody listens |
 | POST | `/decks/:id/render` | Queue card renders through the media queue (`cardIds`, `onlyMissing`, `mode`, `model`, `seed`) |
 | POST | `/decks/:id/cards/:cardId/render` | Queue one card |
 

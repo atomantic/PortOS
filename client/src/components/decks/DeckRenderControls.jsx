@@ -35,7 +35,7 @@ const SIZE_BOUNDS = { min: DECK_CARD_SIZE_MIN, max: DECK_CARD_SIZE_MAX, step: 8 
  */
 export default function DeckRenderControls({
   deck, completion, renderTarget, onPatch, onGeneratePrompts, onRenderMissing, onRenderAll,
-  generating = false, rendering = false,
+  generating = false, generatingStatus = null, rendering = false,
 }) {
   const { backends, size, summary: renderSummary, localRuntime, blocked: runtimeBlocked } = renderTarget;
   const total = completion?.total || 0;
@@ -100,7 +100,7 @@ export default function DeckRenderControls({
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Step step="1" title="Prompts" note={promptNote({ generating, unprompted, total })}>
+        <Step step="1" title="Prompts" note={promptNote({ generating, generatingStatus, unprompted, total })}>
           {(noteId) => (<>
             <button
               type="button"
@@ -202,9 +202,11 @@ function CardSize({ kind, size, onPatch }) {
   );
 }
 
-// What step 1's buttons will do, or why they can't.
-const promptNote = ({ generating, unprompted, total }) => {
-  if (generating) return 'Writing prompts…';
+// What step 1's buttons will do, or why they can't. While a run is in flight
+// the note is the live progress line (phase + written/requested + batch), so
+// a 79-card tarot run that takes minutes names where it is.
+const promptNote = ({ generating, generatingStatus, unprompted, total }) => {
+  if (generating) return generatingStatus || 'Writing prompts…';
   if (unprompted) return `${unprompted} of ${pluralize(total, 'card')} still need a prompt.`;
   return `All ${pluralize(total, 'card')} have a prompt — rewrite to replace them.`;
 };

@@ -22,6 +22,7 @@ import {
 } from '../lib/deckValidation.js';
 import { resolveGalleryImageOrThrow } from './universeBuilder/shared.js';
 import { resolveLlmRoutePin } from '../lib/llmRoutePin.js';
+import { attachClient as attachPromptProgressClient, emitPromptProgress, finishPromptProgress } from '../services/deckPromptProgress.js';
 
 // Services load on first request, not at route-module import: the deck graph
 // reaches the DB, the prompt runner and the media queue, none of which a
@@ -109,7 +110,7 @@ router.delete('/:id/samples/:sampleId', asyncHandler(async (req, res) => {
 // re-shuffle an assignment the user already accepted.
 router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
   const body = validateRequest(deckGeneratePromptsSchema, req.body ?? {});
-  const [{ getDeck, applyCardGenerations }, { castDeckFromUniverse, generateDeckCardPrompts }] = await Promise.all([decks(), prompts()]);
+  const [{ getDeck, applyCardGenerations }, { castDeckFromUniverse, generateDeckCardPrompts, PROMPTS_PER_CALL }] = await Promise.all([decks(), prompts()]);
   const deck = await getDeck(deckId(req));
   // Per-call choice over the deck's stored pin; a provider switch drops the
   // pinned model/effort rather than carrying them across providers.
@@ -124,37 +125,76 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
     });
   }
 
+  // Live progress for this run (see services/deckPromptProgress.js).
+  // Subscribe-then-trigger: the client's GET opens the channel, so it can
+  // connect before (or concurrently with) this POST without racing it — and
+  // every emit below is an advisory no-op when nobody is listening. The
+  // terminal frame ships on both the success and the error path.
+  const emit = (payload) => emitPromptProgress(deck.id, payload);
+  const finish = (payload) => finishPromptProgress(deck.id, payload);
+
   let universe = null;
   let cast = null;
-  if (deck.universeId) {
-    const { getUniverse } = await import('../services/universeBuilder.js');
-    universe = await getUniverse(deck.universeId).catch(() => null);
-    if (universe && body.cast && roster.some((c) => targetIds.has(c.id) && !c.canonRef)) {
-      cast = await castDeckFromUniverse({ deck, cards: roster, universe, ...llm });
-      // Only cards not yet cast take an assignment; a user-accepted link stays.
-      const uncast = new Set(roster.filter((c) => !c.canonRef).map((c) => c.id));
-      const applied = new Map(cast.assignments.filter((a) => uncast.has(a.cardId)).map((a) => [a.cardId, a.canonRef]));
-      await applyCardGenerations(deck.id, [...applied].map(([cardId, canonRef]) => ({ cardId, canonRef })));
-      roster = roster.map((c) => (applied.has(c.id) ? { ...c, canonRef: applied.get(c.id) } : c));
+  try {
+    if (deck.universeId) {
+      const { getUniverse } = await import('../services/universeBuilder.js');
+      universe = await getUniverse(deck.universeId).catch(() => null);
+      if (universe && body.cast && roster.some((c) => targetIds.has(c.id) && !c.canonRef)) {
+        emit({ type: 'phase', deckId: deck.id, phase: 'casting', label: 'Casting the universe onto the cards…' });
+        cast = await castDeckFromUniverse({ deck, cards: roster, universe, ...llm });
+        // Only cards not yet cast take an assignment; a user-accepted link stays.
+        const uncast = new Set(roster.filter((c) => !c.canonRef).map((c) => c.id));
+        const applied = new Map(cast.assignments.filter((a) => uncast.has(a.cardId)).map((a) => [a.cardId, a.canonRef]));
+        await applyCardGenerations(deck.id, [...applied].map(([cardId, canonRef]) => ({ cardId, canonRef })));
+        roster = roster.map((c) => (applied.has(c.id) ? { ...c, canonRef: applied.get(c.id) } : c));
+        emit({ type: 'phase', deckId: deck.id, phase: 'cast', label: 'Casting done — writing prompts…', assigned: cast.assignments.filter((a) => a.canonRef).length });
+      }
     }
-  }
-  const targets = roster.filter((c) => targetIds.has(c.id));
+    const targets = roster.filter((c) => targetIds.has(c.id));
+    const perCall = Number.isFinite(PROMPTS_PER_CALL) && PROMPTS_PER_CALL > 0 ? PROMPTS_PER_CALL : 12;
+    const chunks = Math.max(1, Math.ceil(targets.length / perCall));
+    emit({ type: 'start', deckId: deck.id, requested: targets.length, chunks, at: new Date().toISOString() });
 
-  // Prompts persist chunk by chunk, so a chunk that fails mid-deck (a model
-  // that returns bad JSON on its third call) leaves the earlier cards written.
-  let applied = 0;
-  const generated = await generateDeckCardPrompts({
-    deck, roster, targets, universe, ...llm,
-    onChunk: async (chunk) => { applied += await applyCardGenerations(deck.id, chunk); },
-  });
-  res.json({
-    deck: await getDeck(deck.id),
-    written: applied,
-    requested: targets.length,
-    cast: cast ? cast.assignments.filter((a) => a.canonRef).length : 0,
-    llm: generated.llm,
-  });
+    // Prompts persist chunk by chunk, so a chunk that fails mid-deck (a model
+    // that returns bad JSON on its third call) leaves the earlier cards written.
+    let appliedCount = 0;
+    let chunkIndex = 0;
+    const byId = new Map(targets.map((c) => [c.id, c]));
+    const generated = await generateDeckCardPrompts({
+      deck, roster, targets, universe, ...llm,
+      onChunk: async (chunk) => {
+        appliedCount += await applyCardGenerations(deck.id, chunk);
+        chunkIndex += 1;
+        emit({
+          type: 'chunk', deckId: deck.id, chunk: chunkIndex, chunks,
+          written: appliedCount, requested: targets.length,
+          keys: chunk.map((e) => byId.get(e.cardId)?.key || null).filter(Boolean),
+        });
+      },
+    });
+    finish({
+      type: 'complete', deckId: deck.id, written: appliedCount, requested: targets.length,
+      completedAt: new Date().toISOString(),
+    });
+    res.json({
+      deck: await getDeck(deck.id),
+      written: appliedCount,
+      requested: targets.length,
+      cast: cast ? cast.assignments.filter((a) => a.canonRef).length : 0,
+      llm: generated.llm,
+    });
+  } catch (error) {
+    finish({ type: 'error', deckId: deck.id, error: (error?.message || String(error)).slice(0, 1000) });
+    throw error;
+  }
 }));
+
+// Live progress for the POST above. Attaching OPENS the channel, so the
+// client can subscribe before (or concurrently with) the generate POST
+// without racing it — and generation runs unchanged when nobody listens.
+router.get('/:id/generate-prompts/progress', (req, res) => {
+  attachPromptProgressClient(deckId(req), res);
+});
 
 router.post('/:id/render', asyncHandler(async (req, res) => {
   const body = validateRequest(deckRenderSchema, req.body ?? {});
