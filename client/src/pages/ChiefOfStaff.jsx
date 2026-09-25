@@ -771,6 +771,53 @@ export default function ChiefOfStaff() {
     });
   }, []);
 
+  const handleTaskDeleted = useCallback((taskId, taskSource) => {
+    queueSeqRef.current += 1;
+    setTasks(prev => {
+      const deleteSlice = (slice) => {
+        if (!slice) return slice;
+        const tasks = slice.tasks?.filter(t => t.id !== taskId);
+        const filterSlice = (list) => list?.filter(t => t.id !== taskId);
+        const grouped = slice.grouped ? {
+          pending: filterSlice(slice.grouped.pending),
+          in_progress: filterSlice(slice.grouped.in_progress),
+          challenged: filterSlice(slice.grouped.challenged),
+          blocked: filterSlice(slice.grouped.blocked),
+          completed: filterSlice(slice.grouped.completed),
+        } : undefined;
+        return {
+          ...slice,
+          tasks,
+          ...(grouped ? { grouped } : {}),
+        };
+      };
+      if (taskSource === 'internal' || taskSource === 'cos') {
+        return { ...prev, cos: deleteSlice(prev.cos) };
+      }
+      if (taskSource === 'user') {
+        return { ...prev, user: deleteSlice(prev.user) };
+      }
+      return { ...prev, user: deleteSlice(prev.user), cos: deleteSlice(prev.cos) };
+    });
+    setInsights(prev => {
+      if (!Array.isArray(prev)) return prev;
+      return prev.flatMap(insight => {
+        if (insight.type !== 'blocked' || !Array.isArray(insight.tasks)) return [insight];
+        const remaining = insight.tasks.filter(task => task.id !== taskId);
+        if (remaining.length === insight.tasks.length) return [insight];
+        if (remaining.length === 0) return [];
+        const firstRemaining = remaining[0];
+        return [{
+          ...insight,
+          title: `${remaining.length} blocked task${remaining.length > 1 ? 's' : ''}`,
+          description: firstRemaining.blocker || firstRemaining.description || insight.description,
+          count: remaining.length,
+          tasks: remaining,
+        }];
+      });
+    });
+  }, []);
+
   // A successful task POST returns the persisted task synchronously. Insert it
   // into the queue right away so the user gets a durable pending indication
   // before the scheduler's socket updates report its active transition.
@@ -1307,7 +1354,7 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <Suspense fallback={<TabLoadFallback label="tasks" />}>
-              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <TasksTab completedRevision={taskHistoryRevision} tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} onTaskDeleted={handleTaskDeleted} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}

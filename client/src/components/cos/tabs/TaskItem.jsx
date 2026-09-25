@@ -143,7 +143,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, onTaskDeleted, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -349,6 +349,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   const handleDelete = async () => {
     const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
+    onTaskDeleted?.(task.id, taskSource);
     toast.success('Task deleted');
     onRefresh();
   };

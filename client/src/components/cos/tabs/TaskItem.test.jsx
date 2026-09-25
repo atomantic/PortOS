@@ -286,6 +286,34 @@ describe('TaskItem unblock action', () => {
   });
 });
 
+describe('TaskItem delete action', () => {
+  const blockedTask = {
+    id: 'sys-blocked-delete',
+    description: 'Blocked task to delete',
+    status: 'blocked',
+    metadata: { blockedReason: 'Needs manual intervention' },
+  };
+
+  it('calls deleteCosTask, onTaskDeleted, toast success, and onRefresh in order when confirmed', async () => {
+    api.deleteCosTask.mockResolvedValueOnce({ ok: true });
+    const onRefresh = vi.fn();
+    const onTaskDeleted = vi.fn();
+
+    render(<TaskItem task={blockedTask} isSystem onRefresh={onRefresh} onTaskDeleted={onTaskDeleted} providers={providers} />);
+
+    // Click trash button
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+
+    // Confirm delete button inside group
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(api.deleteCosTask).toHaveBeenCalledWith('sys-blocked-delete', 'internal', { silent: true }));
+    expect(onTaskDeleted).toHaveBeenCalledWith('sys-blocked-delete', 'internal');
+    expect(toast.success).toHaveBeenCalledWith('Task deleted');
+    expect(onRefresh).toHaveBeenCalled();
+  });
+});
+
 describe('TaskItem block modal state (#4038)', () => {
   const openBlockModal = () =>
     fireEvent.click(screen.getByRole('button', { name: 'Mark task as blocked' }));
