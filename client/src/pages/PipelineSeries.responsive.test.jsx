@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { act, render, screen, fireEvent } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
 const listUniverses = vi.fn();
+let mockBibleDirty = false;
 
 vi.mock('../services/api', () => ({
   getPipelineSeries: (...args) => getPipelineSeries(...args),
@@ -22,6 +23,7 @@ vi.mock('../hooks/useArcCanvasSync', () => ({
     updateSeriesFromServer: vi.fn(),
     handleIssuesUpdate: vi.fn(),
     flushPending: vi.fn(async () => false),
+    isDirty: mockBibleDirty,
   }),
 }));
 vi.mock('../hooks/useLocalStorageBool', () => ({ useLocalStorageBool: () => [false, vi.fn()] }));
@@ -36,18 +38,17 @@ vi.mock('../components/imageGen/RecordRenderPinRow', () => ({ default: () => <di
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 function renderPage() {
-  return render(
-    <MemoryRouter initialEntries={['/pipeline/series/series-1']}>
-      <Routes>
-        <Route path="/pipeline/series/:seriesId" element={<PipelineSeries />} />
-      </Routes>
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [{ path: '/pipeline/series/:seriesId', element: <PipelineSeries /> }],
+    { initialEntries: ['/pipeline/series/series-1'] },
   );
+  return { router, ...render(<RouterProvider router={router} />) };
 }
 
 describe('Pipeline series detail — mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockBibleDirty = false;
     getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series' });
     listPipelineIssues.mockResolvedValue([]);
     listUniverses.mockResolvedValue([]);
@@ -72,5 +73,27 @@ describe('Pipeline series detail — mobile layout', () => {
     const page = (await screen.findByRole('heading', { name: 'Example Series' })).closest('.h-full');
     expect(page).toHaveClass('overflow-y-auto');
     expect(page).toHaveClass('lg:overflow-hidden');
+  });
+});
+
+describe('Pipeline series detail — unsaved bible edits (#8423)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockBibleDirty = true;
+    getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series' });
+    listPipelineIssues.mockResolvedValue([]);
+    listUniverses.mockResolvedValue([]);
+  });
+
+  it('parks a switch to another series behind the discard prompt', async () => {
+    const { router } = renderPage();
+    await screen.findByRole('heading', { name: 'Example Series' });
+
+    await act(async () => { router.navigate('/pipeline/series/series-2'); });
+    expect(screen.getByText('Discard your unsaved series bible changes?')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/pipeline/series/series-1');
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Discard' })); });
+    expect(router.state.location.pathname).toBe('/pipeline/series/series-2');
   });
 });

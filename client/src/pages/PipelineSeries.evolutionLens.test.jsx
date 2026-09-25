@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import PipelineSeries from './PipelineSeries';
 import {
   CHARACTER_ARC_LIMITS, TRANSITION_KINDS, TRANSITION_KIND_LABELS,
@@ -72,11 +72,10 @@ const seriesWith = (arc) => ({
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/pipeline/series/series-1']}>
-      <Routes>
-        <Route path="/pipeline/series/:seriesId" element={<PipelineSeries />} />
-      </Routes>
-    </MemoryRouter>,
+    <RouterProvider router={createMemoryRouter(
+      [{ path: '/pipeline/series/:seriesId', element: <PipelineSeries /> }],
+      { initialEntries: ['/pipeline/series/series-1'] },
+    )} />,
   );
 }
 

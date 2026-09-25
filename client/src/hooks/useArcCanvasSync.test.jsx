@@ -156,4 +156,72 @@ describe('useArcCanvasSync', () => {
     expect(did).toBe(false);
     expect(updatePipelineSeries).not.toHaveBeenCalled();
   });
+
+  describe('pending bible edits survive a sibling action (#8423)', () => {
+    const server = { id: 's1', name: 'A', premise: 'old', primaryFormat: 'novel', seasons: [] };
+    const typePremise = (result) => act(() => { result.current.setSeries((s) => ({ ...s, premise: 'typed' })); });
+
+    it('keeps the typed premise when a server record for another field lands, and Save persists it', async () => {
+      const { result } = renderHook(() => useHarness(server, [], { flushFields: FLUSH_FIELDS, silent: true }));
+      typePremise(result);
+
+      // The format select PATCHes one field and hands back the whole server record.
+      act(() => { result.current.updateSeriesFromServer({ ...server, primaryFormat: 'screenplay' }); });
+      expect(result.current.series.premise).toBe('typed');
+      expect(result.current.series.primaryFormat).toBe('screenplay');
+      expect(result.current.isDirty).toBe(true);
+
+      updatePipelineSeries.mockResolvedValue({ ...server, primaryFormat: 'screenplay', premise: 'typed' });
+      let did;
+      await act(async () => { did = await result.current.flushPending(); });
+      expect(did).toBe(true);
+      expect(updatePipelineSeries).toHaveBeenCalledWith('s1', expect.objectContaining({ premise: 'typed' }), { silent: true });
+      expect(result.current.isDirty).toBe(false);
+    });
+
+    it('still PATCHes the premise after a caller spreads the local series into the update', async () => {
+      const { result } = renderHook(() => useHarness(server, [], { flushFields: FLUSH_FIELDS, silent: true }));
+      typePremise(result);
+
+      // AddSeasonRow / SeasonEditor / VolumeCoverLiveUpdates build `{ ...series, seasons }`
+      // from the local record, which already carries the unsaved text.
+      act(() => { result.current.updateSeriesFromServer({ ...result.current.series, seasons: [{ id: 'v1' }] }); });
+      expect(result.current.series.seasons).toEqual([{ id: 'v1' }]);
+
+      updatePipelineSeries.mockResolvedValue({ ...server, seasons: [{ id: 'v1' }], premise: 'typed' });
+      await act(async () => { await result.current.flushPending(); });
+      expect(updatePipelineSeries).toHaveBeenCalledTimes(1);
+      expect(updatePipelineSeries.mock.calls[0][1].premise).toBe('typed');
+    });
+
+    it('applies server changes to fields with no pending edit', async () => {
+      const { result } = renderHook(() => useHarness(server, [], { flushFields: FLUSH_FIELDS }));
+      typePremise(result);
+
+      act(() => { result.current.updateSeriesFromServer({ ...server, name: 'Renamed by autopilot' }); });
+      expect(result.current.series.name).toBe('Renamed by autopilot');
+      expect(result.current.series.premise).toBe('typed');
+
+      // Only the typed premise is dirty — the server's name is the new baseline.
+      updatePipelineSeries.mockResolvedValue({ ...server, name: 'Renamed by autopilot', premise: 'typed' });
+      await act(async () => { await result.current.flushPending(); });
+      expect(updatePipelineSeries.mock.calls[0][1]).toEqual(expect.objectContaining({ name: 'Renamed by autopilot', premise: 'typed' }));
+      expect(result.current.isDirty).toBe(false);
+    });
+
+    it('keeps an edit typed while the flush PATCH was in flight dirty', async () => {
+      const { result } = renderHook(() => useHarness(server, [], { flushFields: FLUSH_FIELDS, silent: true }));
+      typePremise(result);
+      let resolvePatch;
+      updatePipelineSeries.mockImplementation(() => new Promise((r) => { resolvePatch = r; }));
+
+      let flush;
+      act(() => { flush = result.current.flushPending(); });
+      act(() => { result.current.setSeries((s) => ({ ...s, premise: 'typed more' })); });
+      await act(async () => { resolvePatch({ ...server, premise: 'typed' }); await flush; });
+
+      expect(result.current.series.premise).toBe('typed more');
+      expect(result.current.isDirty).toBe(true);
+    });
+  });
 });

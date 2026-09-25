@@ -34,6 +34,24 @@ import { updatePipelineSeries } from '../services/api';
 // FIRST load of each series, keyed on `id`, so an unrelated refetch can't clobber
 // the baseline (which would defeat the dirty-check) and navigating between series
 // resets it. After capture it only advances via updateSeriesFromServer.
+//
+// updateSeriesFromServer MERGES rather than replaces (#8423). Sibling actions
+// (format select, render pin, logo generation, season add, theme chips, a cover
+// render landing, autopilot/review refetches) hand it a whole record while the
+// user still has unsaved bible edits. A bible field is "pending" when the local
+// value differs from the baseline; pending fields keep their local value AND
+// their old baseline, so they stay dirty and the next Save still PATCHes them.
+// Keeping the old baseline (not `next[k]`) matters because several callers build
+// `next` from the local `series` (`{ ...series, seasons }`), which already
+// carries the unsaved text — adopting it would mark those edits saved without
+// any PATCH. Every other field takes the incoming value on both sides. Only
+// flushPending, which knows its record came back from the bible PATCH, adopts
+// the response wholesale as the new baseline.
+
+const fieldValue = (record, k) => (k === 'llm' ? JSON.stringify(record?.llm || {}) : (record?.[k] ?? ''));
+const pendingFields = (series, saved, flushFields) => (
+  series && saved ? [...flushFields, 'llm'].filter((k) => fieldValue(series, k) !== fieldValue(saved, k)) : []
+);
 
 export function useArcCanvasSync({
   series,
@@ -45,7 +63,10 @@ export function useArcCanvasSync({
   onFlushError,
 }) {
   const lastSavedRef = useRef(null);
+  // Latest committed local state, for server updates that land after an await.
+  const latestSeriesRef = useRef(series);
   useEffect(() => {
+    latestSeriesRef.current = series;
     if (series && lastSavedRef.current?.id !== series.id) lastSavedRef.current = series;
   }, [series]);
 
@@ -55,10 +76,33 @@ export function useArcCanvasSync({
   const draftFlushRef = useRef(null);
   const registerDraftFlush = useCallback((fn) => { draftFlushRef.current = fn || null; }, []);
 
-  const updateSeriesFromServer = useCallback((next) => {
-    setSeries(next);
-    lastSavedRef.current = next;
-  }, [setSeries]);
+  // `fromFlush` is internal: flushPending's PATCH response is the true server
+  // state for every bible field, so it becomes the baseline outright.
+  const applyServerRecord = useCallback((next, { fromFlush = false } = {}) => {
+    const saved = lastSavedRef.current;
+    const pendingIn = (local) => (
+      next && saved?.id === next.id && local?.id === next.id ? pendingFields(local, saved, flushFields) : []
+    );
+    // The local merge reads `prev` so an edit queued in the same tick counts;
+    // React may run this updater lazily, so the baseline below can't depend on it.
+    setSeries((prev) => {
+      const pending = pendingIn(prev);
+      if (!pending.length) return next;
+      const merged = { ...next };
+      for (const k of pending) merged[k] = prev[k];
+      return merged;
+    });
+    const pending = fromFlush ? [] : pendingIn(latestSeriesRef.current);
+    if (!pending.length) {
+      lastSavedRef.current = next;
+      return;
+    }
+    const baseline = { ...next };
+    for (const k of pending) baseline[k] = saved[k];
+    lastSavedRef.current = baseline;
+  }, [setSeries, flushFields]);
+
+  const updateSeriesFromServer = useCallback((next) => applyServerRecord(next), [applyServerRecord]);
 
   const handleIssuesUpdate = useCallback((update) => {
     setIssues((prev) => {
@@ -71,10 +115,8 @@ export function useArcCanvasSync({
   const flushPending = useCallback(async () => {
     if (!series) return false;
     const saved = lastSavedRef.current || series;
-    const dirty = flushFields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
-      || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
     let didSave = false;
-    if (dirty) {
+    if (pendingFields(series, saved, flushFields).length) {
       // Build the PATCH payload from the same field list, applying any per-field
       // empty-value default (e.g. `titleLogo: '' ` so the server clears rather than
       // sees `undefined`). `llm` is always sent.
@@ -88,7 +130,7 @@ export function useArcCanvasSync({
           return null;
         });
       if (!updated) return null;
-      updateSeriesFromServer(updated);
+      applyServerRecord(updated, { fromFlush: true });
       didSave = true;
     }
     // Bible PATCH first, THEN the draft — the draft committer's response then
@@ -99,7 +141,15 @@ export function useArcCanvasSync({
       if (draftSaved) didSave = true;
     }
     return didSave;
-  }, [series, flushFields, payloadDefaults, silent, onFlushError, updateSeriesFromServer]);
+  }, [series, flushFields, payloadDefaults, silent, onFlushError, applyServerRecord]);
 
-  return { updateSeriesFromServer, handleIssuesUpdate, flushPending, registerDraftFlush };
+  // Unsaved bible edits, for a host's navigation guard. Only meaningful once the
+  // baseline belongs to the rendered series — right after a series switch the
+  // ref still holds the previous one until the capture effect runs.
+  // Read per render, not memoized: the baseline is a ref, and every path that
+  // moves it also sets `series`, so the next render sees both.
+  const saved = lastSavedRef.current;
+  const isDirty = !!series && saved?.id === series.id && pendingFields(series, saved, flushFields).length > 0;
+
+  return { updateSeriesFromServer, handleIssuesUpdate, flushPending, registerDraftFlush, isDirty };
 }

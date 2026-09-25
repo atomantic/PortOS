@@ -34,7 +34,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useArcCanvasSync` | Host-side wiring for the embedded `<ArcCanvas>`: `lastSavedRef` dirty-check + `updateSeriesFromServer` / `handleIssuesUpdate` / `flushPending`. Parameterized by `flushFields` (which bible fields to flush) + `silent`/`onFlushError`. | Embedding `<ArcCanvas>` in a host that owns `series`/`issues` state (PipelineSeries, Story Builder arc step). Don't re-implement the setter contract. |
+| `useArcCanvasSync` | Host-side wiring for the embedded `<ArcCanvas>`: `lastSavedRef` dirty-check + `updateSeriesFromServer` (merges, keeping pending bible edits) / `handleIssuesUpdate` / `flushPending` / `isDirty` (for `useUnsavedChangesGuard`). Parameterized by `flushFields` (which bible fields to flush) + `silent`/`onFlushError`. | Embedding `<ArcCanvas>` in a host that owns `series`/`issues` state (PipelineSeries, Story Builder arc step). Don't re-implement the setter contract. |
 
 ## Progress & streaming (SSE / socket)
 
