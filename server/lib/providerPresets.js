@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { isDerivedPreset } from './providerGraphRecords.js';
 import { providerConnectionProfile, withoutConnectionOwnedFields } from './providerConnections.js';
-import { harnessForProvider } from './providerHarnesses.js';
+import { harnessById, harnessForProvider } from './providerHarnesses.js';
 import { parseOpencodeConfigContent } from './providerModels.js';
 import { BACKEND_MARKER_KEYS, materializeRouteOutcome } from './providerRouteRecipes.js';
 import { applyServicePlanFilter, instanceForConnection } from './providerServiceInstances.js';
@@ -357,6 +357,39 @@ export function derivedPresetPatch(record, derived) {
 }
 
 /**
+ * The `catalogNarrowing` that keeps a record on the model list it already
+ * runs once it is derived from a service listing `listed`: its own list, when
+ * that is a strict, fully listed subset; `null` when no narrowing is needed or
+ * none would hold. Shared by the conversion backfill and the service fold.
+ */
+export function impliedCatalogNarrowing(record, listed) {
+  const models = Array.isArray(record.models) ? record.models : [];
+  return listed.length > 0 && !isDeepStrictEqual(listed, models) && models.every((model) => listed.includes(model))
+    ? [...models]
+    : null;
+}
+
+/**
+ * Re-derive one DERIVED preset from `instance`: the materialized record and the
+ * patch that writes it, or `null` when it cannot be derived there (an unknown
+ * harness, a missing bootstrap app, a refused composition).
+ *
+ * @param {object} record - a derived preset, possibly with its structural keys already retargeted
+ * @param {{instance: object, catalog: object|null, bootstraps: Record<string, object>, stored?: object}} context
+ *   `stored` is the record as persisted, which the patch is taken against (defaults to `record`)
+ * @returns {{derived: object, patch: object}|null}
+ */
+export function rederivePreset(record, { instance, catalog, bootstraps, stored = record }) {
+  const harness = harnessById(record.harnessId);
+  const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
+  if (!harness || (record.credentialBootstrapId && !app)) return null;
+  const { record: derived } = materializeDerivedPreset({
+    record, harness, instance, catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
+  });
+  return derived ? { derived, patch: derivedPresetPatch(stored, derived) } : null;
+}
+
+/**
  * The backfill verdict for ONE legacy record already resolved onto the graph
  * — the additive structural patch when re-deriving it from `connection` is a
  * FIXPOINT, or the reason it stays legacy. Pulled out of `planPresetBackfill`'s
@@ -397,11 +430,8 @@ export function presetBackfillVerdict(record, { route, connection, instance, boo
     serviceId: connection.slug,
     ...(match ? { credentialBootstrapId: match.slug } : {}),
   };
-  const listed = listedModels(instance, connection.catalog);
-  const models = Array.isArray(record.models) ? record.models : [];
-  if (listed.length > 0 && !isDeepStrictEqual(listed, models) && models.every((model) => listed.includes(model))) {
-    structural.catalogNarrowing = [...models];
-  }
+  const narrowing = impliedCatalogNarrowing(record, listedModels(instance, connection.catalog));
+  if (narrowing) structural.catalogNarrowing = narrowing;
 
   const { record: derived, error } = materializeDerivedPreset({
     record: { ...record, ...structural },

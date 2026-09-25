@@ -1,8 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { providerConnectionProfile } from './providerConnections.js';
 import { isDerivedPreset, routeBelongsOnConnection } from './providerGraphRecords.js';
-import { harnessById } from './providerHarnesses.js';
-import { bootstrapInputFor, derivedPresetPatch, listedModels, materializeDerivedPreset } from './providerPresets.js';
+import { impliedCatalogNarrowing, listedModels, rederivePreset } from './providerPresets.js';
 import { instanceApiKeyFor, instanceForConnection } from './providerServiceInstances.js';
 import { SERVICE_DEFINITIONS, serviceDefinitionById } from './serviceDefinitions.js';
 
@@ -118,55 +117,54 @@ export function planServiceInstanceMerges(graph, providers, { bootstraps = {}, e
   const records = new Map((Array.isArray(providers) ? providers : [])
     .filter((record) => record && typeof record === 'object' && record.id)
     .map((record) => [record.id, record]));
-  const bindingsOf = (connectionId) => graph.bindings.filter((binding) => binding.connectionId === connectionId);
-  const routesOf = (connectionId) => {
-    const ids = new Set(bindingsOf(connectionId).map((binding) => binding.id));
-    return graph.routes.filter((route) => ids.has(route.bindingId));
-  };
-
   const groups = new Map();
   for (const connection of graph.connections) {
     if (!connection.slug || !connection.definitionId || Object.keys(connection.transports || {}).length === 0) continue;
-    const routes = routesOf(connection.id);
+    const bindings = graph.bindings.filter((binding) => binding.connectionId === connection.id);
+    const bindingIds = new Set(bindings.map((binding) => binding.id));
+    const routes = graph.routes.filter((route) => bindingIds.has(route.bindingId));
     if (routes.some((route) => route.pending || !records.has(route.providerId))) continue;
-    const definitionId = effectiveDefinitionId(connection);
-    if (!serviceDefinitionById(definitionId)) continue;
-    groups.set(definitionId, [...(groups.get(definitionId) || []), { connection, routes }]);
+    const definition = serviceDefinitionById(effectiveDefinitionId(connection));
+    if (!definition) continue;
+    const group = groups.get(definition.id) || { definition, members: [] };
+    group.members.push({ connection, bindings, routes });
+    groups.set(definition.id, group);
   }
 
   const merges = [];
-  for (const [definitionId, members] of groups) {
+  for (const { definition, members } of groups.values()) {
     if (members.length < 2) continue;
-    const definition = serviceDefinitionById(definitionId);
+    const definitionId = definition.id;
     // The survivor keeps its id, kind and slug, so prefer the row that already
     // IS the named definition, then the one addressed by the definition's own
     // id, then the one labelled as the service; ties keep table order.
     const rank = ({ connection }) => (connection.definitionId === definitionId ? 0 : 4)
       + (connection.slug === definitionId ? 0 : 2)
       + (connection.label === definition.label ? 0 : 1);
-    const ordered = [...members].sort((a, b) => rank(a) - rank(b));
-    const remaining = [...ordered];
+    const remaining = [...members].sort((a, b) => rank(a) - rank(b));
     while (remaining.length > 1) {
       const lead = remaining.shift();
       let merged = { ...lead.connection };
+      let presetPatches = {};
       const absorbed = [];
       for (const member of [...remaining]) {
-        if (bindingsOf(member.connection.id).length === 0) continue;
+        if (member.bindings.length === 0) continue;
         const next = foldInto(merged, member.connection, definition);
         if (!next) continue;
         const legacy = member.routes.filter((route) => !isDerivedPreset(records.get(route.providerId)));
         if (!legacy.every((route) => routeBelongsOnConnection(providerConnectionProfile(records.get(route.providerId)), next))) continue;
+        // The label is settled below; nothing a preset derives reads it.
         const onRow = [lead, ...absorbed, member].flatMap(({ routes }) => routes).map((route) => records.get(route.providerId));
-        if (!presetPatchesForMerge(next, onRow, bootstraps, env)) continue;
+        const patches = presetPatchesForMerge(next, onRow, bootstraps, env);
+        if (!patches) continue;
         merged = next;
+        presetPatches = patches;
         absorbed.push(member);
         remaining.splice(remaining.indexOf(member), 1);
       }
       if (absorbed.length === 0) continue;
-      merged.label = serviceLabel([lead, ...absorbed].map(({ connection }) => connection), definition, graph.bindings);
-      const onKeeper = [lead, ...absorbed].flatMap(({ routes }) => routes).map((route) => records.get(route.providerId));
-      const presetPatches = presetPatchesForMerge(merged, onKeeper, bootstraps, env);
-      if (presetPatches) merges.push({ ...planMoves(graph, merged, absorbed), keeper: merged, presetPatches });
+      merged.label = serviceLabel([lead, ...absorbed], definition);
+      merges.push({ ...planMoves(lead, absorbed), keeper: merged, presetPatches });
     }
   }
   return merges;
@@ -178,21 +176,19 @@ export function planServiceInstanceMerges(graph, providers, { bootstraps = {}, e
  * NIM") — wrong once the row serves several. Prefer a member already named as
  * the service, then a direct-API member's name, then the definition's own.
  */
-function serviceLabel(rows, definition, bindings) {
-  const named = rows.find((row) => row.label === definition.label);
-  if (named) return named.label;
-  const direct = rows.find((row) => bindings.some((binding) => binding.connectionId === row.id && binding.harnessId == null));
-  return direct?.label || definition.label;
+function serviceLabel(members, definition) {
+  if (members.some(({ connection }) => connection.label === definition.label)) return definition.label;
+  const direct = members.find(({ bindings }) => bindings.some((binding) => binding.harnessId == null));
+  return direct?.connection.label || definition.label;
 }
 
 /** Binding moves onto the survivor, each on a variant key free on it: `UNIQUE(connection, harness, variant)`. */
-function planMoves(graph, keeper, absorbed) {
+function planMoves(lead, absorbed) {
   const key = (harnessId, variantKey) => JSON.stringify([harnessId ?? null, variantKey]);
-  const taken = new Set(graph.bindings.filter((binding) => binding.connectionId === keeper.id)
-    .map((binding) => key(binding.harnessId, binding.variantKey)));
+  const taken = new Set(lead.bindings.map((binding) => key(binding.harnessId, binding.variantKey)));
   const bindingMoves = [];
-  for (const { connection } of absorbed) {
-    for (const binding of graph.bindings.filter((candidate) => candidate.connectionId === connection.id)) {
+  for (const { bindings } of absorbed) {
+    for (const binding of bindings) {
       const variantKey = taken.has(key(binding.harnessId, binding.variantKey)) ? `variant:${binding.id}` : binding.variantKey;
       taken.add(key(binding.harnessId, variantKey));
       bindingMoves.push({ bindingId: binding.id, variantKey });
@@ -204,7 +200,6 @@ function planMoves(graph, keeper, absorbed) {
     bindingMoves,
   };
 }
-
 
 /**
  * The `providers.json` patches that put every DERIVED preset among `records`
@@ -223,10 +218,10 @@ function planMoves(graph, keeper, absorbed) {
  * @param {object} keeper - the survivor as `planServiceInstanceMerges` returned it
  * @param {object[]} records - the executable records on it (legacy ones are skipped)
  * @param {Record<string, object>} bootstraps - the configured bootstrap apps
- * @param {Record<string, string|undefined>} [env]
+ * @param {Record<string, string|undefined>} env
  * @returns {Record<string, object>|null}
  */
-function presetPatchesForMerge(keeper, records, bootstraps, env = process.env) {
+function presetPatchesForMerge(keeper, records, bootstraps, env) {
   const derived = records.filter(isDerivedPreset);
   if (derived.length === 0) return {};
   const instance = instanceForConnection(keeper, env);
@@ -234,23 +229,14 @@ function presetPatchesForMerge(keeper, records, bootstraps, env = process.env) {
   const listed = listedModels(instance, keeper.catalog);
   const patches = {};
   for (const record of derived) {
-    const harness = harnessById(record.harnessId);
-    const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
-    if (!harness || (record.credentialBootstrapId && !app)) return null;
     const next = { ...record, serviceId: keeper.slug };
-    const models = Array.isArray(record.models) ? record.models : [];
-    if (!Array.isArray(record.catalogNarrowing) && listed.length > 0 && !isDeepStrictEqual(listed, models)
-      && models.every((model) => listed.includes(model))) {
-      next.catalogNarrowing = [...models];
-    }
-    const { record: materialized, error } = materializeDerivedPreset({
-      record: next, harness, instance, catalog: keeper.catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
-    });
+    const narrowing = Array.isArray(record.catalogNarrowing) ? null : impliedCatalogNarrowing(record, listed);
+    if (narrowing) next.catalogNarrowing = narrowing;
+    const result = rederivePreset(next, { instance, catalog: keeper.catalog, bootstraps, stored: record });
     // A fold must not change what a preset runs: a list the survivor's plan
     // would cut (a paid-model preset onto a free-plan instance) refuses it.
-    if (error || !isDeepStrictEqual(materialized.models, models)) return null;
-    const patch = derivedPresetPatch(record, materialized);
-    if (Object.keys(patch).length > 0) patches[record.id] = patch;
+    if (!result || !isDeepStrictEqual(result.derived.models, Array.isArray(record.models) ? record.models : [])) return null;
+    if (Object.keys(result.patch).length > 0) patches[record.id] = result.patch;
   }
   return patches;
 }

@@ -28,11 +28,9 @@ import {
 import { harnessById } from '../lib/providerHarnesses.js';
 import { modeSiblingName } from '../lib/aiToolkit/internal/providerModes.js';
 import {
-  bootstrapInputFor,
-  derivedPresetPatch,
-  materializeDerivedPreset,
   planPresetBackfill,
   presetBackfillVerdict,
+  rederivePreset,
 } from '../lib/providerPresets.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
@@ -325,16 +323,8 @@ export async function rematerializeDerivedPresets(connection, { providerIds = nu
   const patches = {};
   for (const record of providers) {
     if (!isDerivedPreset(record) || !onRow(record)) continue;
-    const harness = harnessById(record.harnessId);
-    if (!harness) continue;
-    const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
-    if (record.credentialBootstrapId && !app) continue;
-    const { record: derived } = materializeDerivedPreset({
-      record, harness, instance, catalog: connection.catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
-    });
-    if (!derived) continue;
-    const patch = derivedPresetPatch(record, derived);
-    if (Object.keys(patch).length > 0) patches[record.id] = patch;
+    const patch = rederivePreset(record, { instance, catalog: connection.catalog, bootstraps })?.patch;
+    if (patch && Object.keys(patch).length > 0) patches[record.id] = patch;
   }
   if (Object.keys(patches).length === 0) return [];
   const written = await writeProviderPatches(patches);
