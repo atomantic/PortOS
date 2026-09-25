@@ -1853,15 +1853,14 @@ describe('taskSchedule', () => {
     // Every file-issues-by-default lane, in ONE table: the posture is a single
     // product decision ("an unattended scheduled run must not land code"), so
     // asserting it in two places 20 lines apart just means a future flag gets
-    // added to one of them. `dataInputs` is the only column that varies — the
-    // lanes that preload open issues/PRs dedup against work already filed or in
-    // flight without spending the agent's own forge calls.
-    const NO_PRELOAD = undefined
+    // added to one of them. Every audit includes open issues; some also preload
+    // PRs to dedup against work in flight without spending forge calls.
+    const OPEN_ISSUES_ONLY = ['open-issues']
     const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests']
     const FILE_ISSUES_LANES = [
-      ['data-safety', NO_PRELOAD],
-      ['simplify', NO_PRELOAD],
-      ['ui-lifecycle', NO_PRELOAD],
+      ['data-safety', OPEN_ISSUES_ONLY],
+      ['simplify', OPEN_ISSUES_ONLY],
+      ['ui-lifecycle', OPEN_ISSUES_ONLY],
       ['module-hygiene', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
       ...[...AUDIT_TASK_TYPES]
@@ -1879,6 +1878,12 @@ describe('taskSchedule', () => {
         'better-dependency-freedom',
         'better-test-quality',
       ])
+    })
+
+    it('ships open issues for every scheduled quality audit', () => {
+      for (const taskType of AUDIT_TASK_TYPES) {
+        expect(DEFAULT_TASK_INTERVALS[taskType]?.dataInputs, taskType).toContain('open-issues')
+      }
     })
 
     it.each(FILE_ISSUES_LANES)('registers %s as an enabled on-demand file-issues audit', (taskType, dataInputs) => {
