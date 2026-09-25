@@ -4,11 +4,13 @@ import toast from '../ui/Toast';
 import { formatCount, formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 
-// Any src/href/poster/url()/@import that points at a remote http(s) resource —
-// the load vectors a tracking pixel or remote stylesheet rides in on. Used
-// only to decide whether to show the "remote images blocked" notice; the CSP
-// meta below is what actually blocks the fetch, regardless of this matching.
-const REMOTE_REF_RE = /(?:<(?:img|source|video)\b[^>]*\bsrc\s*=\s*["']?https?:)|(?:<link\b[^>]*\bhref\s*=\s*["']?https?:)|(?:\burl\(\s*["']?https?:)|(?:@import\s+(?:url\()?["']?https?:)|(?:\bposter\s*=\s*["']?https?:)/i;
+// Any src/href/poster/url()/@import that points at a remote http(s) or
+// protocol-relative (`//host/...`) resource — the load vectors a tracking
+// pixel or remote stylesheet rides in on. Used only to decide whether to show
+// the "remote images blocked" notice; the CSP meta below is what actually
+// blocks the fetch (for every scheme, including a bare `//`), regardless of
+// what this matches.
+const REMOTE_REF_RE = /(?:<(?:img|source|video)\b[^>]*\bsrc\s*=\s*["']?(?:https?:)?\/\/)|(?:<link\b[^>]*\bhref\s*=\s*["']?(?:https?:)?\/\/)|(?:\burl\(\s*["']?(?:https?:)?\/\/)|(?:@import\s+(?:url\()?["']?(?:https?:)?\/\/)|(?:\bposter\s*=\s*["']?(?:https?:)?\/\/)/i;
 
 // `default-src 'none'` blocks every fetch the sanitizer regex above doesn't
 // catch (background-image, @import, <link>, <source>, <video poster>, …);
@@ -27,6 +29,14 @@ function SafeHtmlBody({ html }) {
   const iframeRef = useRef(null);
   const [allowRemote, setAllowRemote] = useState(false);
   const hasRemoteRefs = useMemo(() => REMOTE_REF_RE.test(html || ''), [html]);
+
+  // Consent is per rendered body, not per component instance: if this
+  // instance gets reused for a different message/refreshed content (list
+  // position reuse, not a remount), a prior "Load remote images" click must
+  // not silently carry over to content the user never opted into.
+  useEffect(() => {
+    setAllowRemote(false);
+  }, [html]);
 
   const writeContent = useCallback(() => {
     const iframe = iframeRef.current;

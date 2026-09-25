@@ -83,6 +83,30 @@ describe('MessageDetail SafeHtmlBody remote content blocking', () => {
     expect(screen.queryByText('Remote images blocked')).not.toBeInTheDocument();
   });
 
+  it('does not carry a "load remote images" opt-in over to different content in a reused instance', async () => {
+    const { rerender } = renderMessage({
+      ...baseMessage,
+      bodyHtml: '<img src="https://example.com/pixel.gif" alt="">',
+    });
+    await waitFor(() => expect(iframeCsp()).toContain("default-src 'none'"));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load remote images' }));
+    await waitFor(() => expect(iframeCsp()).toMatch(/img-src[^;]*https:/));
+
+    // Same component tree, different message content — as if a list item's
+    // key were reused (refreshed body, or a different message rendered in
+    // the same position) rather than remounted.
+    rerender(
+      <MessageDetail
+        message={{ ...baseMessage, bodyHtml: '<img src="https://tracker.example/pixel.gif" alt="">' }}
+        accounts={[{ id: 'acct-1', name: 'Personal' }]}
+        onBack={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(iframeCsp()).not.toMatch(/img-src[^;]*https:/));
+    expect(await screen.findByText('Remote images blocked')).toBeInTheDocument();
+  });
+
   it('shows no remote-content notice for a body with only inline data: images and plain formatting', async () => {
     renderMessage({
       ...baseMessage,
