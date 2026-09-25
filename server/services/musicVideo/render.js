@@ -302,7 +302,9 @@ export async function renderMusicVideo(projectId) {
     const priorStatus = project.status && project.status !== 'rendering' ? project.status : 'ready';
     // Mark the project rendering so the board reflects an in-flight render even
     // on a client that didn't initiate it (federates via emitRecordUpdated).
-    await updateProject(projectId, { status: 'rendering' }).catch(() => {});
+    await updateProject(projectId, { status: 'rendering' }).catch((err) => {
+      console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
+    });
 
     console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} duration=${totalDuration.toFixed(2)}s`);
 
@@ -353,7 +355,9 @@ export async function renderMusicVideo(projectId) {
         console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
         broadcastSse(job, { type: 'error', error: reason });
         projectRenders.delete(projectId);
-        await updateProject(projectId, { status: 'failed' }).catch(() => {});
+        await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
+          console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
+        });
         closeJobAfterDelay(jobs, jobId);
       },
       onClose: async (code, signal) => {
@@ -371,7 +375,10 @@ export async function renderMusicVideo(projectId) {
           projectRenders.delete(projectId);
           // A cancel restores the pre-render status (so a cancelled re-render of a
           // 'complete' project stays 'complete'); a real failure marks it 'failed'.
-          await updateProject(projectId, { status: canceled ? priorStatus : 'failed' }).catch(() => {});
+          const targetStatus = canceled ? priorStatus : 'failed';
+          await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
+            console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
+          });
           closeJobAfterDelay(jobs, jobId);
           return;
         }
@@ -398,7 +405,9 @@ export async function renderMusicVideo(projectId) {
             musicVideoProjectId: projectId,
           };
           await appendToVideoHistory(meta);
-          await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch(() => {});
+          await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch((updateErr) => {
+            console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
+          });
           console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
           broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
         } catch (err) {
@@ -406,7 +415,9 @@ export async function renderMusicVideo(projectId) {
           job.lastError = `Finalize failed: ${err.message}`;
           console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
           broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
-          await updateProject(projectId, { status: 'failed' }).catch(() => {});
+          await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
+            console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
+          });
         } finally {
           projectRenders.delete(projectId);
           closeJobAfterDelay(jobs, jobId);
@@ -419,5 +430,35 @@ export async function renderMusicVideo(projectId) {
     // Prep threw (or we never handed off to the job lifecycle) — release the
     // reserved slot so a stale PENDING can't 409 every future render.
     if (!handedOff) projectRenders.delete(projectId);
+  }
+}
+
+// Recovery: after a server restart, a persisted 'rendering' status is stale if
+// the project has no live render job. Demote it based on whether it has a
+// renderHistoryId already recorded.
+export async function recoverStuckMusicVideoRenders() {
+  try {
+    // List all projects (implementation note: a project list read may fail; we
+    // report it and return cleanly to avoid crashing boot).
+    const projects = await getProject(null);
+    const rendering = Array.isArray(projects) ? projects.filter(p => p && p.status === 'rendering') : [];
+
+    let recovered = 0;
+    for (const project of rendering) {
+      // Skip projects that still have live jobs.
+      if (projectRenders.has(project.id)) continue;
+
+      // Demote to 'complete' if the project already has a rendered video in
+      // history, otherwise to 'ready' (user needs to generate clips first).
+      const targetStatus = project.renderHistoryId ? 'complete' : 'ready';
+      await updateProject(project.id, { status: targetStatus });
+      recovered++;
+    }
+
+    if (recovered > 0) {
+      console.log(`🎬 Music Video boot recovery: demoted ${recovered} stuck render(s) to ready/complete`);
+    }
+  } catch (err) {
+    console.error(`❌ Music Video recovery failed: ${err.message}`);
   }
 }

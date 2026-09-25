@@ -171,3 +171,81 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(getRenderJobStatus(jobId).error).toBeUndefined();
   });
 });
+
+describe('recoverStuckMusicVideoRenders', () => {
+  it('demotes stuck rendering projects to complete when they have a renderHistoryId', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+
+    // Mock getProject to return a list with a stuck rendering project
+    getProject.mockResolvedValue([
+      { id: 'proj-1', status: 'rendering', renderHistoryId: 'hist-1' },
+    ]);
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(updateProject).toHaveBeenCalledWith('proj-1', { status: 'complete' });
+  });
+
+  it('demotes stuck rendering projects to ready when they lack a renderHistoryId', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+
+    getProject.mockResolvedValue([
+      { id: 'proj-2', status: 'rendering' },
+    ]);
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(updateProject).toHaveBeenCalledWith('proj-2', { status: 'ready' });
+  });
+
+  it('skips projects with active render jobs in the projectRenders map', async () => {
+    const { recoverStuckMusicVideoRenders, renderMusicVideo } = await import('./render.js');
+
+    // Start a render to put the project in the projectRenders map
+    prime('proj-3');
+    const { jobId } = await renderMusicVideo('proj-3');
+
+    // Mock getProject to return that project as rendering
+    getProject.mockResolvedValue([
+      { id: 'proj-3', status: 'rendering', renderHistoryId: 'hist-1' },
+    ]);
+
+    updateProject.mockClear();
+    await recoverStuckMusicVideoRenders();
+
+    // Should NOT update a project with an active job
+    expect(updateProject).not.toHaveBeenCalledWith('proj-3', expect.anything());
+  });
+
+  it('handles list failure gracefully without reporting zero recovered', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+
+    getProject.mockRejectedValue(new Error('DB unavailable'));
+
+    // Should not throw
+    await expect(recoverStuckMusicVideoRenders()).resolves.toBeUndefined();
+
+    // Should log the error (verified via console.error mock if available)
+    expect(updateProject).not.toHaveBeenCalled();
+  });
+
+  it('logs summary when multiple projects are recovered', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    getProject.mockResolvedValue([
+      { id: 'proj-4', status: 'rendering', renderHistoryId: 'hist-1' },
+      { id: 'proj-5', status: 'rendering' },
+      { id: 'proj-6', status: 'ready' }, // Should be skipped
+    ]);
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(updateProject).toHaveBeenCalledTimes(2);
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining('demoted 2 stuck render(s)'),
+    );
+
+    consoleLogSpy.mockRestore();
+  });
+});
