@@ -254,6 +254,22 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {})
   if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
     cleaned.timezoneUpdatedAt = Date.now();
   }
+  // Stamp `backupConfigUpdatedAt` whenever a registration-affecting backup
+  // field actually changes (cron expression, enabled, or destination) — the
+  // same shape as `timezoneUpdatedAt` above — so backupScheduler.js's
+  // missed-slot catch-up (#8456) can tell "this config produced the missed
+  // slot" from "the config was edited after the slot was missed" and skip a
+  // catch-up the current settings never scheduled.
+  if (isPlainObject(prev)) {
+    const prevBackup = isPlainObject(prev.backup) ? prev.backup : {};
+    const nextBackup = isPlainObject(cleaned.backup) ? cleaned.backup : {};
+    const backupScheduleChanged = prevBackup.cronExpression !== nextBackup.cronExpression
+      || prevBackup.enabled !== nextBackup.enabled
+      || (prevBackup.destPath || null) !== (nextBackup.destPath || null);
+    if (backupScheduleChanged) {
+      cleaned.backupConfigUpdatedAt = Date.now();
+    }
+  }
   // atomicWrite (temp-file + rename) so a mid-write crash never truncates
   // settings.json. Pass a pre-stringified string to preserve the trailing
   // newline; atomicWrite's own JSON.stringify omits it.

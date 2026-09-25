@@ -18,7 +18,10 @@ vi.mock('./eventScheduler.js', () => ({
   // null nextRunAt as a failed registration, so the default mock returns a
   // firing one.
   schedule: vi.fn(() => ({ id: 'backup-daily', nextRunAt: Date.now() + 60_000 })),
-  cancel: vi.fn()
+  cancel: vi.fn(),
+  // Defaults to "no missed slot" so every pre-existing test above stays
+  // unaffected by the #8456 catch-up check that now runs on every boot.
+  parseCronToPrevRun: vi.fn(() => null)
 }));
 
 // The scheduler subscribes to `settings:updated` at module load, so the mock
@@ -45,16 +48,21 @@ vi.mock('./settings.js', () => {
 });
 
 vi.mock('./backup.js', () => ({
-  runBackup: vi.fn().mockResolvedValue({ success: true })
+  runBackup: vi.fn().mockResolvedValue({ success: true }),
+  // "never run" — matches backup.js's own DEFAULT_STATE, so a test that
+  // doesn't override this sees the same "no prior run" starting point.
+  getState: vi.fn().mockResolvedValue({ lastRun: null })
 }));
 
 vi.mock('./userTimezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+  getTimezoneUpdatedAt: vi.fn().mockResolvedValue(null)
 }));
 
-import { schedule, cancel } from './eventScheduler.js';
+import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
 import { getSettings, getSettingsWithStatus } from './settings.js';
-import { runBackup } from './backup.js';
+import { runBackup, getState } from './backup.js';
+import { getTimezoneUpdatedAt } from './userTimezone.js';
 import { startBackupScheduler, stopBackupScheduler, syncBackupSchedule } from './backupScheduler.js';
 
 describe('startBackupScheduler', () => {
@@ -386,5 +394,137 @@ describe('corrupt settings read at boot (#8428)', () => {
 
     expect(schedule).toHaveBeenCalledTimes(1);
     expect(schedule.mock.calls[0][0]).toMatchObject({ cron: '0 3 * * *' });
+  });
+});
+
+/**
+ * #8456: the daily backup cron fires nothing until its expression elapses, so
+ * an install where the daemon was down (or crash-looping) across the
+ * scheduled time gets zero backups that day, and — if the machine is
+ * consistently off at that time — ever. Boot now checks whether the most
+ * recent slot elapsed without a backup and, if so, runs a one-time catch-up
+ * after a fixed delay so it never piles onto boot-time migrations/warm-up.
+ */
+describe('missed-slot catch-up at boot (#8456)', () => {
+  const SETTINGS = { backup: { enabled: true, destPath: '/dest', cronExpression: '0 0 * * *' } };
+  const MISSED_SLOT = new Date('2026-01-02T00:00:00.000Z');
+
+  beforeEach(() => {
+    stopBackupScheduler();
+    vi.clearAllMocks();
+    parseCronToPrevRun.mockReturnValue(null);
+    getState.mockResolvedValue({ lastRun: null });
+    getTimezoneUpdatedAt.mockResolvedValue(null);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('runs a catch-up backup after the boot delay when the last run predates the missed slot', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' }); // yesterday's slot only
+
+    await startBackupScheduler();
+    expect(runBackup).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).toHaveBeenCalledWith('/dest', null, {
+      excludePaths: [], disabledDefaultExcludes: [], retentionCount: null
+    });
+  });
+
+  it('does not catch up when the last run is at or after the most recent slot', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: MISSED_SLOT.toISOString() });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
+  it('suppresses catch-up when the backup config changed after the missed slot', async () => {
+    getSettings.mockResolvedValue({ ...SETTINGS, backupConfigUpdatedAt: MISSED_SLOT.getTime() + 60_000 });
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
+  it('suppresses catch-up when the timezone changed after the missed slot', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+    getTimezoneUpdatedAt.mockResolvedValue(MISSED_SLOT.getTime() + 60_000);
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
+  it('never catches up when backup is disabled', async () => {
+    getSettings.mockResolvedValue({ backup: { enabled: false, destPath: '/dest' } });
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
+    expect(parseCronToPrevRun).not.toHaveBeenCalled(); // never scheduled, so nothing to catch up
+  });
+
+  it('never catches up when destPath is missing', async () => {
+    getSettings.mockResolvedValue({ backup: { enabled: true } });
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+
+    await startBackupScheduler();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
+    expect(parseCronToPrevRun).not.toHaveBeenCalled();
+  });
+
+  it('attempts at most one catch-up per boot, even if a settings save re-syncs immediately after', async () => {
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+
+    await startBackupScheduler();
+    expect(parseCronToPrevRun).toHaveBeenCalledTimes(1);
+
+    // A same-signature re-sync (e.g. an unrelated settings save) must not
+    // re-evaluate the missed slot a second time this boot.
+    await syncBackupSchedule(SETTINGS, { catchUpMissedSlot: true });
+    expect(parseCronToPrevRun).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(runBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it('a settings:updated re-sync does not itself trigger a catch-up', async () => {
+    getSettings.mockResolvedValue({ backup: { enabled: false } });
+    await startBackupScheduler();
+    expect(schedule).not.toHaveBeenCalled();
+
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    getState.mockResolvedValue({ lastRun: '2026-01-01T00:00:00.000Z' });
+    settingsEvents.emit('settings:updated', SETTINGS);
+    // The listener is async (it awaits getUserTimezone) — advance by 0 to let
+    // it settle without relying on `setImmediate`, which fake timers also fake.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(runBackup).not.toHaveBeenCalled();
   });
 });
