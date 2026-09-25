@@ -117,11 +117,14 @@ describe('<WaveformPanel>', () => {
     expect(screen.getByText(/Nothing painted yet/)).toBeTruthy();
   });
 
-  it('opens on the host track\'s stored painting without fetching', () => {
-    renderPanel({ track: { id: 'track-1', waveSketch: painted } });
+  it('opens on the host track\'s stored painting without fetching, and revises it at its own length', async () => {
+    renderPanel({ track: { id: 'track-1', waveSketch: { ...painted, durationSec: 95 } } });
     expect(screen.getByText('Glass Tide')).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Revise painting/ })).toBeTruthy();
     expect(api.getTrack).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Length (sec)').value).toBe('95');
+    fireEvent.click(screen.getByRole('button', { name: /Revise painting/ }));
+    await waitFor(() => expect(api.drawTrackWaveform).toHaveBeenCalledTimes(1));
+    expect(api.drawTrackWaveform.mock.calls[0][1]).toMatchObject({ revise: true, durationSec: 95 });
   });
 
   it('still shows, plays, and saves a v1 drawing, which is repainted rather than revised', async () => {

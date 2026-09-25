@@ -270,8 +270,10 @@ export default function WaveformPanel({
   const [sketch, setSketch] = useState(() => normalizeWaveSketch(track?.waveSketch));
   const [guidance, setGuidance] = useState('');
   // Raw field text — clamped only when used, so typing "12" isn't snapped to
-  // the minimum after its first digit.
-  const [lengthInput, setLengthInput] = useState(String(DEFAULT_LENGTH_SEC));
+  // the minimum after its first digit. It follows the current sketch's length,
+  // so revising a reloaded painting keeps its duration instead of cropping it.
+  const [lengthInput, setLengthInput] = useState(() => String(sketch?.durationSec ?? DEFAULT_LENGTH_SEC));
+  useEffect(() => { if (sketch) setLengthInput(String(sketch.durationSec)); }, [sketch]);
   const [review, setReview] = useState(false);
   const [drawing, setDrawing] = useState(null); // 'fresh' | 'revise' | null
   const [saving, setSaving] = useState(false);
