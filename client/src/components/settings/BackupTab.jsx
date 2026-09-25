@@ -72,6 +72,13 @@ export function BackupTab() {
   // `null` = unlimited. Undefined only before the initial load resolves.
   const [retentionCount, setRetentionCount] = useState(undefined);
   const [savedRetentionCount, setSavedRetentionCount] = useState(undefined);
+  // The number input's own DISPLAYED text, decoupled from the committed
+  // `retentionCount`. A controlled `value` bound directly to a clamped
+  // number snaps back to the old value the instant the field is cleared
+  // (parseInt('') is NaN), which makes it impossible to select-all and type
+  // a replacement. Free-typing lives here; `retentionCount` (used for dirty
+  // checking and the save payload) only updates once the text parses.
+  const [retentionInputText, setRetentionInputText] = useState('');
   const [excludePaths, setExcludePaths] = useState([]);
   const [savedExcludePaths, setSavedExcludePaths] = useState([]);
   const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
@@ -143,6 +150,7 @@ export function BackupTab() {
         setSavedCronExpression(savedCron);
         setRetentionCount(savedRetention);
         setSavedRetentionCount(savedRetention);
+        setRetentionInputText(savedRetention === null ? '' : String(savedRetention));
         setExcludePaths(savedExcludes);
         setSavedExcludePaths(savedExcludes);
         setDisabledDefaultExcludes(savedDisabled);
@@ -464,21 +472,33 @@ export function BackupTab() {
                   max={MAX_RETENTION_COUNT}
                   step={1}
                   disabled={retentionCount === null}
-                  value={retentionCount === null ? '' : (retentionCount ?? '')}
+                  value={retentionInputText}
                   onChange={e => {
-                    const parsed = Number.parseInt(e.target.value, 10);
-                    // Ignore an unparseable/blank in-progress edit rather than committing
-                    // `undefined` — that would drop the key from the save payload
-                    // (JSON.stringify omits it) and silently leave the prior value.
+                    const raw = e.target.value;
+                    // Let the field show exactly what was typed — including a
+                    // momentarily empty or out-of-range value — so clearing it to
+                    // type a replacement never snaps back to the old digits.
+                    setRetentionInputText(raw);
+                    const parsed = Number.parseInt(raw, 10);
                     if (Number.isNaN(parsed)) return;
                     setRetentionCount(Math.min(MAX_RETENTION_COUNT, Math.max(MIN_RETENTION_COUNT, parsed)));
+                  }}
+                  onBlur={() => {
+                    // Reconcile the displayed text with the committed (clamped)
+                    // value once editing stops, so an out-of-range or blank entry
+                    // doesn't linger on screen looking accepted.
+                    setRetentionInputText(retentionCount === null ? '' : String(retentionCount));
                   }}
                   className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 />
                 <span className="inline-flex items-center gap-2 text-sm text-gray-400">
                   <ToggleSwitch
                     enabled={retentionCount === null}
-                    onChange={() => setRetentionCount(prev => prev === null ? DEFAULT_RETENTION_COUNT : null)}
+                    onChange={() => {
+                      const next = retentionCount === null ? DEFAULT_RETENTION_COUNT : null;
+                      setRetentionCount(next);
+                      setRetentionInputText(next === null ? '' : String(next));
+                    }}
                     size="sm"
                     ariaLabel="Unlimited retention"
                   />
@@ -673,51 +693,52 @@ export function BackupTab() {
                 {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => {
                   const identity = snapshotIdentity(snap);
                   return (
-                    <CollapsibleListItem
-                      key={identity}
-                      removing={deletingIds.has(identity)}
-                      spacing="0.375rem"
-                      onExited={() => {
-                        setSnapshots(previous => previous.filter(s => snapshotIdentity(s) !== identity));
-                        setDeletingIds(previous => {
-                          const next = new Set(previous);
-                          next.delete(identity);
-                          return next;
-                        });
-                      }}
-                    >
-                      <li className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
-                        <span className="min-w-0">
-                          <span className="block text-gray-300 truncate">{snap.id}</span>
-                          <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
-                          {snap.failed && (
-                            <span className="block text-port-error">Backup failed — download only</span>
-                          )}
-                          {snap.incomplete && (
-                            <span className="block text-gray-500">Still being written…</span>
-                          )}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-1.5">
-                          <button
-                            onClick={() => handleRestoreDb(snap)}
-                            disabled={snap.failed || snap.incomplete}
-                            title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
-                            className="px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Restore DB
-                          </button>
-                          <button
-                            onClick={() => handleDeleteSnapshot(snap)}
-                            disabled={snap.incomplete}
-                            title="Permanently delete this snapshot"
-                            aria-label={`Delete snapshot ${snap.id}`}
-                            className="p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </span>
-                      </li>
-                    </CollapsibleListItem>
+                    <li key={identity}>
+                      <CollapsibleListItem
+                        removing={deletingIds.has(identity)}
+                        spacing="0.375rem"
+                        onExited={() => {
+                          setSnapshots(previous => previous.filter(s => snapshotIdentity(s) !== identity));
+                          setDeletingIds(previous => {
+                            const next = new Set(previous);
+                            next.delete(identity);
+                            return next;
+                          });
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
+                          <span className="min-w-0">
+                            <span className="block text-gray-300 truncate">{snap.id}</span>
+                            <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
+                            {snap.failed && (
+                              <span className="block text-port-error">Backup failed — download only</span>
+                            )}
+                            {snap.incomplete && (
+                              <span className="block text-gray-500">Still being written…</span>
+                            )}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              onClick={() => handleRestoreDb(snap)}
+                              disabled={snap.failed || snap.incomplete}
+                              title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                              className="px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Restore DB
+                            </button>
+                            <button
+                              onClick={() => handleDeleteSnapshot(snap)}
+                              disabled={snap.incomplete}
+                              title="Permanently delete this snapshot"
+                              aria-label={`Delete snapshot ${snap.id}`}
+                              className="p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </span>
+                        </div>
+                      </CollapsibleListItem>
+                    </li>
                   );
                 })}
               </ul>

@@ -157,6 +157,31 @@ describe('BackupTab', () => {
       );
     });
 
+    // Regression: a controlled `value` bound straight to the clamped number
+    // snapped back to the old digits the instant the field was cleared
+    // (parseInt('') is NaN), so a user could never select-all and retype.
+    it('lets the field go empty mid-edit without snapping back to the old value', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: 30, excludePaths: [], disabledDefaultExcludes: [] },
+      });
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const input = screen.getByLabelText(/Retention \(snapshots kept on this machine\)/i);
+      expect(input.value).toBe('30');
+
+      fireEvent.change(input, { target: { value: '' } });
+      expect(input.value).toBe('');
+
+      fireEvent.change(input, { target: { value: '9' } });
+      expect(input.value).toBe('9');
+
+      // Blurring with an empty field reconciles the display back to the last
+      // committed (valid) value rather than leaving it blank.
+      fireEvent.change(input, { target: { value: '' } });
+      fireEvent.blur(input);
+      expect(input.value).toBe('9');
+    });
+
     it('toggling Unlimited clears the field and saves retentionCount: null', async () => {
       getSettings.mockResolvedValue({
         backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: 30, excludePaths: [], disabledDefaultExcludes: [] },
