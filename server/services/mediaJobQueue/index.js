@@ -1244,6 +1244,9 @@ export const MEDIA_QUEUE_PERSIST_FAILED = 'MEDIA_QUEUE_PERSIST_FAILED';
 // snapshot includes it while drainLoop/runJobNow leave it alone. A failed write
 // withdraws the job and throws, so a caller never holds a job id that a restart
 // would not restore, and no provider work starts for it.
+// Exception: under the #4115 latch (an unreadable snapshot preserved for repair)
+// nothing is written by design and the queue deliberately keeps working in
+// memory, so admission succeeds without durability; boot already reported it.
 export async function enqueueJob({ kind, params, owner = null }) {
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
