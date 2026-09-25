@@ -614,20 +614,29 @@ export const catalogSyncSourceSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
+// Ref rows carry tombstone fields (soft-delete from day one) plus, since
+// #8347, an `updatedAt` tombstone/revival change-clock — see
+// `upsertRefFromPeer` in catalogDB/sync.js for the LWW revival-guard
+// rationale. Both are optional on the wire (absent = "peer has no opinion" /
+// pre-#8347 sender) and preserved regardless via `.passthrough()`.
 export const catalogSyncRefSchema = z.object({
   ingredientId: z.string().max(80),
   refKind: z.string().max(32),
   refId: z.string().max(120),
   role: z.string().max(64),
   createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  updatedAt: isoDate.optional(),
   syncSequence: z.string().optional(),
 }).passthrough();
 
-// Relation rows carry tombstone fields (soft-delete from day one). `kind` is a
-// freeform string on the wire (not the strict enum) so a peer running a newer
-// PortOS with an additional relation kind doesn't get its whole envelope
-// rejected by an older receiver — the version gate already covers true
-// shape skew, and an unknown-kind row stores harmlessly.
+// Relation rows carry tombstone fields (soft-delete from day one) + the same
+// #8347 `updatedAt` revival-guard clock as refs. `kind` is a freeform string
+// on the wire (not the strict enum) so a peer running a newer PortOS with an
+// additional relation kind doesn't get its whole envelope rejected by an
+// older receiver — the version gate already covers true shape skew, and an
+// unknown-kind row stores harmlessly.
 export const catalogSyncRelationSchema = z.object({
   fromId: z.string().max(80),
   toId: z.string().max(80),
@@ -635,6 +644,7 @@ export const catalogSyncRelationSchema = z.object({
   createdAt: isoDate,
   deleted: z.boolean().optional(),
   deletedAt: z.string().nullable().optional(),
+  updatedAt: isoDate.optional(),
   syncSequence: z.string().optional(),
 }).passthrough();
 
@@ -699,6 +709,8 @@ export const catalogSyncMediaSchema = z.object({
   createdAt: isoDate,
   deleted: z.boolean().optional(),
   deletedAt: z.string().nullable().optional(),
+  // #8347 revival-guard clock — see catalogSyncRefSchema above.
+  updatedAt: isoDate.optional(),
   syncSequence: z.string().optional(),
 }).passthrough();
 

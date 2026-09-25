@@ -373,7 +373,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // directions, including legacy senders with no version. Whole-row LWW from
   // an older peer can erase fields after an unrelated edit. Tombstone-only
   // transfers remain version-independent; no local storage migration is needed.
-  catalog: 10,
+  // v11 = `catalog_ingredient_refs`/`_relations`/`_media` gained `updated_at`
+  // (#8347) and their `upsertXFromPeer` apply guards now require it to be
+  // strictly newer than the local row's before applying a peer's tombstone
+  // OR revival — a ≤v10 sender's unguarded whole-row apply can revive a
+  // newer local tombstone (soft-delete R at t2, then apply B's still-live
+  // copy of R before B pulls the tombstone) whenever B re-sends R: a
+  // role/caption edit, a reset rewind, or the #8315 upgrade replay that
+  // resends every catalog row once. Same execution-semantics rationale as
+  // v10: this is a receiver-side conflict-resolution change, not just an
+  // additive field, so an equal-version requirement is the only way to know
+  // BOTH sides apply the guard. Tombstone-only transfers already skip the
+  // live-row equality check; a v11 receiver's guard still degrades safely
+  // for a ≤v10 sender's tombstone-less payload (unchanged "no opinion" path).
+  catalog: 11,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

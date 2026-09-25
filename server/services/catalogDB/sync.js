@@ -7,6 +7,14 @@
  * version federation is handled per-table: "tombstone keys absent" is treated
  * as "peer has no opinion" so a pre-tombstone peer can't revive a local delete,
  * and FK-lagged child/parent rows retry parent-less then re-link on a later page.
+ *
+ * The three tuple-unique kinds (refs, relations, media) additionally gate
+ * their tombstone/revival apply on an `updated_at` change-clock (#8347): a
+ * peer's `deleted`/`deleted_at` only lands when its `updated_at` is strictly
+ * newer than the local row's, so a stale re-send of a still-live row (a
+ * reset rewind, a role/data resend, or the #8315 upgrade replay that resends
+ * every catalog row once) can't revive a tombstone that happened after the
+ * peer's own clock. See `upsertRefFromPeer` for the full rationale.
  */
 
 import { query, arrayToPgvector } from '../../lib/db.js';
@@ -54,14 +62,26 @@ export async function upsertRelationFromPeer(rel) {
     Object.prototype.hasOwnProperty.call(rel, 'deleted') ||
     Object.prototype.hasOwnProperty.call(rel, 'deletedAt');
   if (hasTombstoneFields) {
+    // #8347 revival guard: `updated_at` is the tombstone/revival change-clock
+    // (bumped by the trg_catalog_relation_sync_seq trigger on every
+    // deleted/deleted_at flip — see catalog.js). Gate the apply on it being
+    // strictly newer than the local row's, the same LWW shape as
+    // upsertTagFromPeer, so a stale re-send of a still-live edge (a reset
+    // rewind, a role/data resend, or the #8315 upgrade replay) can't revive a
+    // local unlink that already happened. A peer that predates this field
+    // (`rel.updatedAt` absent) falls back to its `deletedAt`/`createdAt`,
+    // which is always older than a genuine later local tombstone.
+    const updatedAtClock = rel.updatedAt || rel.deletedAt || rel.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_relations
-         (from_id, to_id, kind, created_at, deleted, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (from_id, to_id, kind, created_at, deleted, deleted_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (from_id, to_id, kind) DO UPDATE
          SET deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at`,
-      [rel.fromId, rel.toId, rel.kind, rel.createdAt, !!rel.deleted, rel.deletedAt || null],
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at
+       WHERE EXCLUDED.updated_at > catalog_ingredient_relations.updated_at`,
+      [rel.fromId, rel.toId, rel.kind, rel.createdAt, !!rel.deleted, rel.deletedAt || null, updatedAtClock],
     );
   } else {
     await query(
@@ -96,23 +116,30 @@ export async function upsertMediaFromPeer(media) {
     && media.metadata && typeof media.metadata === 'object'
     && !Array.isArray(media.metadata) && Object.keys(media.metadata).length > 0;
   const metadataColumn = hasMetadata ? ', metadata' : '';
-  const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 9 : 7}` : '';
+  const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 10 : 7}` : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const metadataParam = hasMetadata ? [JSON.stringify(media.metadata || {})] : [];
   if (hasTombstoneFields) {
+    // #8347 revival guard — see upsertRelationFromPeer for the rationale.
+    // `updated_at` also moves on a role/caption/metadata-only edit (the
+    // media trigger watches those too), so the same guard additionally
+    // protects a live edit from a stale peer resend, not just a tombstone.
+    const updatedAtClock = media.updatedAt || media.deletedAt || media.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at${metadataColumn})
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8${metadataPlaceholder})
+         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
          SET role = EXCLUDED.role,
              caption = EXCLUDED.caption,
              deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at${metadataUpdate}`,
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at${metadataUpdate}
+       WHERE EXCLUDED.updated_at > catalog_ingredient_media.updated_at`,
       [
         media.ingredientId, media.mediaKey, media.kind,
         media.role ?? null, media.caption ?? null, media.createdAt,
-        !!media.deleted, media.deletedAt || null,
+        !!media.deleted, media.deletedAt || null, updatedAtClock,
         ...metadataParam,
       ],
     );
@@ -310,11 +337,16 @@ export async function upsertSourceFromPeer(src) {
 
 export async function upsertRefFromPeer(ref) {
   // ON CONFLICT DO UPDATE so a peer's soft-delete (or revival) of a ref row
-  // is mirrored locally. Refs don't carry an `updated_at` column — they're
-  // tuple-unique — so a strict LWW window doesn't apply; the receiver simply
-  // adopts the peer's `deleted` / `deleted_at` state. The trigger only bumps
-  // sync_sequence when those columns change, so a no-op replay (peer already
-  // matches local) stays silent on the next outbound pull.
+  // is mirrored locally. Refs are tuple-unique (no editable content fields),
+  // so `updated_at` exists ONLY as a tombstone/revival change-clock (#8347),
+  // bumped by trg_catalog_ref_sync_seq whenever deleted/deleted_at flips —
+  // never by a content edit, since there is no other mutable field. The
+  // WHERE guard below rejects a stale apply whose clock isn't strictly newer
+  // than the local row's, so a stale re-send of a still-live ref (a reset
+  // rewind or the #8315 upgrade replay resending every row once) can't
+  // silently revive a tombstone that happened after the peer's clock. A
+  // no-op replay (peer already matches local) still bumps nothing new, so
+  // it stays silent on the next outbound pull.
   //
   // Mixed-version federation: a v1 peer (pre-tombstone) emits ref rows with
   // NO `deleted`/`deletedAt` keys. Treat "key absent" as "peer has no opinion"
@@ -323,18 +355,25 @@ export async function upsertRefFromPeer(ref) {
   // a locally tombstoned ref. The `hasTombstoneFields` flag distinguishes this
   // from an explicit v2 revival (`deleted: false` present). On INSERT a v1
   // peer's row defaults to `deleted=false`, which is correct — the row is
-  // brand-new locally and the peer believes it's active.
+  // brand-new locally and the peer believes it's active. A peer that carries
+  // tombstone fields but predates the `updatedAt` wire field (a v2-but-not-v3
+  // sender, which cannot occur once every peer ships this fix) falls back to
+  // its `deletedAt`/`createdAt`, which is always older than a genuine later
+  // local tombstone.
   const hasTombstoneFields =
     Object.prototype.hasOwnProperty.call(ref, 'deleted') ||
     Object.prototype.hasOwnProperty.call(ref, 'deletedAt');
   if (hasTombstoneFields) {
+    const updatedAtClock = ref.updatedAt || ref.deletedAt || ref.createdAt;
     await query(
       `INSERT INTO catalog_ingredient_refs
-         (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
          SET deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at`,
+             deleted_at = EXCLUDED.deleted_at,
+             updated_at = EXCLUDED.updated_at
+       WHERE EXCLUDED.updated_at > catalog_ingredient_refs.updated_at`,
       [
         ref.ingredientId,
         ref.refKind,
@@ -343,6 +382,7 @@ export async function upsertRefFromPeer(ref) {
         ref.createdAt,
         !!ref.deleted,
         ref.deletedAt || null,
+        updatedAtClock,
       ],
     );
   } else {
