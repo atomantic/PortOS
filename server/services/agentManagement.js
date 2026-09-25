@@ -5,7 +5,6 @@
  * and orphaned task retry logic.
  */
 
-import { join } from 'path';
 import { rm } from 'node:fs/promises';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -35,14 +34,12 @@ import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
-import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
-import { dispatchRecoveredTaskOutputHook } from './agentFinalization.js';
-import { removeCompletionSentinel } from './agentCompletionCleanup.js';
+import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { buildInvestigationFingerprint } from '../lib/investigationTasks.js';
-import { PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { release } from './executionLanes.js';
@@ -1275,43 +1272,27 @@ async function runCleanupOrphanedAgents() {
         },
       });
       const task = agent.taskId ? await getTaskById(agent.taskId).catch(() => null) : null;
-      await dispatchRecoveredTaskOutputHook({
-        agentId: agent.id,
+      const startedAt = Date.parse(agent.startedAt);
+      // Same shared step list the post-restart recovery in agentLifecycle.js uses
+      // (issue #8440) — output hook, sentinel removal, run-record close, agent
+      // completion, in that order. A hard kill (`pm2 restart`, reboot) lands here,
+      // so this is the path that leaves dirt in a managed app repo if any of it
+      // is skipped.
+      await retireDeadAgent({
+        agent,
         task,
         success: false,
-        workspacePath: agent.metadata?.workspacePath || null,
-      });
-      // Same reason as the post-restart recovery in agentLifecycle.js: this
-      // sweep retires the run without reaching completion cleanup, and the hook
-      // above was the last sentinel read. A hard kill (`pm2 restart`, reboot)
-      // lands here, so this is the path that leaves dirt in a managed app repo.
-      await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
-        .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
-      if (agent.metadata?.runId) {
-        const bufferedOutput = Array.isArray(agent.output)
-          ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
-          : '';
-        const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
-        const startedAt = Date.parse(agent.startedAt);
-        const duration = Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
-        // Close the run BEFORE the agent record. If the run write fails, the
-        // agent remains eligible for the next sweep; if the later agent write
-        // fails, completeAgentRun's endTime guard makes this retry harmless.
-        await completeAgentRun(agent.metadata.runId, isPrivateSecurityTask(task) || isPrivateSecurityTask(agent) ? 'Private security assessment interrupted; inspect its local assessment archive.' : output, interrupted ? 143 : 1, duration, {
-          message: errorMessage,
-          category: interrupted ? 'interrupted' : 'orphaned',
-        });
-      }
-      await completeAgent(agent.id, {
-        success: false,
-        error: errorMessage,
-        orphaned: true,
-        // Post-mortem telemetry on the agent record (nothing reads it yet —
-        // the human-visible distinction is the `error` string above). Worth
-        // persisting because an infrastructure interruption and a real agent
-        // fault are indistinguishable from the process's point of view once
-        // the record is written.
-        interruptedByRestart: interrupted,
+        exitCode: interrupted ? 143 : 1,
+        duration: Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0,
+        errorMessage,
+        category: interrupted ? 'interrupted' : 'orphaned',
+        // Post-mortem telemetry on the agent record (nothing reads it yet — the
+        // human-visible distinction is the `error` string above). Worth persisting
+        // because an infrastructure interruption and a real agent fault are
+        // indistinguishable from the process's point of view once the record is
+        // written. Kept off the shared `retireDeadAgent` shape since the
+        // post-restart path has no equivalent fact to report.
+        agentResultExtra: { interruptedByRestart: interrupted },
       });
       cleanedCount++;
 
@@ -1458,10 +1439,11 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     if (task.status === 'completed') return;
     const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
-    await updateTask(taskId, { status: 'blocked', metadata: { ...task.metadata,
+    const taskUpdate = await stampLiExecutionVerdict({ status: 'blocked', metadata: { ...task.metadata,
       blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',
       blockedReason: 'Private assessment was interrupted. Inspect its local output and explicitly rerun it; no automatic investigation or provider fallback will run.',
-    } }, task.taskType || 'user');
+    } }, task, { success: false });
+    await updateTask(taskId, taskUpdate, task.taskType || 'user');
     return;
   }
 
@@ -1519,7 +1501,8 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     && await committedDuringRun(agentMetadata?.workspacePath || ROOT_DIR, orphanRunStartedAt);
   if (commitFound) {
     emitLog('info', `✅ Orphaned agent ${agentId} actually completed work - commit found for task ${taskId}`, { taskId, agentId });
-    await updateTask(taskId, { status: 'completed' }, task.taskType || 'user');
+    const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: true });
+    await updateTask(taskId, taskUpdate, task.taskType || 'user');
     return;
   }
 
@@ -1622,7 +1605,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       taskId, cooldownMinutes, retryCount
     });
 
-    await updateTask(taskId, {
+    await updateTask(taskId, await stampLiExecutionVerdict({
       status: 'blocked',
       metadata: {
         ...task.metadata,
@@ -1638,7 +1621,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
         blockedAt: new Date().toISOString(),
         cooldownUntil: new Date(Date.now() + cooldownRemaining).toISOString()
       }
-    }, taskType);
+    }, task, { success: false }), taskType);
   } else {
     const reason = totalExceeded
       ? `total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`
@@ -1649,7 +1632,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       totalSpawns
     });
 
-    await updateTask(taskId, {
+    await updateTask(taskId, await stampLiExecutionVerdict({
       status: 'blocked',
       metadata: {
         ...task.metadata,
@@ -1660,7 +1643,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
         blockedCategory: 'max-retries',
         blockedAt: new Date().toISOString()
       }
-    }, taskType);
+    }, task, { success: false }), taskType);
 
     const description = `[Auto-Fix] Investigate repeated agent orphaning for task ${taskId}
 

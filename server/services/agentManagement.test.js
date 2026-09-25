@@ -29,8 +29,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChildProcess } from '../lib/childProcess.js';
 import { readFileSync } from 'fs';
-import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -104,7 +102,17 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
   resolveTaskResumePatch: vi.fn().mockResolvedValue({})
 }));
-vi.mock('./agentFinalization.js', () => ({ dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined) }));
+// `retireDeadAgent`'s own step-order/private-security/argument-shaping behavior has its
+// own suite (`agentFinalization.retireDeadAgent.test.js`) against the real function — this
+// file only asserts that the sweep WIRES it with the right facts. Mocked here as a plain
+// stub (not `importOriginal`) to keep this suite from dragging in agentFinalization.js's
+// whole provider/codeReview/agentCompletion closure, same reason the rest of this file
+// mocks its neighbors.
+vi.mock('./agentFinalization.js', () => ({
+  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
+  retireDeadAgent: vi.fn().mockResolvedValue({ success: false }),
+  stampLiExecutionVerdict: vi.fn(async (taskUpdate) => taskUpdate),
+}));
 // Only the two I/O functions are stubbed — HOST_SHUTDOWN_REASON stays real so
 // the breadcrumb value the tests assert can't drift from the one production writes.
 vi.mock('../lib/hostShutdown.js', async (importOriginal) => ({
@@ -123,6 +131,7 @@ vi.mock('./creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettle
 vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
 import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, terminateAgent, killAgent } from './agentManagement.js';
+import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from './cosAgentLifecycle.js';
 import { updateRun, getProject } from './creativeDirector/local.js';
@@ -132,7 +141,6 @@ import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask, force
 import { pauseAgentViaRunner, terminateAgentViaRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../lib/hostShutdown.js';
-import { completeAgentRun } from './agentRunTracking.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { activeAgents, runnerAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
@@ -245,9 +253,9 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
 
     await cleanupOrphanedAgents();
 
-    expect(markAgentComplete).toHaveBeenCalledWith('agent-stale', expect.objectContaining({
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-stale' }),
       success: false,
-      orphaned: true,
     }));
   });
 
@@ -255,15 +263,19 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
   // cleanup, so this sweep is the path that retires the run — and a
   // worktree-less run executes in a REAL checkout (the PortOS repo or a managed
   // app's own), where a skipped sentinel is untracked dirt in the user's repo.
-  it("removes the reaped run's completion sentinel from its workspace", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), 'orphan-sentinel-'));
-    await writeFile(join(workspace, '.agent-done-agent-stale'), '## Summary\nDied mid-run');
+  //
+  // Sentinel removal itself moved to the shared `retireDeadAgent` (#8440) and is
+  // exercised for real (actual fs writes) in `agentCompletionCleanup.test.js` and
+  // against the mocked leaf in `agentFinalization.retireDeadAgent.test.js`. This
+  // suite's job is only to confirm the sweep hands `retireDeadAgent` the agent
+  // whose metadata carries the workspace the sentinel lives in.
+  it("hands the reaped agent's workspace to retireDeadAgent so its completion sentinel is removed", async () => {
     getAgents.mockResolvedValueOnce([{
       id: 'agent-stale',
       status: 'running',
       pid: 2147483646,
       taskId: 'task-1',
-      metadata: { useRunner: true, executionMode: 'runner', workspacePath: workspace },
+      metadata: { useRunner: true, executionMode: 'runner', workspacePath: '/example/workspace' },
     }]);
     getActiveAgentsFromRunner.mockResolvedValueOnce([{
       id: 'agent-stale', pid: 2147483646, kind: 'cli', processActive: false, liveness: 'pid',
@@ -272,9 +284,9 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
 
     await cleanupOrphanedAgents();
 
-    await expect(readFile(join(workspace, '.agent-done-agent-stale')))
-      .rejects.toMatchObject({ code: 'ENOENT' });
-    await rm(workspace, { recursive: true, force: true });
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-stale', metadata: expect.objectContaining({ workspacePath: '/example/workspace' }) }),
+    }));
   });
 
   it('does not reap a live runner-owned TUI advertised via onExit liveness', async () => {
@@ -318,9 +330,9 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
 
     await cleanupOrphanedAgents();
 
-    expect(markAgentComplete).toHaveBeenCalledWith('agent-stale', expect.objectContaining({
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-stale' }),
       success: false,
-      orphaned: true,
     }));
     expect(runnerAgents.has('agent-stale')).toBe(false);
   });
@@ -569,6 +581,79 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
       approvalReason: 'investigation-loop:repeat-fingerprint',
     });
     expect(addTask.mock.calls[0][0].description).toContain('Why this is held for you');
+  });
+
+  // #8440: before this fix, only the post-restart recovery path
+  // (`completeUntrackedAgentFromCosState`) stamped the LI hand-off verdict — a
+  // task orphaned by the boot/health-check sweep (this function) reached a
+  // terminal state with NO verdict, so the originating peer never learned
+  // whether its proposal worked. These three pin every terminal settlement
+  // `handleOrphanedTask` itself makes. `stampLiExecutionVerdict` is mocked to an
+  // identity passthrough in this file (see the `./agentFinalization.js` mock
+  // above) — its own no-op/build behavior is covered for real in
+  // `agentFinalization.stampLiExecutionVerdict.test.js` — so these assert on the
+  // WIRING: is it called, with the task and the right success flag, before the
+  // task is persisted terminal.
+  describe('stamps the LI execution verdict on every terminal settlement (#8440)', () => {
+    const liTask = (overrides) => ({
+      id: 'task-foo',
+      status: 'in_progress',
+      taskType: 'user',
+      description: 'Original work',
+      metadata: { liProposal: { appId: 'app-example', slug: 'example-slug' }, ...overrides },
+    });
+
+    it('stamps success:false when the retry budget is exhausted (blocked, max-retries)', async () => {
+      const exhaustedTask = liTask({ orphanRetryCount: 2, totalSpawnCount: 2 });
+      getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+
+      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(exhaustedTask));
+
+      expect(stampLiExecutionVerdict).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'blocked' }),
+        exhaustedTask,
+        { success: false }
+      );
+      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'blocked' }), 'user');
+    });
+
+    it('stamps success:false when the orphan retry is in cooldown (blocked, orphan-cooldown)', async () => {
+      const cooldownTask = liTask({ orphanRetryCount: 1, lastOrphanedAt: new Date().toISOString() });
+
+      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(cooldownTask));
+
+      expect(stampLiExecutionVerdict).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'blocked' }),
+        cooldownTask,
+        { success: false }
+      );
+    });
+
+    it('stamps success:true when the commit probe finds the dead run actually finished (completed)', async () => {
+      const task = liTask({});
+      committedDuringRun.mockResolvedValueOnce(true);
+
+      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task), {
+        agentStartedAt: new Date().toISOString(),
+      });
+
+      expect(stampLiExecutionVerdict).toHaveBeenCalledWith(
+        { status: 'completed' },
+        task,
+        { success: true }
+      );
+      expect(updateTask).toHaveBeenCalledWith('task-foo', expect.objectContaining({ status: 'completed' }), 'user');
+    });
+
+    it('still calls the stamp (a no-op for it) for a task with no liProposal', async () => {
+      const task = { id: 'task-foo', status: 'in_progress', taskType: 'user',
+        description: 'Original work', metadata: { orphanRetryCount: 2, totalSpawnCount: 2 } };
+      getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+
+      await handleOrphanedTask('task-foo', 'agent-orphaned', vi.fn().mockResolvedValue(task));
+
+      expect(stampLiExecutionVerdict).toHaveBeenCalledWith(expect.anything(), task, { success: false });
+    });
   });
 });
 
@@ -1721,33 +1806,27 @@ describe('orphan retries resume what the dead run left behind', () => {
     expect(resolveTaskResumePatch).not.toHaveBeenCalled();
   });
 
-  it('closes the orphaned run before completing the agent record', async () => {
+  // The run-record-before-agent-record ordering, and the runId-gated skip, are now
+  // `retireDeadAgent`'s own contract — pinned for real (mocked leaves, real function)
+  // in `agentFinalization.retireDeadAgent.test.js`. This suite only confirms the sweep
+  // hands it the per-caller facts (the interrupted/orphaned exit code, the elapsed
+  // duration, the error message and category) it needs to close that run correctly.
+  it('hands retireDeadAgent the orphaned exit code, duration and category for the dead run', async () => {
     getAgents.mockResolvedValue([{
       ...deadAgent,
       startedAt: new Date(Date.now() - 1000).toISOString(),
       metadata: { ...deadMetadata, runId: 'run-orphan' },
       output: [{ line: 'last buffered line' }],
     }]);
-    const order = [];
-    completeAgentRun.mockImplementation(() => { order.push('run'); });
-    markAgentComplete.mockImplementation(() => { order.push('agent'); });
 
     await cleanupOrphanedAgents();
 
-    expect(completeAgentRun).toHaveBeenCalledWith(
-      'run-orphan',
-      'last buffered line',
-      1,
-      expect.any(Number),
-      { message: 'Agent process terminated unexpectedly', category: 'orphaned' },
-    );
-    expect(order.slice(0, 2)).toEqual(['run', 'agent']);
-  });
-
-  it('skips run completion for legacy agents without a runId', async () => {
-    await cleanupOrphanedAgents();
-
-    expect(completeAgentRun).not.toHaveBeenCalled();
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      exitCode: 1,
+      duration: expect.any(Number),
+      errorMessage: 'Agent process terminated unexpectedly',
+      category: 'orphaned',
+    }));
   });
 
   // A caller that doesn't know which agent died (resetOrphanedTasks on an archived
@@ -2098,18 +2177,15 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
 
     await cleanupOrphanedAgents();
 
-    expect(markAgentComplete).toHaveBeenCalledWith('agent-dead', expect.objectContaining({
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-dead' }),
       success: false,
-      interruptedByRestart: true,
-      error: expect.stringContaining('restart'),
+      exitCode: 143,
+      duration: 0,
+      errorMessage: expect.stringContaining('restart'),
+      category: 'interrupted',
+      agentResultExtra: { interruptedByRestart: true },
     }));
-    expect(completeAgentRun).toHaveBeenCalledWith(
-      'run-interrupted',
-      '',
-      143,
-      0,
-      { message: expect.stringContaining('restart'), category: 'interrupted' },
-    );
     expect(clearHostShutdownMarker).toHaveBeenCalled();
   });
 
@@ -2119,7 +2195,9 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
     await cleanupOrphanedAgents();
 
     expect(clearHostShutdownMarker).not.toHaveBeenCalled();
-    expect(markAgentComplete).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ interruptedByRestart: false }));
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agentResultExtra: { interruptedByRestart: false },
+    }));
   });
 });
 
