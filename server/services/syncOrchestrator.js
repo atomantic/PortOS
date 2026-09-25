@@ -297,9 +297,12 @@ async function syncMemoryFromPeer(peer, cursor) {
   return { memorySeq, totalApplied };
 }
 
-// The seven INDEPENDENT BIGSERIAL cursors the catalog sync envelope tracks.
-// Each table advances its own sequence, so the receiver carries seven cursors
-// (not one) — see catalogSync.js for the protocol rationale.
+// The seven INDEPENDENT feed-position cursors the catalog sync envelope tracks.
+// Each table is its own commit-ordered feed stream (#8315), so the receiver
+// carries seven cursors (not one) — see catalogSync.js for the protocol
+// rationale. A pre-#8315 cursor (a write-time sync_sequence) is below every
+// feed position, so the first pull after a peer upgrades replays each stream
+// once; a cursor above a downgraded peer's maximum rewinds via the reset check.
 const CATALOG_CURSOR_KINDS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
 // Build the `?since[scraps]=A&since[ingredients]=B&...` query string the
@@ -427,7 +430,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
 }
 
 /**
- * Safely parse a value to BigInt for BIGSERIAL comparison.
+ * Safely parse a value to BigInt for feed-position comparison.
  * Returns 0n for invalid/empty/negative inputs.
  */
 function safeBigInt(value) {
@@ -468,7 +471,7 @@ function detectCursorReset(cursor, peer) {
     }
   }
 
-  // Memory: BigInt comparison (BIGSERIAL can exceed Number.MAX_SAFE_INTEGER)
+  // Memory: BigInt comparison (BIGINT positions can exceed Number.MAX_SAFE_INTEGER)
   // Only check when peer reports a numeric memorySeq (null means non-Postgres peer)
   const remoteMemRaw = remote.memorySeq;
   const hasNumericRemoteMem = remoteMemRaw != null && (

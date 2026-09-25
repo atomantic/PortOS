@@ -204,11 +204,11 @@ describe('listIngredients card thumbnail', () => {
 });
 
 describe('getMaxSequences includes the media cursor', () => {
-  it('selects MAX(sync_sequence) from catalog_ingredient_media AS media', async () => {
+  it('reads the catalog_ingredient_media feed stream AS media', async () => {
     const db = await import('../lib/db.js');
     db.query.mockResolvedValueOnce({ rows: [{ media: '0' }] });
     await catalogDB.getMaxSequences();
     const sql = db.query.mock.calls.at(-1)[0].replace(/\s+/g, ' ');
-    expect(sql).toMatch(/catalog_ingredient_media\), 0\)::text AS media/i);
+    expect(sql).toMatch(/stream = 'catalog_ingredient_media'\), 0\)::text AS media/i);
   });
 });

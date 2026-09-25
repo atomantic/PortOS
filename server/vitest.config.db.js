@@ -49,6 +49,7 @@ export const DB_TEST_INCLUDE = [
   'services/modelPinRecords.db.test.js',
   'scripts/run-db-migrations.test.js',
   'lib/db/schema/audit.db.test.js',
+  'lib/db/schema/syncFeed.db.test.js',
 ];
 
 /**

@@ -29,7 +29,7 @@ const DOMAIN_ARRAYS = [
   'catalogDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
   'libraryDdl', 'pipelineDdl', 'writersRoomDdl', 'loraDdl', 'privacyDdl', 'stackerNewsDdl', 'xDdl',
   'beeperDdl', 'mindToolRecipesDdl',
-  'auditDdl',
+  'auditDdl', 'syncFeedDdl',
 ];
 
 describe('db/schema barrel + composer (#2832)', () => {
@@ -73,6 +73,8 @@ describe('db/schema barrel + composer (#2832)', () => {
       ...schema.decksDdl,
       ...schema.auditDdl,
       ...buildAuditTriggers(),
+      ...schema.syncFeedDdl,
+      ...schema.buildSyncFeedTriggers(),
     ];
     expect(buildCatalogDdl()).toEqual(expected);
   });

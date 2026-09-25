@@ -25,6 +25,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
+import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './db/schema/syncFeed.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -355,6 +356,25 @@ describe('DDL parity (init-db.sql ↔ db/schema ensureSchema)', () => {
     expect(sqlAuditTables.size, 'no _audit triggers found in init-db.sql — DDL broke').toBeGreaterThan(8);
     expect([...sqlAuditTables].sort()).toEqual([...jsAuditTables].sort());
     for (const table of jsAuditTables) expect(shared, `audited table ${table} is not declared in both sources`).toContain(table);
+  });
+
+  // Commit-ordered sync feed (#8315). The constraint triggers carry
+  // DEFERRABLE/WHEN clauses the generic trigger extractor above does not
+  // parse, and syncFeed.js generates its statements from `syncFeedTables`, so
+  // compare the composed JS statements against init-db.sql directly. A feed
+  // trigger missing from init-db.sql would leave a fresh install's peers
+  // pulling an empty feed for that stream.
+  it('sync feed DDL and deferred capture triggers match in both files', () => {
+    const flat = (s) => s.replace(/\s+/g, ' ').trim();
+    const sql = flat(INIT_SQL.replace(/--[^\n]*\n/g, '\n'));
+    const jsStatements = [...syncFeedDdl, ...buildSyncFeedTriggers()];
+    for (const stmt of jsStatements) {
+      expect(sql, `init-db.sql is missing: ${flat(stmt).slice(0, 120)}`).toContain(flat(stmt));
+    }
+    const sqlConstraintTriggers = [...INIT_SQL.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)/gi)].map((m) => m[1]).sort();
+    const jsConstraintTriggers = jsStatements.flatMap((s) => [...s.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)/gi)].map((m) => m[1])).sort();
+    expect(sqlConstraintTriggers).toEqual(jsConstraintTriggers);
+    expect(jsConstraintTriggers).toHaveLength(syncFeedTables.length * 2);
   });
 
   it('catalog_ingredients type is app-layer-gated (no hardcoded CHECK in either file)', () => {

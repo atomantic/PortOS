@@ -13,10 +13,12 @@
  *   GET /api/catalog/sync?since[scraps]=A&since[ingredients]=B&...&since[media]=G&limit=100
  *   → { scraps[], ingredients[], sources[], refs[], relations[], tags[], media[], maxSequences, hasMore }
  *
- * The BIGSERIAL `sync_sequence` columns are INDEPENDENT — a row at
- * sources.sync_sequence=50 isn't comparable to ingredients.sync_sequence=50.
- * The receiver therefore tracks one cursor per kind and `since` is `{ scraps,
- * ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
+ * Each kind is its own feed stream with its own commit-ordered positions
+ * (`sync_feed`, #8315 — drawn at COMMIT, so a late-committing transaction can
+ * never land below a cursor a peer already advanced past). Positions of
+ * different kinds are INDEPENDENT — sources position P isn't comparable to
+ * ingredients position P. The receiver therefore tracks one cursor per kind
+ * and `since` is `{ scraps, ingredients, sources, refs, relations }`. A scalar `?since=N` is still accepted for
  * back-compat / one-shot pulls and is applied uniformly to all four kinds.
  * `hasMore` is true when ANY of the four tables had more than `limit` rows
  * past its respective cursor — drain by re-pulling with the maxSequences from
@@ -93,8 +95,8 @@ export async function getChangesSince(since = '0', limit = 100) {
   // True per-table maxima, INDEPENDENT of the inbound cursor. `maxSequences`
   // (below) falls back to the inbound cursor on a quiet kind, so it can't be
   // used to detect a peer rebuild/restore — it would just echo the caller's
-  // cursor. `tableMaxSequences` reports the real MAX(sync_sequence) so the
-  // receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
+  // cursor. `tableMaxSequences` reports each stream's real max feed position so
+  // the receiver can spot `savedCursor > tableMax` and rewind. One cheap MAX query.
   const tableMaxSequences = await getMaxSequences();
 
   // User-defined type definitions ride EVERY envelope (not sequence-tracked —
@@ -425,6 +427,6 @@ export function countAppliedFromStats(stats = {}) {
 }
 
 // Per-kind cursor view for the federation orchestrator. The previous scalar
-// `getMaxSequence` collapsed the four BIGSERIALs into one max — that lied
-// about the protocol (one cursor can't represent four independent sequences).
+// `getMaxSequence` collapsed the independent per-kind cursors into one max —
+// that lied about the protocol (one cursor can't represent four independent sequences).
 export { getMaxSequences };
