@@ -12,12 +12,13 @@
  * destroyed (issue #6618).
  *
  * The loop lives here now, so there is nothing left to mirror. Each engine
- * supplies an `adapter` for the only three things that genuinely differ:
+ * supplies an `adapter` for engine-specific capacity and dispatch behavior:
  *
- *   - `capacityExhausted()` / `canSpawn(task)` — the generator fills a
- *     `tasksToSpawn` array against `availableSlots`; the dequeue engine runs the
- *     `cosDequeue.js` capacity tracker and admits via `canSpawnCommitted`
- *     (Priority 0 is a COMMITTED tier — see #4834).
+ *   - `capacityExhausted()` / `projectCapacityExhausted(appId)` /
+ *     `canSpawn(task)` — the generator fills a `tasksToSpawn` array against
+ *     `availableSlots`; the dequeue engine runs the `cosDequeue.js` capacity
+ *     tracker and admits via `canSpawnCommitted`. The per-project precheck keeps
+ *     requests queued before preparation when their app is already full.
  *   - `emitSpawn(task)` — push-to-array + `trackSpawn` vs
  *     `cosEvents.emit('task:ready', …)` + `capacity.trackSpawn`.
  *   - `addTaskOptions` — the `{ ignoreTaskId }` only the dequeue engine forwards.
@@ -43,17 +44,24 @@ import { cardIdForRequest, finishPreflightCard, finishPreflightDispatch, reportP
  * @param {{ state: object }} ctx        Shared CoS state for this cycle.
  * @param {{
  *   capacityExhausted: () => boolean,
+ *   projectCapacityExhausted?: (appId: string|null) => boolean,
  *   canSpawn: (task: object) => boolean,
  *   emitSpawn: (task: object) => void,
  *   addTaskOptions?: object,
- * }} adapter                            The three per-engine differences.
+ * }} adapter                            Engine-specific capacity and dispatch behavior.
  * @returns {Promise<{ schedule: object }>} The loaded schedule, so a caller that
  *   needs it downstream (dequeueNextTask's Priority 2 disabled-analysis-type
  *   gate) reuses this load instead of issuing a second one.
  */
 export async function drainOnDemandRequests(ctx, adapter) {
   const { state } = ctx;
-  const { capacityExhausted, canSpawn, emitSpawn, addTaskOptions = {} } = adapter;
+  const {
+    capacityExhausted,
+    projectCapacityExhausted = () => false,
+    canSpawn,
+    emitSpawn,
+    addTaskOptions = {},
+  } = adapter;
 
   // Deferred so the static import graph stays acyclic: cosTaskGenerator.js
   // imports THIS module, and these six helpers are declared there. Deferring to
@@ -169,6 +177,19 @@ export async function drainOnDemandRequests(ctx, adapter) {
           `App '${request.appId}' is no longer active, so this run has nothing to target.`);
         continue;
       }
+    }
+
+    // A request that cannot fit under its app's concurrency cap must stay in
+    // the durable on-demand queue. Clearing it before preparation used to be
+    // safe only when the final `canSpawn` could not deny; per-project capacity
+    // can deny while global slots remain, which discarded the prepared task and
+    // closed the visible card without ever creating an agent task.
+    if (projectCapacityExhausted(targetApp?.id ?? request.appId ?? null)) {
+      emitLog('debug', `On-demand request deferred — per-project agent limit reached`, {
+        requestId: request.id,
+        taskType: request.taskType,
+      });
+      continue;
     }
 
     await taskScheduleMod.clearOnDemandRequest(request.id);
