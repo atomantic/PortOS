@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // Regression coverage for #2519 — failed CoS config calls must NOT flash a
-// success toast, must keep the user in edit mode, and must revert optimistic
-// state.
+// success toast and must leave the user's value visible with a retry cue.
 const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   getCosBudgetUsage: vi.fn(),
@@ -42,7 +41,6 @@ const config = {
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,
   maxConcurrentAgentsPerProject: 2,
-  maxProcessMemoryMb: 2048,
   maxTotalProcesses: 50,
   alwaysOn: false,
   autoStart: false,
@@ -81,71 +79,83 @@ beforeEach(() => {
   });
 });
 
-describe('ConfigTab handleSave', () => {
-  it('keeps the editor open and does not toast success when the save fails', async () => {
-    api.updateCosConfig.mockRejectedValue(new Error('network down'));
-    const onUpdate = vi.fn();
-    renderConfig({ onUpdate });
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('network down'));
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(onUpdate).not.toHaveBeenCalled();
-    // Still in edit mode — the Save button is present (editor did not close).
-    expect(screen.getByRole('button', { name: /Save/i })).toBeInTheDocument();
-  });
-
-  it('closes the editor and toasts success when the save resolves', async () => {
+describe('ConfigTab autosave', () => {
+  it('makes controls available immediately and saves checkbox changes as partial updates', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     const onUpdate = vi.fn();
     renderConfig({ onUpdate });
+    await screen.findByText('Waiting for the next wake');
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+    expect(screen.queryByRole('button', { name: /Edit settings/i })).not.toBeInTheDocument();
+    const scheduledJobs = screen.getByRole('checkbox', { name: /Scheduled agent jobs/i });
+    expect(scheduledJobs).toBeChecked();
+    fireEvent.click(scheduledJobs);
 
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Configuration updated'));
-    expect(onUpdate).toHaveBeenCalled();
-    // The PUT must pass { silent: true } so the custom catch is the only error toast.
-    expect(api.updateCosConfig).toHaveBeenCalledWith(expect.any(Object), { silent: true });
-    // Editor closed — the Edit button is back.
-    expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { autonomousJobsEnabled: false },
+      { silent: true },
+    ));
+    await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
+    expect(scheduledJobs).not.toBeChecked();
+    expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('saves the newly exposed scheduler and health controls together', async () => {
+  it('commits numeric fields on blur and discards an incomplete value', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit settings/i }));
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Process count alert' }), { target: { value: '64' } });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'App review cooldown' }), { target: { value: '45' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: /Scheduled agent jobs/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Save settings/i }));
+    const processCount = screen.getByRole('spinbutton', { name: 'Process count alert' });
+    fireEvent.change(processCount, { target: { value: '' } });
+    fireEvent.blur(processCount);
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+    expect(processCount).toHaveValue(50);
+
+    fireEvent.change(processCount, { target: { value: '64' } });
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+    fireEvent.blur(processCount);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        maxTotalProcesses: 64,
-        appReviewCooldownMs: 2_700_000,
-        autonomousJobsEnabled: false,
-      }),
+      { maxTotalProcesses: 64 },
       { silent: true },
     ));
   });
 
-  it('preserves a valid sub-minute cooldown when saving unrelated settings', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
-    renderConfig({ config: { ...config, appReviewCooldownMs: 30_000 } });
+  it('keeps a failed auto-save visible and reports the failure without a success toast', async () => {
+    api.updateCosConfig.mockRejectedValue(new Error('network down'));
+    const onUpdate = vi.fn();
+    renderConfig({ onUpdate });
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit settings/i }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Dynamic avatar/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Save settings/i }));
+    const scheduledJobs = screen.getByRole('checkbox', { name: /Scheduled agent jobs/i });
+    fireEvent.click(scheduledJobs);
 
-    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ appReviewCooldownMs: 30_000, dynamicAvatar: false }),
-      { silent: true },
-    ));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('network down'));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(scheduledJobs).not.toBeChecked();
+    expect(screen.getByRole('alert')).toHaveTextContent('Change those settings to retry');
+  });
+
+  it('serializes rapid changes so an older request cannot finish after the newer value', async () => {
+    let resolveFirst;
+    api.updateCosConfig
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue({ success: true });
+    renderConfig();
+    await screen.findByText('Waiting for the next wake');
+
+    const scheduledJobs = screen.getByRole('checkbox', { name: /Scheduled agent jobs/i });
+    fireEvent.click(scheduledJobs);
+    fireEvent.click(scheduledJobs);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(1));
+    expect(api.updateCosConfig).toHaveBeenNthCalledWith(1, { autonomousJobsEnabled: false }, { silent: true });
+    await act(async () => {
+      resolveFirst({ success: true });
+      await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledTimes(2));
+    });
+    expect(api.updateCosConfig).toHaveBeenNthCalledWith(2, { autonomousJobsEnabled: true }, { silent: true });
+    await waitFor(() => expect(screen.getByTestId('config-save-status')).toHaveTextContent('All changes saved'));
   });
 });
 
@@ -173,13 +183,12 @@ describe('Force Evaluate button', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('stays available while the settings editor is open', async () => {
+  it('stays available alongside the editable settings', async () => {
     const onEvaluate = vi.fn();
     renderConfig({ onEvaluate });
     await screen.findByText('Waiting for the next wake');
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit settings/i }));
-
+    expect(screen.getByRole('checkbox', { name: /Scheduled agent jobs/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Force Evaluate/i }));
     expect(onEvaluate).toHaveBeenCalledTimes(1);
   });
@@ -205,64 +214,22 @@ describe('persistent mind profile', () => {
 });
 
 describe('Default Avatar Style dropdown', () => {
-  it('shows the saved avatar style as text when not editing', async () => {
+  it('is immediately editable and saves the selected avatar style', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig({ config: { ...config, avatarStyle: 'svg' } });
     await screen.findByText('Waiting for the next wake');
-
-    expect(screen.queryByRole('combobox', { name: 'Default avatar' })).not.toBeInTheDocument();
-    expect(screen.getByText('Digital (SVG)')).toBeInTheDocument();
-  });
-
-  it('stages dropdown selection locally without triggering immediate save call', async () => {
-    renderConfig({ config: { ...config, avatarStyle: 'svg' } });
-    await screen.findByText('Waiting for the next wake');
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
 
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     expect(select).toBeEnabled();
+    expect(select).toHaveValue('svg');
 
     fireEvent.change(select, { target: { value: 'cyber' } });
 
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { avatarStyle: 'cyber' },
+      { silent: true },
+    ));
     expect(select).toHaveValue('cyber');
-    expect(api.updateCosConfig).not.toHaveBeenCalled();
-  });
-
-  it('includes staged avatarStyle in updateCosConfig payload on Save click', async () => {
-    api.updateCosConfig.mockResolvedValue({ success: true });
-    const onUpdate = vi.fn();
-    renderConfig({ config: { ...config, avatarStyle: 'svg' }, onUpdate });
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-
-    const select = screen.getByRole('combobox', { name: 'Default avatar' });
-    fireEvent.change(select, { target: { value: 'cyber' } });
-
-    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Configuration updated'));
-    expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ avatarStyle: 'cyber' }),
-      { silent: true }
-    );
-    expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
-  });
-
-  it('reverts staged avatarStyle dropdown selection when Cancel is clicked', async () => {
-    renderConfig({ config: { ...config, avatarStyle: 'svg' } });
-    await screen.findByText('Waiting for the next wake');
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-
-    const select = screen.getByRole('combobox', { name: 'Default avatar' });
-    fireEvent.change(select, { target: { value: 'cyber' } });
-    expect(select).toHaveValue('cyber');
-
-    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
-
-    expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Default avatar' })).not.toBeInTheDocument();
-    expect(screen.getByText('Digital (SVG)')).toBeInTheDocument();
   });
 });
 
@@ -289,19 +256,16 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
     renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
     await screen.findByText('Waiting for the next wake');
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
-
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     const labels = [...select.options].map((option) => option.text);
     expect(labels).toContain('Digital (SVG)');
     expect(labels.some((label) => label.includes('Example Dancer') && label.includes('rigged 3D'))).toBe(true);
   });
 
-  it('shows the coverage note when a rigged record is staged', async () => {
+  it('shows the coverage note and saves a selected rigged record', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig({ config: { ...config, avatarStyle: 'svg' }, riggedAvatars });
     await screen.findByText('Waiting for the next wake');
-
-    fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
 
     const select = screen.getByRole('combobox', { name: 'Default avatar' });
     fireEvent.change(select, { target: { value: 'rigged-image3d-1' } });
@@ -309,10 +273,8 @@ describe('Rigged avatar records in the Default Avatar dropdown', () => {
     expect(await screen.findByText(/Covered: ideating/)).toBeInTheDocument();
     expect(screen.getByText(/Other states play Dance/)).toBeInTheDocument();
 
-    api.updateCosConfig.mockResolvedValue({ success: true });
-    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ avatarStyle: 'rigged-image3d-1' }),
+      { avatarStyle: 'rigged-image3d-1' },
       { silent: true },
     ));
   });
@@ -345,19 +307,60 @@ describe('persistent mind status', () => {
   });
 });
 
+describe('domain guardrails and embedding provider autosave', () => {
+  it('saves an autonomy mode change immediately', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    renderConfig();
+    await screen.findByText('Waiting for the next wake');
+
+    fireEvent.click(within(screen.getByRole('group', { name: 'CoS auto-run mode' })).getByRole('button', { name: 'Off' }));
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { domainAutonomy: { cos: 'off' } },
+      { silent: true },
+    ));
+  });
+
+  it('saves an embedding provider selection immediately', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    renderConfig();
+    await screen.findByText('Waiting for the next wake');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Embedding provider' }), { target: { value: 'codex' } });
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { embeddingProviderId: 'codex', embeddingModel: '' },
+      { silent: true },
+    ));
+  });
+
+  it('saves a budget cap when its number field loses focus', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    renderConfig();
+    await screen.findByText('Waiting for the next wake');
+
+    const actionsPerDay = screen.getAllByRole('spinbutton', { name: 'Actions/day' })[0];
+    fireEvent.change(actionsPerDay, { target: { value: '5' } });
+    fireEvent.blur(actionsPerDay);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { domainBudgets: { brain: { maxActionsPerDay: 5 } } },
+      { silent: true },
+    ));
+  });
+});
+
 describe('boot startup compatibility', () => {
-  it('shows alwaysOn as the boot setting and clears the legacy alias when saving it off', async () => {
+  it('shows alwaysOn as the boot setting and clears the legacy alias when autosaving it off', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig({ config: { ...config, alwaysOn: true, autoStart: true } });
 
-    fireEvent.click(screen.getByRole('button', { name: /Edit settings/i }));
     const toggle = screen.getByRole('checkbox', { name: /Start on server boot/i });
     expect(toggle).toBeChecked();
     fireEvent.click(toggle);
-    fireEvent.click(screen.getByRole('button', { name: /Save settings/i }));
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ alwaysOn: false, autoStart: false }),
+      { alwaysOn: false, autoStart: false },
       { silent: true },
     ));
   });
