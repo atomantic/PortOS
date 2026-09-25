@@ -9,6 +9,7 @@ import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 import { getBuildIdentity } from './lib/buildIdentity.js';
+import { httpCompression } from './lib/httpCompression.js';
 import { PORTS } from './lib/ports.js';
 import { isSmokeBoot } from './lib/runtimeEnv.js';
 
@@ -254,6 +255,7 @@ app.use((req, res, next) => {
   next();
 });
 // Make io available to routes
+app.use(httpCompression);
 app.set('io', io);
 
 // Auth gate runs BEFORE the body parsers so unauthenticated requests to

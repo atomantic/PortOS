@@ -30,6 +30,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
+| `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
 | `google-auth-library` | — | REMOVED (direct) | Google OAuth | Consolidated under `@googleapis/calendar`'s transitive `googleapis-common` dependency |
 | `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |

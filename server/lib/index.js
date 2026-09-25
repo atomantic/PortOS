@@ -712,6 +712,7 @@ export * from './videoTimelineFades.js';
 // `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
 export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
+export * from './httpCompression.js';
 
 export * from './auditQuality.js';
 
