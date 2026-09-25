@@ -41,7 +41,7 @@ function MediaCard({
   onToggleStar,
   onAnnotate,
 }) {
-  const { kind, prompt, modelId, previewUrl, downloadUrl } = item;
+  const { kind, prompt, modelId, previewUrl, thumbnailUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
   const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -62,7 +62,7 @@ function MediaCard({
           className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
         >
           {previewUrl ? (
-            <MediaImage src={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
+            <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined} assetSrc={previewUrl} alt={prompt} className="w-full h-full object-cover" loading="lazy" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-gray-600">
               {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}

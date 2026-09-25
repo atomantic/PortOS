@@ -21,6 +21,7 @@ import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
 import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
 import { escapeRegExp } from '../lib/textUtils.js';
+import { ensureImageThumbnail } from '../lib/imageThumbnail.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
 // explicitly because the federated peer-sync receiver
@@ -37,6 +38,7 @@ const ASSET_STATIC_OPTS = {
     res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data: blob:; media-src 'self'; style-src 'unsafe-inline'");
   },
 };
+const IMAGE_THUMBNAIL_STATIC_OPTS = { ...ASSET_STATIC_OPTS, maxAge: 24 * 60 * 60 * 1000 };
 
 // Vite names every chunk, entry, stylesheet and imported asset it emits under
 // `dist/assets/` by content hash (`index-B5J1S4I5.js`), so the bytes behind one
@@ -70,6 +72,7 @@ const writersRoomAssetsOnly = (req, res, next) => {
 // mounted at all — silently — so `assetMounts.test.js` pins the two together.
 const ASSET_DIRS = {
   '/data/images': () => PATHS.images,
+  '/data/image-thumbnails': () => PATHS.imageThumbnails,
   // Reference images (multi-ref upload inputs + generated character reference
   // sheets) — served read-only so the UI can render thumbnails by URL.
   '/data/image-refs': () => PATHS.imageRefs,
@@ -106,7 +109,21 @@ const ASSET_DIRS = {
   '/data/writers-room/works': wrWorksDir,
 };
 
-const ASSET_GATES = { '/data/writers-room/works': writersRoomAssetsOnly };
+const imageThumbnailGate = async (req, res, next) => {
+  // Only flat WebP names are valid. The helper also checks the PNG source
+  // before an existing derivative can be served.
+  if (!/^\/[A-Za-z0-9][A-Za-z0-9._-]*\.webp$/i.test(req.path)) return res.status(404).end();
+  const filename = req.path.slice(1);
+  const ready = await ensureImageThumbnail(filename);
+  if (!ready) return res.status(404).end();
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  next();
+};
+
+const ASSET_GATES = {
+  '/data/image-thumbnails': imageThumbnailGate,
+  '/data/writers-room/works': writersRoomAssetsOnly,
+};
 
 /** The routes `ASSET_DIRS` knows a directory for — exported so a key that never
  *  reaches `ASSET_ROUTE_PREFIXES` (and is therefore never mounted) fails a test
@@ -159,7 +176,8 @@ function toRouteMatcher(pattern) {
  */
 export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
   ASSET_MOUNTS.forEach(({ route, dir, gate }) => {
-    app.use(route, ...(gate ? [gate] : []), express.static(dir(), ASSET_STATIC_OPTS));
+    const options = route === '/data/image-thumbnails' ? IMAGE_THUMBNAIL_STATIC_OPTS : ASSET_STATIC_OPTS;
+    app.use(route, ...(gate ? [gate] : []), express.static(dir(), options));
   });
   ownedPrefixes.forEach(({ prefix, spaPaths }) => {
     const spaMatchers = spaPaths.map(toRouteMatcher);
