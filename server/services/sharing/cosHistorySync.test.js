@@ -34,7 +34,10 @@ vi.mock('../mediaCollections.js', async () => ({
   findCollectionBySeriesId: vi.fn(), mergeMediaCollectionsFromSync: vi.fn(),
 }));
 vi.mock('../mediaAssetIndex/index.js', () => ({ reconcileMediaAssets: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('../../lib/peerHttpClient.js', async () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
+  peerFetch: vi.fn(),
+  readPeerBody: (await importOriginal()).readPeerBody,
+}));
 // cosAgentIndex is dynamic-imported by the receiver to merge the agentId→date index.
 // Spy it so the merge is observable AND can't write the real data/cos index.
 vi.mock('../cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockResolvedValue(0) }));
@@ -48,6 +51,12 @@ import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { addAgentArchivesToIndex } from '../cosAgentIndex.js';
 
+// A chunked body with no Content-Length that never ends; only the streaming
+// cap in readPeerBody can stop it.
+const endlessChunkedRes = () => {
+  const chunk = new Uint8Array(8 * 1024 * 1024);
+  return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
+};
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 
 function byteRes(content) {
@@ -172,6 +181,12 @@ describe('syncCosHistoryFromPeer', () => {
     const r = await syncCosHistoryFromPeer({ ...PEER, fullSync: false });
     expect(r).toEqual({ pulled: 0, skipped: 'not-fullsync' });
     expect(peerFetch).not.toHaveBeenCalled();
+  });
+
+  it('skips a chunked manifest that streams past the byte cap', async () => {
+    vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
+    expect(await syncCosHistoryFromPeer(PEER)).toEqual({ pulled: 0, skipped: 'too-large' });
+    expect(peerFetch).toHaveBeenCalledOnce();
   });
 
   it('gently skips a sender whose manifest schema is ahead', async () => {

@@ -13,6 +13,8 @@
  *
  * Props:
  *   src: string                  — same as <img>; expected to be `/data/...`
+ *   fallbackSrc?: string         — original to try once if a thumbnail fails
+ *   assetSrc?: string            — original URL whose filename peer sync reports
  *   alt: string                  — same as <img>
  *   className?: string           — applies to BOTH the live <img> and the placeholder wrapper
  *   placeholderClassName?: string — extra classes for the placeholder only
@@ -42,17 +44,20 @@ function basenameOf(src) {
 
 export default function MediaImage({
   src,
+  fallbackSrc,
+  assetSrc = src,
   alt = '',
   className = '',
   placeholderClassName = '',
   ...rest
 }) {
   const [errored, setErrored] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
   // Bumping `nonce` forces the <img> to re-fetch (cache-busted) when the
   // socket says our asset arrived — without it the browser would serve the
   // cached 404 forever.
   const [nonce, setNonce] = useState(0);
-  const filename = basenameOf(src);
+  const filename = basenameOf(assetSrc);
   const filenameRef = useRef(filename);
   filenameRef.current = filename;
 
@@ -60,8 +65,9 @@ export default function MediaImage({
   // different filename that we DO have locally.
   useEffect(() => {
     setErrored(false);
+    setUsingFallback(false);
     setNonce(0);
-  }, [src]);
+  }, [src, assetSrc]);
 
   // Listen for the receiver's asset-arrived event. Match on filename only
   // (kind is implicit from the directory in the src URL) so the listener
@@ -72,6 +78,7 @@ export default function MediaImage({
     const handler = (payload) => {
       if (payload?.filename === filenameRef.current) {
         setErrored(false);
+        setUsingFallback(false);
         setNonce((n) => n + 1);
       }
     };
@@ -94,7 +101,8 @@ export default function MediaImage({
   // The cache-buster appears only after the first arrival event; the very
   // first load (before any 404) uses the bare src so HTTP caching still
   // works the way the rest of the UI expects.
-  const cacheBustedSrc = nonce > 0 ? `${src}${src.includes('?') ? '&' : '?'}_t=${nonce}` : src;
+  const displaySrc = usingFallback ? fallbackSrc : src;
+  const cacheBustedSrc = nonce > 0 ? `${displaySrc}${displaySrc.includes('?') ? '&' : '?'}_t=${nonce}` : displaySrc;
   // Spread `rest` FIRST so the explicit `onError` below wins over a caller-
   // provided one — we still forward the event by capturing the caller's
   // handler before composing. Putting {...rest} last would silently override
@@ -113,7 +121,8 @@ export default function MediaImage({
         // listener still gates the swap-back, so a permanent network error
         // doesn't lock the placeholder on forever — user-visible state then
         // accurately reflects "asset not loadable right now."
-        setErrored(true);
+        if (!usingFallback && fallbackSrc && fallbackSrc !== src) setUsingFallback(true);
+        else setErrored(true);
         callerOnError?.(e);
       }}
     />

@@ -548,6 +548,30 @@ describe('fileForgeIssue', () => {
     expect(body).not.toContain('ghp_');
     expect(body).not.toContain(home);
   });
+
+  // #8460 — the machine-identity/PII redactor rides the same choke point, so
+  // an email, IP, tailnet host or phone number a model copied from the user's
+  // records never reaches a (often public) tracker, whichever filer called.
+  it('redacts emails, IPs, tailnet hosts and phone numbers from the title and body', async () => {
+    const leaks = ['alice@example.com', '192.0.2.10', 'host-1.example.ts.net', '+1 555 010 0000'];
+    execGh.mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/widget/issues/1');
+    await fileForgeIssue({
+      cli: 'gh', labels: LABELS,
+      title: `Invite to alice@example.com bounces`,
+      body: `Peer host-1.example.ts.net at 192.0.2.10 fails; call +1 555 010 0000.`,
+    });
+    const argv = execGh.mock.calls[1][0].join('\n');
+    for (const leak of leaks) expect(argv).not.toContain(leak);
+    expect(argv).toContain('Invite to <email> bounces');
+  });
+
+  it('appends a machine-generated trailer after scrubbing, so redaction cannot rewrite it', async () => {
+    execGh.mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/widget/issues/1');
+    const trailer = '\n\n<!-- marker: release-2026-09-25 -->';
+    await fileForgeIssue({ cli: 'gh', labels: LABELS, title: 'T', body: 'Due 2026-09-25.', trailer });
+    const createArgs = execGh.mock.calls[1][0];
+    expect(createArgs[createArgs.indexOf('--body') + 1]).toBe(`Due <phone>.${trailer}`);
+  });
 });
 
 describe('probeForgeReachability', () => {

@@ -6,7 +6,12 @@ import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './au
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
-import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath, isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
+import {
+  GATED_NON_API_PREFIXES,
+  isAlwaysPublicApiPath,
+  isPeerApiRequestAllowed,
+  isPeerBasicBootstrapRequest,
+} from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
@@ -71,7 +76,7 @@ const warnIfPairedPeerUsedBasic = async (headers) => {
   const peer = await pairedPeerFor(instanceId);
   if (!peer) return;
   warnedBasicPeers.add(instanceId);
-  console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — update it, re-pair with the same sync secret, then remove the stored password on that machine`);
+  console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — pair it again, then remove the stored password on that machine`);
 };
 
 // Logged once per peer + method + path per process (bounded): an older or
@@ -183,7 +188,9 @@ export const authGate = async (req, res, next) => {
   const basicPassword = extractBasicPassword(req);
   if (basicPassword && await verifyBasicPassword(basicPassword)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'basic' };
-    await warnIfPairedPeerUsedBasic(req.headers);
+    // Pair-secret setup intentionally uses the saved instance password once to
+    // provision the scoped credential; this is not a fallback federation call.
+    if (!isPeerBasicBootstrapRequest(req.method, path)) await warnIfPairedPeerUsedBasic(req.headers);
     return next();
   }
   // /data/* is hit directly by <img>/<audio>/<video> tags which don't show a

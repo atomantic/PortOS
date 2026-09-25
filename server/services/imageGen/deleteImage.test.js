@@ -84,10 +84,14 @@ function seedImage(filename) {
 describe('deleteImage → media asset index delete hook', () => {
   it('unindexes the deleted image by its gallery filename', async () => {
     seedImage('img-1.png');
+    const thumbnail = join(imagesDir, 'image-thumbnails', 'img-1.webp');
+    mkdirSync(join(imagesDir, 'image-thumbnails'), { recursive: true });
+    writeFileSync(thumbnail, 'derived preview');
     const res = await deleteImage('img-1.png');
 
     expect(res).toEqual({ ok: true });
     expect(existsSync(join(imagesDir, 'img-1.png'))).toBe(false);
+    expect(existsSync(thumbnail)).toBe(false);
     // The ref must be the gallery filename — the key the index wrote the row under.
     expect(unindexImage).toHaveBeenCalledWith('img-1.png');
   });

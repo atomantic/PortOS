@@ -250,6 +250,43 @@ describe('syncOrchestrator', () => {
       applyRemote.mockResolvedValue({ applied: false, count: 0 });
     });
 
+    // An endless chunked body (no Content-Length) must fail the pull at the cap
+    // rather than grow the heap. One shared chunk keeps the test cheap.
+    const endlessBody = () => {
+      const chunk = new Uint8Array(16 * 1024 * 1024);
+      const state = { pulled: 0, cancel: vi.fn() };
+      state.response = new Response(new ReadableStream({
+        pull(controller) { state.pulled++; controller.enqueue(chunk); },
+        cancel: state.cancel,
+      }));
+      return state;
+    };
+
+    it('drops a snapshot that streams past the body cap without buffering it all', async () => {
+      const body = endlessBody();
+      mockFetch.mockImplementation(async () => body.response);
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: false } });
+      expect(result.brain.totalApplied).toBe(0);
+      expect(applyBrainChanges).not.toHaveBeenCalled();
+      expect(body.cancel).toHaveBeenCalledOnce();
+      // 256 MiB default cap / 16 MiB chunks, plus the stream's read-ahead.
+      expect(body.pulled).toBeLessThanOrEqual(18);
+    });
+
+    it('skips an avatar that streams past the asset cap', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      const body = endlessBody();
+      mockFetch.mockImplementation(async (url) => (url.includes('/data/images/')
+        ? body.response
+        : { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) }));
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      expect(body.cancel).toHaveBeenCalledOnce();
+      expect(body.pulled).toBeLessThanOrEqual(8);
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
     it('does not fetch or store a peer-supplied SVG avatar', async () => {
       const { applyRemote } = await import('./dataSync.js');
       applyRemote.mockResolvedValue({ applied: true, count: 1 });

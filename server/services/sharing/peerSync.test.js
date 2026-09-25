@@ -211,8 +211,9 @@ vi.mock('../decks.js', () => ({
   pruneTombstonedDecks: vi.fn().mockResolvedValue({ pruned: 0, ids: [] }),
 }));
 
-vi.mock('../../lib/peerHttpClient.js', async () => ({
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
   peerFetch: vi.fn(),
+  readPeerBody: (await importOriginal()).readPeerBody,
   peerSocketOptions: {},
 }));
 
@@ -317,6 +318,13 @@ import { getCatalogBundleForRef } from '../catalogDB.js';
 import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 import { contentHashForRecord, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
+
+// A chunked body with no Content-Length that never ends; only the streaming
+// cap in readPeerBody can stop it.
+const endlessChunkedRes = () => {
+  const chunk = new Uint8Array(8 * 1024 * 1024);
+  return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
+};
 
 let originalDataPath;
 let originalImagesPath;
@@ -1566,6 +1574,12 @@ describe('peerSync', () => {
         headers: { get: (h) => (h.toLowerCase() === 'content-length' ? String(64 * 1024 * 1024) : null) },
         json: async () => ({ kind: 'universe', record: { id: 'u-pull' }, assetManifest: [], sourceInstanceId: 'peer-a' }),
       });
+      expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
+        .toEqual({ pulled: false, reason: 'payload-too-large' });
+    });
+
+    it('payload-too-large when a chunked body with no Content-Length streams past the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
       expect(await pullRecordFromPeer('peer-a', 'universe', 'u-pull'))
         .toEqual({ pulled: false, reason: 'payload-too-large' });
     });
@@ -3353,10 +3367,77 @@ describe('peerSync', () => {
       );
     });
 
+    it('never pulls assets for an asset-less kind, even if the payload invents image references', async () => {
+      await writeFile(join(PATHS.images, 'protected.png'), 'local image');
+      const result = await applyIncomingPush({
+        kind: 'commissionFeedback',
+        record: { id: 'feedback-1', imageRefs: ['protected.png'] },
+        assetManifest: [{ filename: 'protected.png', kind: 'image', sha256: 'a'.repeat(64) }],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.missingAssets).toEqual([]);
+      expect(await readFile(join(PATHS.images, 'protected.png'), 'utf8')).toBe('local image');
+    });
+
+    it.each([false, true])('scopes a manifest to its record and replaces existing bytes only on an applied merge (%s)', async (applied) => {
+      await writeFile(join(PATHS.images, 'existing.png'), 'local image');
+      await writeFile(join(PATHS.images, 'existing.metadata.json'), '{"prompt":"local prompt"}');
+      vi.mocked(mergeUniversesFromSync).mockResolvedValue({ applied, count: applied ? 1 : 0 });
+      const manifest = ['missing.png', 'existing.png', 'unrelated.png'].map((filename) => ({
+        filename, kind: 'image', sha256: 'a'.repeat(64), sidecarSha256: 'b'.repeat(64),
+      }));
+      const result = await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', imageRefs: ['missing.png', 'existing.png'] },
+        assetManifest: manifest,
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.missingAssets).toEqual(applied ? manifest.slice(0, 2) : manifest.slice(0, 1));
+      expect(await readFile(join(PATHS.images, 'existing.png'), 'utf8')).toBe('local image');
+      if (!applied) {
+        expect(await readFile(join(PATHS.images, 'existing.metadata.json'), 'utf8')).toBe('{"prompt":"local prompt"}');
+      }
+    });
+
+    it('admits only referenced series, child-issue and linked-collection assets', async () => {
+      const manifest = [
+        { kind: 'image', filename: 'series.png' },
+        { kind: 'image', filename: 'issue.png' },
+        { kind: 'video', filename: 'collection-clip.mp4' },
+        { kind: 'image', filename: 'private.png' },
+        { kind: 'image', filename: 'deleted.png' },
+        { kind: 'image', filename: 'unrelated.png' },
+      ];
+      const result = await applyIncomingPush({
+        kind: 'series', record: { id: 'ser-1', imageRefs: ['series.png'] },
+        issues: [
+          { id: 'issue-1', seriesId: 'ser-1', imageRefs: ['issue.png'] },
+          { id: 'issue-2', seriesId: 'ser-1', ephemeral: true, imageRefs: ['private.png'] },
+          { id: 'issue-3', seriesId: 'ser-1', deleted: true, imageRefs: ['deleted.png'] },
+        ],
+        linkedCollection: { id: 'collection-1', items: [{ kind: 'video', ref: 'collection-clip' }] },
+        assetManifest: manifest, sourceInstanceId: 'peer-a',
+      });
+      expect(result.missingAssets).toEqual(manifest.slice(0, 3));
+    });
+
+    it('admits track render history and deck images but drops other asset kinds', async () => {
+      for (const [kind, record, own] of [
+        ['track', { id: 'track-1', audioFilename: 'active.mp3', renders: [{ audioFilename: 'older.mp3' }] },
+          [{ kind: 'music', filename: 'active.mp3' }, { kind: 'music', filename: 'older.mp3' }]],
+        ['deck', { id: 'deck-1', cards: [{ primaryImageRef: 'card.png', imageRefs: ['render.png'] }], samples: [{ imageRef: 'style.png' }] },
+          ['card.png', 'render.png', 'style.png'].map((filename) => ({ kind: 'image', filename }))],
+      ]) {
+        const result = await applyIncomingPush({ kind, record, sourceInstanceId: 'peer-a',
+          assetManifest: [...own, { kind: 'audio', filename: 'unrelated.mp3' }] });
+        expect(result.missingAssets).toEqual(own);
+      }
+    });
+
     it('reports missing assets in the response', async () => {
       const result = await applyIncomingPush({
         kind: 'universe',
-        record: { id: 'u1' },
+        record: { id: 'u1', imageRefs: ['absent.png'] },
         assetManifest: [{ filename: 'absent.png', kind: 'image', sha256: 'a'.repeat(64) }],
         sourceInstanceId: 'peer-a',
       });
@@ -3366,19 +3447,17 @@ describe('peerSync', () => {
     it('never schedules a navigable peer asset from an incoming push', async () => {
       const result = await applyIncomingPush({
         kind: 'universe',
-        record: { id: 'u1' },
+        record: { id: 'u1', imageRefs: ['peer.html', 'peer.svg', 'peer.png'], videoPath: 'clip.ogv' },
         assetManifest: [
           { filename: 'peer.html', kind: 'image', sha256: 'a'.repeat(64) },
           { filename: 'peer.svg', kind: 'image', sha256: 'b'.repeat(64) },
           { filename: 'peer.png', kind: 'image', sha256: 'c'.repeat(64) },
-          { filename: 'memo.webm', kind: 'audio', sha256: 'd'.repeat(64) },
-          { filename: 'clip.ogv', kind: 'video', sha256: 'e'.repeat(64) },
+            { filename: 'clip.ogv', kind: 'video', sha256: 'e'.repeat(64) },
         ],
         sourceInstanceId: 'peer-a',
       });
       expect(result.missingAssets).toEqual([
         { filename: 'peer.png', kind: 'image', sha256: 'c'.repeat(64) },
-        { filename: 'memo.webm', kind: 'audio', sha256: 'd'.repeat(64) },
         { filename: 'clip.ogv', kind: 'video', sha256: 'e'.repeat(64) },
       ]);
       expect(await readFile(join(PATHS.images, 'peer.html')).catch(() => null)).toBeNull();
@@ -5120,6 +5199,12 @@ describe('media-library federation (#1566)', () => {
         json: async () => ({ schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary, manifestHash: 'a'.repeat(64), assets: [] }),
       });
       const res = await syncMediaLibraryFromPeer(mkPeer('fs-huge'));
+      expect(res.skipped).toBe('too-large');
+    });
+
+    it('skips a chunked manifest with no Content-Length that streams past the cap', async () => {
+      vi.mocked(peerFetch).mockResolvedValue(endlessChunkedRes());
+      const res = await syncMediaLibraryFromPeer(mkPeer('fs-chunked'));
       expect(res.skipped).toBe('too-large');
     });
 

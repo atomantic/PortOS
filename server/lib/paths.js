@@ -102,6 +102,7 @@ export const PATHS = {
   voiceProfiles: join(INSTALL_ROOT, 'data/voice-profiles'),
   videos: join(INSTALL_ROOT, 'data/videos'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
+  imageThumbnails: join(INSTALL_ROOT, 'data/image-thumbnails'),
   // Sprite Manager (issue #2895): per-record asset trees
   // (sprites/<id>/{reference,walk,runs,runtime,atlas}/...). Records live in
   // Postgres (sprite_records); only binary artifacts + manifests live here.

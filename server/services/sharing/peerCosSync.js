@@ -17,7 +17,8 @@ import { PATHS, atomicWrite, ensureDir, sha256File, tryReadFile, safeJSONParse }
 import { isPlainObject } from '../../lib/objects.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
@@ -75,6 +76,8 @@ function cosAgentsDir() {
 const COS_HISTORY_MANIFEST_CAP = 150_000;
 // The manifest JSON itself (not the archive bytes — those ride the per-file cap).
 const COS_HISTORY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
+// readPeerBody outcome for a body that streamed past its cap, distinct from invalid JSON.
+const TOO_LARGE = Symbol('too-large');
 // Per-archive-file hard cap. Agent transcripts (output.txt) can be large; 64MB is
 // generous while still bounding a hostile/runaway peer. An oversized file is
 // logged + skipped (it stays "missing" and is retried, never silently dropped).
@@ -253,7 +256,12 @@ export async function syncCosHistoryFromPeer(peer) {
       console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_HISTORY_MANIFEST_MAX_BYTES}) — skipping`);
       return { pulled: 0, skipped: 'too-large' };
     }
-    const body = await res.json().catch(() => null);
+    const body = await readPeerBody(res, 'json', { maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES })
+      .catch((err) => (err?.code === RESPONSE_TOO_LARGE ? TOO_LARGE : null));
+    if (body === TOO_LARGE) {
+      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} streamed past ${COS_HISTORY_MANIFEST_MAX_BYTES} bytes — skipping`);
+      return { pulled: 0, skipped: 'too-large' };
+    }
     const parsed = peerCosHistoryManifestSchema.safeParse(body);
     if (!parsed.success) {
       console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
@@ -472,7 +480,12 @@ export async function syncCosTasksFromPeer(peer) {
       console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_TASKS_MAX_BYTES}) — skipping`);
       return { merged: 0, skipped: 'too-large' };
     }
-    const body = await res.json().catch(() => null);
+    const body = await readPeerBody(res, 'json', { maxBytes: COS_TASKS_MAX_BYTES })
+      .catch((err) => (err?.code === RESPONSE_TOO_LARGE ? TOO_LARGE : null));
+    if (body === TOO_LARGE) {
+      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} streamed past ${COS_TASKS_MAX_BYTES} bytes — skipping`);
+      return { merged: 0, skipped: 'too-large' };
+    }
     const parsed = peerCosTasksSchema.safeParse(body);
     if (!parsed.success) {
       console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} failed validation — skipping`);
