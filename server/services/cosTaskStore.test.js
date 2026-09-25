@@ -164,6 +164,22 @@ describe('cosTaskStore.firstLine', () => {
   });
 });
 
+describe('cosTaskStore.updateTask expectedStatus', () => {
+  it('does not apply a stale terminal update after a task has been claimed', async () => {
+    const task = await addTask({ id: 'sys-rl-cas', description: 'Resolve a PR' }, 'internal');
+    await updateTask(task.id, { status: 'in_progress' }, 'internal');
+    mock.events = [];
+
+    const result = await updateTask(task.id, {
+      status: 'completed', metadata: { reviewLoopRetiredReason: 'pull-request-merged-before-follow-up' },
+    }, 'internal', { expectedStatus: 'pending' });
+
+    expect(result).toMatchObject({ statusChanged: true, task: { status: 'in_progress' } });
+    expect((await getTaskById(task.id)).status).toBe('in_progress');
+    expect(mock.events).toEqual([]);
+  });
+});
+
 describe('cosTaskStore.getUserTasks / getCosTasks', () => {
   it('returns an empty, non-existent result when the file is missing', async () => {
     const result = await getUserTasks();
