@@ -93,6 +93,18 @@ describe('SystemHealthPage remediation links', () => {
     expect(within(banner).getByRole('link', { name: /Disk usage breakdown/ })).toHaveAttribute('href', '/system-resources/storage');
   });
 
+  it('renders an unavailable disk card when the disk probe fails', async () => {
+    api.getSystemHealth.mockResolvedValue({
+      ...HEALTH,
+      system: { ...HEALTH.system, disk: null },
+      warnings: [{ type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false }],
+    });
+    renderPage();
+
+    expect(await screen.findByLabelText('Disk status unavailable')).toHaveTextContent('Unavailable');
+    expect(screen.queryByRole('button', { name: 'Dismiss warning: Disk status unavailable' })).not.toBeInTheDocument();
+  });
+
   it('links memory, process and app alerts to their own remediation page', async () => {
     api.getSystemHealth.mockResolvedValue(withWarnings([
       { type: 'memory', message: 'Memory usage at or above 85%' },
