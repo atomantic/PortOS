@@ -524,7 +524,11 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (!checksumRes?.checksum) return { totalApplied: 0, checksum: null };
 
   const lastChecksum = cachedChecksums?.[category] ?? null;
-  if (lastChecksum && lastChecksum === checksumRes.checksum) {
+  // A saved schema gap is compatibility state, independent of payload changes.
+  // Keep retrying that category even when its payload checksum is unchanged so
+  // a peer upgrade can clear the old warning without requiring another edit.
+  const hasSchemaGap = Boolean(peer?.schemaGaps?.[category]);
+  if (lastChecksum && lastChecksum === checksumRes.checksum && !hasSchemaGap) {
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
 
