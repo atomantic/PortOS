@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import WaveformPanel from './WaveformPanel';
 import * as api from '../../services/api';
+import { renderSketchPreview } from '../../lib/waveSketchSynthWorker.js';
 
 vi.mock('../../services/api', () => ({
   drawTrackWaveform: vi.fn(),
@@ -133,12 +134,53 @@ describe('<WaveformPanel>', () => {
     expect(screen.getByText(/2 voices · 2 strokes/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Revise/ })).toBeNull();
     expect(screen.getByRole('button', { name: /Paint from scratch/ })).toBeTruthy();
+    const playButton = await screen.findByRole('button', { name: /Play drawing/ });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /Play drawing/ }));
+      fireEvent.click(playButton);
       await Promise.resolve();
     });
     await screen.findByRole('button', { name: /Stop/ });
     expect(audio.sources[0].buffer.numberOfChannels).toBe(1);
+  });
+
+  it('renders the preview off the main thread and never plays a superseded sketch\'s audio', async () => {
+    // A Worker double: the test decides when (and whether) each render lands.
+    const workers = [];
+    vi.stubGlobal('Worker', function FakeWorker() {
+      this.messages = [];
+      this.terminated = false;
+      this.postMessage = (msg) => this.messages.push(msg);
+      this.terminate = () => { this.terminated = true; };
+      workers.push(this);
+    });
+    const reply = (worker) => act(async () => {
+      const [{ id, sketch, columns }] = worker.messages;
+      worker.onmessage({ data: { id, ...renderSketchPreview(sketch, columns) } });
+    });
+
+    renderPanel({ track: { id: 'track-1', waveSketch: drawn } });
+    const pending = screen.getByRole('button', { name: /Rendering preview/ });
+    expect(pending.disabled).toBe(true);
+    expect(workers[0].messages[0].sketch.version).toBe(1);
+
+    // Repaint while the v1 render is still in flight: the stale render is killed.
+    fireEvent.click(screen.getByRole('button', { name: /Paint from scratch/ }));
+    await screen.findByTestId('waveform-canvas-summary');
+    expect(workers[0].terminated).toBe(true);
+    expect(workers[1].messages[0].sketch.version).toBe(2);
+
+    // The stale worker answering late changes nothing.
+    await reply(workers[0]);
+    expect(screen.getByRole('button', { name: /Rendering preview/ }).disabled).toBe(true);
+
+    await reply(workers[1]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Play painting/ }));
+      await Promise.resolve();
+    });
+    await screen.findByRole('button', { name: /Stop/ });
+    expect(audio.sources).toHaveLength(1);
+    expect(audio.sources[0].buffer.numberOfChannels).toBe(2);
   });
 
   it('sends the typed length, clamped to the supported range', async () => {
