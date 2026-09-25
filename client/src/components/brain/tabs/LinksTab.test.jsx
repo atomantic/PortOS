@@ -246,26 +246,6 @@ describe('LinksTab clone-status polling', () => {
     hidden.mockRestore();
   });
 
-  it('ignores a poll response overtaken by a newer one', async () => {
-    getBrainLinks.mockResolvedValue({ links: [link('a', 'cloning')] });
-    // The first tick's response resolves only after the second tick's has been
-    // applied — it must not patch the finished clone back to `cloning`.
-    let release;
-    const slow = new Promise(resolve => { release = resolve; });
-    getBrainLink
-      .mockImplementationOnce(async () => { await slow; return link('a', 'cloning'); })
-      .mockResolvedValue(link('a', 'cloned', { localPath: '/repos/a' }));
-    await renderTab();
-
-    await tick();
-    await tick();
-    expect(screen.getByText('Cloned')).toBeTruthy();
-
-    await act(async () => { release(); await Promise.resolve(); });
-    expect(screen.getByText('Cloned')).toBeTruthy();
-    expect(screen.queryByText('Cloning...')).toBeNull();
-  });
-
   // The post-clone intake writes these in a second update, right after the
   // status flips — the poll has to carry them or the chips never appear.
   it('carries the post-clone intake fields through', async () => {

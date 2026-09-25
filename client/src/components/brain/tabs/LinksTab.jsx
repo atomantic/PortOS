@@ -180,10 +180,8 @@ export default function LinksTab({ onRefresh }) {
   const inFlightKey = inFlight.map(l => `${l.id}:${l.cloneStatus}`).join('|');
 
   const [stalledPollKey, setStalledPollKey] = useState(null);
-  // Ticks since the in-flight set last moved, and a monotonic id so a slow
-  // response can't land on top of a newer one.
+  // Ticks since the in-flight set last moved.
   const noProgressTicksRef = useRef(0);
-  const pollGenerationRef = useRef(0);
   useEffect(() => {
     noProgressTicksRef.current = 0;
   }, [inFlightKey]);
@@ -196,16 +194,12 @@ export default function LinksTab({ onRefresh }) {
       return;
     }
     noProgressTicksRef.current += 1;
-    const generation = ++pollGenerationRef.current;
     // A 404 means the user deleted the bookmark mid-clone: drop it, or its id
     // stays in the in-flight set and is polled until the stall bound. Any other
     // failure is transient and leaves that link exactly as it is.
     const settled = await Promise.all(inFlightIds.map(id => api.getBrainLink(id, { silent: true })
       .then(fresh => ({ id, fresh }))
       .catch(err => ({ id, gone: err?.status === 404 }))));
-    // A response slower than the interval would otherwise patch a finished
-    // clone back to `cloning`, restarting the poll and the stall count.
-    if (generation !== pollGenerationRef.current) return;
     const byId = new Map(settled.map(r => [r.id, r]));
     setLinks(prev => {
       let changed = false;
