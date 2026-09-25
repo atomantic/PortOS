@@ -42,6 +42,12 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // runs before migrations) and the backfill would then merge this install's
   // runs into another machine's rows.
   'cos/agents/index.order.json',
+  // Migration 412 prunes memory-classifier-config.json and browser-config.json
+  // to remove keys that equal the shipped seed values. Both files are derived
+  // from user edits; a shipped seed would shadow environment-derived defaults
+  // (LM_STUDIO_URL, CDP_HOST) and cause the service to ignore those env vars.
+  'memory-classifier-config.json',
+  'browser-config.json',
 ]);
 
 /**
