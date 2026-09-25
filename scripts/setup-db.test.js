@@ -10,6 +10,17 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const setupDbSrc = readFileSync(join(here, 'setup-db.js'), 'utf8');
+const dockerComposeSrc = readFileSync(join(here, '..', 'docker-compose.yml'), 'utf8');
+const dockerPortBindings = dockerComposeSrc.match(/^    ports:\r?\n((?:^      - .*(?:\r?\n|$))+)/m)?.[1]
+  ?.trim()
+  .split(/\r?\n/)
+  .map((binding) => binding.trim());
+
+describe('Docker PostgreSQL host binding', () => {
+  it('publishes the configured host port on loopback only', () => {
+    expect(dockerPortBindings).toEqual(['- "127.0.0.1:${PGPORT_DOCKER:-5561}:5432"']);
+  });
+});
 
 describe('native setup migration guidance', () => {
   it('warns that migrating immediately after native setup overwrites Docker data', () => {
