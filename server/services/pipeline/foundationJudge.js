@@ -37,6 +37,7 @@
 
 import { join } from 'path';
 import { assertValidSeriesId } from '../../lib/pipelineIds.js';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../lib/seriesAutopilotDefaults.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -121,7 +122,7 @@ if (Math.abs(WEIGHT_SUM - 1) > 1e-9) {
 // Default gate threshold — the weighted [0,10] score the foundation must clear
 // before drafting. Mirrors autonovel's 7.5 foundation bar (design record
 // Phase 11). Overridable per-run + via the persisted setting.
-export const DEFAULT_FOUNDATION_THRESHOLD = 7.5;
+export const DEFAULT_FOUNDATION_THRESHOLD = SERIES_AUTOPILOT_DEFAULTS.foundationThreshold;
 // A strong weighted world score must not hide a critically thin character or
 // craft foundation. The floor follows an intentionally lowered run threshold,
 // but otherwise keeps every dimension at a publishable planning baseline.

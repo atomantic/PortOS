@@ -29,49 +29,11 @@ import CanonReadinessPanel from './CanonReadinessPanel';
 import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
 import { severityColor } from './constants.js';
 import { READINESS_GATE_LABELS, READINESS_GATE_ORDER } from '../../lib/editorialHealth.js';
+import { SERIES_AUTOPILOT_DEFAULTS } from '../../../../server/lib/seriesAutopilotDefaults.js';
 
-// Convergence-round bounds — mirror the server (seriesAutopilot.js + the
-// pipelineEditorialChecks settings schema). 0 = skip that gate entirely.
+// Bounds are UI constraints; the fallback values come from the shared defaults.
 const ROUND_MIN = 0;
 const ROUND_MAX = 20;
-const DEFAULT_ARC_ROUNDS = 3;
-const DEFAULT_EDITORIAL_ROUNDS = 2;
-const DEFAULT_BEAT_CONTINUITY_ROUNDS = 2;
-// Editorial-checks pause threshold (#1613) — mirror the server default (0 = off).
-// Unlike the round bounds it has no upper cap; a large N is effectively off.
-const DEFAULT_CHECK_PAUSE_THRESHOLD = 0;
-// Pause-notification escalation (#1615) — mirror the server default (on). The one
-// autopilot setting that defaults ON: a zero-cost in-app banner when a run pauses.
-const DEFAULT_NOTIFY_ON_PAUSE = true;
-// Iterate-to-quality revision loop (#2171) — mirror the server defaults. Off by
-// default (a fresh burst of judge + cut LLM spend); cycles bound the cost and the
-// plateau delta is the mean-score movement below which the series counts converged.
-const DEFAULT_REVISION_ENABLED = false;
-const DEFAULT_REVISION_MIN_CYCLES = 1;
-const DEFAULT_REVISION_MAX_CYCLES = 2;
-const DEFAULT_REVISION_PLATEAU_DELTA = 0.3;
-// Foundation-quality gate (#2176) — mirror the server defaults. The gate itself
-// defaults ON (the point of the phase); the weighted [0,10] threshold the
-// foundation must clear before drafting mirrors autonovel's 7.5 bar; the improve
-// loop is bounded by MAX_FOUNDATION_ROUNDS (3).
-const DEFAULT_FOUNDATION_GATE = true;
-const DEFAULT_FOUNDATION_THRESHOLD = 7.5;
-const DEFAULT_FOUNDATION_ROUNDS = 3;
-// Pipeline self-improvement — mirror the server default (off). When on, a run
-// that ends badly diagnoses whether PortOS's own automation is at fault and
-// files a worktree-isolated, approval-gated CoS task against PortOS to fix it.
-const DEFAULT_SELF_IMPROVE = false;
-// Observing orchestrator — mirror the server default (off). When on, the run
-// watches its own telemetry step by step and dispatches AUTO-APPROVED PortOS
-// fix tasks (worktree + PR + review loop + merge, no human gate) as pipeline
-// defects surface. Supersedes the selfImprove terminal diagnosis when both on.
-const DEFAULT_OBSERVER = false;
-// Evidence is collected regardless; routing stays opt-in so a series cannot
-// silently switch models merely because a sample threshold was reached.
-const DEFAULT_AUTO_SELECT_MODELS = false;
-// Force the run's route onto stages pinned on the Prompts page — mirror the
-// server default (off).
-const DEFAULT_OVERRIDE_STAGE_PINS = false;
 const AUTOPILOT_LLM_STAGES = [
   ['characterFoundation', 'Character foundation'],
   ['generateArc', 'Generate arc'],
@@ -141,72 +103,72 @@ const clampDelta = (n, fallback) => {
 // are deliberately NOT here — they are never persisted.
 const OPTION_SPECS = {
   maxArcVerifyRounds: {
-    defaultValue: DEFAULT_ARC_ROUNDS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.maxArcVerifyRounds,
     read: readInteger,
-    clamp: (v) => clampRound(v, DEFAULT_ARC_ROUNDS),
+    clamp: (v) => clampRound(v, SERIES_AUTOPILOT_DEFAULTS.maxArcVerifyRounds),
   },
   maxEditorialRounds: {
-    defaultValue: DEFAULT_EDITORIAL_ROUNDS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.maxEditorialRounds,
     read: readInteger,
-    clamp: (v) => clampRound(v, DEFAULT_EDITORIAL_ROUNDS),
+    clamp: (v) => clampRound(v, SERIES_AUTOPILOT_DEFAULTS.maxEditorialRounds),
   },
   maxBeatContinuityRounds: {
-    defaultValue: DEFAULT_BEAT_CONTINUITY_ROUNDS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.maxBeatContinuityRounds,
     read: readInteger,
-    clamp: (v) => clampRound(v, DEFAULT_BEAT_CONTINUITY_ROUNDS),
+    clamp: (v) => clampRound(v, SERIES_AUTOPILOT_DEFAULTS.maxBeatContinuityRounds),
   },
   // #1613 — non-negative integer, no upper cap (0 = off).
   checkFindingsPauseThreshold: {
-    defaultValue: DEFAULT_CHECK_PAUSE_THRESHOLD,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.checkFindingsPauseThreshold,
     read: readInteger,
     clamp: clampThreshold,
   },
   // #1615 — plain boolean, no clamp. Defaults ON.
   notifyOnPause: {
-    defaultValue: DEFAULT_NOTIFY_ON_PAUSE,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.notifyOnPause,
     read: readBoolean,
     persistOnEdit: true,
   },
   // #2171 — revision loop: enable checkbox + cycle bounds + plateau delta.
   revisionEnabled: {
-    defaultValue: DEFAULT_REVISION_ENABLED,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.revisionEnabled,
     read: readBoolean,
     persistOnEdit: true,
   },
   revisionMinCycles: {
-    defaultValue: DEFAULT_REVISION_MIN_CYCLES,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.revisionMinCycles,
     read: readInteger,
-    clamp: (v) => clampCycles(v, DEFAULT_REVISION_MIN_CYCLES),
+    clamp: (v) => clampCycles(v, SERIES_AUTOPILOT_DEFAULTS.revisionMinCycles),
   },
   revisionMaxCycles: {
-    defaultValue: DEFAULT_REVISION_MAX_CYCLES,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.revisionMaxCycles,
     read: readInteger,
-    clamp: (v) => clampCycles(v, DEFAULT_REVISION_MAX_CYCLES),
+    clamp: (v) => clampCycles(v, SERIES_AUTOPILOT_DEFAULTS.revisionMaxCycles),
   },
   revisionPlateauDelta: {
-    defaultValue: DEFAULT_REVISION_PLATEAU_DELTA,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.revisionPlateauDelta,
     read: readNumber,
-    clamp: (v) => clampDelta(v, DEFAULT_REVISION_PLATEAU_DELTA),
+    clamp: (v) => clampDelta(v, SERIES_AUTOPILOT_DEFAULTS.revisionPlateauDelta),
   },
   // #2176 — foundation gate (defaults ON) + weighted threshold + round bound.
   foundationGate: {
-    defaultValue: DEFAULT_FOUNDATION_GATE,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.foundationGate,
     read: readBoolean,
     persistOnEdit: true,
   },
   foundationThreshold: {
-    defaultValue: DEFAULT_FOUNDATION_THRESHOLD,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.foundationThreshold,
     read: readNumber,
-    clamp: (v) => clampFoundationThreshold(v, DEFAULT_FOUNDATION_THRESHOLD),
+    clamp: (v) => clampFoundationThreshold(v, SERIES_AUTOPILOT_DEFAULTS.foundationThreshold),
   },
   maxFoundationRounds: {
-    defaultValue: DEFAULT_FOUNDATION_ROUNDS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.maxFoundationRounds,
     read: readInteger,
-    clamp: (v) => clampRound(v, DEFAULT_FOUNDATION_ROUNDS),
+    clamp: (v) => clampRound(v, SERIES_AUTOPILOT_DEFAULTS.maxFoundationRounds),
   },
   // Pipeline self-improvement — boolean, off by default.
   selfImprove: {
-    defaultValue: DEFAULT_SELF_IMPROVE,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.selfImprove,
     read: readBoolean,
     persistOnEdit: true,
   },
@@ -214,17 +176,17 @@ const OPTION_SPECS = {
   // a scheduled unattended run is exactly where the user wants the pipeline
   // hardening itself.
   observer: {
-    defaultValue: DEFAULT_OBSERVER,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.observer,
     read: readBoolean,
     persistOnEdit: true,
   },
   autoSelectModels: {
-    defaultValue: DEFAULT_AUTO_SELECT_MODELS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.autoSelectModels,
     read: readBoolean,
     persistOnEdit: true,
   },
   overrideStagePins: {
-    defaultValue: DEFAULT_OVERRIDE_STAGE_PINS,
+    defaultValue: SERIES_AUTOPILOT_DEFAULTS.overrideStagePins,
     read: readBoolean,
     persistOnEdit: true,
   },
