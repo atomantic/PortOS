@@ -67,9 +67,36 @@ describe('shutdown handler — host-restart bookkeeping (#3202)', () => {
     const exitAt = code.indexOf('process.exit(0)');
 
     expect(startAt).toBeGreaterThan(-1);
-    expect(startAt).toBeLessThan(code.indexOf('closeAllConnections'));
+    expect(startAt).toBeLessThan(code.indexOf('closeServer('));
     expect(awaitAt).toBeGreaterThan(startAt);
     expect(awaitAt).toBeLessThan(exitAt);
+  });
+});
+
+// #8323. The drain itself (intake refusal, in-flight completion, deadline) is
+// exercised against real listeners in lib/httpDrain.test.js; what only this
+// handler can get wrong is WHEN it runs relative to the rest of the teardown.
+describe('shutdown handler — request drain ordering (#8323)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('stops request intake before the first await and waits on it before the forced close', () => {
+    const beginAt = code.indexOf('httpDrain.begin(HTTP_DRAIN_WINDOW_MS)');
+    expect(beginAt, 'httpDrain.begin(...) is not called in shutdown()').toBeGreaterThan(-1);
+    expect(beginAt).toBeLessThan(code.search(/\bawait\b/));
+
+    const drainedAt = code.indexOf('await requestsDrained');
+    expect(drainedAt).toBeGreaterThan(code.indexOf('io.close('));
+    expect(drainedAt).toBeLessThan(code.indexOf('closeServer('));
+    // Force-dropping connections up front would cut the requests being drained.
+    expect(code.indexOf('closeAllConnections')).toBe(-1);
+  });
+
+  it('fits the drain window and the close graces inside the shutdown ceiling', () => {
+    const constant = (name) => Number(SRC.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+    const closeGrace = Number(SRC.match(/const closeServer = \(server, label, graceMs = (\d+)\)/)?.[1]);
+    const dbGrace = Number(code.match(/withGrace\('DB pool', (\d+)/)?.[1]);
+    expect(constant('HTTP_DRAIN_WINDOW_MS') + closeGrace + dbGrace)
+      .toBeLessThan(constant('GRACEFUL_SHUTDOWN_TIMEOUT_MS'));
   });
 });
 
@@ -147,6 +174,6 @@ describe('shutdown handler — detached-group teardown (#7496)', () => {
 
   it('signals the groups before dropping connections', () => {
     // Signalling after the server has begun closing would race process.exit.
-    expect(code.indexOf('signalDetachedGroups(')).toBeLessThan(code.indexOf('closeAllConnections'));
+    expect(code.indexOf('signalDetachedGroups(')).toBeLessThan(code.indexOf('closeServer('));
   });
 });
