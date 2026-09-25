@@ -31,6 +31,28 @@ describe('buildCodeAnimationPrompt', () => {
     expect(prompt).not.toContain('No style was specified');
   });
 
+  it('turns a character bible into rigging instructions, and omits them without one', () => {
+    const withCast = buildCodeAnimationPrompt({
+      concept: 'x',
+      cast: 'Wick — a palm-sized paper lantern whose wire handle droops when sad',
+      format,
+    });
+    expect(withCast).toContain('CHARACTERS — the design bible');
+    expect(withCast).toContain('Wick — a palm-sized paper lantern whose wire handle droops when sad');
+    expect(withCast).toContain('procedural face');
+    expect(buildCodeAnimationPrompt({ concept: 'x', format })).not.toContain('CHARACTERS —');
+  });
+
+  it('holds every film to the direction bar and a pre-answer self-review', () => {
+    const prompt = buildCodeAnimationPrompt({ concept: 'x', format });
+    expect(prompt).toContain('DIRECTION — make it feel like a studio short');
+    expect(prompt).toContain('virtual camera');
+    expect(prompt).toContain('SELF-REVIEW before you answer');
+    // The self-review follows the runtime contract, right before the output rule.
+    expect(prompt.indexOf('SELF-REVIEW')).toBeGreaterThan(prompt.indexOf('RUNTIME CONTRACT'));
+    expect(prompt.indexOf('SELF-REVIEW')).toBeLessThan(prompt.indexOf('OUTPUT:'));
+  });
+
   it('lets the model choose a style only when nothing configures one', () => {
     expect(buildCodeAnimationPrompt({ concept: 'x', format })).toContain('No style was specified');
     const withBoard = buildCodeAnimationPrompt({
@@ -63,7 +85,9 @@ describe('buildCodeAnimationPrompt', () => {
     expect(withTrack).toContain('120 BPM, drop at 0:16');
     expect(withTrack).toContain('MediaStreamAudioDestinationNode');
 
-    expect(buildCodeAnimationPrompt({ concept: 'x', format, soundtrack: 'procedural' })).toContain('procedural soundtrack');
+    const procedural = buildCodeAnimationPrompt({ concept: 'x', format, soundtrack: 'procedural' });
+    expect(procedural).toContain('procedural soundtrack');
+    expect(procedural).toContain('Silence is a beat');
     expect(buildCodeAnimationPrompt({ concept: 'x', format })).toContain('The animation is silent');
   });
 

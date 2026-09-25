@@ -35,6 +35,7 @@ const DEFAULT_DRAFT = {
   title: '',
   seedIdea: '',
   concept: '',
+  cast: '',
   onScreenText: '',
   styleNotes: '',
   universeId: '',
@@ -81,6 +82,7 @@ const loadDraft = () => {
     title: stringField('title'),
     seedIdea: stringField('seedIdea'),
     concept: stringField('concept'),
+    cast: stringField('cast'),
     onScreenText: stringField('onScreenText'),
     styleNotes: stringField('styleNotes'),
     universeId: stringField('universeId'),
@@ -113,6 +115,7 @@ function toBrief(draft) {
   return {
     title: draft.title,
     concept: draft.concept,
+    cast: draft.cast,
     onScreenText: draft.onScreenText,
     styleNotes: draft.styleNotes,
     format: draft.format,
@@ -138,6 +141,7 @@ function toBriefIdeaInput(draft) {
     current: {
       title: draft.title,
       concept: draft.concept,
+      cast: draft.cast,
       onScreenText: draft.onScreenText,
       styleNotes: draft.styleNotes,
     },
@@ -159,6 +163,7 @@ function draftFromJob(job) {
     title: input.title || '',
     seedIdea: input.seedIdea || '',
     concept: input.concept || '',
+    cast: input.cast || '',
     onScreenText: input.onScreenText || '',
     styleNotes: input.styleNotes || '',
     universeId: input.universeId || '',
@@ -408,6 +413,7 @@ export default function CodeAnimation() {
     const startingBrief = {
       title: draft.title,
       concept: draft.concept,
+      cast: draft.cast,
       onScreenText: draft.onScreenText,
       styleNotes: draft.styleNotes,
     };
@@ -423,13 +429,14 @@ export default function CodeAnimation() {
     });
     setWritingBrief(false);
     if (!result?.brief) return;
-    const { title, concept, onScreenText, styleNotes } = result.brief;
+    const { title, concept, cast = '', onScreenText, styleNotes } = result.brief;
     // Style refinements live in the Style section, not the brief — only replace
     // the artist's own notes when the writer actually asked for a refinement.
     setDraft((previous) => ({
       ...previous,
       ...(previous.title === startingBrief.title ? { title } : {}),
       ...(previous.concept === startingBrief.concept ? { concept } : {}),
+      ...(previous.cast === startingBrief.cast ? { cast } : {}),
       ...(previous.onScreenText === startingBrief.onScreenText ? { onScreenText } : {}),
       ...(styleNotes && previous.styleNotes === startingBrief.styleNotes ? { styleNotes } : {}),
     }));
@@ -662,7 +669,11 @@ export default function CodeAnimation() {
             </div>
             <div>
               <label htmlFor="ca-concept" className={labelClass}>What happens</label>
-              <textarea id="ca-concept" rows={4} value={draft.concept} maxLength={limits?.conceptMax} onChange={(event) => update({ concept: event.target.value })} placeholder="A paper lantern drifts over a sleeping harbor town, gathers fireflies, and bursts into a constellation at the climax." className={`${inputClass} resize-y`} />
+              <textarea id="ca-concept" rows={6} value={draft.concept} maxLength={limits?.conceptMax} onChange={(event) => update({ concept: event.target.value })} placeholder={'A paper lantern drifts over a sleeping harbor town, gathers fireflies, and bursts into a constellation.\n0:00–0:04 Low tracking shot: the lantern bobs past rooftops, curious…'} className={`${inputClass} resize-y`} />
+            </div>
+            <div>
+              <label htmlFor="ca-cast" className={labelClass}>Characters <span className="text-gray-600">(optional; design bible the animation rigs)</span></label>
+              <textarea id="ca-cast" rows={4} value={draft.cast} maxLength={limits?.castMax} onChange={(event) => update({ cast: event.target.value })} placeholder="Wick — a palm-sized paper lantern: round body, bent-wire handle that droops when sad; palette cream #F3E6C4, ember #E8763A; face: two ink-dot eyes (curious, sleepy, startled, delighted, determined). Identity lock: silhouette and handle never change." className={`${inputClass} resize-y`} />
             </div>
             <div>
               <label htmlFor="ca-text" className={labelClass}>On-screen text / narration <span className="text-gray-600">(optional)</span></label>

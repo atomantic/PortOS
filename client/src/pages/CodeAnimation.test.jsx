@@ -133,6 +133,7 @@ describe('Code Animation page', () => {
       brief: {
         title: 'The Brass Wick',
         concept: 'Mira climbs the flooded arcade as the lamps go out.',
+        cast: 'Mira — tall, oil-stained coat',
         onScreenText: '0:02 "One light remains"',
         styleNotes: 'colder blues at the climax',
       },
@@ -157,6 +158,7 @@ describe('Code Animation page', () => {
     });
     expect(await screen.findByLabelText(/what happens/i)).toHaveValue('Mira climbs the flooded arcade as the lamps go out.');
     expect(screen.getByLabelText(/^title/i)).toHaveValue('The Brass Wick');
+    expect(screen.getByLabelText(/^characters/i)).toHaveValue('Mira — tall, oil-stained coat');
     expect(screen.getByLabelText(/on-screen text/i)).toHaveValue('0:02 "One light remains"');
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('colder blues at the climax');
   });
