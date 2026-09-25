@@ -1300,11 +1300,52 @@ describe('text-stage generation progress frames (#3393)', () => {
     return { series, issue };
   }
 
-  it('generates normally with nobody subscribed (the channel is never a dependency)', async () => {
+  it('generates normally with nobody subscribed and reserves progress for a late client', async () => {
     const { issue } = await seedProse();
     const result = await textStages.generateStage(issue.id, 'prose', {});
     expect(result.stage.status).toBe('ready');
-    expect(textStageProgress.isChannelOpen(issue.id, 'prose')).toBe(false);
+    expect(textStageProgress.__testing.channels.get(textStageProgress.channelKey(issue.id, 'prose')).lastPayload.type)
+      .toBe('complete');
+  });
+
+  it('an overlapping generation cannot finish the first run\'s progress stream', async () => {
+    const { issue } = await seedProse();
+    const res = fakeRes();
+    textStageProgress.attachClient(issue.id, 'prose', res);
+
+    let firstStarted;
+    let secondStarted;
+    let finishFirst;
+    let finishSecond;
+    const firstAtProvider = new Promise((resolve) => { firstStarted = resolve; });
+    const secondAtProvider = new Promise((resolve) => { secondStarted = resolve; });
+    const firstCanFinish = new Promise((resolve) => { finishFirst = resolve; });
+    const secondCanFinish = new Promise((resolve) => { finishSecond = resolve; });
+    runnerSvc.executeApiRun.mockImplementationOnce(async ({ onData, onComplete }) => {
+      firstStarted();
+      await firstCanFinish;
+      onData('First draft');
+      onComplete({ success: true });
+    }).mockImplementationOnce(async ({ onData, onComplete }) => {
+      secondStarted();
+      await secondCanFinish;
+      onData('Second draft');
+      onComplete({ success: true });
+    });
+
+    const first = textStages.generateStage(issue.id, 'prose', {});
+    await firstAtProvider;
+    const second = textStages.generateStage(issue.id, 'prose', {});
+    await secondAtProvider;
+    finishSecond();
+    await second;
+    expect(framesOf(res).some((frame) => frame.type === 'complete')).toBe(false);
+    expect(textStageProgress.__testing.channels.get(textStageProgress.channelKey(issue.id, 'prose')).finished)
+      .toBe(false);
+
+    finishFirst();
+    await first;
+    expect(framesOf(res).filter((frame) => frame.type === 'complete')).toHaveLength(1);
   });
 
   it('streams start → context → generate → complete on the single-shot path', async () => {
