@@ -64,15 +64,17 @@ Additive response fields are allowed. A breaking change needs a new, explicitly
 versioned endpoint and a staged migration of the probe; `schemaVersions.js`
 gates synchronized records, not these request/response contracts.
 
-All three requests use the configured peer HTTP Basic credential when the
-remote instance enables its optional password gate. They are not a general
+All three requests authenticate with the peer credential described in
+[PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md#peer-credentials-are-not-operator-authority):
+the paired peer token, plus the configured HTTP Basic credential until the
+remote confirms the token. They are not a general
 cross-install data channel: probe results are stored only as the local peer's
 health, app, and sync snapshots. Do not add personal records, peer lists,
 credentials, local paths, or build identity to these responses.
 
 | Method | Endpoint | Stable request and response contract |
 |--------|----------|--------------------------------------|
-| GET | `/system/health/details` | Returns an object containing `instanceId` and `version` (each may be `null`) for peer identity and compatibility display. The health summary remains an object so an older prober can retain it as its last-known health snapshot. |
+| GET | `/system/health/details` | Returns an object containing `instanceId` and `version` (each may be `null`) for peer identity and compatibility display. Newer installs add `peerAuth: { version, accepted }`; `accepted` is true only when this request authenticated with the prober's pair token. A missing field means the prober keeps sending Basic. The health summary remains an object so an older prober can retain it as its last-known health snapshot. |
 | GET | `/apps?view=probe` | The periodic probe requests `view=probe`; returns either the legacy app array or `{ apps: [...] }`. Each app entry used by peers retains `id`, `name`, `icon`, `overallStatus`, `uiPort`, `apiPort`, and `type`; fields may be absent or `null` when unknown. Older peers may ignore the query and return the legacy enriched list, which remains compatible with the same field mapping. |
 | GET | `/instances/sync-status?forPeer=<instance-id>` | `forPeer` is optional and remains lenient: an unknown or legacy identifier, blank value, or omitted value must degrade to the unscoped status response rather than fail the probe. A recognized peer receives its `cursorForYou` alongside the normal sync status — with this install's own `lastSyncError` / `lastSyncSucceeded` stripped, since those carry local diagnostics and the endpoint is reachable by any tailnet machine. |
 

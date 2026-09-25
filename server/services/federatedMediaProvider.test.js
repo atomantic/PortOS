@@ -196,6 +196,11 @@ describe('federated media provider authorization', () => {
     await expect(authorizeFederatedMediaPeer(req)).resolves.toEqual({
       callerId: 'peer-example', config: config(),
     });
+    // The paired peer token (#8356) is the scoped successor to Basic here.
+    await expect(authorizeFederatedMediaPeer({
+      ...baseReq,
+      portosAuthContext: { enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' },
+    })).resolves.toEqual({ callerId: 'peer-example', config: config() });
 
     state.peer.enabled = false;
     await expect(authorizeFederatedMediaPeer(req)).rejects.toMatchObject({

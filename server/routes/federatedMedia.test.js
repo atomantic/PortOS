@@ -170,7 +170,7 @@ describe('federated media routes', () => {
 
     it('refuses an unauthorized peer before writing anything', async () => {
       provider.authorize.mockRejectedValueOnce(Object.assign(
-        new Error('Verified peer Basic authentication is required'),
+        new Error('Verified peer authentication is required'),
         { status: 403, code: 'MEDIA_PROVIDER_PEER_AUTH_REQUIRED' },
       ));
       const response = await request(buildApp()).post('/api/federation/media/v1/assets')

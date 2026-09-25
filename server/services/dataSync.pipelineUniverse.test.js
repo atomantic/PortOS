@@ -1113,6 +1113,8 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     // assertion stays honest about what the snapshot map IS and ISN'T
     // responsible for.
     const OUT_OF_BAND_SYNC_KEYS = new Set([
+      // Peer credential handshake version (#8356), advertised in health details; never a data category.
+      'peerAuth',
       // Numeric PortOS quality uses its version-validated read-through endpoint, never snapshot writes.
       'appQuality',
       // catalog → `POST /api/catalog/sync/apply` (server/services/catalogSync.js)
