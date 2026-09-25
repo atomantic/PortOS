@@ -124,3 +124,21 @@ Most services carry sibling `.test.js` suites (storage CRUD, draft save/version/
 - Creative Director (`server/services/creativeDirector/`, `/creative-director`) — treatment/scene/run orchestration the CD bridge feeds into
 - Comic pipeline — the promote-to-pipeline target
 - Media collections, image-gen, and the media job queue — shared render infrastructure
+
+
+### Library paging
+
+The library requests 50 works initially and appends more with **Load more works**.
+Folder counts describe loaded works while more pages remain. Opening a work by
+URL still loads it directly, even if its library row has not loaded.
+
+`GET /api/writers-room/works?limit=50` returns `{ items, total, limit, offset, nextCursor }`.
+Limits are validated from 1 to 100. Echo the opaque `nextCursor` as `cursor` to
+continue; a query-less request keeps the legacy array response, and legacy
+`offset` requests keep their envelope. Each new paging request snapshots live
+work IDs in `updated_at DESC, id ASC` order for five minutes. Only page members
+are hydrated with drafts; capturing membership reads IDs, not manifests. Edits
+cannot move an ID between pages, new works appear on a fresh snapshot, and
+subsequent deletions are omitted (total remains the original membership count).
+Up to 32 snapshots are retained per process. Expiry, eviction, or server restart
+returns HTTP 409 `CURSOR_EXPIRED`; retrying in the library restarts at page one.

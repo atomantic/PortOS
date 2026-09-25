@@ -310,23 +310,46 @@ export async function listWorkIds({ includeDeleted = false } = {}) {
   return rows.map((r) => r.id);
 }
 
+/** Snapshot membership only: no work bodies or draft history are hydrated. */
+export async function listOrderedWorkIds() {
+  const { rows } = await query(
+    `SELECT id FROM writers_room_works WHERE deleted = FALSE ORDER BY updated_at DESC, id ASC`,
+  );
+  return rows.map(row => row.id);
+}
+
+/** Hydrate only the already bounded page, preserving snapshot order. */
+export async function readWorksPage(ids) {
+  if (!ids.length) return [];
+  const works = await query(
+    `SELECT id, data FROM writers_room_works
+     WHERE deleted = FALSE AND id = ANY($1::text[])
+     ORDER BY array_position($1::text[], id) LIMIT $2`, [ids, ids.length],
+  );
+  return hydrateWorks(works.rows);
+}
+
 /** Every live work's manifest, rebuilt with its drafts[] — one pair of queries. */
 export async function listWorks() {
   const works = await query(
     `SELECT id, data FROM writers_room_works WHERE deleted = FALSE`,
   );
-  if (works.rows.length === 0) return [];
+  return hydrateWorks(works.rows);
+}
+
+async function hydrateWorks(works) {
+  if (works.length === 0) return [];
   const drafts = await query(
     `SELECT work_id, data FROM writers_room_draft_versions
      WHERE work_id = ANY($1::text[]) ORDER BY created_at, id`,
-    [works.rows.map((r) => r.id)],
+    [works.map((r) => r.id)],
   );
   const draftsByWork = new Map();
   for (const d of drafts.rows) {
     if (!draftsByWork.has(d.work_id)) draftsByWork.set(d.work_id, []);
     draftsByWork.get(d.work_id).push({ data: d.data });
   }
-  return works.rows.map((w) => rowsToManifest(w, draftsByWork.get(w.id) || []));
+  return works.map((w) => rowsToManifest(w, draftsByWork.get(w.id) || []));
 }
 
 /**

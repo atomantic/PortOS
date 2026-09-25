@@ -15,7 +15,11 @@ export const deleteWritersRoomFolder = (id, options = {}) => request(`/writers-r
 });
 
 // Works
-export const listWritersRoomWorks = () => request('/writers-room/works');
+export const listWritersRoomWorks = (query, options = {}) => {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query || {})) if (value != null) params.set(key, value);
+  return request(`/writers-room/works${params.size ? `?${params}` : ''}`, options);
+};
 export const createWritersRoomWork = (data, options = {}) => request('/writers-room/works', {
   method: 'POST',
   body: JSON.stringify(data),

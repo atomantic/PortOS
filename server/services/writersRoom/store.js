@@ -232,6 +232,11 @@ function makeFileBackend() {
       return ids.filter((_, i) => manifests[i] && manifests[i].deleted !== true);
     },
     listWorks: loadLiveManifests,
+    listOrderedWorkIds: async () => (await loadLiveManifests())
+      .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '') || a.id.localeCompare(b.id))
+      .map(work => work.id),
+    readWorksPage: async (ids) => (await Promise.all(ids.map(id => loadManifest(id).catch(() => null))))
+      .filter(work => work && !work.deleted),
     // No cheap count on the file layout — `deleted` lives inside each manifest,
     // so the live set can only be known by reading them. Counting the shared
     // live-set reader makes agreement with listWorks structural rather than a
@@ -342,6 +347,8 @@ export function writersRoomStore() {
     readWork: async (id, opts) => (await getBackend()).readWork(id, opts),
     listWorkIds: async (opts) => (await getBackend()).listWorkIds(opts),
     listWorks: async () => (await getBackend()).listWorks(),
+    listOrderedWorkIds: async () => (await getBackend()).listOrderedWorkIds(),
+    readWorksPage: async (ids) => (await getBackend()).readWorksPage(ids),
     countWorks: async () => (await getBackend()).countWorks(),
     writeWork: async (manifest) => (await getBackend()).writeWork(manifest),
     deleteWork: async (id) => (await getBackend()).deleteWork(id),

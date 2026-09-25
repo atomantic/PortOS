@@ -64,5 +64,8 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
     return () => { generation.current += 1; refreshQueued.current = false; pending.current?.abort(); pending.current = null; };
   }, [reload]);
 
-  return { ...page, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
+  const setItems = useCallback(update => commit({ ...state.current,
+    items: typeof update === 'function' ? update(state.current.items) : update }), [commit]);
+
+  return { ...page, setItems, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
 }

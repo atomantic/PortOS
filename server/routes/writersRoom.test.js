@@ -7,6 +7,7 @@ vi.mock('../services/writersRoom/local.js', () => ({
   listFolders: vi.fn(async () => [{ id: 'wr-folder-1', name: 'Drafts' }]),
   createFolder: vi.fn(async (data) => ({ id: 'wr-folder-new', ...data })),
   deleteFolder: vi.fn(async () => ({ ok: true })),
+  listWorksPage: vi.fn(),
   listWorks: vi.fn(async () => [{ id: 'wr-work-1', title: 'A' }]),
   createWork: vi.fn(async (data) => ({ id: 'wr-work-new', title: data.title, kind: data.kind || 'short-story' })),
   getWorkWithBody: vi.fn(),
@@ -149,9 +150,7 @@ describe('writersRoom routes', () => {
     });
 
     it('GET /works returns a bounded envelope when pagination is requested', async () => {
-      svc.listWorks.mockResolvedValueOnce(
-        Array.from({ length: 5 }, (_, i) => ({ id: `wr-work-${i}`, title: `W${i}` }))
-      );
+      svc.listWorksPage.mockResolvedValueOnce({ items: [{ id: 'wr-work-1' }, { id: 'wr-work-2' }], total: 5, limit: 2, offset: 1, nextCursor: 'cursor' });
       const r = await request(app).get('/api/writers-room/works?limit=2&offset=1');
       expect(r.status).toBe(200);
       expect(r.body.items).toHaveLength(2);
@@ -159,6 +158,15 @@ describe('writersRoom routes', () => {
       expect(r.body.total).toBe(5);
       expect(r.body.limit).toBe(2);
       expect(r.body.offset).toBe(1);
+    });
+
+    it('rejects oversized pages and forwards validated cursor queries', async () => {
+      expect((await request(app).get('/api/writers-room/works?limit=101')).status).toBe(400);
+      expect((await request(app).get('/api/writers-room/works?cursor=bad')).status).toBe(400);
+      svc.listWorksPage.mockResolvedValueOnce({ items: [], total: 0, nextCursor: null });
+      const cursor = '00000000-0000-4000-8000-000000000000.50';
+      expect((await request(app).get(`/api/writers-room/works?cursor=${cursor}`)).status).toBe(200);
+      expect(svc.listWorksPage).toHaveBeenLastCalledWith({ limit: 50, offset: 0, cursor });
     });
 
     it('POST /works rejects unknown kind', async () => {

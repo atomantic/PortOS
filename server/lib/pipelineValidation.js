@@ -762,3 +762,25 @@ export const issuesListQuerySchema = z.object({
   offset: z.preprocess((v) => (v === undefined ? 0 : Number(v)), z.number().int().min(0)).default(0),
   limit: z.preprocess((v) => (v === undefined ? 1000 : Number(v)), z.number().int().min(1).max(1000)).default(1000),
 });
+
+
+// Query-less callers retain the legacy array; limit/offset opt into a snapshot.
+export const writersRoomWorksQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  cursor: z.string().regex(/^[0-9a-f-]{36}\.[0-9]+$/).max(80).optional(),
+});
+export const writersRoomWorkSummarySchema = z.object({
+  id: z.string(), folderId: z.string().nullable().optional(), title: z.string(),
+  kind: z.string(), status: z.string(), activeDraftVersionId: z.string().nullable().optional(),
+  wordCount: z.number(), draftCount: z.number(),
+  pipelineSeriesId: z.string().nullable(), pipelineIssueId: z.string().nullable(),
+  createdAt: z.string(), updatedAt: z.string(),
+});
+export const writersRoomWorksResponseSchema = z.union([
+  z.array(writersRoomWorkSummarySchema),
+  z.object({
+    items: z.array(writersRoomWorkSummarySchema), total: z.number().int(),
+    limit: z.number().int(), offset: z.number().int(), nextCursor: z.string().nullable(),
+  }),
+]);

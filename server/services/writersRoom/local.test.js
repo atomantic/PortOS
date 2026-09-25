@@ -651,3 +651,27 @@ describe('retrospective evolution-lens anchors (#6445)', () => {
     expect(block).toContain('[unverified]');
   });
 });
+
+
+describe('library snapshot pages', () => {
+  it('holds membership across equal timestamps, edits, inserts and deletions; expires with restart guidance', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const created = await Promise.all(['A', 'B', 'C', 'D'].map(title => createWork({ title, kind: 'short-story' })));
+    const ordered = created.map(work => work.id).sort();
+    const first = await local.listWorksPage({ limit: 2 });
+    expect(first.items.map(work => work.id)).toEqual(ordered.slice(0, 2));
+    vi.setSystemTime(new Date('2026-01-01T00:01:00Z'));
+    await updateWork(ordered[3], { title: 'Edited' });
+    await deleteWork(ordered[2]);
+    await createWork({ title: 'New arrival', kind: 'short-story' });
+    const second = await local.listWorksPage({ limit: 2, cursor: first.nextCursor });
+    expect(second.items.map(work => work.id)).toEqual([ordered[3]]);
+    expect(second.items[0].title).toBe('Edited');
+    expect(second.total).toBe(4);
+    expect(second.nextCursor).toBeNull();
+    vi.setSystemTime(new Date('2026-01-01T00:06:00Z'));
+    await expect(local.listWorksPage({ cursor: first.nextCursor })).rejects.toMatchObject({ code: 'CURSOR_EXPIRED' });
+    expect((await local.listWorksPage({ limit: 100 })).items).toHaveLength(4);
+  });
+});

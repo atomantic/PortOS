@@ -5,6 +5,7 @@ import {
   voiceSynthesizeBodySchema,
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
+import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
@@ -32,6 +33,21 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   },
   '/api/api-docs/tools.min.json': {
     get: { summary: 'Read minimized semantic tool resource', responses: { 200: { description: 'Schema-optimized provider-neutral tool resource' } } },
+  },
+  '/api/writers-room/works': {
+    get: {
+      summary: 'List Writers Room works',
+      description: 'No query returns the legacy array. Paging captures ordered membership for five minutes; echo nextCursor to continue. Deleted works are omitted; total describes original membership. Restart on CURSOR_EXPIRED.',
+      parameters: Object.entries(writersRoomWorksQuerySchema.shape).map(([name, schema]) => ({
+        name, in: 'query', required: false, schema: zodToOpenApiSchema(schema),
+      })),
+      responses: {
+        200: { description: 'Legacy array or bounded snapshot page',
+          content: { 'application/json': { schema: zodToOpenApiSchema(writersRoomWorksResponseSchema) } } },
+        400: { description: 'Invalid paging query or cursor' },
+        409: { description: 'Restart pagination', 'x-portos-error-codes': ['CURSOR_EXPIRED'] },
+      },
+    },
   },
   '/api/review/queue': {
     get: {
