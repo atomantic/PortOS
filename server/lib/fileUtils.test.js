@@ -1413,8 +1413,9 @@ describe('fileUtils', () => {
 // =============================================================================
 
 describe('Windows swap-window retries (#4095)', () => {
-  // Matches WIN_RETRY_ATTEMPTS in fileUtils.js.
+  // Matches WIN_RETRY_ATTEMPTS in fileCore.js.
   const RETRY_ATTEMPTS = 5;
+  const BACKUP_RETRY_ATTEMPTS = 20;
   const lockError = (code) => Object.assign(new Error(`${code}: simulated windows lock`), { code });
 
   let tmpRoot;
@@ -1502,6 +1503,34 @@ describe('Windows swap-window retries (#4095)', () => {
       expect(movedDestinationAside).toBe(true);
       // …and the swap cleaned up after itself.
       expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('retries a transient lock while moving the existing destination to backup', async () => {
+      const target = join(tmpRoot, 'transient-backup-lock.json');
+      writeFileSync(target, JSON.stringify({ v: 1 }));
+      fakePlatform('win32');
+      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+
+      await atomicWrite(target, { v: 2 });
+
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 2 });
+      expect(fsPromises.rename.mock.calls.filter(([from]) => from === target)).toHaveLength(RETRY_ATTEMPTS + 1);
+      expect(readdirSync(tmpRoot).filter((n) => n.endsWith('.bak') || n.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('preserves the existing destination when the backup move stays locked', async () => {
+      const target = join(tmpRoot, 'persistent-backup-lock.json');
+      writeFileSync(target, JSON.stringify({ v: 1 }));
+      fakePlatform('win32');
+      for (let i = 0; i < RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EPERM'));
+      for (let i = 0; i < BACKUP_RETRY_ATTEMPTS; i += 1) fsPromises.rename.mockRejectedValueOnce(lockError('EBUSY'));
+
+      await expect(atomicWrite(target, { v: 2 })).rejects.toMatchObject({ code: 'EBUSY' });
+
+      expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual({ v: 1 });
+      expect(fsPromises.rename).toHaveBeenCalledTimes(RETRY_ATTEMPTS + BACKUP_RETRY_ATTEMPTS);
+      expect(readdirSync(tmpRoot)).toEqual(['persistent-backup-lock.json']);
     });
 
     it('does not retry off win32 — a rename failure still surfaces immediately', async () => {

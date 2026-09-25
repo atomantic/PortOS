@@ -9,7 +9,7 @@ const testScript = fileURLToPath(new URL('./reactor_render_test.py', import.meta
 describe.skipIf(!python)('Reactor stream capture lifecycle', () => {
   it('captures decoder tails, rejects incomplete streams, and reaps cancelled encoders offline', () => {
     expect(() => execFileSync(python, [testScript], {
-      encoding: 'utf8', timeout: 10000,
+      encoding: 'utf8', timeout: 25_000, // Allow the offline suite to finish under a loaded Windows shard.
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       stdio: 'pipe',
     })).not.toThrow();

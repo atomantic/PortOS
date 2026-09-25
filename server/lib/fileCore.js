@@ -36,6 +36,10 @@ const isWindows = () => process.platform === 'win32';
 // phantom "nothing here yet".
 const WIN_RETRY_ATTEMPTS = 5;
 const WIN_RETRY_DELAY_MS = 10;
+// The backup move follows a failed atomic replace, where a reader or AV scan
+// can keep the existing destination locked longer than the first retry window.
+const WIN_BACKUP_RETRY_ATTEMPTS = 20;
+const WIN_BACKUP_RETRY_DELAY_MS = 25;
 // rename(2) failures that mean "the destination is momentarily locked", not
 // "this rename can never work".
 const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
@@ -221,22 +225,26 @@ export async function atomicWrite(filePath, data) {
   if (existingMode !== null) {
     await chmod(tmp, existingMode).catch(() => {});
   }
+  const renameWithWindowsRetries = async (from, to, {
+    attempts = WIN_RETRY_ATTEMPTS,
+    delayMs = WIN_RETRY_DELAY_MS,
+  } = {}) => {
+    let err = await rename(from, to).then(() => null, (e) => e);
+    let retries = 0;
+    if (isWindows()) {
+      for (let attempt = 1; err && attempt < attempts && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
+        await sleep(delayMs);
+        retries += 1;
+        err = await rename(from, to).then(() => null, (e) => e);
+        if (!err) console.log(`⚠️ atomicWrite rename succeeded after ${retries} retry(s): ${basename(filePath)}`);
+      }
+    }
+    return { err, retries };
+  };
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic
   // overwrite), but still fails with EPERM/EACCES/EBUSY if the destination is locked (AV scan,
   // concurrent reader). Fall back to a backup-swap so the original file is never lost.
   const replace = async () => {
-    const renameWithRetries = async (from, to) => {
-      let err = await rename(from, to).then(() => null, (e) => e);
-      if (isWindows()) {
-        for (let attempt = 1; err && attempt < WIN_RETRY_ATTEMPTS && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
-          await sleep(WIN_RETRY_DELAY_MS);
-          err = await rename(from, to).then(() => null, (e) => e);
-          if (!err) console.log(`⚠️ atomicWrite rename succeeded after ${attempt} retry(s): ${basename(filePath)}`);
-        }
-      }
-      return err;
-    };
-
     // Retry the ATOMIC rename before resorting to the backup swap (#4095). The
     // swap below renames the destination away and back, so for that instant the
     // destination DOES NOT EXIST — a concurrent read lands on ENOENT and reads
@@ -244,16 +252,23 @@ export async function atomicWrite(filePath, data) {
     // default instead of the file's real contents. A transient lock clears in
     // milliseconds, so retrying keeps almost every write on the atomic path and
     // never opens that window.
-    const err = await renameWithRetries(tmp, filePath);
+    const firstRename = await renameWithWindowsRetries(tmp, filePath);
+    const err = firstRename.err;
     if (!err) return;
     if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
       const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      const backupErr = await renameWithRetries(filePath, bak);
-      const hadExisting = backupErr?.code !== 'ENOENT';
-      if (hadExisting && backupErr) throw backupErr;
-      const renameErr = await rename(tmp, filePath).then(() => null, (e) => e);
+      // A transient Windows lock can also reject the move to the backup. Retry
+      // that move before giving up; until it succeeds, the original stays at
+      // filePath and is safe to read.
+      const backupRename = await renameWithWindowsRetries(filePath, bak, {
+        attempts: WIN_BACKUP_RETRY_ATTEMPTS,
+        delayMs: WIN_BACKUP_RETRY_DELAY_MS,
+      });
+      if (backupRename.err && backupRename.err.code !== 'ENOENT') throw backupRename.err;
+      const hadExisting = !backupRename.err;
+      const renameErr = (await renameWithWindowsRetries(tmp, filePath)).err;
       if (renameErr) {
-        if (hadExisting) await rename(bak, filePath).catch(() => {});
+        if (hadExisting) await renameWithWindowsRetries(bak, filePath);
         throw renameErr;
       }
       if (hadExisting) await unlink(bak).catch(() => {});
