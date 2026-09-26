@@ -77,10 +77,17 @@ build server-side.
   is single-user, so the username half is ignored — only the password is verified.
   Store the password **per instance in the iOS Keychain**.
 
-**CSRF note.** When auth is on, PortOS 403s cross-origin requests that carry an
-`Origin` header (the browser-session CSRF guard). A native `URLSession` sends **no**
-`Origin` header, so it passes the guard cleanly — no special handling needed. Do
-not set an `Origin` header manually.
+**CSRF note.** In both auth modes — with or without a password — PortOS 403s a
+browser request whose `Origin` does not match its `Host` (`CROSS_ORIGIN_BLOCKED`,
+including the opaque `Origin: null`), and a browser request (one carrying
+`Origin` or `Sec-Fetch-Site`) whose `Host` is not an IP literal, a single-label
+name, a `.localhost`/`.ts.net`/`.local`/`.home.arpa`/`.internal`/`.lan` name, the
+machine's own hostname, or a name listed in the comma-separated
+`PORTOS_ALLOWED_HOSTS` environment variable (`HOST_NOT_ALLOWED`; a leading dot
+admits every subdomain). This stops any web page from relaying requests onto
+loopback through the user's own browser, and DNS rebinding. A native
+`URLSession` sends **neither** header, so it passes the guard cleanly — no special
+handling needed. Do not set an `Origin` header manually.
 
 A dedicated per-device API-key surface (a companion group in `apiRegistry.js` /
 long-lived device token) is a **possible future enhancement**, not built here —

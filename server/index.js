@@ -116,7 +116,7 @@ import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
-import { authGate, socketAuthGate } from './services/authGate.js';
+import { allowSocketRequest, authGate, socketAuthGate } from './services/authGate.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
@@ -203,10 +203,16 @@ setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
+  // CORS headers are reflected only for handshakes allowRequest admits: the
+  // same browser-relay guard as the HTTP gate refuses a foreign Origin or a
+  // rebindable Host on both the polling and websocket transports, in both
+  // auth modes (a password-free install would otherwise take shell:start from
+  // any web page). Origin-less native/peer clients pass through.
   cors: {
-    origin: true, // Allow any origin (local network only)
+    origin: true,
     credentials: true
   },
+  allowRequest: allowSocketRequest,
   path: '/socket.io'
 });
 

@@ -86,6 +86,9 @@ function createApp(io = { emit: vi.fn() }, { remoteAddress, withAuthGate = true 
   const app = express();
   app.set('io', io);
   app.use(express.json());
+  // Production parses form bodies globally (server/index.js), which is what
+  // makes a cross-site <form method=POST> a no-preflight attack path.
+  app.use(express.urlencoded({ extended: true }));
   if (remoteAddress !== undefined) app.use((req, _res, next) => {
     // Model the server's socket observation, never an HTTP header.
     Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
@@ -202,6 +205,35 @@ describe('commands routes', () => {
         child.emit('close', 0);
       },
     );
+
+    // #8707: the user's own browser relays a hidden form from any web page onto
+    // loopback, where password-free host control trusts the socket peer.
+    it.each([false, true])('refuses a cross-site form POST from the loopback browser (auth enabled: %s)', async enabled => {
+      isAuthEnabled.mockResolvedValue(enabled);
+      spawnMock.mockReturnValue(createChildProcess());
+      const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+      const response = await request(app).post('/api/commands/execute')
+        .set('Content-Type', 'application/x-www-form-urlencoded')
+        .set('Origin', 'https://attacker.example')
+        .set('Sec-Fetch-Site', 'cross-site')
+        .send('command=npx+--yes+example-package');
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps a same-origin browser POST working on a password-free install', async () => {
+      spawnMock.mockReturnValue(createChildProcess());
+      const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+      const probe = await request(app).get('/api/commands/allowed');
+      expect(probe.status).toBe(200);
+      const started = await request(app).post('/api/commands/execute')
+        .set('Origin', 'http://localhost:5554')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
 
     it('keeps local UI command control through the dev proxy', async () => {
       const child = createChildProcess();
