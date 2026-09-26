@@ -1875,6 +1875,12 @@ CREATE TABLE IF NOT EXISTS beeper_sync_cursors (
 -- a failed row is never retried in place — a re-send is a NEW row, because
 -- Beeper has no idempotency key on send. Mirrors the beeper.js block in
 -- server/lib/db/schema/.
+CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
+  account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  upper_bound TEXT
+);
+
 CREATE TABLE IF NOT EXISTS beeper_outbox (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
@@ -2245,9 +2251,3 @@ DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredi
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
 DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
-
-CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
-    account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
-    message_id TEXT NOT NULL,
-    upper_bound TEXT
-  );

@@ -468,7 +468,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
        is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
        observed_at = EXCLUDED.observed_at, updated_at = NOW()
      WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
-       AND (EXCLUDED.unsent_at IS NOT NULL OR
+       AND ((EXCLUDED.unsent_at IS NOT NULL AND EXCLUDED.observed_at >= beeper_messages.observed_at) OR
          (beeper_messages.unsent_at IS NULL
           AND COALESCE(EXCLUDED.edited_at, 'epoch'::timestamptz) >= COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
           AND (EXCLUDED.edited_at > COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)

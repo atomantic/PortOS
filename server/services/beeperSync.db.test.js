@@ -269,6 +269,8 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
           normalizeMessageRow(messageFixture({ text: 'Stale example' }), '2099-01-01T00:00:00Z'));
         await upsertMirroredMessage(client, conversationId,
           normalizeMessageRow({ ...upstream, text: 'Older concurrent example' }, '2020-01-01T00:00:00Z'));
+        await upsertMirroredMessage(client, conversationId,
+          normalizeMessageRow(messageFixture({ isDeleted: true }), '2020-01-01T00:00:00Z'));
       });
       expect((await readThread(conversationId)).messages[0].body).toBe('Corrected example');
 
