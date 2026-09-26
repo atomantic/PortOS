@@ -629,6 +629,29 @@ describe('syncOrchestrator', () => {
       expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
     });
 
+    it('advances durably deferred child cursors to reach later tag and scrap parent pages', async () => {
+      for (const position of ['1', '2']) {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            maxSequences: { tags: position, scraps: position }, hasMore: position === '1',
+          }),
+        });
+      }
+      applyCatalogChanges
+        .mockResolvedValueOnce({
+          tags: { deferred: 1, failed: 0 }, scraps: { deferred: 1, failed: 0 },
+        })
+        .mockResolvedValueOnce({
+          tags: { inserted: 1, failed: 0 }, scraps: { inserted: 1, failed: 0 },
+        });
+      const result = await syncWithPeer(catalogPeer);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).toContain('since[tags]=1');
+      expect(mockFetch.mock.calls[1][0]).toContain('since[scraps]=1');
+      expect(result.catalog.catalogSeqs).toMatchObject({ tags: '2', scraps: '2' });
+    });
+
     it('holds a kind cursor when that kind had apply failures (parent on a later page)', async () => {
       // A ref fails because its parent ingredient is on a later page; the
       // ingredient itself applies cleanly in the same batch.

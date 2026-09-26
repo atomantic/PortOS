@@ -46,6 +46,7 @@ import {
   upsertRelationFromPeer,
   upsertTagFromPeer,
   upsertMediaFromPeer,
+  drainPendingCatalogApplies,
   normalizeTags,
 } from './catalogDB.js';
 import { compareSchemaVersions, scopeVersionDiff, formatVersionGap, catalogEnvelopeHasLiveRows, PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -190,7 +191,8 @@ export async function applyRemoteChanges(envelope = {}) {
       try {
         res = await upsertFn(item);
         if (lww) {
-          if (!res.applied) tally.skipped++;
+          if (res.deferred) tally.deferred = (tally.deferred || 0) + 1;
+          else if (!res.applied) tally.skipped++;
           else if (res.isInsert) tally.inserted++;
           else tally.updated++;
         } else {
@@ -276,8 +278,8 @@ export async function applyRemoteChanges(envelope = {}) {
     return { ...ing, tags: registered };
   };
 
-  // Tags first — they carry a `parent_id` self-FK (handled by the parent-less
-  // retry in upsertTagFromPeer) and are referenced by the freeform tag arrays
+  // Tags first — they carry a `parent_id` self-FK (durably deferred by
+  // upsertTagFromPeer) and are referenced by the freeform tag arrays
   // on ingredients, so we want the canonical rows present before the ingredient
   // rows land. They have no FK to scraps/ingredients, so ordering is otherwise
   // free.
@@ -290,8 +292,8 @@ export async function applyRemoteChanges(envelope = {}) {
   // join rows land). Chunked scraps self-FK: a child carries
   // `parentScrapId` → another scrap row, so order PARENT rows (no
   // parentScrapId) before CHILD rows within this envelope to avoid an FK
-  // violation on the child insert. (`upsertScrapFromPeer` also retries
-  // parent-less on FK error to cover a parent lagging across pages.)
+  // violation on the child insert. (`upsertScrapFromPeer` durably defers
+  // children whose parent is on a later page.)
   const orderedScraps = Array.isArray(envelope.scraps)
     ? [...envelope.scraps].sort((a, b) => {
         const aChild = a?.parentScrapId ? 1 : 0;
@@ -303,6 +305,10 @@ export async function applyRemoteChanges(envelope = {}) {
     items: orderedScraps, upsertFn: upsertScrapFromPeer, tally: stats.scraps, lww: true,
     errLabel: 'scrap', idFor: (s) => s?.id,
   });
+
+  // Also runs on empty envelopes: persisted dependencies survive restarts.
+  // Complete scraps before source joins attempt their FK-dependent writes.
+  await drainPendingCatalogApplies();
 
   await applyKind({
     items: envelope.ingredients, upsertFn: upsertIngredientFromPeer, tally: stats.ingredients, lww: true,

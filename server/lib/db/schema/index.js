@@ -22,7 +22,7 @@ import { userActionsDdl } from './userActions.js';
 import { reviewQueueTriageDdl } from './reviewQueueTriage.js';
 import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { aiGraphDdl } from './aiGraph.js';
-import { catalogDdl, catalogUserTypesDdl } from './catalog.js';
+import { catalogDdl, catalogUserTypesDdl, catalogPendingAppliesDdl } from './catalog.js';
 import { mediaDdl } from './media.js';
 import { universesDdl } from './universes.js';
 import { libraryDdl } from './library.js';
@@ -50,6 +50,7 @@ export {
   aiGraphDdl,
   catalogDdl,
   catalogUserTypesDdl,
+  catalogPendingAppliesDdl,
   mediaDdl,
   universesDdl,
   libraryDdl,
