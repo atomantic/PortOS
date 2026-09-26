@@ -3,7 +3,6 @@ import { Check, Film, Radio, RefreshCw, Wind } from 'lucide-react';
 import toast from '../ui/Toast';
 import { approveSpriteTrack, reopenSpriteTrack } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
 import { SPRITE_DIRECTIONS } from '../../lib/spriteFacets.js';
 import { CorrectionNoteToggle, trackCorrectionKey } from './CorrectionNote.jsx';
 import { checkerboardStyle, spriteAssetUrl } from './spriteAssets.js';
@@ -47,10 +46,6 @@ export default function TrackWorkflow({
     direction,
     runs.find((run) => run.direction === direction),
   ])), [runs, directions]);
-  const working = runs.some((run) => ['rendering', 'postprocessing'].includes(run.status));
-
-  useAutoRefetch(onChanged, 4000, { enabled: working, immediate: false, pollOnly: true });
-
   const [approve, approving] = useAsyncAction(async (direction, runId) => {
     await approveSpriteTrack(record.id, definition.id, { direction, runId }, { silent: true });
     toast.success(`${definition.label} ${directional ? `${direction} ` : ''}approved`);
@@ -159,7 +154,7 @@ export default function TrackWorkflow({
                       // server-side) and the note key are decided HERE, where the
                       // definition and the facing already are, so the page's
                       // handler needs no per-track lookup and stays stable across
-                      // the 4s poll that replaces `detail` wholesale.
+                      // record refreshes that replace `detail` wholesale.
                       onClick={() => onGenerate(definition.id, {
                         direction: directional ? direction : undefined,
                         correctionKey,

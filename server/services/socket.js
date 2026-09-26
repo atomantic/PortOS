@@ -1,3 +1,4 @@
+import { spriteEvents } from './sprites/events.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
@@ -829,6 +830,20 @@ function setupMediaGenEventForwarding() {
       : kind === 'image' ? 'image-gen'
         : kind === 'audio' ? 'audio-gen'
           : null;
+
+  spriteEvents.on('changed', ({ recordId }) => {
+    ioInstance?.emit('sprites:changed', { recordId });
+  });
+  // Queue lifecycle events carry the persisted job's routing tags. Generation
+  // transport events can precede the queue's terminal state, so do not use them.
+  for (const event of ['enqueued', 'started', 'completed', 'failed', 'canceled']) {
+    mediaJobEvents.on(event, (job) => {
+      for (const tagKey of ['spriteRef', 'spriteWalk', 'spriteAnimation']) {
+        const recordId = job.params?.[tagKey]?.recordId;
+        if (recordId) ioInstance?.emit('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
+      }
+    });
+  }
 
   mediaJobEvents.on('changed', () => {
     ioInstance?.emit('media-jobs:changed', {});

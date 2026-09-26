@@ -71,7 +71,6 @@ const ALLOWED = {
   'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (job state arrives through socket events)',
   'src/components/music/strudelFrame.js': 'source text for the sandboxed player frame: its recording-progress tick runs inside the iframe, not in PortOS; no I/O',
   'src/components/sprites/LoopTrimmer.jsx': 'advances the sprite playback frame; no I/O',
-  'src/components/sprites/WalkWorkflow.jsx': 'counts ticks to self-cancel a stale-queued attach after ~60s — useAutoRefetch does not model a bounded poll',
   'src/components/universeBuilder/graph/GraphTimeline.jsx': 'advances the universe-graph playback position one issue per tick; no I/O',
   'src/components/voice/VoiceWidget.jsx': 'samples the in-memory VAD RMS level every 100ms; no I/O',
   'src/components/writers-room/ExercisePanel.jsx': 'elapsed-time clock tick; no I/O',

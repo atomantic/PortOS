@@ -1,3 +1,4 @@
+import { emitSpriteChanged } from './events.js';
 /**
  * The generic per-track animation workflow (#3136).
  *
@@ -116,6 +117,7 @@ async function saveRun(recordId, run) {
   const dir = join(spriteDir(recordId), runRelPath(run.id));
   await ensureDir(dir);
   await atomicWrite(join(dir, RUN_RECORD_NAME), run);
+  emitSpriteChanged(recordId);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { emitSpriteChanged } from './events.js';
 /**
  * Sprites — reference workflow orchestration (issue #2896, phase 2).
  *
@@ -148,6 +149,7 @@ async function saveManifest(recordId, manifest) {
   const abs = join(spriteDir(recordId), manifestRelPath(recordId));
   await ensureDir(join(spriteDir(recordId), 'reference'));
   await atomicWrite(abs, manifest);
+  emitSpriteChanged(recordId);
 }
 
 function seedManifest(recordId, { directional = true } = {}) {
@@ -856,6 +858,7 @@ export async function attachReferenceCandidate(ctx) {
     candidateSha256: await sha256File(dest),
     sourceFilename: filename,
   });
+  emitSpriteChanged(recordId);
   return { candidatePath: relPath };
 }
 
