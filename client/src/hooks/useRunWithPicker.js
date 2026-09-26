@@ -77,5 +77,7 @@ export default function useRunWithPicker() {
     loading,
     effort,
     setEffort,
+    setSelectedProviderId,
+    setSelectedModel,
   };
 }
