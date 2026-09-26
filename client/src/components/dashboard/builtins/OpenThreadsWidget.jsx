@@ -2,10 +2,13 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { ListTodo, Pin } from 'lucide-react';
 import * as api from '../../../services/api';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+import { useTimeTick } from '../../../hooks/useTimeTick';
 import { isThreadOverdue, threadNextLine } from '../../../lib/brainThreads.js';
 import { formatCount, formatDateShort } from '../../../utils/formatters';
 import ThreadSourceClosedAction from '../../brain/ThreadSourceClosedAction';
+
+const RESOURCE_EVENTS = ['brain:threads:changed'];
 
 // The Brain bullet journal's open loops (#7664) with the next action on each,
 // so what you are on the hook for is one glance away. A *thread* here is a
@@ -22,15 +25,17 @@ const WIDGET_STATUSES = 'open,waiting';
 
 export default function OpenThreadsWidget() {
   const [completed, setCompleted] = useState({});
-  const { data, loading } = useAutoRefetch(
+  // Overdue coloring is local clock state, not a reason to re-read the API.
+  useTimeTick(60000);
+  const { data, loading } = useSocketResource(
     () => api.listThreads({ status: WIDGET_STATUSES, limit: ROWS, offset: 0 }, { silent: true }),
-    60_000,
+    { events: RESOURCE_EVENTS },
   );
 
   if (loading && !data) return null;
 
   const fetchedRows = Array.isArray(data?.threads) ? data.threads : [];
-  // Retain successful writes over a poll that started before completion.
+  // Retain successful writes over a read that started before completion.
   // A genuinely newer record (e.g. reopened in Brain) becomes visible again.
   const rows = fetchedRows.filter((t) => !completed[t.id] || t.updatedAt > completed[t.id]);
   const total = (Number.isFinite(data?.total) ? data.total : fetchedRows.length) - (fetchedRows.length - rows.length);

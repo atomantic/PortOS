@@ -9,7 +9,7 @@
  * `archiveStaleAgents`) plus the completed agents still resident in
  * `state.agents` — so it is correct the moment a run finishes. Both are
  * process-cached (`loadAgentIndex` memoizes, `loadState` holds `stateCache`),
- * so the widget's 30-second poll costs no disk I/O.
+ * so event-triggered dashboard reads cost no disk I/O.
  *
  * It replaces the `data/cos/productivity.json` aggregate this used to read
  * (#7599). That file had no automatic writer: nothing in the server called the
@@ -38,6 +38,7 @@
  * learning rather than this grid.
  */
 
+import { scheduleDashboardExpiry } from './dashboardEvents.js';
 import { loadState } from './cosState.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 
@@ -102,6 +103,9 @@ async function countRunsByDate(sinceStr) {
 export async function getActivityCalendar(weeks = 12) {
   const today = new Date();
   const todayStr = dayKey(today);
+  const nextDay = new Date(today);
+  nextDay.setUTCHours(24, 0, 0, 0);
+  scheduleDashboardExpiry('cos:day:changed', nextDay.getTime());
 
   // Sunday of the current week, then back N-1 whole weeks — so the grid is
   // exactly `weeks` columns wide whatever weekday it is read on.

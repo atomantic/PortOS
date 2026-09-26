@@ -1,4 +1,5 @@
 import { meatspaceEvents } from '../meatspaceEvents.js';
+import { dashboardEvents } from '../dashboardEvents.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -197,4 +198,19 @@ describe('loadJSON — status-less MortalLoom goals reach strict active-goal con
     const status = await getIdentityStatus();
     expect(status.sections.goals.status).toBe('unavailable');
   });
+});
+
+// Regression: persisted goal edits invalidate dashboards, unrelated identity writes do not.
+it('announces goal persistence only after the readable store has changed', async () => {
+  const listener = vi.fn();
+  dashboardEvents.on('goals:changed', listener);
+  try {
+    await saveJSON(GOALS_FILE, { goals: [{ id: 'example', title: 'Updated goal' }] });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(await loadJSON(GOALS_FILE, DEFAULT_GOALS)).toMatchObject({ goals: [{ title: 'Updated goal' }] });
+    await saveJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    dashboardEvents.off('goals:changed', listener);
+  }
 });

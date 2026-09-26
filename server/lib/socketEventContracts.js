@@ -44,6 +44,47 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'cos:day:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate UTC-day aggregates when the current activity-calendar day expires.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'goals:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate goals after a local write or peer merge.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'backup:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate backup status and snapshots after lifecycle or configuration changes.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:decisions:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the decision summary after an appended or collapsed decision.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:schedule:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate upcoming tasks after schedule persistence.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:scheduler:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate upcoming tasks after scheduler registration, cancellation or execution.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:agents:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate agent aggregates after deletion or cleanup.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:learning:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate learning aggregates and upcoming estimates after persistence.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+
   'digital-twin:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Digital Twin status/settings after persistence or completed peer sync; contains no personal data.',

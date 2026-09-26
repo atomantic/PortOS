@@ -3,13 +3,15 @@ import { Link } from 'react-router';
 import { Wrench, ArrowRight } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatDurationMs } from '../../../utils/formatters';
+
+const RESOURCE_EVENTS = ['cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:cos:changed'];
 
 // Auto-fix telemetry (issue #2328). Self-fetches the aggregated
 // GET /api/autofix/metrics (derived server-side from persisted
 // metadata.diagnostics) — this data is NOT part of dashboardState, so unlike
-// the dashboardState-slice widgets this one owns its own poll. Renders the
+// the dashboardState-slice widgets this one owns its own subscription. Renders the
 // overall auto-fix success rate, a daily success-rate trend sparkline, the
 // fallback-tier breakdown, and median time-to-recovery.
 
@@ -24,8 +26,8 @@ const TIER_COLORS = {
 // sentinel ("no data yet" must not read as 0%).
 const pct = (rate) => (rate == null ? '—' : `${Math.round(rate * 100)}%`);
 
-// Stable serialization of every slice the widget renders — the poll de-dupe key.
-// Deliberately omits the server's `generatedAt` wall clock (changes every poll)
+// Stable serialization of every slice the widget renders — the resource comparison key.
+// Deliberately omits the server's `generatedAt` wall clock (changes every read)
 // so identical data doesn't force a re-render, while any change to the rendered
 // tiers / trend / recovery summary does.
 const renderKey = (d) =>
@@ -79,17 +81,17 @@ function TrendSparkline({ trend }) {
 }
 
 function AutoFixMetricsWidget() {
-  const { data, loading } = useAutoRefetch(
+  const { data, loading } = useSocketResource(
     () => api.getAutoFixMetrics({ silent: true }),
-    60000,
     {
+      namespace: 'cos', events: RESOURCE_EVENTS,
       // Skip the re-render only when EVERY rendered slice is byte-identical.
-      // `generatedAt` is the server's wall clock and changes every poll, so it
+      // `generatedAt` is the server's wall clock and changes every read, so it
       // must be excluded — but the comparison otherwise serializes the full
       // rendered payload (overall, per-tier rows, the trend series, the
       // time-to-recovery summary) so a tier redistribution or a same-length
       // trend whose values shifted still re-renders. The payload is tiny (a
-      // few tiers + ≤30 trend days), so stringifying each poll is negligible.
+      // few tiers + ≤30 trend days), so stringifying each snapshot is negligible.
       compare: (prev, next) => renderKey(prev) === renderKey(next),
     },
   );

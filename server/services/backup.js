@@ -6,6 +6,7 @@
  * Integrates with eventScheduler for daily cron scheduling.
  */
 
+import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { access, lstat, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
@@ -543,6 +544,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
     await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
+    dashboardEvents.emit('backup:changed');
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
@@ -573,6 +575,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     await ensureDir(dataDestDir);
     activeSnapshotId = snapshotId;
     await writeFile(markerPath(snapshotDir), '');
+    dashboardEvents.emit('backup:changed');
 
     const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
     changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
@@ -633,6 +636,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       });
     }
 
+    dashboardEvents.emit('backup:changed');
     return { ...result, prunedSnapshots: pruned.pruned };
   } catch (err) {
     return fail(err);
@@ -1063,6 +1067,7 @@ export async function deleteSnapshot(destPath, snapshotId, { source } = {}) {
     });
   }
   await rm(snapshotDir, { recursive: true, force: true });
+  dashboardEvents.emit('backup:changed');
   console.log(`💾 Backup snapshot deleted: ${resolvedSource}/${snapshotId}`);
   return { deleted: true, snapshotId, source: resolvedSource };
 }
@@ -1579,10 +1584,11 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
 }
 
 /**
- * Get current backup state from disk.
+ * Get persisted backup state with the current in-process run status.
  */
 export async function getState() {
-  return readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
+  const state = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
+  return isRunning ? { ...state, status: 'running' } : state;
 }
 
 /**

@@ -7,6 +7,7 @@
  */
 
 import { meatspaceEvents } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -437,6 +438,7 @@ async function applyGoalsRemote(remoteData) {
 
   if (goalsChanged || remoteMaxTs > localMaxTs) {
     await atomicWrite(GOALS_FILE, merged);
+    dashboardEvents.emit('goals:changed');
     console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
     return { applied: true, count: mergedGoals.length };
   }

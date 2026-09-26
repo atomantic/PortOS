@@ -1,4 +1,6 @@
 import { meatspaceEvents } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
+import { settingsEvents } from './settings.js';
 import { recordEvents } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
@@ -425,6 +427,28 @@ function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event
 
 // Set up CoS event forwarding
 function setupCosEventForwarding() {
+  // Dashboard invalidations deliberately omit decisions, prompts and settings.
+  for (const event of ['goals:changed', 'backup:changed']) {
+    dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
+  }
+  for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
+    dashboardEvents.on(event, () => broadcastToCos(event, {}));
+  }
+  settingsEvents.on('settings:updated', () => ioInstance?.emit('backup:changed', {}));
+  for (const [source, target] of [
+    ['scheduler:scheduled', 'cos:scheduler:changed'],
+    ['scheduler:ran', 'cos:scheduler:changed'],
+    ['scheduler:cancelled', 'cos:scheduler:changed'],
+    ['agents:changed', 'cos:agents:changed'],
+    ['learning:changed', 'cos:learning:changed'],
+  ]) {
+    cosEvents.on(source, data => {
+      broadcastToCos(target, {});
+      if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
+        ioInstance?.emit('backup:changed', {});
+      }
+    });
+  }
   // Status events
   cosEvents.on('goals:changed', data => broadcastToCos('cos:goals:changed', data));
   cosEvents.on('status', (data) => broadcastToCos('cos:status', data));

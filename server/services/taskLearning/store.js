@@ -458,6 +458,7 @@ export async function saveLearningData(data) {
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
   cosEvents.emit('goals:changed', {});
+  cosEvents.emit('learning:changed');
 }
 
 /**

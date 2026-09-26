@@ -1,4 +1,5 @@
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
@@ -149,12 +150,44 @@ describe('socket.js — initSocket', () => {
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
+    dashboardEvents.removeAllListeners();
   });
 
   it('forwards death-clock invalidations without personal data', () => {
     io.emitted.length = 0;
     meatspaceEvents.emit('death-clock:changed', {});
     expect(io.emitted).toEqual([['meatspace:death-clock:changed', {}]]);
+  });
+
+  it('forwards dashboard invalidations without source records and gates CoS events on subscription', () => {
+    const subscriber = makeSocket('dashboard-subscriber');
+    const other = makeSocket('dashboard-other');
+    io.connect(subscriber);
+    io.connect(other);
+    createdSockets.push(subscriber, other);
+    subscriber.handlers['cos:subscribe']();
+    for (const [source, target] of [
+      ['scheduler:scheduled', 'cos:scheduler:changed'],
+      ['scheduler:ran', 'cos:scheduler:changed'], ['scheduler:cancelled', 'cos:scheduler:changed'],
+      ['agents:changed', 'cos:agents:changed'], ['learning:changed', 'cos:learning:changed'],
+    ]) {
+      queueListeners.cos.find(([event]) => event === source)[1]({ privateContent: 'Example private record' });
+      expect(subscriber.emitted).toContainEqual([target, {}]);
+      expect(other.emitted.some(([event]) => event === target)).toBe(false);
+    }
+    dashboardEvents.emit('cos:day:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:day:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:day:changed')).toBe(false);
+    dashboardEvents.emit('cos:decisions:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:decisions:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:decisions:changed')).toBe(false);
+    dashboardEvents.emit('cos:schedule:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:schedule:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:schedule:changed')).toBe(false);
+    io.emitted.length = 0;
+    dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
+    dashboardEvents.emit('backup:changed', { destPath: '/private/example' });
+    expect(io.emitted).toEqual([['goals:changed', {}], ['backup:changed', {}]]);
   });
 
   it('forwards Digital Twin changes without leaking source records', () => {
