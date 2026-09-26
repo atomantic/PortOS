@@ -153,6 +153,26 @@ placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.
 | `POST …/serve/retry` | Restart from the saved config. |
 | `DELETE …/serve` | Stop serve and disable restore-on-boot. |
 
+### Serve process and relay health are separate
+
+A live managed serve is displayed as **process running**, not proof that a peer
+can reach PortOS. Its status includes `relayStatus` (`unknown`, `connected`, or
+`degraded`), `relayError`, and `relayObservedAt`. A reported connection failure or
+loss shows **relay degraded** while keeping the process and saved key intact.
+
+Relay evidence comes from complete, bounded Tailcat stderr lines. Only fixed
+failure summaries leave the process observer; raw endpoints, capabilities and
+credentials are not returned or logged. Overlong lines are discarded entirely.
+An explicit connection message for the affected relay clears the failure; an
+unrelated relay connecting does not. Evidence expires after five minutes to
+**unknown**, never presumed healthy. A replacement process starts with unknown
+relay health, and stopped/replaced children cannot update its status.
+
+These observations remain in memory and update the UI through the existing
+serve-change event. They do not trigger restarts or change encryption, ingress,
+or pairing settings. Even **Relay connected** only confirms a relay connection;
+the peer health check still establishes end-to-end API reachability.
+
 ### The saved address is what makes a failed add recoverable
 
 The row is written **before** the forward is attempted. That ordering is the
