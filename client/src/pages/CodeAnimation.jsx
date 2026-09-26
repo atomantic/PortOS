@@ -9,7 +9,7 @@ import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import {
@@ -31,7 +31,7 @@ import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../uti
 import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
-const JOB_POLL_MS = 3_000;
+const JOB_EVENTS = ['code-animation:changed'];
 // Mood-board choice sentinels: follow the universe's linked board, or none.
 const BOARD_FOLLOW_UNIVERSE = 'universe';
 const BOARD_NONE = 'none';
@@ -296,7 +296,6 @@ export default function CodeAnimation() {
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
   const [preview, setPreview] = useState(null);
-  const jobIdRef = useRef(jobId);
   const hydratedJobIdRef = useRef('');
   const locallyStartedJobIdRef = useRef('');
   const {
@@ -366,25 +365,32 @@ export default function CodeAnimation() {
   const inProgressCount = galleryCounts.running;
   const completedCount = galleryCounts.completed;
 
-  // Poll the generation job named in the URL until it settles. The ref drops a
-  // response for a job the user has since replaced.
+  // Clear route-specific output before applying the newly selected resource.
   useEffect(() => {
-    jobIdRef.current = jobId;
     hydratedJobIdRef.current = '';
     setJob(null);
     setPreview(null);
     setBuilt(null);
   }, [jobId]);
-  const jobSettled = job?.id === jobId && job.status !== 'running';
-  const pollJob = useCallback(async () => {
-    const requested = jobId;
-    // Only a 404 means the job is gone; any other failure rethrows so the
-    // poller keeps trying on its next tick.
-    const next = await getCodeAnimationJob(requested, { silent: true }).catch((error) => {
-      if (error.status === 404) return { id: requested, status: 'missing', error: error.message };
+  const jobResource = useSocketResource(async () => {
+    if (!jobId) return null;
+    // Only a 404 means the job is gone. Transient failures retain the current
+    // output and offer retry, with recovery on events, reconnect or tab re-show.
+    return getCodeAnimationJob(jobId, { silent: true }).catch((error) => {
+      if (error.status === 404) return { id: jobId, status: 'missing', error: error.message };
       throw error;
     });
-    if (jobIdRef.current !== requested) return;
+  }, {
+    namespace: 'code-animation',
+    events: JOB_EVENTS,
+    resourceKey: jobId,
+    matchesEvent: (payload) => !!jobId && payload?.id === jobId,
+  });
+
+  useEffect(() => {
+    const next = jobResource.data;
+    if (!next) return;
+    const requested = jobId;
     setJob(next);
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
     else setPreview(null);
@@ -410,8 +416,7 @@ export default function CodeAnimation() {
         briefKey: JSON.stringify(toBrief(restoredDraft)),
       } : null);
     }
-  }, [jobId]);
-  useAutoRefetch(pollJob, JOB_POLL_MS, { enabled: !!jobId && !jobSettled, pollOnly: true });
+  }, [jobId, jobResource.data]);
 
   const handleImages = async (event) => {
     const files = [...(event.target.files || [])];
@@ -857,6 +862,12 @@ export default function CodeAnimation() {
               {job?.status === 'failed' && <span className="text-xs text-port-error">Generation failed: {job.error}</span>}
               {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available.</span>}
             </div>
+            {jobResource.error && (
+              <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-error">
+                <span>Could not refresh this generation. Its displayed status may be out of date.</span>
+                <button type="button" onClick={jobResource.refetch} className={buttonSecondary}>Retry job status</button>
+              </div>
+            )}
             <details className="text-xs text-gray-400">
               <summary className="cursor-pointer select-none">Preview HTML from another LLM</summary>
               <div className="mt-2 space-y-2">
