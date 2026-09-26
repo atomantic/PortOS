@@ -11,6 +11,12 @@ router.post('/render', asyncHandler(async (req, res) => {
     const { snapshotAssets } = await import('../services/htmlComposition/browser.js');
     const { validateLaunchVideoAssets } = await import('../lib/launchVideoValidation.js');
     validateLaunchVideoAssets(await snapshotAssets(params.directory), params.launchVideo);
+    if (params.launchVideo?.appId) {
+      const { getAppById } = await import('../services/apps.js');
+      if (!await getAppById(params.launchVideo.appId)) throw new ServerError('App not found', { status: 404 });
+      const expected = `launch-videos/${params.launchVideo.appId}/${params.launchVideo.runId}/composition`;
+      if (params.directory !== expected) throw new ServerError('Launch-video directory does not match its app and run', { status: 400 });
+    }
   }
   res.status(202).json(await enqueueJob({ kind: 'html-composition', params }));
 }));

@@ -14,7 +14,7 @@ const readImages = async diskReader => (diskReader || (await import('../imageGen
 // negative prompts, provider payloads — stays on the record and is read on
 // demand (`/gallery/lookup`, `/video-gen/history/:id`).
 const COMPACT_FIELDS = ['id', 'filename', 'path', 'thumbnail', 'createdAt', 'hidden', 'width', 'height',
-  'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'renderMs', 'loraFilenames',
+  'appId', 'model', 'modelId', 'mode', 'seed', 'steps', 'numFrames', 'fps', 'renderMs', 'loraFilenames',
   'lora_filenames', 'loraPaths', 'lora_paths', 'stitchedFrom', 'upscaledFrom', 'extractedFromVideoId',
   'cleanedFrom', 'autoCleaned', 'regenerated', 'watermarkRemoved'];
 const COMPACT_PROMPT_CHARS = 240;

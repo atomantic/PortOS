@@ -68,8 +68,20 @@ explicitly when either binary is unavailable; route and queue tests still run.
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
 This option is required for directories rooted at `launch-videos/` and can also
-be applied to other composition directories. The app-detail action and CoS
-planning task are not part of this API foundation yet (tracked in #8649).
+be applied to other composition directories. The app-detail Make launch video action queues a user-triggered CoS task with
+tone, direction, format, duration and an optional existing Music-library track.
+Closing its drawer does not cancel the run; use CoS agents to follow or cancel it.
+Overlapping submissions for the same app are refused until its task settles.
+No schedule or boot-time provider call is installed.
+
+App runs pass `appId` and `runId` together in `launchVideo`, with directory exactly
+`launch-videos/<appId>/<runId>/composition`. The run is pinned to this instance.
+On success, the renderer exclusively creates `plan.md`, `storyboard.json`,
+`caption.txt`, `video.mp4` and `poster.jpg` beside `composition/`, using the
+validated in-memory source snapshot. Media History retains its normal video
+and thumbnail copies with app/run metadata. The app page shows the latest video
+and caption, a copy control, and a new-run action. Existing artifacts are never
+overwritten. This reuses CoS queues and media history; it adds no record store.
 
 Alongside `index.html`, put non-empty `plan.md`, `caption.txt`, and
 `storyboard.json` in the composition directory. A storyboard has this shape:

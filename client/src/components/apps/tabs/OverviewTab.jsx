@@ -4,6 +4,7 @@ import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, Archi
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { isStandardizable, NON_PM2_TYPES } from '../constants';
+import LaunchVideoPanel from '../LaunchVideoPanel';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -126,6 +127,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
   return (
     <div className="space-y-6">
+      <LaunchVideoPanel key={app.id} app={app} />
       {/* Capped width so key/value pairs stay legible. (JIRA config + the sprint
           Kanban board, which needed the full page width, now live on the app's
           own JIRA tab.) */}

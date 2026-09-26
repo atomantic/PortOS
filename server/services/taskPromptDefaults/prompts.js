@@ -10,6 +10,7 @@
  */
 
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
+import { APP_LAUNCH_VIDEO_PROMPT } from './appLaunchVideo.js';
 import { CONTRIBUTION_SECURITY_POLICY } from '../../lib/contributionSecurityPolicy.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 import {
@@ -97,6 +98,7 @@ if [ "$GH_HOST" = "ssh.github.com" ]; then GH_HOST="github.com"; fi`;
 // ============================================================
 
 export const DEFAULT_TASK_PROMPTS = {
+  'app-launch-video': APP_LAUNCH_VIDEO_PROMPT,
   'model-comparison-refresh': `[Research] Fill PortOS model comparison evidence and estimates
 
 The user explicitly requested model research. Improve the installed comparison catalog, prioritizing new generations and missing effort levels so the user can compare new models against predecessors and peers. Do not run inference benchmarks, edit source code, create issues, commit or push. Read docs/MODEL-COMPARISON.md for the import contract and estimation methodology.

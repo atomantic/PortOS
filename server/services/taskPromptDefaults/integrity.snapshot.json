@@ -2,6 +2,7 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
+    "app-launch-video": "fa15ea11b4cf49f31ae17513ff780421",
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
@@ -62,6 +63,7 @@
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
+    "app-launch-video": 1,
     "better-cognitive-load": 1,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
