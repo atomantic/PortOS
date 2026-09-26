@@ -338,6 +338,18 @@ describe('backup routes', () => {
       );
     });
 
+    it('reports a refused preflight and a concurrent maintenance request without success', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restorePostgres.mockResolvedValueOnce({ status: 'failed', reason: 'restore_preflight' });
+      const refused = await request(buildApp()).post('/api/backup/restore-db').send({ snapshotId: 'snap-1' });
+      expect(refused.body).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+      backup.restorePostgres.mockRejectedValueOnce(Object.assign(new Error('Restore in progress'), {
+        status: 503, code: 'DATABASE_MAINTENANCE',
+      }));
+      const busy = await request(buildApp()).post('/api/backup/restore-db').send({ snapshotId: 'snap-1', dryRun: false });
+      expect(busy.status).toBe(503);
+    });
+
     it('forwards source with database restore preview and execution requests', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
       backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: true });

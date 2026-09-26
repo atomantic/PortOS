@@ -632,6 +632,20 @@ jobs:
       - name: Provision test database (portos_test)
         run: npm run setup:db:test --prefix server
 
+      # Backup restore coverage takes a real pg_dump. The runner's default
+      # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
+      - name: Install matching PostgreSQL client
+        run: |
+          # Ubuntu's default repository only supplies its bundled major.
+          # Use PostgreSQL's signed repository for the service's major.
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl --fail --silent --show-error -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
       - name: Run DB-backed tests (portos_test)
         run: |
           set +e

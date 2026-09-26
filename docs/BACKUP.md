@@ -151,3 +151,20 @@ This is **read-time resolution only**: nothing on disk changes, sparse configura
 
 - [Storage Classification Contract](./STORAGE.md) — which data lives in Postgres vs files (and therefore which half of a snapshot captures it).
 - [`docs/superpowers/specs/2026-06-05-verified-pg-backup-design.md`](./superpowers/specs/2026-06-05-verified-pg-backup-design.md) — design rationale for verified, restorable DB backups.
+
+### Restoring an older database snapshot
+
+Database restore is a **full replacement**, not a merge. It removes current
+PortOS tables, functions and sequence state before replaying the snapshot,
+including tables introduced after the backup. Current schema upgrades and
+ordered migrations then recreate newer tables consistently without retaining
+post-snapshot records. The public namespace's owner and permissions are retained.
+
+Preview performs read-only ownership/object/dependency checks. Unknown objects
+or external dependencies refuse the restore; the reset uses `RESTRICT`, never
+an unrestricted cascade. Reset and dump replay share one PostgreSQL transaction
+with `ON_ERROR_STOP`: a replay failure restores the previous rows and constraints.
+Schema reconciliation follows the commit; a reconciliation failure explicitly
+reports that replay committed and recovery still needs attention. Application
+database operations drain before reset; new operations receive a temporary
+maintenance error until replay and reconciliation finish (including failures).

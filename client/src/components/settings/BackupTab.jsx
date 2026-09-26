@@ -770,7 +770,7 @@ export function BackupTab() {
             This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
             {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
             {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
-            {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+            {' '}as a full replacement of the live PostgreSQL database. All current application tables and rows are replaced, including tables added after this snapshot. Newer tables are recreated empty and current migrations run afterward.
           </p>
           <div className="flex justify-end gap-2">
             <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
