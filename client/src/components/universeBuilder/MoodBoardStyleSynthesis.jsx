@@ -27,7 +27,7 @@ const apiProviderFilter = (p) => p.enabled && p.type === 'api';
 // until the modal actually opens. The parent keys this by universe+board, so
 // switching targets remounts it and a stale proposal can never be adopted
 // into a different universe.
-function SynthesisBody({ boardId, styleNotes, influences, locked, onAdopt, onBusyChange, onClose }) {
+function SynthesisBody({ targetLabel, boardId, styleNotes, influences, locked, onAdopt, onBusyChange, onClose }) {
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
   const [adopting, setAdopting] = useState(false);
@@ -116,7 +116,7 @@ function SynthesisBody({ boardId, styleNotes, influences, locked, onAdopt, onBus
       {result ? (
         <StyleDiffPreview
           analysis={result}
-          description="Review this diff before deciding whether the board's synthesized style should update the universe."
+          description={`Review this diff before deciding whether the board's synthesized style should update the ${targetLabel}.`}
         />
       ) : null}
       {result?.context?.droppedItems ? (
@@ -145,7 +145,7 @@ function SynthesisBody({ boardId, styleNotes, influences, locked, onAdopt, onBus
             type="button"
             onClick={adopt}
             disabled={busy || !result.diff?.hasChanges}
-            title={result.diff?.hasChanges ? 'Apply the proposed style guide to the universe' : 'The current guidance already matches the proposal'}
+            title={result.diff?.hasChanges ? `Apply the proposed style guide to the ${targetLabel}` : 'The current guidance already matches the proposal'}
             className="inline-flex min-h-[38px] items-center gap-2 rounded bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50"
           >
             {adopting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -160,6 +160,7 @@ function SynthesisBody({ boardId, styleNotes, influences, locked, onAdopt, onBus
 export default function MoodBoardStyleSynthesis({
   boardId,
   universeId,
+  targetLabel = 'universe',
   styleNotes,
   influences,
   locked,
@@ -178,14 +179,14 @@ export default function MoodBoardStyleSynthesis({
     setOpen(false);
   };
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <button
         type="button"
         onClick={() => setOpen(true)}
         disabled={!saved}
         title={saved
-          ? 'Distill the linked mood board into the universe style guide'
-          : 'Save the universe before synthesizing its style'}
+          ? `Distill the linked mood board into the ${targetLabel} style guide`
+          : `Save the ${targetLabel} before synthesizing its style`}
         className="inline-flex min-h-[38px] items-center gap-1.5 rounded border border-port-accent/40 px-2.5 py-1.5 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
       >
         <Sparkles size={14} />
@@ -199,11 +200,12 @@ export default function MoodBoardStyleSynthesis({
         closeOnBackdrop={!bodyBusy}
         usePortal
         panelClassName="bg-port-card border border-port-border rounded-xl"
-        ariaLabel="Synthesize universe style from mood board"
+        ariaLabel={`Synthesize ${targetLabel} style from mood board`}
       >
         {open ? (
           <SynthesisBody
             key={`${universeId || ''}:${boardId}`}
+            targetLabel={targetLabel}
             boardId={boardId}
             styleNotes={styleNotes}
             influences={influences}
