@@ -280,7 +280,7 @@ export default function ReviewerPicker({
       if (providerReviewUnsupported?.[token]) {
         return {
           label: "can't review",
-          title: `${labelFor(token)} has no runnable review transport on this machine. Configure its command or API transport in AI Providers.`
+          title: `${labelFor(token)} cannot run isolated, tool-free claim/public reviews on this machine. Configure its command, select API mode, or choose a supported reviewer harness in AI Providers.`
         };
       }
       return null;

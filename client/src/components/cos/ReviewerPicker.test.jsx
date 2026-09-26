@@ -136,7 +136,8 @@ describe('ReviewerPicker', () => {
           onChange={() => {}}
         />
       );
-      expect(screen.getByText("can't review")).toBeInTheDocument();
+      expect(screen.getByText("can't review")).toHaveAttribute('title', expect.stringContaining('tool-free claim/public reviews'));
+      expect(screen.getByText("can't review")).toHaveAttribute('title', expect.stringContaining('select API mode, or choose a supported reviewer harness'));
     });
 
     it('says nothing about a provider absent from the map, or when it was never fetched', () => {
