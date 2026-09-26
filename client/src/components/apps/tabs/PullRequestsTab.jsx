@@ -20,7 +20,6 @@ import useRunWithPicker from '../../../hooks/useRunWithPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../../hooks/useCodeReviewDefaults';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../lib/reviewerModels';
-import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import RunActionButton from './RunActionButton';

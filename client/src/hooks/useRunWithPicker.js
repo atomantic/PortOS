@@ -58,11 +58,12 @@ export default function useRunWithPicker() {
     highlightToolUse: true,
   };
 
-  // Request fragment with empty values dropped
+  // Request fragment matching the original pattern: include all fields,
+  // matching the previous behavior of `provider || undefined, model || undefined, effort || undefined`
   const pin = {
-    ...(selectedProviderId ? { provider: selectedProviderId } : {}),
-    ...(selectedModel ? { model: selectedModel } : {}),
-    ...(effort ? { effort } : {}),
+    provider: selectedProviderId || undefined,
+    model: selectedModel || undefined,
+    effort: effort || undefined,
   };
 
   // Also expose individual properties for convenience and agentPicker compatibility

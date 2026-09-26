@@ -19,7 +19,6 @@ import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import ReviewerPicker from '../../cos/ReviewerPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { chipColors } from '../../../lib/chipContrast';
-import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo, formatCount } from '../../../utils/formatters';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
