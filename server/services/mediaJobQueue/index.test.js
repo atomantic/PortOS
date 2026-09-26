@@ -781,6 +781,23 @@ describe('mediaJobQueue', () => {
     expect(settleVideoAttempt).toHaveBeenCalledWith('example-project', 'example-attempt', { jobId: job.jobId, status: 'uncertain' });
   });
 
+  it('refuses cancellation when completion starts during provider resolution', async () => {
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'import race' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+    // cancelJob passes its first guard synchronously and yields at the dynamic
+    // import. Complete before that promise resumes to exercise the second guard.
+    const cancellation = mediaJobQueue.cancelJob(job.jobId);
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: 'example.mp4' });
+
+    await expect(cancellation).resolves.toMatchObject({
+      ok: false, code: 'ALREADY_TERMINAL', error: 'Job is already finishing',
+    });
+    expect(stubs.cancelVideo).not.toHaveBeenCalled();
+    expect(mediaJobQueue.getJob(job.jobId).cancelRequested).toBeFalsy();
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
   it('cancel during the terminal drain window is refused, not "canceling"', async () => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'finishing race' } });
     await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
