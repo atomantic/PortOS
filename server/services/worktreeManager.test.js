@@ -184,7 +184,7 @@ describe('Worktree dependency preparation', () => {
     stat.mockImplementation(missing);
     readlink.mockImplementation(path => Promise.resolve(normalize(path).includes('/server/')
       ? join('/foreign', 'node_modules')
-      : normalize(path).replace('/worktree/', '/repo/')));
+      : path.replace('worktree', 'repo')));
 
     await unlinkWorktreeDependencies('/repo', '/worktree');
 
