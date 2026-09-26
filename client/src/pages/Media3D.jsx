@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
 import useMounted from '../hooks/useMounted';
 import { nameFromImageFilename, timeAgo } from '../utils/formatters';
@@ -18,9 +18,6 @@ import { renderOptionsBody, SUBJECT_SCALE_DEFAULT } from '../lib/imageTo3dRender
 import { isTargetReady, unavailableReasonLabel } from '../lib/imageTo3dReasons';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
-// Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
-const POLL_INTERVAL_MS = 2500;
-
 export default function Media3D() {
   const [searchParams, updateParams] = useUrlParams();
   // URL is the source of truth for what's open: the source image, the chosen
@@ -31,8 +28,8 @@ export default function Media3D() {
 
   const { targets, loading, error, reload: reloadTargets } = useImageTo3dTargets();
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Render lifecycle: a create kicks off an on-device render, then we poll the
-  // record (via useAutoRefetch below) until it lands (ready → preview) or fails
+  // Render lifecycle: a create kicks off an on-device render; model events
+  // refresh the record until it lands (ready → preview) or fails
   // (error → surfaced inline, where the runner's actionable HF-auth message shows).
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
@@ -55,7 +52,7 @@ export default function Media3D() {
   // Central HF-token status (stored / env / cli) for the gated-model notice. `present`
   // is tri-state — see useHfTokenStatus; `null` means unknown, not absent.
   const { present: hfTokenPresent, source: hfTokenSource, refresh: refreshHfToken } = useHfTokenStatus();
-  const mountedRef = useMounted(); // gate setState after the create/poll awaits
+  const mountedRef = useMounted(); // gate setState after the create awaits
 
   const loadRecords = useCallback(() => {
     listImageTo3dModels({ silent: true })
@@ -111,30 +108,28 @@ export default function Media3D() {
 
   const handlePick = (item) => { updateParams({ image: item.filename }); setPickerOpen(false); };
 
-  // One poll tick against the in-flight record. Let a transient GET *throw* so
-  // useAutoRefetch logs and retries next tick — a multi-minute render must not be
-  // abandoned on a single network blip; a genuine render failure comes back as a
-  // `failed` record, handled below. Reaching a terminal state clears `generating`,
-  // which flips the hook's `enabled` off and stops the interval.
-  const pollTick = useCallback(async () => {
-    if (!modelId) return;
-    const model = await getImageTo3dModel(modelId, { silent: true });
-    if (!mountedRef.current) return;
-    const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
-    if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
-    // Patch the just-polled record into the library in place — we already hold
-    // the fresh row, so re-fetching the whole list would be wasted I/O (the
-    // repo's reactive-update convention).
-    if (model.status === 'ready' && model.assetPath) {
-      setGenPercent(100); updateParams({ glb: model.assetPath }); setGenerating(false); patchRecord(model);
-    } else if (model.status === 'failed' || model.status === 'canceled') {
-      // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
-      setGenError(model.error || 'The render did not finish.'); setGenerating(false); patchRecord(model);
+  const { data: activeModel, error: modelError, loading: modelLoading } = useModelLifecycle(modelId, getImageTo3dModel);
+  useEffect(() => {
+    if (!modelId || modelLoading) return;
+    if (modelError) {
+      setGenError(modelError.message || 'Could not refresh the render. Reconnect or return to this tab to retry.');
+      return;
     }
-    // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
-  }, [modelId, updateParams, mountedRef, patchRecord]);
-
-  useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
+    if (!activeModel) {
+      setGenError('This 3D model no longer exists.');
+      setGenerating(false);
+      return;
+    }
+    const latest = activeModel.runs?.at(-1);
+    if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
+    patchRecord(activeModel);
+    setGenError(null);
+    if (activeModel.status === 'ready' && activeModel.assetPath) {
+      setGenPercent(100); updateParams({ glb: activeModel.assetPath }); setGenerating(false);
+    } else if (activeModel.status === 'failed' || activeModel.status === 'canceled') {
+      setGenError(activeModel.error || 'The render did not finish.'); setGenerating(false);
+    }
+  }, [activeModel, modelError, modelLoading, modelId, patchRecord, updateParams]);
 
   const handleGenerate = useCallback(async () => {
     if (!selectedImage || !selectedTarget) return;

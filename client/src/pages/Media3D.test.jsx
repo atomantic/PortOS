@@ -1,5 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+afterEach(() => { vi.useRealTimers(); });
+
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({ default: {
+  on: (event, fn) => { if (!socketHandlers.has(event)) socketHandlers.set(event, new Set()); socketHandlers.get(event).add(fn); },
+  off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+} }));
+const emitModel = async (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { imageTo3dTarget } from '../lib/imageTo3dTargetFixture';
 import Media3D from './Media3D';
@@ -127,6 +138,31 @@ describe('Media3D — generation workspace', () => {
       expect.anything(),
     ));
     expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/image-to-3d/m1/model.glb');
+  });
+
+  it('updates generation from matching events, reconnect and tab show without status polling', async () => {
+    createImageTo3dModel.mockResolvedValue({ id: 'm1', status: 'generating', runs: [] });
+    getImageTo3dModel.mockResolvedValue({ id: 'm1', status: 'generating', runs: [{ percent: 10 }] });
+    renderAt('/3d?image=example-robot.png');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate 3D/i }));
+    await screen.findByRole('button', { name: /Generating 10%/ });
+    vi.useFakeTimers();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await emitModel('image-to-3d:changed', { id: 'other' });
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(1);
+    getImageTo3dModel.mockResolvedValue({ id: 'm1', status: 'generating', runs: [{ percent: 70 }] });
+    await emitModel('image-to-3d:changed', { id: 'm1' });
+    expect(screen.getByRole('button', { name: /Generating 70%/ })).toBeInTheDocument();
+    await emitModel('connect');
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(3);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    getImageTo3dModel.mockResolvedValue({ id: 'm1', status: 'ready', assetPath: '/example.glb', runs: [] });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(screen.getByTestId('glb-viewer')).toHaveTextContent('/example.glb');
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
   });
 
   it('sends per-run options chosen after mount, not the values captured at mount', async () => {
