@@ -1,3 +1,4 @@
+import { spriteEvents } from './sprites/events.js';
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
@@ -439,6 +440,22 @@ describe('socket.js — initSocket', () => {
   // media-job cancellation bridge (#1791): mediaJobEvents 'canceled' → a
   // generationId-keyed *-gen:canceled broadcast so stuck render spinners clear.
   // ===========================================================================
+  it('broadcasts record-scoped sprite persistence and queue invalidations without record content', () => {
+    spriteEvents.emit('changed', { recordId: 'example-sprite', privateRecord: 'excluded' });
+    expect(io.emitted).toContainEqual(['sprites:changed', { recordId: 'example-sprite' }]);
+    for (const event of ['enqueued', 'started', 'completed', 'failed', 'canceled']) {
+      mediaJobEvents.emit(event, {
+        id: 'example-job', kind: 'image',
+        params: { spriteRef: { recordId: 'example-sprite', target: 'main', prompt: 'excluded' } },
+      });
+    }
+    expect(io.emitted.filter(([event]) => event === 'sprites:jobs-changed')).toEqual(
+      Array.from({ length: 5 }, () => ['sprites:jobs-changed', {
+        recordId: 'example-sprite', kind: 'image', tagKey: 'spriteRef',
+      }]),
+    );
+  });
+
   it('broadcasts bounded queue and checkpoint invalidations', () => {
     mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
     trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });

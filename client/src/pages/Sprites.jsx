@@ -31,6 +31,7 @@ import NewSpritePanel from '../components/sprites/NewSpritePanel.jsx';
 import SpriteSearch from '../components/sprites/SpriteSearch.jsx';
 import TabPills from '../components/ui/TabPills.jsx';
 import useDrawerTab from '../hooks/useDrawerTab.js';
+import { useSocketResource } from '../hooks/useSocketResource.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
 
@@ -42,15 +43,21 @@ import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
 // grok i2v clip per anchor, deterministic packaging, per-direction approval
 // into the finalized walk set — #2897). Publish lands in phase 4.
 
+const SPRITE_EVENTS = ['sprites:changed'];
+
 export default function Sprites() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [records, setRecords] = useState(null);
-  const [detail, setDetail] = useState(null);
-  // 'missing' (404 — record really doesn't exist) vs 'error' (transient/server
-  // failure — the record may be fine, offer a retry instead of lying).
-  const [detailState, setDetailState] = useState('idle');
-  const [retryTick, setRetryTick] = useState(0);
+  const {
+    data: detail, error: detailError, refetch: refreshDetail, updateData: setDetail,
+  } = useSocketResource(
+    () => id ? getSpriteRecord(id, { silent: true }) : Promise.resolve(null),
+    { events: SPRITE_EVENTS, resourceKey: id, matchesEvent: payload => Boolean(id) && payload?.recordId === id },
+  );
+  const detailState = detailError
+    ? ([400, 404].includes(detailError.status) ? 'missing' : 'error')
+    : detail ? 'loaded' : 'loading';
   // Catalog card thumbnails: id → record-relative locked main-reference path.
   // Only characters with a frozen main reference have one; everything else
   // falls back to its group icon.
@@ -66,7 +73,7 @@ export default function Sprites() {
   // Catalog thumbnails are only shown on the Library view (`!id`), and
   // listSpriteThumbnails is an O(records) disk scan — so fetch them when the
   // catalog is on screen, NOT from refresh() (which rides walk/reference render
-  // polling on the detail page). Best-effort: a failed fetch just falls back to
+  // refreshes on the detail page). Best-effort: a failed fetch just falls back to
   // icon placeholders. Re-runs whenever we return to the catalog, so a main
   // reference locked (or an asset added) on a detail page shows on the way back.
   useEffect(() => {
@@ -92,7 +99,7 @@ export default function Sprites() {
     setDetail((prev) => (prev?.record?.id === updated.id
       ? { ...prev, record: { ...prev.record, ...updated } }
       : prev));
-  }, []);
+  }, [setDetail]);
   const onRecordDeleted = useCallback((deletedId) => {
     setRecords((prev) => (prev || []).filter((r) => r.id !== deletedId));
     toast.success('Sprite deleted');
@@ -100,28 +107,12 @@ export default function Sprites() {
     if (id === deletedId) navigate('/sprites');
   }, [id, navigate]);
 
-  // Stable identity — ReferenceWorkflow's poll effect depends on it, and an
-  // inline arrow would tear down/recreate the interval every parent render.
   const onWorkflowChanged = useCallback(() => {
     refresh();
-    setRetryTick((t) => t + 1);
-  }, [refresh]);
+    return refreshDetail();
+  }, [refresh, refreshDetail]);
 
   useEffect(() => { refresh(); }, [refresh]);
-
-  // Same-id refetches (retryTick bumps from locks/renders/imports) keep the
-  // current detail rendered — nulling it would unmount ReferenceWorkflow and
-  // drop its in-flight render polling. Only an actual id switch clears.
-  useEffect(() => {
-    if (!id) { setDetail(null); setDetailState('idle'); return undefined; }
-    let stale = false; // rapid A→B clicks: a late A response must not clobber B
-    setDetail((prev) => (prev?.record?.id === id ? prev : null));
-    setDetailState('loading');
-    getSpriteRecord(id, { silent: true })
-      .then((d) => { if (!stale) { setDetail(d); setDetailState('loaded'); } })
-      .catch((err) => { if (!stale) setDetailState(err?.status === 404 || err?.status === 400 ? 'missing' : 'error'); });
-    return () => { stale = true; };
-  }, [id, retryTick]);
 
   // In-flight render tracking is owned HERE rather than inside each workflow
   // (#2931): the asset collection's Regenerate buttons fire the same two
@@ -135,8 +126,6 @@ export default function Sprites() {
     kind: 'video',
     tagKey: 'spriteWalk',
     tagField: 'direction',
-    onChanged: onWorkflowChanged,
-    sweepDelays: () => [1500, 8000],
     failMessage: (direction, job) => `Walk render failed for ${direction}: ${job?.error || 'see media jobs'}`,
   });
   const referenceRenders = useSpritePendingRenders({
@@ -144,7 +133,6 @@ export default function Sprites() {
     kind: 'image',
     tagKey: 'spriteRef',
     tagField: 'target',
-    onChanged: onWorkflowChanged,
   });
 
   // Correction guidance for EVERY regeneration surface is page-owned (#2964,
@@ -340,7 +328,7 @@ export default function Sprites() {
     }, { silent: true }),
     `Failed to queue ${direction} walk`,
     // Refetch immediately so the server's 'rendering' run lands before the
-    // media-job poll evicts the optimistic key (~4s) — otherwise the Generate
+    // job reconciliation evicts the optimistic key — otherwise the Generate
     // button briefly re-enables and a second click would 409 the in-flight
     // render. The server guard is the real backstop; this closes the UI gap.
     onWorkflowChanged,
@@ -354,12 +342,12 @@ export default function Sprites() {
   // so a track render must not occupy the walk direction's optimistic
   // reservation (both can legitimately be authored at once), and each owns its
   // short default source clip rather than inheriting the walk duration picker.
-  // The immediate refetch persists the observable TUI run for polling.
+  // The immediate refetch persists the observable TUI run for review.
   // The caller supplies both the request `direction` (present only for a
   // directional track) and the `correctionKey` for the card that was clicked —
   // TrackWorkflow already holds the definition and the facing, so deciding both
   // there keeps this handler dependency-light and therefore stable across the 4s
-  // detail poll, which replaces `detail` wholesale and would otherwise churn
+  // detail refresh, which replaces `detail` wholesale and would otherwise churn
   // every memoized track section.
   const generateTrack = useCallback(async (trackId, { direction, correctionKey }) => {
     try {
@@ -484,7 +472,7 @@ export default function Sprites() {
         />
         {/* Re-import while a sprite is open must refresh the open detail too,
             not just the library list. */}
-        <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
+        <ImportPanel onImported={() => { refresh(); if (id) refreshDetail(); }} />
       </div>
       <div>
         <section className="min-w-0">
@@ -523,7 +511,7 @@ export default function Sprites() {
           ) : detailState === 'error' ? (
             <div className="text-sm text-gray-400">
               Failed to load this sprite.{' '}
-              <button onClick={() => setRetryTick((t) => t + 1)} className="text-port-accent hover:underline">Retry</button>
+              <button onClick={() => refreshDetail()} className="text-port-accent hover:underline">Retry</button>
             </div>
           ) : !detail ? (
             <PageSkeleton header="none" label="Loading sprite" cards={3} sidebar={false} />
@@ -662,7 +650,7 @@ export default function Sprites() {
         open={animationTypesOpen}
         onClose={(changed) => {
           setAnimationTypesOpen(false);
-          if (changed && id) setRetryTick((t) => t + 1);
+          if (changed && id) refreshDetail();
         }}
       />
     </div>

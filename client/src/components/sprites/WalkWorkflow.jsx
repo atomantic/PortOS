@@ -593,35 +593,6 @@ export default function WalkWorkflow({
   // there too, so both entry points submit through one code path.
   const { pendingJobs } = renders;
 
-  // Keep the card in sync with server-side run progress. Three long-ish states
-  // need polling: 'rendering' (the observable grok-tui clip render, up to
-  // ~10 min — the client pending flag drops as soon as the run persists, so
-  // this poll is what carries the card through the render), 'postprocessing'
-  // (the deterministic frame-extraction/un-key, seconds-to-minutes), and a
-  // stale 'queued' with no live job (an attach waiting behind the write tail —
-  // bounded to ~60s so a genuinely dead job doesn't poll forever). 'rendering'
-  // and 'postprocessing' are legitimately long, so they poll unbounded until
-  // they flip (executeTuiRun's 30-min hard cap guarantees 'rendering' resolves).
-  // Booleans (not the runs array) as deps: refetches produce fresh array
-  // identities every 4s, which would otherwise reset the bounded tick count.
-  // 'rendering' and 'postprocessing' are legitimately long — poll unbounded
-  // until they flip; only the stale-'queued' case is bounded (~60s).
-  const unbounded = runs.some((r) => r.status === 'rendering' || r.status === 'postprocessing');
-  const awaitingAttach = runs.some((r) => r.status === 'queued' && !pendingJobs[r.direction]);
-  useEffect(() => {
-    if (!unbounded && !awaitingAttach) return undefined;
-    let ticks = 0;
-    const timer = setInterval(() => {
-      ticks += 1;
-      if (!unbounded && ticks > 15) {
-        clearInterval(timer);
-        return;
-      }
-      onChanged();
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [unbounded, awaitingAttach, onChanged]);
-
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
     for (const run of runs) {

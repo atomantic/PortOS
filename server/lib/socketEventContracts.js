@@ -214,6 +214,20 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   }),
+  'sprites:changed': {
+    direction: 'server-to-client',
+    summary: 'A sprite run, reference manifest or candidate was persisted; reread this record.',
+    payloadSchema: { type: 'object', properties: { recordId: { type: 'string' } }, required: ['recordId'], additionalProperties: false },
+  },
+  'sprites:jobs-changed': {
+    direction: 'server-to-client',
+    summary: 'A sprite media job changed lifecycle state; reconcile this record and render lane.',
+    payloadSchema: {
+      type: 'object',
+      properties: { recordId: { type: 'string' }, kind: { type: 'string' }, tagKey: { type: 'string' } },
+      required: ['recordId', 'kind', 'tagKey'], additionalProperties: false,
+    },
+  },
   'media-jobs:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',

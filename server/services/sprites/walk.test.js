@@ -1,3 +1,4 @@
+import { spriteEvents } from './events.js';
 /**
  * Walk-animation workflow orchestration (#2897): generation gating on locked
  * anchors, run-record lifecycle through the video completion hook, approval
@@ -10,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile, rm } from 'fs/promises';
@@ -808,7 +809,19 @@ describe('startWalkGeneration — local render lane (#4876)', () => {
     const videoAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4');
     await writeFile(videoAbs, 'local-rendered-clip');
     runWalkPostprocess.mockClear();
-    await attachTuiWalkResult(id, runId, videoAbs);
+    const persisted = [];
+    const onChanged = ({ recordId }) => {
+      if (recordId === id) persisted.push(JSON.parse(readFileSync(
+        join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), 'utf8',
+      )).status);
+    };
+    spriteEvents.on('changed', onChanged);
+    try {
+      await attachTuiWalkResult(id, runId, videoAbs);
+    } finally {
+      spriteEvents.off('changed', onChanged);
+    }
+    expect(persisted).toEqual(['postprocessing', 'candidate']);
     expect(runWalkPostprocess).toHaveBeenCalledTimes(1);
     const stored = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), 'utf8'));
     expect(stored.status).toBe('candidate');
