@@ -66,7 +66,9 @@ beforeEach(() => {
   persisted = new Map();
   getAccount.mockImplementation(async id => structuredClone(accounts.get(id) ?? null));
   readJSONFile.mockImplementation(async (path, fallback) =>
-    structuredClone(persisted.get(basename(path, '.json')) ?? fallback));
+    persisted.has(basename(path, '.json'))
+      ? structuredClone(persisted.get(basename(path, '.json')))
+      : fallback);
   atomicWrite.mockImplementation(async (path, cache) => {
     persisted.set(basename(path, '.json'), structuredClone(cache));
   });
