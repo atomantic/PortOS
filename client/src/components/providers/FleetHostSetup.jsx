@@ -13,7 +13,7 @@ import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMember
 
 const HOST_EVENTS = ['fleet-host:changed', 'fleet-host:usage:changed'];
 const PEER_EVENTS = ['instances:peers:updated'];
-const readHost = () => getFleetLlmHost({ silent: true });
+const readHost = ({ reconcile, signal }) => getFleetLlmHost({ silent: true, refresh: reconcile, signal });
 const readPeerHosts = () => getFleetPeerHosts({ silent: true });
 
 // A self-host provider (the auto-created Direct API one from `configure()` in
@@ -96,10 +96,11 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
     : (peerError || peerResult?.unavailable) ? 'Could not discover peer hosts. Retry when the peer is available.' : '';
   const title = status?.recommendation.title || 'Recommended model host setup';
   if (compact) {
-    if (loadError) return <Banner tone="error">{loadError}<button type="button" onClick={() => { load(); loadPeers(); }}>Retry</button></Banner>;
+    const warning = loadError && <Banner tone="error">{loadError}<button type="button" onClick={() => { load(); loadPeers(); }} className="ml-2 min-h-[44px] text-port-accent">Retry</button></Banner>;
     if (selfNeedsProvider || unconfiguredPeerHosts.length > 0) {
       return (
         <div className="space-y-3" aria-label="Available model hosts">
+          {warning}
           {selfNeedsProvider && (
             <HostCard
               ariaLabel="This machine's model host"
@@ -126,6 +127,8 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
     }
 
     return (
+      <div className="space-y-3">
+      {warning}
       <section className="rounded-xl border border-port-border bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" aria-label="Recommended model host">
         <div className="min-w-0">
           <p className="text-sm font-medium text-white flex items-center gap-2"><Server size={16} />{title}</p>
@@ -133,6 +136,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
         </div>
         <Link to="/ai/fleet?fleetStep=host" className={actionClass}>Model host setup</Link>
       </section>
+      </div>
     );
   }
   // The banner above names the page that manages the recommended runtime, so

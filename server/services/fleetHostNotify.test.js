@@ -36,6 +36,8 @@ it('shares probes across viewers and HTTP reads, reports changed/failing readine
   expect(read).toHaveBeenCalledTimes(2);
   await readFleetHostStatus();
   expect(read).toHaveBeenCalledTimes(2);
+  await readFleetHostStatus({ refresh: true });
+  expect(read).toHaveBeenCalledTimes(3);
   a.handlers.disconnect();
   read.mockRejectedValue(new Error('probe unavailable'));
   b.emit.mockClear();

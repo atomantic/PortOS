@@ -48,6 +48,7 @@ it('renders events and stop receipts without timer reads, then reconciles once o
   act(() => bus.deliver('connect'));
   await settle();
   expect(api.getFleetLlmHost).toHaveBeenCalledTimes(beforeReconnect + 1);
+  expect(api.getFleetLlmHost).toHaveBeenLastCalledWith(expect.objectContaining({ refresh: true }));
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
   fireEvent(document, new Event('visibilitychange'));
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
@@ -81,8 +82,9 @@ it('refreshes compact discovery from configured-peer events and shows failed dis
   act(() => bus.deliver('instances:peers:updated'));
   await settle();
   expect(screen.getByText('Example GPU', { selector: 'span' })).toBeInTheDocument();
-  api.getFleetPeerHosts.mockResolvedValue({ hosts: [], unavailable: 1 });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [{ peerId: 'example-peer', peerName: 'Example GPU', enabled: true }], unavailable: 1 });
   act(() => bus.deliver('instances:peers:updated'));
   await settle();
   expect(screen.getByText(/Could not discover peer hosts/)).toBeInTheDocument();
+  expect(screen.getByText('Example GPU', { selector: 'span' })).toBeInTheDocument();
 });

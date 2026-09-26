@@ -270,7 +270,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
 
   router.get('/fleet-host', asyncHandler(async (req, res) => {
     const { readFleetHostStatus } = await import('../services/fleetHostNotify.js');
-    res.set('Cache-Control', 'no-store').json(await readFleetHostStatus());
+    res.set('Cache-Control', 'no-store').json(await readFleetHostStatus({ refresh: req.query.fresh === '1' }));
   }));
   // Who has been using this machine's GPU. Never cached: the point of the
   // report is what is happening right now.
