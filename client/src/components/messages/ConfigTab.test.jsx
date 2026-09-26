@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
+  deleteMessageAccount: vi.fn(),
   getGoogleAuthStatus: vi.fn(),
   getGoogleAuthUrl: vi.fn(),
   getSettings: vi.fn(),
@@ -39,10 +40,10 @@ const gmailAccount = {
   syncConfig: { ingestSent: true },
 };
 
-function renderConfig() {
+function renderConfig(setAccounts = vi.fn()) {
   return render(
     <MemoryRouter initialEntries={['/messages/config']}>
-      <ConfigTab accounts={[gmailAccount]} setAccounts={vi.fn()} />
+      <ConfigTab accounts={[gmailAccount]} setAccounts={setAccounts} />
     </MemoryRouter>,
   );
 }
@@ -104,5 +105,29 @@ describe('Messages Gmail OAuth setup', () => {
 
     expect(await screen.findByText('Google OAuth needs Gmail permission')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pending authorization' })).toBeInTheDocument();
+  });
+});
+
+
+describe('Messages account deletion', () => {
+  it('retains the account without a success toast on cleanup failure, then allows retry', async () => {
+    api.getGoogleAuthStatus.mockResolvedValue({ hasCredentials: true, hasTokens: true });
+    api.deleteMessageAccount.mockRejectedValueOnce(new Error('Cleanup failed')).mockResolvedValueOnce(undefined);
+    const setAccounts = vi.fn();
+    renderConfig(setAccounts);
+    await screen.findByRole('button', { name: 'Enabled' });
+
+    fireEvent.click(screen.getByTitle('Delete account'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.deleteMessageAccount).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTitle('Delete account')).not.toBeDisabled());
+    expect(setAccounts).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByText('Personal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Delete account'));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Account deleted'));
+    expect(setAccounts.mock.calls[0][0]([gmailAccount])).toEqual([]);
   });
 });

@@ -197,13 +197,15 @@ describe('Messages Routes', () => {
       expect(response.body.error).toBe('Invalid account ID format');
     });
 
-    it('should return 404 if account not found', async () => {
+    it('cleans up historical orphan data even when the account is absent', async () => {
+      messageAccounts.updateAccount.mockResolvedValue(null);
       messageAccounts.deleteAccount.mockResolvedValue(false);
 
       const response = await request(app).delete(`/api/messages/accounts/${VALID_UUID}`);
 
-      expect(response.status).toBe(404);
-      expect(response.body.error).toBe('Account not found');
+      expect(response.status).toBe(204);
+      expect(messageSync.deleteCache).toHaveBeenCalledWith(VALID_UUID);
+      expect(messageDrafts.deleteDraftsByAccountId).toHaveBeenCalledWith(VALID_UUID);
     });
   });
 
