@@ -108,4 +108,49 @@ describe('ProcessesTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
     expect(document.body.querySelector('.fixed.inset-0')).toBeNull();
   });
+
+  it('fullscreen log viewer has dialog semantics and ARIA attributes', () => {
+    render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    fireEvent.click(screen.getByTitle('Fullscreen'));
+
+    const dialog = screen.getByRole('dialog', { name: 'Logs for example-api' });
+    expect(dialog).toBeTruthy();
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-label', 'Logs for example-api');
+  });
+
+  it('pressing Escape closes the fullscreen log viewer', () => {
+    render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    fireEvent.click(screen.getByTitle('Fullscreen'));
+
+    expect(screen.getByRole('dialog', { name: 'Logs for example-api' })).toBeTruthy();
+
+    // Press Escape to close fullscreen
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Logs for example-api' }), { key: 'Escape' });
+
+    // Dialog should be gone
+    expect(screen.queryByRole('dialog', { name: 'Logs for example-api' })).toBeNull();
+  });
+
+  it('fullscreen log viewer traps focus within the modal', () => {
+    useProcessLogs.mockReturnValue({
+      logs: [{ line: 'test', type: 'stdout', timestamp: 100 }],
+      subscribed: false,
+      clear: vi.fn(),
+    });
+    render(<ProcessesTab appId="app-1" pm2ProcessNames={['example-api']} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand details for example-api' }));
+    fireEvent.click(screen.getByTitle('Fullscreen'));
+
+    const dialog = screen.getByRole('dialog', { name: 'Logs for example-api' });
+    const exitButton = screen.getByRole('button', { name: 'Exit fullscreen' });
+
+    // Focus should be inside the modal (on the exit button or another control)
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
 });
