@@ -2,6 +2,7 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
@@ -79,6 +80,9 @@ export async function updateDraft(id, updates) {
     const drafts = await loadDrafts();
     const idx = drafts.findIndex(d => d.id === id);
     if (idx === -1) return null;
+    if (['sending', 'sent'].includes(drafts[idx].status) || ['sending', 'sent', 'failed'].includes(updates.status)) {
+      throw new ServerError('Draft cannot be edited in its current send state', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
     const allowed = ['to', 'cc', 'subject', 'body', 'status'];
     for (const key of allowed) {
       if (updates[key] !== undefined) drafts[idx][key] = updates[key];
@@ -86,6 +90,38 @@ export async function updateDraft(id, updates) {
     drafts[idx].updatedAt = new Date().toISOString();
     await saveDrafts(drafts);
     return drafts[idx];
+  });
+}
+
+// The eligibility check and transition share the same queue as every draft edit.
+// Provider I/O happens after this promise resolves, never while holding the queue.
+export async function claimDraftForSend(id) {
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const draft = drafts.find(d => d.id === id);
+    if (!draft) throw new ServerError('Draft not found', { status: 404, code: 'DRAFT_NOT_FOUND' });
+    if (draft.status !== 'approved') {
+      throw new ServerError('Draft must be approved and not already sending or sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
+    draft.status = 'sending';
+    draft.updatedAt = new Date().toISOString();
+    await saveDrafts(drafts);
+    return draft;
+  });
+}
+
+export async function finishDraftSend(id, success) {
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const draft = drafts.find(d => d.id === id);
+    if (!draft) return null;
+    if (draft.status !== 'sending') {
+      throw new ServerError('Draft is not sending', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
+    draft.status = success ? 'sent' : 'failed';
+    draft.updatedAt = new Date().toISOString();
+    await saveDrafts(drafts);
+    return draft;
   });
 }
 

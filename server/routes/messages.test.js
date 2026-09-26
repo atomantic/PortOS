@@ -560,14 +560,27 @@ describe('Messages Routes', () => {
       expect(response.status).toBe(404);
     });
 
-    it('should return 400 for non-not-found errors', async () => {
-      messageSender.sendDraft.mockResolvedValue({ success: false, status: 400, code: 'INVALID_STATUS', error: 'Draft not approved' });
+    it('should return a typed 409 for an ineligible send', async () => {
+      messageSender.sendDraft.mockResolvedValue({ success: false, status: 409, code: 'DRAFT_STATE_CONFLICT', error: 'Draft not approved' });
 
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/send`);
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(409);
       expect(response.body.error).toBe('Draft not approved');
+      expect(response.body.code).toBe('DRAFT_STATE_CONFLICT');
     });
+  });
+
+  it.each([
+    ['post', '/approve', 'approveDraft'],
+    ['put', '', 'updateDraft'],
+    ['post', '/send', 'sendDraft']
+  ])('returns the conflict envelope from %s drafts/:id%s', async (method, suffix, service) => {
+    const owner = service === 'sendDraft' ? messageSender : messageDrafts;
+    owner[service].mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
+    const response = await request(app)[method](`/api/messages/drafts/${DRAFT_UUID}${suffix}`).send({});
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'Draft state conflict', code: 'DRAFT_STATE_CONFLICT' });
   });
 
   describe('DELETE /api/messages/drafts/:id', () => {
