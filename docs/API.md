@@ -999,6 +999,8 @@ Common error codes:
 
 ### Catalog scrap graph commits
 
+An optional UUID `operationKey` makes a reviewed submission retry-safe. Reuse it for retries with the same accepted content, relationships, scrap, universe and role: the server returns the original ingredient response without creating another batch, including after restart or concurrent requests. Reusing it with different input returns HTTP 409. Embedding output is excluded from request identity. Mint a new key for an intentional new submission; callers omitting it keep legacy behavior. Receipts remain local to the accepting instance and persist with its database.
+
 `POST /api/catalog/scraps/:id/commit` accepts up to 200 `accepted` entries and an optional `relationships` array (at most 1,000 edges). Each explicit edge has `fromDraftId`, `toDraftId`, `kind`, and nonempty `evidence` (at most 400 characters). When the array is present, every accepted entry needs a unique nonempty `draftId` (at most 120 characters); both endpoints must be accepted IDs and self-edges are rejected. Draft IDs stay outside persisted payloads. Renaming or reordering entries does not change endpoint identity.
 
 The server validates the graph before embedding or writing. Duplicate directed tuples create one edge, retaining every distinct evidence passage in the source ingredient's existing `payload.evidence` field with the kind and target name. Bible entries keep their evidence arrays (20 passages, 500 characters each including the contextual prefix); light entries keep string evidence, or arrays when supplied. Overflow is rejected explicitly, never truncated. The existing 200KB payload limit still applies after evidence enrichment.

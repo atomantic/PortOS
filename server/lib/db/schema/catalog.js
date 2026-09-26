@@ -17,7 +17,18 @@ export const catalogPendingAppliesDdl = [
     )`,
 ];
 
+// Machine-local retry receipts: retained with the database backup, never federated.
+export const catalogCommitReceiptsDdl = [
+    `CREATE TABLE IF NOT EXISTS catalog_commit_receipts (
+  operation_key UUID PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  ingredients JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`,
+];
+
 export const catalogDdl = [
+    ...catalogCommitReceiptsDdl,
     ...catalogPendingAppliesDdl,
     `CREATE TABLE IF NOT EXISTS catalog_scraps (
       id TEXT PRIMARY KEY,

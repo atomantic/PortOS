@@ -418,6 +418,7 @@ export const catalogDraftRelationshipSchema = z.object({
 // scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
 // today's behavior exactly: source link only, no homing ref.
 export const catalogScrapCommitSchema = z.object({
+  operationKey: z.string().uuid().optional(),
   accepted: z.array(catalogIngredientCreateSchema.extend({
     // Extraction-local identity, never an ingredient ID or payload field.
     draftId: z.string().trim().min(1).max(120).optional(),

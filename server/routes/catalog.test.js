@@ -18,6 +18,9 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import express from 'express';
 import pg from 'pg';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
@@ -66,9 +69,11 @@ const NONCE = Date.now();
 
 const createdIngredientIds = new Set();
 const createdScrapIds = new Set();
+const receiptKeys = new Set();
 
 afterAll(async () => {
   if (!dbReady) return;
+  await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
   for (const id of createdIngredientIds) {
     await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
   }
@@ -454,6 +459,73 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
   });
 
+  it('replays a lost response and concurrent commits without duplicating the batch, and rejects changed input', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example receipt source' });
+    createdScrapIds.add(scrap.id);
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [UNI, 'Example Universe']);
+    const operationKey = randomUUID();
+    receiptKeys.add(operationKey);
+    const body = {
+      operationKey, universeRef: UNI,
+      accepted: [
+        { type: 'idea', name: 'Example receipt A', payload: { a: 1, b: 2 } },
+        { type: 'idea', name: 'Example receipt B' },
+      ],
+    };
+    const post = (input) => request(makeApp()).post(`/api/catalog/scraps/${scrap.id}/commit`).send(input);
+    const [first, concurrent] = await Promise.all([post(body), post(body)]);
+    expect(first.status).toBe(201);
+    expect(concurrent.status).toBe(201);
+    expect(concurrent.body.ingredients).toEqual(first.body.ingredients);
+    const ids = first.body.ingredients.map(row => row.id);
+    ids.forEach(id => createdIngredientIds.add(id));
+    const counts = async () => {
+      const { rows: [row] } = await query(`SELECT
+        (SELECT count(*) FROM catalog_ingredient_sources WHERE scrap_id = $1) AS sources,
+        (SELECT count(*) FROM catalog_ingredients WHERE id = ANY($2::text[])) AS ingredients,
+        (SELECT count(*) FROM catalog_ingredient_revisions WHERE ingredient_id = ANY($2::text[])) AS revisions,
+        (SELECT count(*) FROM catalog_ingredient_refs WHERE ingredient_id = ANY($2::text[])) AS refs,
+        (SELECT count(*) FROM catalog_ingredient_relations WHERE from_id = ANY($2::text[])) AS edges`, [scrap.id, ids]);
+      return row;
+    };
+    const originalCounts = await counts();
+    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '2', edges: '1' });
+    // A fresh process has no request cache: it must replay the durable receipt.
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+      import { commitScrap } from './services/catalogDB/commit.js';
+      import { catalogScrapCommitSchema } from './lib/catalogValidation.js';
+      import { close } from './lib/db.js';
+      const input = JSON.parse(process.argv[1]);
+      const result = await commitScrap({ scrapId: input.scrapId, ...catalogScrapCommitSchema.parse(input.body) });
+      await close();
+      console.log('RECEIPT:' + JSON.stringify(result));
+    `, JSON.stringify({ scrapId: scrap.id, body })], {
+      cwd: new URL('../', import.meta.url),
+      env: { ...process.env, NODE_ENV: 'test', PGDATABASE: 'portos_test' },
+    });
+    const restartedResult = JSON.parse(stdout.split('\n').find(line => line.startsWith('RECEIPT:')).slice(8));
+    expect(restartedResult).toEqual(first.body.ingredients);
+    const { embedBatch } = await import('../services/embeddings.js');
+    const embedCalls = embedBatch.mock.calls.length;
+    const replay = await post({ ...body, accepted: [
+      { ...body.accepted[0], payload: { b: 2, a: 1 } }, body.accepted[1],
+    ] });
+    expect(replay.status).toBe(201);
+    expect(replay.body.ingredients).toEqual(first.body.ingredients);
+    expect(await counts()).toEqual(originalCounts);
+    expect((await post({ ...body, accepted: [{ type: 'idea', name: 'Changed' }] })).status).toBe(409);
+    expect(await counts()).toEqual(originalCounts);
+    expect(embedBatch.mock.calls.length).toBe(embedCalls);
+    const nextKey = randomUUID();
+    receiptKeys.add(nextKey);
+    const intentional = await post({ ...body, operationKey: nextKey });
+    expect(intentional.status).toBe(201);
+    intentional.body.ingredients.forEach(row => {
+      createdIngredientIds.add(row.id);
+      expect(ids).not.toContain(row.id);
+    });
+  });
+
   it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
     await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Commit Universe ${NONCE}`]);
     const scrap = await catalogDB.createScrap({ rawText: `Commit binding source ${NONCE}` });
@@ -570,6 +642,8 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   it('rolls back source links, universe refs, ingredients and earlier edges on a relation failure', async () => {
     const scrap = await catalogDB.createScrap({ rawText: 'Example relation rollback source' });
     createdScrapIds.add(scrap.id);
+    const operationKey = randomUUID();
+    receiptKeys.add(operationKey);
     const refs = await import('../services/catalogDB/refs.js');
     const realLink = refs.linkIngredientRelation;
     const linkedIds = new Set();
@@ -582,7 +656,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     });
     try {
       await expect(catalogDB.commitScrap({
-        scrapId: scrap.id, universeRef: UNI,
+        scrapId: scrap.id, universeRef: UNI, operationKey,
         accepted: ['a', 'b', 'c'].map(draftId => ({ draftId, type: 'idea', name: 'Example ' + draftId })),
         relationships: [
           { fromDraftId: 'a', toDraftId: 'b', kind: 'references', evidence: 'A references B.' },
@@ -593,6 +667,13 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
       spy.mockRestore();
     }
     expect(calls).toBe(2);
+    expect((await query('SELECT * FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey])).rows).toEqual([]);
+    const retry = await catalogDB.commitScrap({
+      scrapId: scrap.id, operationKey,
+      accepted: [{ type: 'idea', name: 'Example successful retry after rollback' }],
+    });
+    retry.forEach(row => createdIngredientIds.add(row.id));
+    expect(retry).toHaveLength(1);
     for (const id of linkedIds) {
       expect(await catalogDB.getIngredient(id)).toBeNull();
       expect(await catalogDB.listSourcesForIngredient(id)).toEqual([]);

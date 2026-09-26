@@ -33,12 +33,13 @@ export const pruneCatalogScrap = (id, body, options) =>
 // when the caller passes 'unassigned' (the "no universe" choice), reproducing
 // prior behavior exactly (source link only, no homing ref).
 // `relationships` forwards explicit grounded graph relationships (including [] for structured drafts).
-export const commitCatalogScrapDraft = (id, accepted, { universeRef, role, relationships, ...options } = {}, maybeRelationships) => {
+export const commitCatalogScrapDraft = (id, accepted, { universeRef, role, relationships, operationKey, ...options } = {}, maybeRelationships) => {
   const rels = maybeRelationships !== undefined ? maybeRelationships : relationships;
   return request(`/catalog/scraps/${enc(id)}/commit`, {
     method: 'POST',
     body: JSON.stringify({
       accepted,
+      ...(operationKey ? { operationKey } : {}),
       ...(universeRef ? { universeRef, ...(role ? { role } : {}) } : {}),
       ...(rels !== undefined ? { relationships: rels } : {}),
     }),
