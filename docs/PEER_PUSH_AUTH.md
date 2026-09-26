@@ -36,6 +36,14 @@ bodies. The sender attaches `X-PortOS-Peer-Sync-Token` only to
 `/api/peer-sync/push`, alongside the scoped peer credential. Use the existing
 private transport (Tailscale or HTTPS) to protect credentials in transit.
 
+## Peer destinations must serve endpoints directly
+
+All peer HTTP requests refuse redirects, even when a caller requests redirect
+following. HTTPS requests also never follow redirects; their redirect response
+is non-OK and handled as a peer transport/configuration failure. Configure each
+peer address to serve its federation endpoints directly. Redirect failures do
+not authorize credential-free retries, address changes, or re-pairing.
+
 ## Peer credentials are not operator authority
 
 The instance password is operator authority: whoever holds it can sign in at
