@@ -10,6 +10,9 @@ const observeError = () => {};
 beforeAll(() => errorEvents.on('error', observeError));
 afterAll(() => errorEvents.off('error', observeError));
 
+vi.mock('../services/messageActions.js', () => ({ executeAction: vi.fn() }));
+import { executeAction } from '../services/messageActions.js';
+
 // Mock the services
 vi.mock('../services/messageAccounts.js', () => ({
   listAccounts: vi.fn(),
@@ -815,5 +818,21 @@ describe('Messages Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.api).toEqual({ success: false, status: 401, error: 'InvalidAuthenticationToken' });
     });
+  });
+});
+
+describe('message browser action conflict envelope', () => {
+  it('preserves both IDs and returns a typed 409 without broadcasting a change', async () => {
+    const app = express();
+    const emit = vi.fn();
+    app.set('io', { emit });
+    app.use(express.json());
+    app.use('/api/messages', messagesRoutes);
+    executeAction.mockRejectedValueOnce(new ServerError('Sync the account and retry.', { status: 409, code: 'MESSAGE_IDENTITY_CONFLICT' }));
+    const response = await request(app).post(`/api/messages/${VALID_UUID}/${VALID_UUID_2}/action`).send({ action: 'delete' });
+    expect(executeAction).toHaveBeenCalledWith(VALID_UUID, VALID_UUID_2, 'delete');
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'Sync the account and retry.', code: 'MESSAGE_IDENTITY_CONFLICT' });
+    expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
   });
 });

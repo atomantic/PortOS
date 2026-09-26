@@ -12,7 +12,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return { ...actual, tryReadFile };
 });
 
-const { testSelectors } = await import('./messagePlaywrightSync.js');
+const { testSelectors, syncPlaywright } = await import('./messagePlaywrightSync.js');
 
 const OPEN_PAGE = { url: 'https://outlook.office.com/mail/', webSocketDebuggerUrl: 'ws://x' };
 
@@ -92,4 +92,15 @@ describe('testSelectors', () => {
     expect(result.status).toBe('partial');
     expect(result.results.messageRow.matches).toBe(0);
   });
+});
+
+it('retains the ingested provider row ID when detail is unavailable', async () => {
+  findOrOpenPage.mockResolvedValue(OPEN_PAGE);
+  isAuthPage.mockReturnValue(false);
+  tryReadFile.mockResolvedValue('{}');
+  evaluateOnPage.mockReset();
+  evaluateOnPage.mockResolvedValueOnce([{ providerRowId: 'stable-row', from: 'Example Sender', subject: 'Example subject', date: '2026-09-26' }]);
+  evaluateOnPage.mockResolvedValue({ found: false });
+  const result = await syncPlaywright({ id: 'example-account', type: 'outlook' }, { messages: [] });
+  expect(result.messages).toEqual([expect.objectContaining({ providerRowId: 'stable-row', subject: 'Example subject' })]);
 });

@@ -119,6 +119,16 @@ export async function getMessages(options = {}) {
   return aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit, offset });
 }
 
+/** Remove only a confirmed action target, serialized with sync/refresh writes. */
+export async function removeMessageFromCache(accountId, messageId) {
+  if (!UUID_RE.test(accountId)) throw new Error('Invalid accountId');
+  return queueAccountWrite(accountId, async () => {
+    const cache = await loadCache(accountId);
+    cache.messages = cache.messages.filter(message => message.id !== messageId);
+    await saveCache(accountId, cache);
+  });
+}
+
 export async function deleteCache(accountId) {
   if (!UUID_RE.test(accountId)) return;
   // Drain cache writers before erasing; a writer already in flight must not
@@ -211,14 +221,21 @@ export async function syncAccount(accountId, io, options = {}) {
     const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
 
     // Deduplicate by externalId; update flags and body on existing messages
-    const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
+    const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.providerRowId ? `${m.externalId}|${m.providerRowId}` : m.externalId, m]));
     const uniqueNew = [];
     for (const msg of newMessages) {
-      if (!msg.externalId || !existingMap.has(msg.externalId)) {
+      const identityKey = msg.providerRowId ? `${msg.externalId}|${msg.providerRowId}` : msg.externalId;
+      // Upgrade a legacy identity only when both sides are unique. Duplicate
+      // summaries must never move an existing local ID to a different row.
+      const legacy = msg.providerRowId && existingMap.get(msg.externalId);
+      const canUpgrade = legacy && cache.messages.filter(m => m.externalId === msg.externalId).length === 1
+        && newMessages.filter(m => m.externalId === msg.externalId).length === 1;
+      const existing = existingMap.get(identityKey) || (canUpgrade ? legacy : null);
+      if (!msg.externalId || !existing) {
         uniqueNew.push(msg);
       } else {
-        // Update flags on existing message
-        const existing = existingMap.get(msg.externalId);
+        // Update flags and provider identity on existing message
+        if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
         if (msg.isUnread !== undefined) existing.isUnread = msg.isUnread;
         if (msg.isRead !== undefined) existing.isRead = msg.isRead;
         if (msg.isPinned !== undefined) existing.isPinned = msg.isPinned;

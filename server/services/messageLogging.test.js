@@ -125,6 +125,7 @@ describe('mailbox operational log privacy', () => {
     const message = seedMessage(account);
     doubles.evaluate.mockResolvedValueOnce({ found: false, hasListbox: true });
     await refreshMessage(account.id, message.id);
+    doubles.evaluate.mockResolvedValueOnce({ success: true, messageId: message.id });
     expect(await executeAction(account.id, message.id, 'archive')).toMatchObject({ success: true });
     expect(await getMessage(account.id, message.id)).toBeNull();
     expect(output()).toContain(message.id);
@@ -141,6 +142,7 @@ describe('mailbox operational log privacy', () => {
     const message = seedMessage(account);
     delete message.apiId;
     doubles.files.set(join('/mock/messages/cache', account.id + '.json'), JSON.stringify({ messages: [message] }));
+    doubles.evaluate.mockResolvedValueOnce({ success: true, messageId: message.id });
     expect(await executeAction(account.id, message.id, 'delete')).toMatchObject({ success: true });
     expect(doubles.modify).toHaveBeenCalledOnce();
     expect(doubles.trash).toHaveBeenCalledOnce();
