@@ -35,12 +35,14 @@ import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { hasCredentialBootstrap, resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { commandOutput } from '../lib/commandExists.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
+import { isDerivedPreset } from '../lib/providerGraphRecords.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { primeOpencodeCatalogCache } from '../lib/opencodeCatalogCache.js';
 import { getOpencodeLocalProviderNamespace, isConfiguredDefaultModel } from '../lib/providerModels.js';
 import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { createStaleWhileRevalidate } from '../lib/staleWhileRevalidate.js';
 import * as providerService from './providers.js';
+import { providerGraphEnabled } from './providerGraph.js';
 import {
   PROVIDER_RUNTIMES,
   getProviderRuntime,
@@ -136,10 +138,10 @@ export const usesHarnessCatalog = (provider) =>
  *
  * The full precondition for {@link refreshHarnessModels} in one place: the
  * binary this record launches must know how to enumerate its models
- * (`modelsArgs`), and the record must be a plain wrapper rather than one
- * pointed at a local daemon or a hosted gateway ({@link usesHarnessCatalog}).
- * A custom binary resolves to no runtime row at all and answers `null` on the
- * first question.
+ * (`modelsArgs` or `listModels`), and the record must be a plain wrapper
+ * rather than one pointed at a local daemon or a hosted gateway
+ * ({@link usesHarnessCatalog}). A custom binary resolves to no runtime row at
+ * all and answers `null` on the first question.
  *
  * Lives here rather than beside its caller because the answer is exactly the
  * set this refresh may rewrite, and TWO places ask it: the provider card's
@@ -151,7 +153,7 @@ export const usesHarnessCatalog = (provider) =>
  */
 export const harnessCatalogRuntime = (provider) => {
   const runtime = getProviderRuntime(providerRuntimeKey(provider));
-  return runtime?.modelsArgs && usesHarnessCatalog(provider) ? runtime : null;
+  return (runtime?.modelsArgs || runtime?.listModels) && usesHarnessCatalog(provider) ? runtime : null;
 };
 
 /**
@@ -304,10 +306,28 @@ const credentialProbeGroups = (targets) => {
 /**
  * Write one probe's catalog to the records that probe answers for, and return
  * the ids actually rewritten.
+ *
+ * A DERIVED preset (#7565) never receives this write directly: its `models`
+ * IS its service's catalog narrowed, so the next re-derivation would discard
+ * whatever landed here and the underlying catalog would stay stale forever —
+ * exactly the bug the Harnesses page's bulk refresh shipped with, because it
+ * (unlike the provider card's own button, `POST /:id/refresh-models`) has no
+ * single record to special-case. Refresh the SERVICE instead, once per
+ * `serviceId` even when several of its presets target this harness, and reuse
+ * the catalog this call already fetched — passing it back through as an
+ * injected `harnessModels` answers `refreshServiceCatalog`'s harness strategy
+ * with no second probe and no re-entry into `refreshHarnessModels` (#8497).
  */
 async function applyHarnessCatalog(runtime, models, targets) {
   const updated = [];
+  const derivedProviderIdsByService = new Map();
   for (const provider of targets) {
+    if (isDerivedPreset(provider) && providerGraphEnabled()) {
+      const ids = derivedProviderIdsByService.get(provider.serviceId) || [];
+      ids.push(provider.id);
+      derivedProviderIdsByService.set(provider.serviceId, ids);
+      continue;
+    }
     // Hold the record's namespace scope (see `storedNamespaces`). A filter that
     // matched nothing means the harness no longer lists anything this record is
     // for — skip it rather than blanking a working list on that evidence.
@@ -335,6 +355,20 @@ async function applyHarnessCatalog(runtime, models, targets) {
     // same providers.json, and Promise.all would have them clobber each other.
     await providerService.updateProvider(provider.id, { models: next, defaultModel });
     updated.push(provider.id);
+  }
+  if (derivedProviderIdsByService.size > 0) {
+    // Deferred: a bulk-refresh path that most calls never touch should not
+    // drag the whole provider-graph module into every caller of this file
+    // (server/AGENTS.md "Import scoping").
+    const { refreshServiceCatalog } = await import('./providerServices.js');
+    const alreadyListed = async () => ({ ok: true, models });
+    for (const [serviceId, providerIds] of derivedProviderIdsByService) {
+      const outcome = await refreshServiceCatalog(serviceId, { harnessModels: alreadyListed }).catch((err) => {
+        console.error(`❌ ${runtime.label}: could not refresh service "${serviceId}"'s catalog: ${err?.message || err}`);
+        return null;
+      });
+      if (outcome?.service?.catalog?.state !== 'failed') updated.push(...providerIds);
+    }
   }
   return updated;
 }
@@ -364,10 +398,16 @@ async function applyHarnessCatalog(runtime, models, targets) {
  *
  * @returns {Promise<{ok:boolean, reason?:string, models:string[], updated:string[]}>}
  */
-export async function refreshHarnessModels(id, { run = commandOutput, providerId = null, ...probeDeps } = {}) {
+export async function refreshHarnessModels(id, { run = commandOutput, providerId = null, listModels, ...probeDeps } = {}) {
   const runtime = getProviderRuntime(id);
   if (!runtime) return { ok: false, reason: 'Unknown harness.', models: [], updated: [] };
-  if (!runtime.modelsArgs) {
+  // `listModels` is the alternative to `modelsArgs` for a harness whose
+  // catalog cannot be read from a single argv + stdout capture (Codex's lives
+  // behind an `app-server` JSON-RPC handshake — `providerRuntimeInstaller.js`).
+  // The caller may override it (tests do, to skip the real spawn), but never
+  // supplies one for a harness whose row declares its own.
+  const listModelsImpl = listModels || runtime.listModels;
+  if (!runtime.modelsArgs && !listModelsImpl) {
     return {
       ok: false,
       reason: `${runtime.label} has no command for listing its models, so PortOS cannot refresh them from here.`,
@@ -431,6 +471,21 @@ export async function refreshHarnessModels(id, { run = commandOutput, providerId
     // (its harness need not be there); `resolveCliSpawn` resolves the bootstrap
     // binary's own shim instead.
     const resolved = group.probeAs ? null : await findCommand(runtime.command);
+    if (listModelsImpl) {
+      // A harness-specific lister owns its own spawn shape (Codex drives a
+      // JSON-RPC handshake, not a single argv + stdout capture) — hand it the
+      // same resolved credential/command context `resolveCliSpawn` would use.
+      // Per-bucket, same as the generic path below: one credential's failure
+      // must not fail buckets probed under a different one.
+      const listed = await listModelsImpl({
+        probeAs: group.probeAs,
+        resolvedCommand: resolved || runtime.command,
+        env: process.env,
+        timeoutMs: MODELS_PROBE_TIMEOUT_MS,
+      }).catch((err) => ({ error: err?.message || `${runtime.label} failed to list its models.` }));
+      if (Array.isArray(listed) && listed.length > 0) return { group, listed };
+      return { group, failure: Array.isArray(listed) ? `${runtime.label} returned no models.` : listed.error };
+    }
     const probe = resolveCliSpawn(group.probeAs, resolved || runtime.command, [...runtime.modelsArgs], process.env);
     const listed = parseHarnessModels(runtime.id, await run(probe.command, probe.args, { timeoutMs: MODELS_PROBE_TIMEOUT_MS }));
     if (listed.length > 0) return { group, listed };

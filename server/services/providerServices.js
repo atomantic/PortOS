@@ -86,9 +86,18 @@ async function listByProbe(connection, definition, { env, probe }) {
  * empty catalog: `refreshHarnessModels` already refuses to report a blank
  * listing as "zero models", and this keeps that refusal.
  *
- * A harness with no `models` verb (Codex lists through `codex app-server`)
- * falls back to a bound route's toolkit lister, so its derived presets can
- * still pick up new models. Any other refusal stays a refusal.
+ * Codex now has its own lister (`listModels`, driving `codex app-server`'s
+ * JSON-RPC handshake — `services/harnesses.js`, #8497) and no longer needs
+ * this fallback. But it is NOT the only harness `refreshHarnessModels` refuses
+ * with `noLister`: Claude Code (`claude-subscription`) still has neither
+ * `modelsArgs` nor a `listModels` hook — its catalog is read from a per-record
+ * on-disk cache the toolkit already knows how to fetch through a BOUND route
+ * (`fetchProviderModels` → `_fetchAnthropicModels`), never from the harness
+ * binary directly. Dropping the fallback entirely would make
+ * `claude-subscription`'s catalog refresh fail outright even though a working
+ * route sits right there, so a harness that refuses with `noLister` still
+ * falls back to a bound route's own lister — that catalog can still update.
+ * Any other refusal (not installed, signed out, empty probe) stays a refusal.
  */
 async function listByHarness(connection, definition, graph, { harnessModels, routeModels }) {
   const result = await harnessModels(definition.harnessOnly);

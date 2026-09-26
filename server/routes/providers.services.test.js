@@ -305,6 +305,12 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     expect(ok.body.service.catalog).toMatchObject({ state: 'known', models: ['claude-a', 'claude-b'] });
   });
 
+  // Codex's row now has its own lister (`listModels`, driving `codex
+  // app-server` — services/harnesses.js #8497) and no longer needs this
+  // fallback. But Claude Code still has neither `modelsArgs` nor `listModels`
+  // — its catalog is read from a per-record on-disk cache, only reachable
+  // through a bound route's own toolkit lister — so `listByHarness` still
+  // falls back to one when the harness itself refuses with `noLister`.
   it('falls back to a bound route\'s own lister when the harness has no models command', async () => {
     const withRoute = graphFixture();
     withRoute.bindings.push({ id: '99999999-9999-4999-8999-999999999999', revision: 1, connectionId: CLAUDE_SUB, harnessId: 'claude', variantKey: 'default', label: 'Claude', enabled: true, selectedModels: [] });
