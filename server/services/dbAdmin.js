@@ -8,6 +8,7 @@ import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 
 const rootDir = PATHS.root;
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
@@ -21,6 +22,8 @@ const bashBinary = resolveBashBinary();
 // before they probe or change configuration; always release after failure.
 let databaseOperationActive = false;
 async function withDatabaseOperation(operation) {
+  // Check synchronously before locking, probing, or launching shell writers.
+  assertDatabaseAdmission();
   if (databaseOperationActive) {
     throw new ServerError('Another database operation is in progress. Wait for it to finish and retry.', { status: 409 });
   }
@@ -518,7 +521,7 @@ async function syncDatabaseImpl(io) {
 
   emit('start', { message: 'Exporting from active database...' });
   // Explicit backend export bypasses db.sh's saved-mode/container selection.
-  const { dumpFile } = await exportDatabase(currentMode);
+  const { dumpFile } = await exportDatabaseImpl(currentMode);
   console.log(`🗄️ Sync: exported to ${dumpFile}`);
 
   // Step 2: Ensure target is running and configured
@@ -657,7 +660,7 @@ async function setupNativeDatabaseImpl(io) {
 }
 
 /** Export a specific database backend, or the active backend when omitted. */
-export async function exportDatabase(backend) {
+async function exportDatabaseImpl(backend) {
   const label = `backup-${Date.now()}`;
 
   if (backend) {
@@ -732,3 +735,5 @@ export const stopDatabase = (backend) => withDatabaseOperation(() => stopDatabas
 export const setupNativeDatabase = (io) => withDatabaseOperation(() => setupNativeDatabaseImpl(io));
 
 export const fixDatabase = () => withDatabaseOperation(() => fixDatabaseImpl());
+
+export const exportDatabase = (backend) => withDatabaseOperation(() => exportDatabaseImpl(backend));

@@ -246,7 +246,7 @@ node scripts/database-maintenance.mjs begin native docker
 node scripts/database-maintenance.mjs begin docker native
 ```
 
-The command returns the operation ID and direction. Plan for downtime: new pooled database operations and CoS spawn admission are refused immediately, and both managed server and runner refuse normal boot while fenced. Admission is the synchronous fence check: work admitted just before publication may still obtain a connection or spawn afterward. Already-admitted transactions may finish; this boundary alone is **not a drained snapshot boundary**. The offline coordinator must still stop/drain all owned writers and validate live/spawning work before export. A process-local restore callback cannot bypass this persistent fence.
+The command returns the operation ID and direction. Plan for downtime: new pooled database operations, database administration mutations/exports, and CoS spawn admission are refused immediately, and both managed server and runner refuse normal boot while fenced. Admission is the synchronous fence check: work admitted just before publication may still obtain a connection or spawn afterward. Already-admitted transactions may finish; this boundary alone is **not a drained snapshot boundary**. The offline coordinator must still stop/drain all owned writers and validate live/spawning work before export. A process-local restore callback cannot bypass this persistent fence.
 
 If no transfer has started and saved source configuration is unchanged, cancel using that exact ID:
 

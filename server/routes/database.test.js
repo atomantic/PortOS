@@ -5,9 +5,16 @@
  * we can control every shell invocation without touching the real filesystem
  * or running actual Docker/psql commands.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+
+vi.mock('../lib/paths.js', async (importOriginal) => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), {
+    dataRoot: lazyTempDataRoot('portos-database-admin-'),
+  });
+});
 
 // resolveBashBinary and the db.sh path are resolved at module load — mock
 // the dependencies before the route is imported.
@@ -63,6 +70,11 @@ import { writeFileSync, mkdtempSync, readFileSync, createReadStream } from 'fs';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 import databaseRoutes from './database.js';
+import { PATHS } from '../lib/paths.js';
+import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
+import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+
+afterAll(cleanupTempDataRoots);
 import { isPg17OnlyDirective, importDumpFile } from '../services/dbAdmin.js';
 
 // Helper: make execFile call the callback with controlled output
@@ -119,6 +131,39 @@ describe('database migration admission', () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
     expect(checkHealth).not.toHaveBeenCalled();
+  });
+});
+
+// Regression: raw shell admin operations bypass the pooled DB write fence.
+// Exercise the real durable journal through HTTP, without a live database.
+describe('database admin maintenance admission', () => {
+  it('refuses every admin operation while fenced and resumes after source-only cancellation', async () => {
+    vi.clearAllMocks();
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example_role' };
+    const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+    try {
+      for (const [route, body] of [
+        ['switch', { target: 'docker', migrate: true }],
+        ['sync', {}], ['start', { backend: 'docker' }],
+        ['stop', { backend: 'native' }], ['destroy', { backend: 'docker' }],
+        ['setup-native', {}], ['fix', {}],
+        ['export', {}], ['export', { backend: 'docker' }],
+      ]) {
+        const res = await request(makeApp()).post(`/api/database/${route}`).send(body);
+        expect(res.status, route).toBe(503);
+        expect(res.body.code, route).toBe('DATABASE_MAINTENANCE');
+      }
+      expect(execFile).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(checkHealth).not.toHaveBeenCalled();
+    } finally {
+      journal.cancel(operation.id, source);
+    }
+    mockExecFile([{ exitCode: 0, stdout: 'started' }]);
+    expect((await request(makeApp()).post('/api/database/start').send({ backend: 'docker' })).status).toBe(200);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -653,6 +698,7 @@ describe('POST /api/database/sync endpoint safety', () => {
       ['switch', { target: 'docker', migrate: false }],
       ['destroy', { backend: 'docker' }],
       ['sync', {}],
+      ['export', {}],
     ]) {
       const res = await request(app).post(`/api/database/${route}`).send(body);
       expect(res.status).toBe(409);
