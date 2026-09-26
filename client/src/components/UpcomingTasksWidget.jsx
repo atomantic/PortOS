@@ -89,6 +89,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       'documentation': '📝',
       'feature-ideas': '💡',
       'plan-feature': '🗺️',
+      'media-render-research': '🎬',
       'plan-task': '✅',
       'claim-issue': '🎯',
       'claim-work': '🎯',

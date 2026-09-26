@@ -146,6 +146,8 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // claim flows pick up later. Always-filing tracker-filing type
   // (TRACKER_FILING_PRESETS['plan-feature']), like reference-watch/repo-study.
   'plan-feature',
+  // Always-filing research type (TRACKER_FILING_PRESETS), like plan-feature.
+  'media-render-research',
   // user-action-review reads the machine-local operator-action ledger
   // (services/userActions.js) for repeated manual work — Run Now on the same
   // schedule type over and over, near-duplicate task prompts, negative feedback

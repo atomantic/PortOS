@@ -1789,6 +1789,20 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('media-render-research defaults', () => {
+    it('is an on-demand tracker-filing research task that files labelled media issues', async () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('media-render-research')
+      expect(DEFAULT_TASK_INTERVALS['media-render-research']).toMatchObject({
+        type: INTERVAL_TYPES.ON_DEMAND,
+        enabled: true,
+        taskMetadata: { useWorktree: false, openPR: false, readOnly: false },
+      })
+      const { resolveTrackerFilingBlock } = await import('../lib/workTracker.js')
+      const block = await resolveTrackerFilingBlock({ repoPath: '/tmp/example-repo', workTracker: 'github' }, 'media-render-research')
+      expect(block.trackerInstructions).toContain('--label media-research --label area:media --label plan')
+    })
+  })
+
   describe('plan-feature defaults', () => {
     it('is registered as a self-improvement task type with a description', () => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('plan-feature')
