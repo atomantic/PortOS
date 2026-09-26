@@ -29,9 +29,12 @@ export const beeperDdl = [
     status TEXT NOT NULL DEFAULT '',
     bridge_id TEXT NOT NULL DEFAULT '',
     last_seen_at TIMESTAMPTZ,
+    chat_cursor TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+
+  `ALTER TABLE beeper_accounts ADD COLUMN IF NOT EXISTS chat_cursor TEXT`,
 
   // The ONE Beeper credential this install holds (#31). AES-256-GCM ciphertext
   // via `server/lib/vaultCrypto.js` — never `settings.json`, never a plaintext

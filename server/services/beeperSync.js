@@ -684,7 +684,7 @@ async function sweepChat({
  * 502s on its messages, say) sitting at the top of the newest-first list would
  * abort this account's whole walk on every single pass and starve every chat
  * below it indefinitely. Its cursor and watermark are untouched by the failed
- * transaction, so it is retried next pass either way.
+ * transaction, so it is retried on a later traversal.
  *
  * A CAUGHT-UP CHAT DOES NOT END THE WALK, and that is the whole reason the
  * truncation contract works. `sweepChat` withholds the watermark from a chat
@@ -698,20 +698,37 @@ async function sweepChat({
  * to the top of the list.
  *
  * A caught-up page cannot terminate the walk either: older pages can contain
- * truncated, failed, or purged chats. Walk to the server's end or the page cap.
+ * truncated, failed, or purged chats. Persist progress at the page cap and
+ * resume next run, reserving one page to refresh the head. End-of-list resets
+ * the checkpoint so failed chats remain reachable on subsequent traversals.
  */
 async function sweepAccount(account, clientOptions, observedAt, personIndex) {
   const cursors = await readAccountCursors(account.accountId);
-  let cursor;
+  const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [account.accountId]);
+  let cursor = checkpoint.rows[0]?.chat_cursor || undefined;
+  let refreshHead = Boolean(cursor);
+  let continuationPending = true;
+  let cursorRestarts = 0;
   let chatsSwept = 0;
   let messagesWritten = 0;
   let failedChats = 0;
 
   for (let pageIndex = 0; pageIndex < MAX_CHAT_PAGES_PER_ACCOUNT; pageIndex++) {
+    const requestCursor = refreshHead ? undefined : cursor;
     // eslint-disable-next-line no-await-in-loop -- cursor pagination is inherently sequential
     const page = await listChatsPage({
-      cursor, direction: 'before', accountIDs: [account.accountId], ...clientOptions,
+      cursor: requestCursor, direction: 'before', accountIDs: [account.accountId], ...clientOptions,
+    }).catch(async (err) => {
+      // A rejected pagination request can be retried from the head. Authentication,
+      // transport and server failures must retain the checkpoint, not erase it.
+      if (!requestCursor || !(err instanceof BeeperApiError) || ![400, 410, 422].includes(err.status)) throw err;
+      await query('UPDATE beeper_accounts SET chat_cursor = $2 WHERE account_id = $1', [account.accountId, null]);
+      cursor = undefined;
+      cursorRestarts++;
+      console.warn(`⚠️ ${LOG_PREFIX}: restarting rejected account pagination`);
+      return null;
     });
+    if (!page) continue;
     assertPagedShape(page, '/v1/chats');
 
     for (const chat of page.items) {
@@ -730,12 +747,28 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
       messagesWritten += result.messages;
     }
 
-    if (!page.hasMore) break;
-    if (!page.oldestCursor || page.oldestCursor === cursor) break;
-    cursor = page.oldestCursor;
+    // The head refresh spends one page of the same budget but never overwrites
+    // the historical checkpoint. Failed chats keep their own old watermarks and
+    // are retried on a later traversal without starving the rest of the account.
+    if (refreshHead) {
+      refreshHead = false;
+      continue;
+    }
+    if (page.hasMore && (!page.oldestCursor || page.oldestCursor === cursor)) {
+      throw new BeeperApiError('Beeper account pagination stalled without a usable next cursor', {
+        code: 'MALFORMED_RESPONSE', status: 502,
+      });
+    }
+    cursor = page.hasMore ? page.oldestCursor : null;
+    // Only advance after all work on this page was attempted. A crash or write
+    // failure replays this page through the existing idempotent message writes.
+    // eslint-disable-next-line no-await-in-loop -- checkpoint follows page work
+    await query('UPDATE beeper_accounts SET chat_cursor = $2 WHERE account_id = $1', [account.accountId, cursor]);
+    continuationPending = Boolean(page.hasMore);
+    if (!continuationPending) break;
   }
 
-  return { chatsSwept, messagesWritten, failedChats };
+  return { chatsSwept, messagesWritten, failedChats, continuationPending, cursorRestarts };
 }
 
 // A per-run re-entrancy guard: one sweep at a time, process-wide. The timer,
@@ -795,6 +828,8 @@ async function executeSweep(reason) {
     let accountsDone = 0;
     let failedAccounts = 0;
     let failedChats = 0;
+    let unfinishedAccounts = 0;
+    let cursorRestarts = 0;
     for (const account of accounts) {
       // eslint-disable-next-line no-await-in-loop -- accounts are swept in order; each owns its own cursors
       const result = await sweepAccount(account, clientOptions, observedAt, personIndex).catch((err) => {
@@ -806,6 +841,8 @@ async function executeSweep(reason) {
         chats += result.chatsSwept;
         messages += result.messagesWritten;
         failedChats += result.failedChats;
+        unfinishedAccounts += Number(result.continuationPending);
+        cursorRestarts += result.cursorRestarts;
       }
       // #80: one account done, whether it succeeded or failed — "N of M" counts
       // accounts attempted, not accounts that mirrored something.
@@ -835,6 +872,9 @@ async function executeSweep(reason) {
       messages,
       failedAccounts,
       failedChats,
+      unfinishedAccounts,
+      enumerationComplete: unfinishedAccounts === 0 && failedAccounts === 0,
+      cursorRestarts,
       durationMs,
     };
   } finally {
