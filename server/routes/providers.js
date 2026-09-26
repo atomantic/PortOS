@@ -269,8 +269,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
   });
 
   router.get('/fleet-host', asyncHandler(async (req, res) => {
-    const { getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
-    res.set('Cache-Control', 'no-store').json(await getFleetLlmHostStatus());
+    const { readFleetHostStatus } = await import('../services/fleetHostNotify.js');
+    res.set('Cache-Control', 'no-store').json(await readFleetHostStatus({ refresh: req.query.fresh === '1' }));
   }));
   // Who has been using this machine's GPU. Never cached: the point of the
   // report is what is happening right now.
@@ -281,12 +281,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // The counterpart to `/fleet-host/setup`: close the queue, clear the
   // enable marker, drop the login task and remove the container.
   router.post('/fleet-host/stop', asyncHandler(async (req, res) => {
-    const { disableFleetLlmHost } = await import('../services/fleetLlmHost.js');
+    const { disableFleetLlmHost, getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
     if (runtimeSetupInFlight) throw new ServerError('Model host setup is running — wait for it to finish before stopping the host.', { status: 409, code: 'SETUP_BUSY' });
     const log = [];
     const result = await disableFleetLlmHost({ emit: (message) => log.push(message) });
     resetProviderReadinessCache();
-    res.set('Cache-Control', 'no-store').json({ ...result, log });
+    res.set('Cache-Control', 'no-store').json({ ...result, log, status: await getFleetLlmHostStatus().catch(() => null) });
   }));
   router.get('/fleet-peer-hosts', asyncHandler(async (req, res) => {
     const { getFleetPeerHosts } = await import('../services/fleetLlmHost.js');
@@ -302,7 +302,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.set('Cache-Control', 'no-store').json({ apiKey: await revealFleetLlmKey() });
   }));
   router.post('/fleet-host/setup', asyncHandler(async (req, res) => {
-    const { configureFleetLlmHost } = await import('../services/fleetLlmHost.js');
+    const { configureFleetLlmHost, getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
     if (runtimeSetupInFlight) throw new ServerError('Another model setup is running.', { status: 409, code: 'SETUP_BUSY' });
     runtimeSetupInFlight = true;
     const { send, safeEnd } = openSseStream(res);
@@ -313,7 +313,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
       isCancelled: () => clientGone,
     }).catch((err) => ({ success: false, error: err.message }))
       .finally(() => { runtimeSetupInFlight = false; resetProviderReadinessCache(); });
-    send(result.success ? { type: 'complete', message: 'Host configured. Check model readiness below.' } : { type: 'error', message: result.error });
+    const status = await getFleetLlmHostStatus().catch(() => null);
+    send(result.success ? { type: 'complete', message: 'Host configured. Check model readiness below.', status } : { type: 'error', message: result.error });
     safeEnd();
   }));
 

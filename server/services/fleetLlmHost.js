@@ -1,3 +1,4 @@
+import { noteFleetHostChanged } from './fleetHostNotify.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { detectSystemCapabilities } from '../lib/systemCapabilities.js';
@@ -66,23 +67,29 @@ export async function startFleetLlmHost() {
   // recorded against the history already on disk rather than starting a second
   // ledger that the hydrate would then overwrite.
   const usage = await getFleetHostUsageLedger();
-  const next = createFleetLlmGateway({ upstream, apiKey, usage, onRecorded: scheduleFleetHostUsagePersist });
+  const next = createFleetLlmGateway({ upstream, apiKey, usage, onRecorded: scheduleFleetHostUsagePersist, onChanged: () => noteFleetHostChanged({ usageOnly: true }) });
   await new Promise((resolve, reject) => {
     next.server.once('error', reject);
     next.server.listen(PORTS.FLEET_LLM, '0.0.0.0', resolve);
   });
   next.server.on('error', () => console.error('❌ Fleet inference listener failed'));
   gateway = next;
+  noteFleetHostChanged();
 }
 
 export async function stopFleetLlmHost() {
   const previous = gateway;
   gateway = null;
+  noteFleetHostChanged();
   await previous?.close();
   // The in-flight requests `close()` just cancelled are the newest rows in the
   // ledger; write them before the listener is gone rather than leaving them to
   // a debounce timer that a shutdown may never run.
   await flushFleetHostUsage();
+}
+
+export function getFleetLlmHostQueue() {
+  return gateway?.status() || { active: 0, queued: 0, maxActive: 1, maxQueued: 16 };
 }
 
 /** Inbound usage, with this host's live admission state folded in. */
@@ -110,10 +117,15 @@ export async function getFleetLlmHostUsage() {
  *
  * @returns {Promise<{success: boolean, containerStopped: boolean, error?: string}>}
  */
-export async function disableFleetLlmHost({ emit = () => {} } = {}) {
+export function disableFleetLlmHost(options = {}) {
+  return disableHost(options).finally(() => noteFleetHostChanged());
+}
+
+async function disableHost({ emit = () => {} } = {}) {
   emit('Closing the shared API queue — no new peer requests will be admitted.');
   await stopFleetLlmHost();
   await upsertPortosEnvLine(ENABLED_KEY, '0');
+  noteFleetHostChanged();
   emit('Disabled the model host for the next restart.');
 
   const loginTask = await removeFleetHostLoginTask();
@@ -166,7 +178,7 @@ export async function getFleetLlmHostStatus() {
     stoppable: Boolean(gateway) || Boolean(probe?.reachable) || enabled,
     endpoint: tailnet.running && tailnet.dnsName ? `http://${tailnet.dnsName}:${PORTS.FLEET_LLM}/v1` : null,
     model: MODEL, hasApiKey: Boolean(host?.apiKey),
-    queue: gateway?.status() || { active: 0, queued: 0, maxActive: 1, maxQueued: 16 },
+    queue: getFleetLlmHostQueue(),
     checks: [
       { id: 'hardware', label: 'Supported hardware', ok: recommendation.supported },
       { id: 'docker', label: 'Docker engine responding', ok: Boolean(docker), detail: docker ? 'Ready' : 'Start Docker Desktop; if it is already running, restart its engine and retry.' },
@@ -185,8 +197,8 @@ export async function revealFleetLlmKey() {
 }
 
 export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
-  const { getPeers } = await import('./instances.js').catch(() => ({ getPeers: async () => [] }));
-  const peers = await getPeers().catch(() => []);
+  const { getPeers } = await import('./instances.js');
+  const peers = await getPeers();
   const candidates = peers.filter((p) => p && p.enabled !== false && p.status !== 'offline');
   if (candidates.length === 0) return { hosts: [] };
 
@@ -195,9 +207,10 @@ export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
       return withAbortTimeout(timeoutMs, async (signal) => {
         const baseUrl = peerBaseUrl(peer);
         const res = await peerFetch(`${baseUrl}/api/providers/fleet-host`, { signal }, peer);
-        if (!res.ok) return null;
-        const status = await res.json().catch(() => null);
-        if (!status || (!status.serving && !status.enabled)) return null;
+        if (!res.ok) throw new Error('Peer host status unavailable');
+        const status = await res.json();
+        if (!status || typeof status.enabled !== 'boolean' || typeof status.serving !== 'boolean') throw new Error('Invalid peer host status');
+        if (!status.serving && !status.enabled) return null;
 
         const endpoint = status.endpoint || (peer.host || peer.address
           ? `http://${peer.host || peer.address}:${PORTS.FLEET_LLM}/v1`
@@ -216,7 +229,7 @@ export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
           specs: status.specs || null,
           queue: status.queue || null,
         };
-      }).catch(() => null);
+      });
     })
   );
 
@@ -224,7 +237,8 @@ export async function getFleetPeerHosts({ timeoutMs = 3000 } = {}) {
     .filter((r) => r.status === 'fulfilled' && r.value !== null)
     .map((r) => r.value);
 
-  return { hosts };
+  const unavailable = results.filter(result => result.status === 'rejected').length;
+  return { hosts, ...(unavailable ? { unavailable } : {}) };
 }
 
 export async function revealFleetPeerHostKey(peerId, { timeoutMs = 4000 } = {}) {
@@ -251,7 +265,8 @@ export async function revealFleetPeerHostKey(peerId, { timeoutMs = 4000 } = {}) 
 export async function configureFleetLlmHost({ emit = () => {}, isCancelled = () => false } = {}) {
   if (setupRunning) throw new Error('Model host setup is already running.');
   setupRunning = true;
-  return configure({ emit, isCancelled }).finally(() => { setupRunning = false; });
+  noteFleetHostChanged();
+  return configure({ emit, isCancelled }).finally(() => { setupRunning = false; noteFleetHostChanged(); });
 }
 
 async function configure({ emit, isCancelled }) {

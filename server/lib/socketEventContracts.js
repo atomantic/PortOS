@@ -44,6 +44,22 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'fleet-host:subscribe': {
+    direction: 'client-to-server', summary: 'Observe local fleet host readiness while this operator socket is subscribed.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:unsubscribe': {
+    direction: 'client-to-server', summary: 'Release this operator socket; stop external probes after the last subscriber leaves.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:changed': {
+    direction: 'server-to-client', summary: 'Local host readiness or setup changed; no credentials or records.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:usage:changed': {
+    direction: 'server-to-client', summary: 'Local queue or usage ledger changed; read the authenticated usage report.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'reference-sheet:changed': {
     direction: 'server-to-client',
     summary: 'Correlated sheet publication outcome after the image copy and character pointer write finish.',

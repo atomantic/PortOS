@@ -14,7 +14,7 @@ import { maybeRedirectToLogin } from '../services/apiCore';
  * setup-image-video.sh):
  *   { type: 'stage',    stage, message? }  → advances currentStage + logs it
  *   { type: 'log',      message }          → appends a log line
- *   { type: 'complete', message }          → done=true, onComplete(), closes
+ *   { type: 'complete', message }          → done=true, onComplete(frame), closes
  *   { type: 'error',    message }          → error set, closes
  *
  * Closing the EventSource or aborting the fetch stream (via `close()` on
@@ -35,7 +35,7 @@ import { maybeRedirectToLogin } from '../services/apiCore';
  * @param {string|null} url - SSE endpoint; null/empty leaves the stream closed.
  * @param {object} opts
  * @param {boolean} [opts.enabled=true] - when false, the stream stays closed and state resets.
- * @param {() => void} [opts.onComplete] - fired once on the `complete` frame.
+ * @param {(frame: object) => void} [opts.onComplete] - fired once on the `complete` frame.
  * @param {number} [opts.maxLogLines=500] - cap on retained log lines.
  * @param {number} [opts.flushMs=0] - 0 = per-line flush; >0 = debounce window.
  * @param {'GET'|'POST'} [opts.method='GET'] - GET uses EventSource; POST uses
@@ -142,7 +142,7 @@ export function useInstallStream(url, {
         appendLog({ kind: 'success', text: msg.message });
         flush();
         closeThis();
-        onCompleteRef.current?.();
+        onCompleteRef.current?.(msg);
       } else if (msg.type === 'error') {
         const message = msg.message || 'Installer failed.';
         setError(message);
