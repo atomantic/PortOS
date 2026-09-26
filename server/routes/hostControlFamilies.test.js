@@ -12,6 +12,13 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
   isAuthEnabled: vi.fn().mockResolvedValue(false),
 }));
 
+// The stored settings the executable-path gate compares a body against.
+const settingsStore = vi.hoisted(() => ({ current: {} }));
+vi.mock('../services/settings.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getSettings: vi.fn(async () => settingsStore.current),
+}));
+
 const featureAgents = vi.hoisted(() => ({
   createFeatureAgent: vi.fn(),
   activateFeatureAgent: vi.fn(),
@@ -150,5 +157,53 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     expect(featureAgents.activateFeatureAgent).toHaveBeenCalledTimes(2);
     expect(loops.triggerLoop).toHaveBeenCalledTimes(2);
     expect([settingsWrite, cosConfigWrite].map((write) => write.mock.calls.length)).toEqual([2, 2]);
+  });
+});
+
+describe('host-control gate on settings keys that pick an executable (#8751)', () => {
+  const STORED = {
+    imageGen: {
+      grok: { enabled: true, grokPath: '/opt/example/bin/grok', aspectRatio: '1:1' },
+      agy: { enabled: true, agyPath: '/opt/example/bin/agy' },
+      local: { pythonPath: '/opt/example/.venv/bin/python3' },
+    },
+    layeredIntelligence: { trustShellSources: false },
+  };
+  const CHANGES = [
+    { imageGen: { ...STORED.imageGen, grok: { ...STORED.imageGen.grok, grokPath: '/bin/bash' } } },
+    { imageGen: { agy: { agyPath: '/bin/sh' } } },
+    { imageGen: { codex: { codexPath: '/usr/bin/env' } } },
+    { imageGen: { local: { pythonPath: '/opt/example/other/python3' } } },
+    { layeredIntelligence: { trustShellSources: true } },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    settingsStore.current = STORED;
+  });
+
+  it('refuses a remote password-free caller that changes one, before anything is written', async () => {
+    for (const body of CHANGES) {
+      expectRefused(await call(remote(), ['put', '/api/settings', body]));
+      expectRefused(await call(local(), ['put', '/api/settings', body], '192.0.2.10'));
+    }
+    expect(settingsWrite).not.toHaveBeenCalled();
+  });
+
+  it('lets a remote caller resave the stored values, or clear one, while changing an open key', async () => {
+    const statuses = [];
+    for (const body of [
+      { imageGen: { ...STORED.imageGen, grok: { ...STORED.imageGen.grok, aspectRatio: '16:9' } } },
+      { layeredIntelligence: { trustShellSources: false } },
+      { imageGen: { grok: { enabled: false, grokPath: '' } } },
+    ]) statuses.push((await call(remote(), ['put', '/api/settings', body])).status);
+    expect(statuses).toEqual([200, 200, 200]);
+    expect(settingsWrite).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps a local caller able to change every one', async () => {
+    const statuses = [];
+    for (const body of CHANGES) statuses.push((await call(local(), ['put', '/api/settings', body])).status);
+    expect(statuses).toEqual(CHANGES.map(() => 200));
   });
 });
