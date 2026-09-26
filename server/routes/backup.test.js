@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { PassThrough } from 'stream';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/backup.js', () => ({
   getState: vi.fn(),
@@ -152,6 +152,21 @@ describe('backup routes', () => {
   });
 
   describe('GET /api/backup/snapshots', () => {
+    it('returns classified inventory failures through the centralized boundary', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backup/target' } });
+      backup.listSnapshots.mockRejectedValueOnce(new ServerError(
+        'Backup inventory unavailable: read-namespace (EIO)',
+        { code: 'BACKUP_INVENTORY_UNAVAILABLE', context: { operation: 'read-namespace', filesystemCode: 'EIO' } },
+      ));
+      const res = await request(buildApp()).get('/api/backup/snapshots');
+      expect(res.status).toBe(500);
+      expect(res.body).toMatchObject({
+        error: 'Backup inventory unavailable: read-namespace (EIO)',
+        code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      });
+      expect(JSON.stringify(res.body)).not.toContain('/backup/target');
+    });
+
     it('returns the list of snapshots from the configured destPath', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
       backup.listSnapshots.mockResolvedValue([{ id: 's1' }, { id: 's2' }]);

@@ -847,6 +847,16 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
   return manifest;
 }
 
+// Keep filesystem diagnostics bounded: native errors include private paths.
+function inventoryReadError(cause, operation) {
+  const code = ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'EMFILE', 'ENFILE', 'ESTALE']
+    .includes(cause?.code) ? cause.code : 'UNKNOWN';
+  return new ServerError(`Backup inventory unavailable: ${operation} (${code})`, {
+    code: 'BACKUP_INVENTORY_UNAVAILABLE',
+    context: { operation, filesystemCode: code },
+  });
+}
+
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
@@ -861,11 +871,19 @@ export async function listSnapshots(destPath) {
   // every directory. Treating it as a snapshot id and reading
   // `<.DS_Store>/manifest.json` throws ENOTDIR. Also skip dotfile-named dirs so
   // nothing hidden can masquerade as a snapshot (real ids are timestamps).
-  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(() => []);
+  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(async cause => {
+    if (cause?.code !== 'ENOENT') throw inventoryReadError(cause, 'read-snapshots-root');
+    // Absence is empty only when the configured destination itself is readable.
+    await readdir(destPath).catch(error => { throw inventoryReadError(error, 'read-destination'); });
+    return [];
+  });
   const directories = rootEntries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'));
   const descriptors = (await Promise.all(directories.map(async (entry) => {
     const rootEntryPath = join(snapshotsRoot, entry.name);
-    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(() => []);
+    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(cause => {
+      if (cause?.code === 'ENOENT') return [];
+      throw inventoryReadError(cause, 'read-namespace');
+    });
     const isLegacySnapshot = SNAPSHOT_ID_PATTERN.test(entry.name) && contents.some(child =>
       (child.name === 'data' && child.isDirectory())
       || child.name === 'manifest.json'

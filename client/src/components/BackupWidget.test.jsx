@@ -56,6 +56,34 @@ beforeEach(() => {
 });
 
 describe('BackupWidget snapshots', () => {
+  it('shows first-load failure and recovers through retry to a valid empty inventory', async () => {
+    mockGetBackupSnapshots.mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue([]);
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Snapshot inventory unavailable.');
+    expect(screen.queryByText('No snapshots found.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry snapshot inventory' }));
+    expect(await screen.findByText('No snapshots found.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('marks retained inventory stale after refresh failure and clears it on retry', async () => {
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    await screen.findByRole('button', { name: /Download snapshot/ });
+    mockGetBackupSnapshots.mockRejectedValueOnce(new Error('unavailable'));
+    await act(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Previously loaded inventory is stale.');
+    expect(screen.getByRole('button', { name: /Download snapshot/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry snapshot inventory' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
   it('offers neither action for a snapshot that is still being written', async () => {
     mockGetBackupSnapshots.mockResolvedValue([
       { id: '2026-08-25T12-00-00', fileCount: 0, incomplete: true },

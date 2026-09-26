@@ -455,6 +455,48 @@ describe('listSnapshots', () => {
     }
   });
 
+  it.each(['EIO', 'EACCES'])('rejects root and namespace %s without exposing paths or returning partial data', async code => {
+    const cause = Object.assign(new Error('private destination and machine'), { code });
+    const spy = vi.spyOn(fs, 'readdir').mockRejectedValue(cause);
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      message: `Backup inventory unavailable: read-snapshots-root (${code})`,
+      context: { operation: 'read-snapshots-root', filesystemCode: code },
+    });
+    spy.mockImplementation(async path => {
+      if (String(path) === joinPath('/dest', 'snapshots')) return [dirent('healthy', true), dirent('unreadable', true)];
+      if (String(path).endsWith('unreadable')) throw cause;
+      return [dirent('2026-06-08T15-18-34', true)];
+    });
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      message: `Backup inventory unavailable: read-namespace (${code})`,
+    });
+    spy.mockRestore();
+  });
+
+  it('accepts missing snapshots only under a readable destination', async () => {
+    const missing = Object.assign(new Error('private path'), { code: 'ENOENT' });
+    const spy = vi.spyOn(fs, 'readdir').mockImplementation(async path => {
+      if (String(path) === '/dest') return [];
+      throw missing;
+    });
+    expect(await listSnapshots('/dest')).toEqual([]);
+    spy.mockRejectedValue(missing);
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      context: { operation: 'read-destination', filesystemCode: 'ENOENT' },
+    });
+    spy.mockRestore();
+  });
+
+  it('skips a namespace removed during enumeration', async () => {
+    const spy = vi.spyOn(fs, 'readdir').mockResolvedValueOnce([dirent('disappeared', true)])
+      .mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    expect(await listSnapshots('/dest')).toEqual([]);
+    spy.mockRestore();
+  });
+
   it('returns [] for a falsy destPath without touching the filesystem', async () => {
     const readdirSpy = vi.spyOn(fs, 'readdir');
     expect(await listSnapshots('')).toEqual([]);
