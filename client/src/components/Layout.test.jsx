@@ -18,7 +18,7 @@ import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 // so the render is deterministic and side-effect free.
 
 // --- Notification / status hooks: no-op, except useNotifications which feeds the
-//     dropdown + the single-row badge count. ---
+//     dropdown with a nonzero unread count. ---
 vi.mock('../hooks/useErrorNotifications', () => ({ useErrorNotifications: () => {} }));
 vi.mock('../hooks/useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
 vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
@@ -29,7 +29,7 @@ vi.mock('./PasswordRiskWarning.jsx', () => ({ default: () => null }));
 vi.mock('../hooks/useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
-    unreadCount: 0,
+    unreadCount: 6,
     markAsRead: vi.fn(),
     markAllAsRead: vi.fn(),
     removeNotification: vi.fn(),
@@ -125,6 +125,17 @@ const renderLayout = async (initialPath = '/brain/inbox') => {
 const pinnedSection = () => screen.queryByTestId('pinned-section');
 
 describe('Layout — manifest-derived sidebar structure', () => {
+  it.each([false, true])('keeps global unread notifications off CoS navigation (collapsed: %s)', async (collapsed) => {
+    localStorage.setItem('portos-sidebar-collapsed', String(collapsed));
+    await renderLayout();
+
+    const cos = screen.getByRole('button', { name: /^Chief of Staff/ });
+    expect(cos).toHaveTextContent(/^Chief of Staff$/);
+    fireEvent.click(cos);
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/cos/tasks');
+  });
+
+
   it('loads sidebar apps through the lean navigation projection', async () => {
     await renderLayout();
 
