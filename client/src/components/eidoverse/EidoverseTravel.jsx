@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketSubscription } from '../../hooks/useSocketSubscription';
+import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
+import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import { departEidoverse, getEidoverseDestinations } from '../../services/api';
 
 export default function EidoverseTravel({ travelRef, enabled, objects = [], onDestinationsChange, beforeDeparture }) {
   const [destinations, setDestinations] = useState([]);
+  const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden');
+  useVisibilityEvent((state) => setVisible(state !== 'hidden'));
+  const watching = enabled && visible;
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
   const generation = useRef(0);
-  const destinationsChanged = useRef(onDestinationsChange);
-  destinationsChanged.current = onDestinationsChange;
   const lastDestinations = useRef(null);
   const busy = useRef(false);
   const mounted = useMounted();
@@ -18,20 +21,49 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     generation.current += 1;
     return () => { generation.current += 1; };
   }, [enabled]);
+  const applyDestinations = useCallback((result) => {
+    if (!Array.isArray(result?.destinations)) return;
+    setDestinations(result.destinations);
+    const fingerprint = JSON.stringify(result.destinations.map((entry) => entry.peerId).sort());
+    if (lastDestinations.current === null) lastDestinations.current = fingerprint;
+  }, []);
+  useEffect(() => {
+    if (!watching || lastDestinations.current === null) return;
+    const fingerprint = JSON.stringify(destinations.map((entry) => entry.peerId).sort());
+    // The parent can defer while projecting or editing. Retry when its
+    // callback changes after that gate clears, without waiting for a poll
+    // or another (possibly unchanged) server snapshot.
+    if (fingerprint !== lastDestinations.current && onDestinationsChange?.() !== false) {
+      lastDestinations.current = fingerprint;
+    }
+  }, [destinations, onDestinationsChange, watching]);
   const refresh = useCallback(async () => {
     const current = generation.current;
     const sequence = ++fetchSequence.current;
     await getEidoverseDestinations({ silent: true }).then((result) => {
       if (!mounted.current || generation.current !== current || sequence !== fetchSequence.current) return;
-      setDestinations(result.destinations);
-      const fingerprint = JSON.stringify(result.destinations.map((entry) => entry.peerId).sort());
-      if (lastDestinations.current === null || fingerprint === lastDestinations.current
-        || destinationsChanged.current?.() !== false) lastDestinations.current = fingerprint;
+      applyDestinations(result);
     }).catch(() => {
       if (mounted.current && generation.current === current && sequence === fetchSequence.current) setDestinations([]);
     });
-  }, [mounted]);
-  useAutoRefetch(refresh, 30000, { enabled, pollOnly: true });
+  }, [mounted, applyDestinations]);
+  useEffect(() => {
+    if (!watching) return;
+    const update = (snapshot) => {
+      fetchSequence.current += 1;
+      applyDestinations(snapshot);
+    };
+    socket.on('eidoverse-travel:destinations', update);
+    refresh();
+    return () => {
+      fetchSequence.current += 1;
+      socket.off('eidoverse-travel:destinations', update);
+    };
+  }, [watching, refresh, applyDestinations]);
+  useSocketSubscription('eidoverse-travel', {
+    enabled: watching,
+    onResubscribe: refresh,
+  });
   const depart = useCallback(async (peerId) => {
     if (busy.current || !enabled) return;
     busy.current = true;
