@@ -1,28 +1,39 @@
-import { useState, useCallback, Fragment } from 'react';
+import { useState, useCallback, useEffect, Fragment } from 'react';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+import socket from '../services/socket';
+import useMounted from '../hooks/useMounted';
 import { formatCount, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+
+const AGENT_EVENTS = [];
 
 export function AgentsPage() {
   const [killing, setKilling] = useState({});
   const [expandedPid, setExpandedPid] = useState(null);
-  const REFRESH_INTERVAL = 3;
+  const mounted = useMounted();
 
-  // Let errors throw — `useAutoRefetch` preserves the last-good agents list
-  // on transient failures. `silent: true` keeps the 3s poll quiet on blips.
   const loadAgents = useCallback(() => api.getAgents({ silent: true }), []);
-  const { data, loading, refetch } = useAutoRefetch(loadAgents, REFRESH_INTERVAL * 1000);
+  const { data, loading, refetch, updateData } = useSocketResource(loadAgents, {
+    namespace: 'agent-processes', events: AGENT_EVENTS,
+  });
   const agents = data ?? [];
+
+  useEffect(() => {
+    const onSnapshot = frame => {
+      if (Array.isArray(frame?.agents)) updateData(frame.agents);
+    };
+    socket.on('agent-processes:changed', onSnapshot);
+    return () => socket.off('agent-processes:changed', onSnapshot);
+  }, [updateData]);
 
   const handleKill = async (pid) => {
     setKilling(prev => ({ ...prev, [pid]: true }));
-    await api.killAgent(pid).catch(() => null);
-    setTimeout(() => {
-      setKilling(prev => ({ ...prev, [pid]: false }));
-      refetch();
-    }, 1000);
+    const result = await api.killAgent(pid).catch(() => null);
+    if (!mounted.current) return;
+    if (result?.success) updateData(previous => (previous ?? []).filter(agent => agent.pid !== pid));
+    setKilling(prev => ({ ...prev, [pid]: false }));
   };
 
   const toggleExpand = (pid) => {
@@ -51,7 +62,6 @@ export function AgentsPage() {
         <div className="flex items-center gap-2 sm:gap-3">
           <Activity size={24} className="sm:w-7 sm:h-7 text-port-accent-2" />
           <h1 className="text-lg sm:text-2xl font-bold text-white font-mono">AI Agent Processes</h1>
-          <span className="hidden sm:inline text-gray-500 text-sm">({REFRESH_INTERVAL}s)</span>
         </div>
         <button
           onClick={refetch}

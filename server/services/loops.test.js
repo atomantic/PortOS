@@ -424,10 +424,22 @@ describe('loops.js', () => {
 
       const completes = [];
       loopEvents.on('iteration:complete', (data) => completes.push(data));
+      let finishSave;
+      atomicWrite.mockImplementation((path, data) => {
+        if (Array.isArray(data) && data.some(record => record.iterationCount === 1)) {
+          return new Promise(resolve => { finishSave = resolve; });
+        }
+        return Promise.resolve();
+      });
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       atomicWrite.mockClear();
 
       await triggerLoop(loop.id);
+      await flushAsync();
+
+      expect(finishSave).toBeTypeOf('function');
+      expect(completes).toHaveLength(0);
+      finishSave();
       await flushAsync();
 
       // The success branch must NOT log its swallowed-throw message — that only

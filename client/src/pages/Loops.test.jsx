@@ -16,20 +16,6 @@ vi.mock('../services/socket', () => ({
   default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-// Mirror the real hook's on-mount fetch (the page clears `loading` only from
-// that callback) while dropping the interval, which jsdom has no use for.
-vi.mock('../hooks/useAutoRefetch', async () => {
-  const { useEffect, useRef } = await import('react');
-  return {
-    useAutoRefetch: (fetchFn) => {
-      const fetchRef = useRef(fetchFn);
-      fetchRef.current = fetchFn;
-      useEffect(() => { fetchRef.current(); }, []);
-      return { refetch: () => fetchRef.current() };
-    },
-  };
-});
-
 import Loops from './Loops';
 import socket from '../services/socket';
 import * as api from '../services/api';

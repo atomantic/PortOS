@@ -10,8 +10,7 @@ import { FormField } from '../components/ui/FormField';
 import { timeAgo } from '../components/feature-agents/constants';
 import { formatCount, formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
-import { useSocketSubscription } from '../hooks/useSocketSubscription';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 import EmptyState from '../components/EmptyState';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -338,46 +337,30 @@ const ACTION_MAP = {
   delete: { fn: api.deleteLoop, msg: 'Loop deleted' },
 };
 
+const LOOP_EVENTS = [
+  'loop:created', 'loop:stopped', 'loop:resumed', 'loop:deleted', 'loop:updated',
+  'loop:iteration:start', 'loop:iteration:complete', 'loop:iteration:error',
+];
+
 export default function Loops() {
   // The create form is always on screen above the list, so the empty state's
   // call to action focuses its prompt field rather than opening anything.
   const promptRef = useRef(null);
-  const [loops, setLoops] = useState([]);
   const [providers, setProviders] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
-
-  const fetchLoops = useCallback(async () => {
-    const data = await api.getLoops().catch(() => []);
-    setLoops(data);
-    setLoading(false);
-  }, []);
-
-  const fetchProviders = useCallback(async () => {
-    const data = await api.getLoopProviders().catch(() => ({ providers: [] }));
-    setProviders(data.providers || []);
-  }, []);
-
-  // Fallback poll for iteration count updates (socket events cover state changes)
-  useAutoRefetch(fetchLoops, 60_000, { pollOnly: true });
+  const loadLoops = useCallback(() => api.getLoops(), []);
+  const { data, loading, refetch: fetchLoops } = useSocketResource(loadLoops, {
+    namespace: 'loops', events: LOOP_EVENTS,
+  });
+  const loops = data ?? [];
 
   useEffect(() => {
-    fetchProviders();
-
-    const refreshEvents = ['loop:created', 'loop:stopped', 'loop:resumed', 'loop:deleted', 'loop:updated'];
-    const handleRefresh = () => fetchLoops();
-    refreshEvents.forEach(e => socket.on(e, handleRefresh));
-
-    return () => {
-      refreshEvents.forEach(e => socket.off(e, handleRefresh));
-    };
-  }, [fetchLoops, fetchProviders]);
-
-  // Re-emits `loops:subscribe` on every socket reconnect and refetches the
-  // list, since the server's per-socket subscriber Set is empty on the
-  // reconnected socket — without this, live output and status updates go
-  // silent after a server restart/self-update until the page is reloaded.
-  useSocketSubscription('loops', { onResubscribe: fetchLoops });
+    let active = true;
+    api.getLoopProviders().then(data => {
+      if (active) setProviders(data.providers || []);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const handleAction = async (action, id) => {
     const entry = ACTION_MAP[action];
