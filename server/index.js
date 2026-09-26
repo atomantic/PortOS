@@ -116,7 +116,7 @@ import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
-import { allowSocketRequest, authGate, hostControlRouteGate, socketAuthGate } from './services/authGate.js';
+import { allowSocketRequest, authGate, hostControlBodyGate, hostControlRouteGate, socketAuthGate } from './services/authGate.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
@@ -283,6 +283,8 @@ app.use(hostControlRouteGate);
 // Every per-file upload cap is derived from this value — see lib/uploadLimits.js.
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ limit: JSON_BODY_LIMIT, extended: true }));
+// …and the policy-store slices that change execution, which need the body.
+app.use(hostControlBodyGate);
 
 // The viewer and vendored noVNC modules are outside /api so WKWebView can load
 // them without persisting the user's PortOS password. The viewer URL itself is

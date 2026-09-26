@@ -20,6 +20,30 @@
  *     templates, challenge and goal-fidelity reports — records and LLM text
  *     only, and sub-agents call the latter from loopback anyway.
  *   - standardize/analyze — reads the repo; `apply` and `backup` are gated.
+ *   - feature agents and loops: pause/stop/delete — they reduce execution.
+ *   - code-review/cli-outcome — records a reviewer verdict; nothing runs.
+ *   - providers (#8721): the gated writes choose the binary, its args, the
+ *     endpoint and credentials a tool-running CLI harness talks to, or which
+ *     harnesses and wrapper CLIs may run at all. Left open: DELETEs (a
+ *     connection still in use is refused with a 409), fleet-host/stop and the
+ *     Codex login cancel (they stop execution), the fleet key reveals (a read
+ *     of a secret, not execution), binding create/edit/unlink (minted routes
+ *     arrive disabled; unlink clones the endpoint the binding already had;
+ *     link/preview only reads), the model-comparison import (records only),
+ *     model pins/aliases, derive and status recovery (they choose among
+ *     already-configured values), and test, vision, refresh-models and
+ *     refresh-catalog (they run an already-configured provider on a fixed
+ *     prompt, as every AI feature does).
+ *   - pipeline and FableLoom: only autopilot start is gated — with gap filing
+ *     or self-improvement on it queues CoS agents. Every other pipeline route
+ *     generates text or media through an already-configured provider, the
+ *     same as any AI feature; the caller never chooses what runs.
+ *   - settings: feature toggles and the Eidoverse host bridge (they arm
+ *     PortOS's own integrations or open a listener), orchestration profiles,
+ *     AI assignments and credentials (they choose among configured providers
+ *     or store a key). The `PUT /api/settings` and `PUT /api/cos/config`
+ *     slices that change execution policy are gated per request body — see
+ *     HOST_CONTROL_SETTINGS_SLICES and HOST_CONTROL_OPEN_COS_CONFIG_KEYS.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -98,6 +122,86 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // HTTP twins of the gated `app:standardize` / `standardize:start` events.
   'POST /api/standardize/apply',
   'POST /api/standardize/backup',
+
+  // Feature agents and loops (#8721): create/edit set the prompt, working
+  // directory and provider an agent runs with; the rest start one.
+  'POST /api/feature-agents',
+  'PUT /api/feature-agents/:id',
+  'POST /api/feature-agents/:id/start',
+  'POST /api/feature-agents/:id/resume',
+  'POST /api/feature-agents/:id/trigger',
+  'POST /api/loops',
+  'PUT /api/loops/:id',
+  'POST /api/loops/:id/resume',
+  'POST /api/loops/:id/trigger',
+
+  // GSD: queue CoS agent work against an app, or write into its repo.
+  'POST /api/cos/gsd/projects/:appId/concerns/tasks',
+  'POST /api/cos/gsd/projects/:appId/phases/:phaseId/action',
+  'PUT /api/cos/gsd/projects/:appId/documents/:docName',
+
+  // Runs the configured local or provider reviewer on a caller-supplied diff.
+  'POST /api/code-review/local',
+
+  // Providers: which binary runs, with which args, against which endpoint and
+  // credentials; installing or launching runtimes; signing a CLI in or out.
+  // `PUT /api/providers/:id` also matches `/active` and `/bootstraps`.
+  'POST /api/providers',
+  'PUT /api/providers/:id',
+  'POST /api/providers/:id/modes/tui',
+  'PATCH /api/providers/routes/:providerId',
+  'POST /api/providers/connections',
+  'PATCH /api/providers/connections/:id',
+  'POST /api/providers/services',
+  'PATCH /api/providers/services/:slug',
+  'POST /api/providers/bindings/:id/link',
+  'PUT /api/providers/harnesses/:id',
+  'POST /api/providers/presets',
+  'POST /api/providers/codex/account/login',
+  'POST /api/providers/codex/account/logout',
+  'POST /api/providers/readiness/setup',
+  'POST /api/providers/readiness/serve-model',
+  'POST /api/providers/runtimes/install',
+  'POST /api/providers/opencode/install',
+  'POST /api/providers/fleet-host/setup',
+
+  // Autopilots and support requests that queue CoS agents.
+  'POST /api/pipeline/series/:id/autopilot/start',
+  'POST /api/fableloom/:id/editorial/autopilot/start',
+  'POST /api/image-video/models/support-request',
+
+  // Eidoverse: clone and install a caller-named repo, or repoint it.
+  'POST /api/settings/features/eidoverse/install',
+  'PUT /api/settings/features/eidoverse/source',
+]);
+
+/**
+ * `PUT /api/settings` slices that set what runs or the guardrails around it:
+ * harness enablement and wrapper CLIs, the code-review chain, the untrusted
+ * content screen in front of agent work, scheduled self-update, and scheduled
+ * series autopilots. The store is polymorphic, so its other slices stay open.
+ */
+export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
+  'autoUpdate',
+  'codeReview',
+  'credentialBootstraps',
+  'harnesses',
+  'seriesAutopilot',
+  'untrustedContent',
+]);
+
+/**
+ * The only `PUT /api/cos/config` keys a remote caller on a password-free
+ * install may change. Nearly all of CoS config is execution policy (autonomy,
+ * concurrency, MCP server commands, the Persistent Mind's capabilities), so
+ * this list is the inverse: an unlisted key, including one added later, is
+ * gated.
+ */
+export const HOST_CONTROL_OPEN_COS_CONFIG_KEYS = Object.freeze([
+  'avatarStyle',
+  'dynamicAvatar',
+  'embeddingModel',
+  'embeddingProviderId',
 ]);
 
 const compileSegment = (segment) => {
@@ -113,6 +217,23 @@ const compileRoute = (route) => {
 };
 
 const COMPILED_ROUTES = HOST_CONTROL_ROUTES.map(compileRoute);
+
+const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : []);
+
+// The two polymorphic policy stores, gated per body key rather than per route.
+// `hostControlBodyGate` in services/authGate.js applies these after the body
+// parser, since `hostControlRouteGate` runs before it.
+const COMPILED_BODY_ROUTES = [
+  ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key))],
+  ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
+].map(([route, pick]) => ({ ...compileRoute(route), pick }));
+
+/** The host-control keys a request body names, for `method path` of a policy store; [] elsewhere. */
+export const hostControlBodyKeys = (method, path, body) => {
+  if (typeof method !== 'string' || typeof path !== 'string') return [];
+  const verb = method.toUpperCase();
+  return COMPILED_BODY_ROUTES.find((entry) => entry.method === verb && entry.pattern.test(path))?.pick(body) ?? [];
+};
 
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */
 export const hostControlRouteFor = (method, path) => {

@@ -13,7 +13,7 @@ import {
   isPeerBasicBootstrapRequest,
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
-import { isHostControlRoute } from '../lib/hostControlRoutes.js';
+import { hostControlBodyKeys, isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
@@ -263,6 +263,13 @@ export const requireHostControl = (req, res, next) => {
 // says which HTTP routes execute on the host.
 export const hostControlRouteGate = (req, res, next) => (
   isHostControlRoute(req.method, req.path) ? requireHostControl(req, res, next) : next()
+);
+
+// The body-slice twin, mounted right after the JSON parser: the two
+// polymorphic policy stores (PUT /api/settings, PUT /api/cos/config) are
+// gated only when the body names a key that changes execution policy.
+export const hostControlBodyGate = (req, res, next) => (
+  hostControlBodyKeys(req.method, req.path, req.body).length > 0 ? requireHostControl(req, res, next) : next()
 );
 
 // The socket twin of requireHostControl on a password-free install, for the
