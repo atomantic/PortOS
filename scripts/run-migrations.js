@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { readdir, readFile, writeFile, mkdir, rename } from 'fs/promises';
+import { readdir, readFile, mkdir, rename } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { writeJsonAtomic } from './migrations/_lib.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
@@ -33,20 +34,19 @@ async function scanMigrationFiles(migrationsDir) {
 }
 
 /**
- * Read the applied-migrations list. Default to [] on missing/unreadable file.
+ * Read the applied-migrations list. A missing file defaults to [].
  *
  * When `repair` is true and the file is corrupt (mid-write truncation, bad
- * JSON, wrong shape), rename it aside and rebuild from scratch — migrations are
- * idempotent, so re-running is safe, and this prevents one bad write from
- * bricking every subsequent boot. When `repair` is false (read-only callers
- * like listPendingMigrations), a corrupt file is treated as `[]` WITHOUT
- * mutating anything on disk.
+ * JSON, wrong shape), rename it aside and rebuild the ledger from scratch so
+ * corruption does not brick future boots. Non-ENOENT read errors
+ * propagate in repair mode: treating an unreadable ledger as empty could rerun
+ * migrations against live data. When `repair` is false (read-only callers like
+ * listPendingMigrations), read errors and corrupt content are treated as `[]`
+ * WITHOUT mutating anything on disk.
  */
 async function readAppliedList(appliedFile, { repair = false } = {}) {
   const raw = await readFile(appliedFile, 'utf-8').catch(err => {
-    if (err.code !== 'ENOENT' && repair) {
-      console.warn(`⚠️ Could not read ${appliedFile}: ${err.message}, defaulting to []`);
-    }
+    if (err.code !== 'ENOENT' && repair) throw err;
     return null;
   });
   if (raw === null) return [];
@@ -143,7 +143,7 @@ export async function runMigrations({
       applied.push(file);
       disarmed++;
     }
-    if (disarmed > 0) await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
+    if (disarmed > 0) await writeJsonAtomic(appliedFile, applied);
   }
 
   let ran = 0;
@@ -159,7 +159,7 @@ export async function runMigrations({
     console.log(`🔄 Running migration: ${file}`);
     await migration.up({ rootDir, migrationsDir });
     applied.push(file);
-    await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
+    await writeJsonAtomic(appliedFile, applied);
     ran++;
     console.log(`✅ Migration applied: ${file}`);
   }
