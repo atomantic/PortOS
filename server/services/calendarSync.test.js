@@ -22,6 +22,21 @@ vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: vi.fn().mockResolvedValue({ created: 0, matched: 0 }),
 }));
 
+vi.mock('../lib/fileUtils.js', async importOriginal => ({
+  ...await importOriginal(),
+  ensureDir: vi.fn(),
+  readJSONFile: vi.fn(),
+  atomicWrite: vi.fn(),
+}));
+vi.mock('./calendarApiSync.js', () => ({ syncOutlookCalendarApi: vi.fn() }));
+vi.mock('./humanActivity.js', () => ({
+  calendarActivityCandidates: vi.fn(() => []),
+  recordEvents: vi.fn(),
+}));
+vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
+
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { syncAccount, logCalendarTouchpoints } from './calendarSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { mcpSyncAccount, mcpDiscoverCalendars } from './calendarGoogleSync.js';
@@ -129,5 +144,47 @@ describe('logCalendarTouchpoints — candidate building (#2033)', () => {
     ]);
     // All four filtered out → producer never calls the logger.
     expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Outlook batch identity reconciliation (#8635)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccount.mockResolvedValue({
+      id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'outlook-calendar',
+    });
+    readJSONFile.mockResolvedValue({ events: [] });
+  });
+
+  it('counts overlapping page events once and retains the last mutable fields', async () => {
+    syncOutlookCalendarApi.mockResolvedValue([
+      { id: 'first', externalId: 'a', title: 'Earlier' },
+      { id: 'second', externalId: 'a', title: 'Latest' },
+    ]);
+    expect(await syncAccount(ACCOUNT_ID)).toMatchObject({ newEvents: 1, total: 1 });
+    expect(atomicWrite.mock.calls.at(-1)[1].events).toEqual([
+      { id: 'first', externalId: 'a', title: 'Latest' },
+    ]);
+  });
+
+  it.each(['success', 'partial'])('heals old duplicates with a stable id during %s sync', async status => {
+    const omitted = { id: 'omitted', externalId: 'b' };
+    readJSONFile.mockResolvedValue({ events: [
+      { id: 'retained', externalId: 'a', title: 'Old' },
+      { id: 'duplicate', externalId: 'a', title: 'Stale' },
+      omitted,
+    ] });
+    syncOutlookCalendarApi.mockResolvedValue({
+      status, events: [{ id: 'incoming', externalId: 'a', title: 'Current' }],
+    });
+    expect(await syncAccount(ACCOUNT_ID)).toMatchObject({
+      newEvents: 0, total: status === 'partial' ? 2 : 1,
+      pruned: status === 'partial' ? 0 : 1,
+    });
+    expect(atomicWrite.mock.calls.at(-1)[1].events).toEqual([
+      { id: 'retained', externalId: 'a', title: 'Current' },
+      ...(status === 'partial' ? [omitted] : []),
+    ]);
   });
 });

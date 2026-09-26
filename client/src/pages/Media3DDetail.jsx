@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel, imageTo3dAssetUrl, imageTo3dFullMeshUrl } from '../services/api';
 import useMounted from '../hooks/useMounted';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { timeAgo } from '../utils/formatters';
 import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
@@ -18,20 +18,19 @@ import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 
-// Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
-const POLL_INTERVAL_MS = 2500;
-
 // Per-record detail view for an image-to-3D model (`/3d/:id`). The record
 // id is the URL, so a finished mesh is a shareable, reload-safe deep link. Mounts
 // the reusable GlbViewer once the render lands (status `ready` + `assetPath`),
-// with a Download .glb, and offers re-render / delete. Polls while generating.
+// with a Download .glb, and offers re-render / delete. Refreshes on model events.
 export default function Media3DDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const mountedRef = useMounted();
-  const [record, setRecord] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const { data: record, updateData: setRecord, refetch, loading, error } = useModelLifecycle(id, getImageTo3dModel);
+  const notFound = !loading && !error && !record;
+  useEffect(() => {
+    if (error) toast.error(error.message || 'Could not refresh the model');
+  }, [error]);
   const [busy, setBusy] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // The three.js graph GlbViewer has loaded, handed up so the AR panel can
@@ -62,49 +61,16 @@ export default function Media3DDetail() {
     if (!next || !mountedRef.current || routeIdRef.current !== id
       || routeGenerationRef.current !== routeGeneration || String(next.id) !== id) return;
     setRecord(next);
-  }, [id, mountedRef, routeGeneration]);
+  }, [id, mountedRef, routeGeneration, setRecord]);
 
-  const load = useCallback(async ({ initial = false } = {}) => {
-    const requestedId = id;
-    const requestedGeneration = routeGenerationRef.current;
-    const isCurrentRoute = () => mountedRef.current
-      && routeIdRef.current === requestedId
-      && routeGenerationRef.current === requestedGeneration;
-    const next = await getImageTo3dModel(id, { silent: true }).catch((err) => {
-      if (err?.status === 404) { if (isCurrentRoute()) setNotFound(true); }
-      else if (initial && isCurrentRoute()) toast.error(err?.message || 'Failed to load 3D model');
-      return null;
-    });
-    if (next && isCurrentRoute() && String(next.id) === requestedId) {
-      setRecord(next); setNotFound(false);
-    }
-    if (initial && isCurrentRoute()) setLoading(false);
-    return next;
-  }, [id, mountedRef]);
-
-  // Re-fetch from scratch whenever the routed id changes — reset loading/notFound
-  // so switching between two `/3d/:id` records shows a spinner instead of
-  // the previous record's content (and doesn't carry a stale not-found flag).
+  // Reset edit state only on route entry; progress must not clobber drafts.
   useEffect(() => {
-    setLoading(true); setNotFound(false);
-    setRecord(null);
     setBusy(false); setConfirmingDelete(false);
     optionsSeededFor.current = null;
     setSteps(''); setSeed(''); setKeyBackground(false); setDetail('auto');
     setAlphaMode(''); setNormalMap(false); setSubjectScale(SUBJECT_SCALE_DEFAULT);
     setLoadedScene(null);
-    load({ initial: true });
-  }, [load]);
-
-  // Poll only while generating (the initial fetch above owns the first load, so
-  // immediate:false); `load` owns its own state + error handling, so pollOnly.
-  // Gate off notFound too: if the record is deleted out from under a live poll
-  // (another tab / peer), stop polling instead of 404-ing every tick.
-  useAutoRefetch(load, POLL_INTERVAL_MS, {
-    pollOnly: true,
-    immediate: false,
-    enabled: !notFound && record?.status === 'generating',
-  });
+  }, [id]);
 
   // Seed the option fields from the latest run once per id.
   useEffect(() => {
@@ -138,10 +104,14 @@ export default function Media3DDetail() {
     });
     if (isCurrentRoute()) {
       setBusy(false);
-      if (next && String(next.id) === requestedId) setRecord(next);
+      if (next && String(next.id) === requestedId) {
+        setRecord(next);
+        // Completion can beat the POST response; reconcile after applying it.
+        refetch();
+      }
     }
   }, [busy, record?.status, id, steps, seed, keyBackground, detail, alphaMode, normalMap,
-    subjectScale, mountedRef]);
+    subjectScale, mountedRef, setRecord, refetch]);
 
   const handleDelete = useCallback(async () => {
     const requestedId = id;
@@ -174,7 +144,7 @@ export default function Media3DDetail() {
   if (notFound || !record) {
     return (
       <div className="mx-auto max-w-4xl py-16 text-center">
-        <p className="text-sm text-gray-400">This 3D model no longer exists.</p>
+        <p className="text-sm text-gray-400">{error ? 'Could not load this 3D model. Return to this tab or reconnect to retry.' : 'This 3D model no longer exists.'}</p>
         <Link to="/3d" className="mt-3 inline-flex items-center gap-1.5 text-sm text-port-accent hover:underline">
           <ArrowLeft className="h-4 w-4" /> Back to 3D
         </Link>

@@ -181,11 +181,18 @@ export async function syncAccount(accountId, io, options = {}) {
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
 
     // Deduplicate by externalId; update fields on existing events
-    const existingMap = new Map(cache.events.filter(e => e.externalId).map(e => [e.externalId, e]));
+    const existingMap = new Map();
+    cache.events = cache.events.filter(event => {
+      if (!event.externalId) return true;
+      if (existingMap.has(event.externalId)) return false;
+      existingMap.set(event.externalId, event);
+      return true;
+    });
     const uniqueNew = [];
     for (const event of newEvents) {
       if (!event.externalId || !existingMap.has(event.externalId)) {
         uniqueNew.push(event);
+        if (event.externalId) existingMap.set(event.externalId, event);
       } else {
         const existing = existingMap.get(event.externalId);
         // Update mutable fields

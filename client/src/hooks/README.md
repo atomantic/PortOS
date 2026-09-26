@@ -40,7 +40,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useQuotaPendingPoll` | `useQuotaPendingPoll(reload, cards)` — re-reads provider quota cards every 4s while any is `pending` (a scrape still in flight), paused on a hidden tab. | A surface renders `ProviderQuotaBody` cards from `GET /api/usage/providers` — without it the page keeps a spinner, or a federated peer's older meters, until a manual refresh. |
+| `useQuotaUpdates` | Reconcile quota cards on scrape completion, reconnect and tab show; the caller owns the entry read. | Usage, Subscriptions and Quota Burn quota cards. |
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
 | `useSseJobSlot` | Generic single-slot SSE job: captured target from preparation through completion, terminal-frame handling (`complete`/`error`/`canceled`), and `sse.closed`-without-terminal-frame recovery in one place. Returns `{ active, pending, jobId, percent, stage, context, start, cancel }`; reserves synchronously, exposes context during kickoff and ignores unmounted responses. Optional `readPercent` adapts other progress scales. Pass `startRequest`/`eventsUrl`/`cancelRequest` + per-feature toast copy. | Any "kick off a job → stream SSE → settle on terminal frame" hook. The reference-audio/YouTube/video-download/MIDI/music-video-render hooks all wrap this — don't re-roll the terminal-frame + lost-connection dance. |
 | `useInstallStream` | BYO-runtime install-log stream lifecycle: `stage`/`log`/`complete`/`error` frame dispatch, capped + optionally-debounced log accumulation, "connection lost" handling, ref-stashed `onComplete`, auto-scroll. `method: 'GET'` uses EventSource; `method: 'POST'` reads one fetch stream for a non-idempotent install. | A streamed install/setup modal that shows live SSE log lines (FLUX.2, video runtimes, OpenCode). Don't re-roll the teardown/onComplete-ref dance. |
@@ -270,3 +270,6 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePagedCollection` | `usePagedCollection(fetchPage, { enabled })` — bounded cursor pages, deduplication by id, single-flight loading, abort/stale-query protection, retry, reset, and local mutation via setItems. | Growing cursor-based collections; pair with `InfiniteScrollFooter`. |
 
 | `useGoalOrganize` / `useGoalCreate` | Shared goal suggestion preview, explicit apply, and guarded create flows for both Goals views. | Goals List and Tree views. |
+
+| `useGraphNodeDetail` | Selection-keyed graph record loading with render-time identity gating and late-response disposal. | Brain and CoS graph detail panels. |
+| `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |

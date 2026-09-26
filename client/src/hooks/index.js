@@ -142,7 +142,7 @@ export * from './useProcessLogs.js';
 export * from './useOpenClawStream.js';
 export * from './usePipelineProgress.js';
 export * from './usePortosRestartWatch.js';
-export * from './useQuotaPendingPoll.js';
+export * from './useQuotaUpdates.js';
 export * from './useReaderPanel.js';
 export * from './useSeriesEditorial.js';
 export * from './useImageTo3dTargets.js';
@@ -251,3 +251,6 @@ export * from './useSocketResource.js';
 
 export * from './useProcessSnapshot.js';
 export * from './useFableLoomRun.js';
+
+export { default as useGraphNodeDetail } from './useGraphNodeDetail.js';
+export * from './useModelLifecycle.js';

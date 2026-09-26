@@ -57,6 +57,7 @@ export const WAIT = Object.freeze({ FRESH: 'fresh', CACHED: 'cached', NEVER: 'ne
  *   (a `/usage` panel that rendered without its limit lines); those are cached
  *   for `partialTtlMs` so the next view self-heals — but still CACHED, because
  *   not caching them at all turns every poll into a fresh subprocess spawn.
+ * @param {() => void} [options.onSettled] Synchronous notification after success/failure is cached.
  * @param {number} [options.partialTtlMs]        TTL for a reading `isComplete` rejects.
  */
 export function createStaleWhileRevalidate({
@@ -64,6 +65,7 @@ export function createStaleWhileRevalidate({
   failureBackoffMs = 30 * 1000,
   isComplete = () => true,
   partialTtlMs = 30 * 1000,
+  onSettled,
 } = {}) {
   const entries = new Map(); // key -> { at, value, ttl, failedAt, inflight }
 
@@ -86,6 +88,16 @@ export function createStaleWhileRevalidate({
         const { at, value, ttl } = entries.get(key) || {};
         entries.set(key, { at, value, ttl, failedAt: Date.now() });
         return { error };
+      })
+      .then(result => {
+        // A notification failure must not turn a good reading into a failed
+        // production or reject an unobserved background refresh.
+        try {
+          onSettled?.();
+        } catch (error) {
+          console.error(`❌ Cache settlement notification failed: ${error.message}`);
+        }
+        return result;
       });
     entries.set(key, { ...entries.get(key), inflight });
     return inflight;

@@ -28,6 +28,7 @@ import { noteSystemActivity } from './systemActivityNotify.js';
 
 // Module-level state
 let isRunning = false;
+let failedStateProjection = null;
 
 // The in-process lock is the activity signal the updater reads. Note the edge
 // in the same assignment so a client cannot keep a stale "backup running"
@@ -543,7 +544,12 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     if (failureRecorded) await clearInProgressMarkers();
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
-    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
+    const failureState = { lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null };
+    await saveState(failureState, (cause) => {
+      const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOENT', 'EMFILE', 'ENFILE'].includes(cause.code) ? cause.code : 'UNKNOWN';
+      failedStateProjection = { ...failureState, error: `Backup failed; status persistence failed (${code}). See server logs.` };
+      console.error(`❌ Backup status persistence failed: transition=error snapshot=${snapshotId ?? 'none'} code=${code}`);
+    });
     dashboardEvents.emit('backup:changed');
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
@@ -1584,25 +1590,34 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
 }
 
 /**
- * Get persisted backup state with the current in-process run status.
+ * Get backup state with process-local failure and running projections.
  */
 export async function getState() {
   const state = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
-  return isRunning ? { ...state, status: 'running' } : state;
+  const projected = failedStateProjection ? { ...state, ...failedStateProjection } : state;
+  return isRunning ? { ...projected, status: 'running' } : projected;
 }
 
 /**
  * Merge patch into current backup state and persist.
  * @param {object} patch - Fields to merge into state
+ * @param {Function} [onFailure] - Handle a rejected write inside the serialized queue
  */
-export async function saveState(patch) {
-  return queueStateWrite(async () => {
+export async function saveState(patch, onFailure) {
+  return queueStateWrite(() => (async () => {
     await ensureDir(join(PATHS.data, 'backup'));
-    const current = await getState();
+    // Status projections are read-only and must never become durable state.
+    const current = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
     const updated = { ...current, ...patch };
     await atomicWrite(STATE_PATH, updated);
+    failedStateProjection = null;
     return updated;
-  });
+  })().catch((error) => {
+    // Handle the failed transition inside the queue: a later successful write
+    // must clear it, never race with an out-of-queue failure handler.
+    if (onFailure) return onFailure(error);
+    throw error;
+  }));
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Box, Check, Code2, Download, Info, LoaderCircle, RefreshCw, Trash2, X } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router';
 import MediaImage from '../components/MediaImage';
@@ -7,7 +7,7 @@ import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect
 import ThreejsModelPreview from '../components/threejsModels/ThreejsModelPreview';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
-import useMounted from '../hooks/useMounted';
+import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import useProviderModels from '../hooks/useProviderModels';
 import useThreejsModelFamilies, { GENERAL_FAMILY_ID, resolveFamilyId } from '../hooks/useThreejsModelFamilies';
 import {
@@ -26,9 +26,6 @@ import { seedModelEffort } from '../utils/providers';
 
 const providerFilter = (provider) =>
   provider.enabled !== false && ['api', 'cli', 'tui'].includes(provider.type);
-
-const MAX_IN_FLIGHT_POLLS = 2;
-const POLL_TIMEOUT_MS = 30_000;
 
 const SEVERITY_STYLE = {
   error: 'border-port-error/40 bg-port-error/10 text-port-error',
@@ -266,9 +263,11 @@ function ClipInventoryPanel({ animation, spec }) {
 export default function ThreejsModelDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [record, setRecord] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const { data: record, updateData: setRecord, refetch, loading, error } = useModelLifecycle(id, getThreejsModel, { procedural: true });
+  const notFound = !loading && !error && !record;
+  useEffect(() => {
+    if (error) toast.error(error.message || 'Could not refresh the model');
+  }, [error]);
   const [feedback, setFeedback] = useState('');
   const [starting, setStarting] = useState(false);
   const [effort, setEffort] = useState('');
@@ -287,86 +286,6 @@ export default function ThreejsModelDetail() {
     // This picker renders the effort control and threads the value to the
     // server, so Antigravity lists base models with effort picked separately.
   } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
-
-  const mountedRef = useMounted();
-  const lifecycleGenerationRef = useRef(0);
-  const requestSequenceRef = useRef(0);
-  const pollSequenceRef = useRef(0);
-  const lastAppliedRequestRef = useRef(0);
-  const inFlightPollsRef = useRef(new Map());
-  const load = useCallback(async ({ initial = false, signal } = {}) => {
-    const lifecycleGeneration = lifecycleGenerationRef.current;
-    const requestSequence = ++requestSequenceRef.current;
-    const isCurrent = () => mountedRef.current && lifecycleGeneration === lifecycleGenerationRef.current;
-    const isAuthoritative = () => isCurrent() && requestSequence >= lastAppliedRequestRef.current;
-    if (initial && isCurrent()) {
-      setLoading(true);
-      setNotFound(false);
-      setRecord(null);
-    }
-    const next = await getThreejsModel(id, {
-      silent: true,
-      ...(signal ? { signal } : {}),
-    }).catch((error) => {
-      if (!isAuthoritative()) return null;
-      if (error.status === 404) {
-        lastAppliedRequestRef.current = requestSequence;
-        setNotFound(true);
-      } else if (initial) toast.error(error.message || 'Failed to load model');
-      return null;
-    });
-    if (!isAuthoritative()) return null;
-    if (next) {
-      lastAppliedRequestRef.current = requestSequence;
-      setRecord(next);
-      setNotFound(false);
-    }
-    if (initial) setLoading(false);
-    return next;
-  }, [id, mountedRef]);
-
-  useEffect(() => {
-    lifecycleGenerationRef.current += 1;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
-    void load({ initial: true, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
-    return () => {
-      clearTimeout(timeoutId);
-      controller.abort();
-      lifecycleGenerationRef.current += 1;
-    };
-  }, [id, load]);
-
-  useEffect(() => {
-    if (loading || notFound || record?.id !== id || record?.status !== 'generating') return undefined;
-    const handle = setInterval(() => {
-      if (inFlightPollsRef.current.size >= MAX_IN_FLIGHT_POLLS) return;
-      const pollSequence = ++pollSequenceRef.current;
-      const controller = new AbortController();
-      const poll = { controller, timeoutId: null };
-      inFlightPollsRef.current.set(pollSequence, poll);
-      poll.timeoutId = setTimeout(() => {
-        if (inFlightPollsRef.current.get(pollSequence)?.controller !== controller) return;
-        inFlightPollsRef.current.delete(pollSequence);
-        controller.abort();
-      }, POLL_TIMEOUT_MS);
-      void load({ signal: controller.signal }).finally(() => {
-        const activePoll = inFlightPollsRef.current.get(pollSequence);
-        if (activePoll?.controller !== controller) return;
-        clearTimeout(activePoll.timeoutId);
-        inFlightPollsRef.current.delete(pollSequence);
-      });
-    }, 2_000);
-    return () => {
-      clearInterval(handle);
-      for (const { controller, timeoutId } of inFlightPollsRef.current.values()) {
-        clearTimeout(timeoutId);
-        controller.abort();
-      }
-      inFlightPollsRef.current.clear();
-      lifecycleGenerationRef.current += 1;
-    };
-  }, [loading, notFound, record?.id, record?.status, id, load]);
 
   useEffect(() => {
     if (!record || providers.length === 0) return;
@@ -390,7 +309,7 @@ export default function ThreejsModelDetail() {
   // not to the provider, so a record whose provider is gone (or an install with
   // none configured) must still read its stored family back into the picker.
   // Re-seeds per record id only, so a user's in-form change survives the
-  // 2s poll while a generation is running.
+  // model events while a generation is running.
   useEffect(() => {
     setFamily(record?.family || GENERAL_FAMILY_ID);
   }, [record?.id]);
@@ -418,6 +337,7 @@ export default function ThreejsModelDetail() {
     setStarting(false);
     if (next) {
       setRecord(next);
+      refetch();
       setFeedback('');
       toast.success(record.spec ? 'Refinement started' : 'Generation started');
     }
@@ -449,7 +369,7 @@ export default function ThreejsModelDetail() {
   if (notFound || !record) {
     return (
       <div className="py-12 text-center">
-        <p className="mb-3 text-gray-400">That Three.js model does not exist.</p>
+        <p className="mb-3 text-gray-400">{error ? 'Could not load this model. Return to this tab or reconnect to retry.' : 'That Three.js model does not exist.'}</p>
         <Link to="/media/threejs" className="text-port-accent hover:underline">Back to models</Link>
       </div>
     );

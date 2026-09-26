@@ -1,3 +1,12 @@
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({ default: {
+  on: (event, fn) => { if (!socketHandlers.has(event)) socketHandlers.set(event, new Set()); socketHandlers.get(event).add(fn); },
+  off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+} }));
+const emitModel = async (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
+
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -96,178 +105,89 @@ const deferred = () => {
 };
 
 describe('ThreejsModelDetail request lifecycle', () => {
-  beforeEach(resetMocks);
+  beforeEach(() => { resetMocks(); getThreejsModel.mockReset(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('ignores a poll response after navigating to another model', async () => {
+  it('renders matching events without polling and reconciles reconnect and tab show once', async () => {
+    getThreejsModel.mockResolvedValue({ ...baseRecord, status: 'generating' });
+    renderDetail();
+    await screen.findByText('generating', { exact: true });
     vi.useFakeTimers();
-    const modelAInitial = deferred();
-    const modelAPoll = deferred();
-    const modelBInitial = deferred();
-    const requests = {
-      'model-a': [modelAInitial, modelAPoll],
-      'model-b': [modelBInitial],
-    };
-    const signals = [];
-    getThreejsModel.mockImplementation((id, options) => {
-      signals.push(options?.signal);
-      return requests[id].shift().promise;
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await emitModel('threejs-model:changed', { id: 'unrelated' });
+    expect(getThreejsModel).toHaveBeenCalledTimes(1);
+    getThreejsModel.mockResolvedValue({ ...baseRecord, status: 'ready' });
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
+    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
+    await emitModel('connect');
+    expect(getThreejsModel).toHaveBeenCalledTimes(3);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
+    expect(getThreejsModel).toHaveBeenCalledTimes(3);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(getThreejsModel).toHaveBeenCalledTimes(4);
+  });
+
+  it('aborts a pending read on route change and ignores its late result', async () => {
+    const pending = deferred();
+    let oldSignal;
+    getThreejsModel.mockImplementation((id, { signal }) => {
+      if (id === 'model-a') { oldSignal = signal; return pending.promise; }
+      return Promise.resolve({ ...baseRecord, id, name: 'Model B' });
     });
     renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { modelAInitial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(2_000); });
+    await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Switch to model B' }));
-    expect(signals[1]).toBeInstanceOf(AbortSignal);
-    expect(signals[1].aborted).toBe(true);
-    await act(async () => { modelBInitial.resolve({ ...baseRecord, id: 'model-b', name: 'Model B', status: 'ready' }); });
-    expect(screen.getByText('Model B')).toBeInTheDocument();
-
-    await act(async () => { modelAPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    expect(screen.getByText('Model B')).toBeInTheDocument();
+    expect(oldSignal.aborted).toBe(true);
+    await screen.findByText('Model B');
+    await act(async () => { pending.resolve({ ...baseRecord, id: 'model-a', name: 'Model A' }); });
     expect(screen.queryByText('Model A')).not.toBeInTheDocument();
   });
 
-  it('does not start polling before a new route initial load settles', async () => {
-    vi.useFakeTimers();
-    const modelAInitial = deferred();
-    const modelBInitial = deferred();
-    const modelAReturn = deferred();
-    const modelAReturnPoll = deferred();
-    const requests = {
-      'model-a': [modelAInitial, modelAReturn, modelAReturnPoll],
-      'model-b': [modelBInitial],
-    };
-    getThreejsModel.mockImplementation((id) => requests[id].shift().promise);
-    renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { modelAInitial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to model B' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to model A' }));
-    await act(async () => { vi.advanceTimersByTime(2_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(3);
-
-    await act(async () => { modelAReturn.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(2_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(4);
-    await act(async () => { modelAReturnPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
-  });
-
-  it('does not starve a slow poll when the next interval tick starts', async () => {
-    vi.useFakeTimers();
-    const initial = deferred();
-    const slowPoll = deferred();
-    const laterPoll = deferred();
-    const requests = [initial, slowPoll, laterPoll];
-    getThreejsModel.mockImplementation(() => requests.shift().promise);
-    renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(4_000); });
-    await act(async () => { vi.advanceTimersByTime(2_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(3);
-    await act(async () => { slowPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
-    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
-
-    await act(async () => { laterPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
-  });
-
-  it('releases a hung poll slot after its timeout', async () => {
-    vi.useFakeTimers();
-    const initial = deferred();
-    const hungPoll = deferred();
-    const secondPoll = deferred();
-    const requests = [initial, hungPoll, secondPoll];
-    // Polls issued after the two hung ones are captured rather than pre-seeded:
-    // a hung slot is released at `pollStart + POLL_TIMEOUT_MS`, which is always
-    // a multiple of the 2s interval, so the release and an interval tick are
-    // due in the SAME millisecond. Which of the two runs first is a fake-timer
-    // tie-break, not component behavior, and it decides whether the freed slot
-    // is refilled on that tick or the next one — i.e. whether one or two
-    // replacement polls go out. Pinning an exact call count here asserted that
-    // tie-break (and flipped when vitest 5 updated @sinonjs/fake-timers), so
-    // assert the contract the test is named for instead: nothing is issued
-    // while both slots are held, and polling resumes once they time out.
-    const replacements = [];
-    getThreejsModel.mockImplementation(() => {
-      if (requests.length > 0) return requests.shift().promise;
-      const replacement = deferred();
-      replacements.push(replacement);
-      return replacement.promise;
-    });
-    renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(4_000); });
-    await act(async () => { vi.advanceTimersByTime(4_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(3);
-
-    // Both slots are held by the hanging polls: the interval keeps ticking for
-    // another 20s (10 ticks) and issues nothing.
-    await act(async () => { vi.advanceTimersByTime(20_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(3);
-    expect(replacements).toHaveLength(0);
-
-    // Past POLL_TIMEOUT_MS the hung slots are released and polling resumes.
-    await act(async () => { vi.advanceTimersByTime(6_000); });
-    expect(replacements.length).toBeGreaterThan(0);
-    await act(async () => { replacements[0].resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
-    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
-  });
-
-  it('keeps an older terminal poll result when a newer poll fails transiently', async () => {
-    vi.useFakeTimers();
-    const initial = deferred();
-    const olderPoll = deferred();
-    const newerPoll = deferred();
-    const requests = [initial, olderPoll, newerPoll];
-    getThreejsModel.mockImplementation(() => requests.shift().promise);
-    renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(4_000); });
-    await act(async () => { newerPoll.reject(new Error('Temporary outage')); });
-    await act(async () => { olderPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
-
-    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
-  });
-
-  it('stops polling after a model disappears', async () => {
-    vi.useFakeTimers();
-    const initial = deferred();
-    const poll = deferred();
-    const unexpectedPoll = deferred();
-    const requests = [initial, poll, unexpectedPoll];
-    getThreejsModel.mockImplementation(() => requests.shift().promise);
-    renderLifecycleDetail(['/media/threejs/model-a']);
-
-    await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(2_000); });
-    await act(async () => { poll.reject({ status: 404, message: 'Model disappeared' }); });
-    expect(screen.getByText('That Three.js model does not exist.')).toBeInTheDocument();
-
-    await act(async () => { vi.advanceTimersByTime(4_000); });
+  it('coalesces invalidations during a slow read and does not lose the terminal update', async () => {
+    getThreejsModel.mockResolvedValueOnce({ ...baseRecord, status: 'generating' });
+    renderDetail();
+    await screen.findByText('generating', { exact: true });
+    const slow = deferred();
+    getThreejsModel.mockReturnValueOnce(slow.promise).mockResolvedValue({ ...baseRecord, status: 'ready' });
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
     expect(getThreejsModel).toHaveBeenCalledTimes(2);
+    await act(async () => { slow.resolve({ ...baseRecord, status: 'generating' }); });
+    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
+    expect(getThreejsModel).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps a newer terminal poll result authoritative over an older generating response', async () => {
+  it('releases a timed-out read and recovers on reconnect without recurring requests', async () => {
     vi.useFakeTimers();
-    const initial = deferred();
-    const olderPoll = deferred();
-    const newerPoll = deferred();
-    const requests = [initial, olderPoll, newerPoll];
-    getThreejsModel.mockImplementation(() => requests.shift().promise);
-    renderDetail(['/media/threejs/model-a']);
-
-    await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-    await act(async () => { vi.advanceTimersByTime(4_000); });
-    await act(async () => { newerPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
-    await act(async () => { olderPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
-
+    let signal;
+    getThreejsModel.mockImplementationOnce((_id, options) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    }).mockResolvedValue(baseRecord);
+    renderDetail();
+    await act(async () => {});
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(signal.aborted).toBe(true);
+    expect(getThreejsModel).toHaveBeenCalledTimes(1);
+    await emitModel('connect');
     expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
-    await act(async () => { vi.advanceTimersByTime(2_000); });
+  });
+
+  it('retries a transient terminal read once and preserves missing records without retries', async () => {
+    getThreejsModel.mockResolvedValueOnce({ ...baseRecord, status: 'generating' });
+    renderDetail();
+    await screen.findByText('generating', { exact: true });
+    getThreejsModel.mockRejectedValueOnce(new Error('Temporary outage')).mockResolvedValueOnce(baseRecord);
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
+    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
     expect(getThreejsModel).toHaveBeenCalledTimes(3);
+    getThreejsModel.mockRejectedValueOnce({ status: 404 });
+    await emitModel('threejs-model:changed', { id: baseRecord.id });
+    expect(screen.getByText('That Three.js model does not exist.')).toBeInTheDocument();
+    expect(getThreejsModel).toHaveBeenCalledTimes(4);
   });
 });
 

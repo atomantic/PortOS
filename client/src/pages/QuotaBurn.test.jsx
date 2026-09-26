@@ -4,7 +4,11 @@ import { findEnabledByLabelText, findEnabledByRole } from '../test/enabledBarrie
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import QuotaBurn, { SAVE_DEBOUNCE_MS } from './QuotaBurn';
-import { PENDING_POLL_MS } from '../hooks/useQuotaPendingPoll';
+import socket from '../services/socket';
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('events');
+  return { default: new EventEmitter() };
+});
 
 vi.mock('../services/api', () => ({
   getQuotaBurn: vi.fn(),
@@ -126,7 +130,7 @@ const flushSave = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE
 // Past the debounce/poll window rather than up to its edge, so a "did not
 // happen" assertion runs AFTER the moment the thing would have happened.
 const pastSaveWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS + 100); });
-const pastPollWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(PENDING_POLL_MS + 100); });
+const pastPollWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(4100); });
 
 // Mirrors UNSAVED_PATCH_KEY in the page — the session-scoped stash holding a
 // patch the server never accepted.
@@ -155,7 +159,7 @@ describe('QuotaBurn page', () => {
     expect(screen.getByText('disabled')).toBeInTheDocument();
   });
 
-  it('renders immediately while a family\'s quota is still being read, then polls it in', async () => {
+  it('renders immediately while a family\'s quota is still being read, then receives it on a quota event', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const pendingStatus = {
@@ -169,16 +173,39 @@ describe('QuotaBurn page', () => {
       expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
 
       await pastPollWindow();
+      expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/reading quota…/)).toBeInTheDocument();
+      await act(async () => { socket.emit('provider-quota:updated', {}); });
 
       expect(await screen.findByText(/62% left/)).toBeInTheDocument();
       expect(screen.queryByText(/reading quota…/)).not.toBeInTheDocument();
-      // Positive control for 'does NOT poll when nothing is pending': the poll
-      // DOES fire inside this window, so that test's silence means the guard
-      // held rather than that the window was too short to observe anything.
       expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reconciles once on reconnect and tab show, and removes subscriptions on unmount', async () => {
+    const view = renderPage();
+    await screen.findByText(/62% left/);
+    expect(api.getQuotaBurn).toHaveBeenCalledTimes(1);
+    await act(async () => { socket.emit('connect'); });
+    expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('hidden');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      socket.emit('provider-quota:updated', {});
+    });
+    expect(api.getQuotaBurn).toHaveBeenCalledTimes(2);
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getQuotaBurn).toHaveBeenCalledTimes(3);
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getQuotaBurn).toHaveBeenCalledTimes(3);
+    view.unmount();
+    expect(socket.listenerCount('provider-quota:updated')).toBe(0);
+    visibility.mockRestore();
   });
 
   it('names WHICH window the reading describes', async () => {
@@ -233,9 +260,7 @@ describe('QuotaBurn page', () => {
   });
 
   it('does NOT poll when nothing is pending', async () => {
-    // Past a full poll interval, not the 100ms of wall clock this used to
-    // wait: a re-arming timer first fires at PENDING_POLL_MS, so a shorter
-    // window passed whether or not `enabled: anyPending` was there at all.
+    // Advance past the retired four-second poll.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     renderPage();
     await screen.findByText(/62% left/);
@@ -890,7 +915,7 @@ describe('QuotaBurn save races', () => {
     expect(screen.getByText(/62% left/)).toBeInTheDocument();
   });
 
-  it('surfaces a background poll that failed, and clears it on the next poll that lands', async () => {
+  it('surfaces a failed event refresh and clears it on reconnect', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const pendingStatus = {
@@ -904,13 +929,13 @@ describe('QuotaBurn save races', () => {
       expect(await screen.findByText(/reading quota…/)).toBeInTheDocument();
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(4000);
+        socket.emit('provider-quota:updated', {});
       });
       expect(await screen.findByText(/Provider CLI is not responding/)).toBeInTheDocument();
       expect(screen.getByLabelText(/Run the quota-burn loop automatically/)).toBeInTheDocument();
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(4000);
+        socket.emit('connect');
       });
       expect(await screen.findByText(/62% left/)).toBeInTheDocument();
       expect(screen.queryByText(/Provider CLI is not responding/)).not.toBeInTheDocument();

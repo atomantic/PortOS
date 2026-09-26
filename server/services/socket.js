@@ -1,4 +1,5 @@
 import { spriteEvents } from './sprites/events.js';
+import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
@@ -35,6 +36,7 @@ import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
+import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import { callStateEvents } from './voice/callSession.js';
 import {
@@ -240,7 +242,10 @@ function registerAuthRevocationHandler(io) {
 const forwardMeatspaceChange = payload => ioInstance?.emit('meatspace:changed', payload);
 
 function setupEventForwarding() {
+  modelLifecycleEvents.on('image-to-3d:changed', data => ioInstance?.emit('image-to-3d:changed', data));
+  modelLifecycleEvents.on('threejs-model:changed', data => ioInstance?.emit('threejs-model:changed', data));
   meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
+  providerQuotaEvents.on('updated', () => ioInstance?.emit('provider-quota:updated', {}));
   setupCosEventForwarding();
   setupErrorEventForwarding();
   setupAppsEventForwarding();
@@ -440,8 +445,11 @@ function invalidateMindVisibility() {
   mindVisibilityTimer.unref?.();
 }
 
-// Set up CoS event forwarding
+// Process-wide listeners forward through the current IO and subscriber sets.
+let cosForwardingSetup = false;
 function setupCosEventForwarding() {
+  if (cosForwardingSetup) return;
+  cosForwardingSetup = true;
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
   for (const event of ['goals:changed', 'backup:changed']) {
     dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
