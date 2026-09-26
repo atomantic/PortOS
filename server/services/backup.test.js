@@ -36,8 +36,10 @@ function testDataRoot() {
   if (!TEST_DATA_ROOT) TEST_DATA_ROOT = mkdtempSync(joinPath(tmpdir(), 'portos-backup-data-'));
   return TEST_DATA_ROOT;
 }
-vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), { dataRoot: testDataRoot }));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: { atomicWrite: vi.fn(actual.atomicWrite) } });
+});
 
 afterAll(() => {
   if (TEST_DATA_ROOT) rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -2078,8 +2080,10 @@ describe('getState and saveState', () => {
     // data/ tree — and `runBackup lifecycle` below then rewrote the
     // developer's genuine data/backup/state.json on every run (#6176; the
     // runtime write guard is what surfaced it).
-    vi.doMock('../lib/fileUtils.js', async (importOriginal) =>
-      makePathsProxy(await importOriginal(), { dataRoot: testDataRoot }));
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
+      const actual = await importOriginal();
+      return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: { atomicWrite: vi.fn(actual.atomicWrite) } });
+    });
     vi.resetModules();
     const { rm } = await import('fs/promises');
     if (tmpRoot) await rm(tmpRoot, { recursive: true, force: true });
@@ -2937,6 +2941,40 @@ describe('runBackup lifecycle', () => {
     await waitFor(() => spawn.mock.calls.length === 2, 'retry rsync spawn');
     retryProc.emit('close', 0);
     await expect(retry).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('projects a failed scheduled attempt when state persistence fails, then recovers', async () => {
+    const { saveState, getState, listSnapshots } = await import('./backup.js');
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    await saveState({ lastSnapshotId: 'previous-snapshot', status: 'ok', error: null });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot).catch(error => error);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = basename(await findSnapshotDir());
+    const persistedBefore = await readJson(joinPath(dataRoot, 'backup', 'state.json'));
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+    atomicWrite.mockRejectedValueOnce(Object.assign(new Error('private path and credential'), { code: 'EACCES' }));
+    proc.emit('close', 23);
+    expect(await pending).toMatchObject({ message: expect.stringContaining('rsync exited with code 23') });
+    expect(isBackupInProgress()).toBe(false);
+    expect(diagnostic).toHaveBeenCalledWith(`❌ Backup status persistence failed: transition=error snapshot=${snapshotId} code=EACCES`);
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json'))).toEqual(persistedBefore);
+    expect(await getState()).toMatchObject({
+      status: 'error', lastSnapshotId: 'previous-snapshot', pgBackup: null,
+      error: 'Backup failed; status persistence failed (EACCES). See server logs.',
+    });
+    expect((await listSnapshots(destRoot))[0].failed).toBe(true);
+    // A rejected subsequent write must not clear the process-local projection.
+    atomicWrite.mockRejectedValueOnce(new Error('still unavailable'));
+    await expect(saveState({ status: 'ok' })).rejects.toThrow('still unavailable');
+    expect((await getState()).status).toBe('error');
+    await saveState({ status: 'ok', error: null });
+    expect(await getState()).toMatchObject({ status: 'ok', error: null, lastSnapshotId: 'previous-snapshot' });
+    // Prove the overlay is gone, rather than merely masked by matching values.
+    const fsp = await actualFs();
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastSnapshotId: 'recovered-snapshot' }));
+    expect(await getState()).toEqual({ status: 'ok', lastSnapshotId: 'recovered-snapshot' });
   });
 
   it.each(['ENOENT', 'EACCES', 'EIO'])('persists a failed preflight (%s) over prior success and permits repair', async (code) => {
