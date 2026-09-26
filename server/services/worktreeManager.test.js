@@ -136,7 +136,7 @@ describe('Worktree dependency preparation', () => {
       ? missing() : Promise.resolve({ isDirectory: () => true }));
     lstat.mockImplementation(path => {
       const normalized = normalize(path);
-      if (directories.some(name => normalized === `/worktree/${name}`)) {
+      if (directories.filter(name => name !== 'node_modules').some(name => normalized === `/worktree/${name}`)) {
         return Promise.resolve({ isDirectory: () => true });
       }
       if (normalized.endsWith('/package.json') && normalized !== '/worktree/assets/package.json') {
