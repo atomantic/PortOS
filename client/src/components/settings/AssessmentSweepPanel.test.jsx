@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -25,6 +25,12 @@ const counts = { unmeasured: 2, stale: 1, all: 4 };
 const renderPanel = (props = {}) => render(
   <AssessmentSweepPanel counts={counts} contextTokens={[512, 4096, 16384]} onSweepFinished={vi.fn()} {...props} />
 );
+
+const receive = (event, frame) => act(async () => {
+  socket.on.mock.calls.find(([name]) => name === event)[1](frame);
+});
+
+afterEach(() => vi.useRealTimers());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -171,11 +177,79 @@ describe('AssessmentSweepPanel', () => {
     renderPanel({ onSweepFinished });
     await screen.findByText(/1\/2 models measured/);
 
-    getLocalLlmAssessmentSweep.mockResolvedValue({ ...idle, status: 'complete', total: 2, completed: 2 });
-    const handler = socket.on.mock.calls.find(([event]) => event === 'localLlm:progress')[1];
-    await act(async () => handler({ scope: 'assessment-sweep', event: 'complete', status: 'complete' }));
+    await receive('localLlm:sweep:changed', { ...idle, status: 'complete', total: 2, completed: 2 });
+    await receive('localLlm:sweep:changed', { ...idle, status: 'complete', total: 2, completed: 2 });
 
     await waitFor(() => expect(onSweepFinished).toHaveBeenCalledTimes(1));
+  });
+
+  it('renders another tab’s queue transitions without any recurring fetch', async () => {
+    vi.useFakeTimers();
+    const onSweepFinished = vi.fn();
+    const onRunningChange = vi.fn();
+    const { unmount } = renderPanel({ onSweepFinished, onRunningChange });
+    await act(async () => {});
+    const running = { ...idle, status: 'running', settled: false, total: 2, startedAt: '2026-01-01T00:00:00Z' };
+    await receive('localLlm:sweep:changed', running);
+    expect(screen.getByRole('button', { name: /stop sweep/i })).toBeInTheDocument();
+    await receive('localLlm:sweep:changed', {
+      ...running, completed: 1,
+      results: [{ backend: 'ollama', modelId: 'example-model', verdict: 'fits', meanTokensPerSecond: 42 }],
+    });
+    expect(screen.getByText(/1\/2 models measured/)).toBeInTheDocument();
+    expect(screen.getByText('example-model')).toBeInTheDocument();
+    await receive('localLlm:sweep:changed', { ...running, status: 'cancelled' });
+    expect(screen.getByRole('button', { name: 'Measure all models' })).toBeDisabled();
+    expect(onRunningChange).toHaveBeenLastCalledWith(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(1);
+    expect(onSweepFinished).not.toHaveBeenCalled();
+    await receive('localLlm:sweep:changed', { ...running, status: 'cancelled', settled: true });
+    expect(screen.getByRole('button', { name: 'Measure all models' })).toBeEnabled();
+    expect(onRunningChange).toHaveBeenLastCalledWith(false);
+    expect(onSweepFinished).toHaveBeenCalledTimes(1);
+    unmount();
+    for (const event of ['localLlm:sweep:changed', 'connect', 'localLlm:progress']) {
+      const handler = socket.on.mock.calls.find(([name]) => name === event)[1];
+      expect(socket.off).toHaveBeenCalledWith(event, handler);
+    }
+  });
+
+  it('reconciles once on tab re-show and ignores a read superseded by an event', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('visible');
+    const { unmount } = renderPanel();
+    await act(async () => {});
+    let resolveRead;
+    getLocalLlmAssessmentSweep.mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+    visibility.mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(2);
+    await receive('localLlm:sweep:changed', { ...idle, status: 'running', settled: false, total: 3 });
+    await act(async () => { resolveRead(idle); });
+    expect(screen.getByRole('button', { name: /stop sweep/i })).toBeInTheDocument();
+    unmount();
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(2);
+    visibility.mockRestore();
+  });
+
+  it('does not roll back a completed event when the start response arrives late', async () => {
+    const user = userEvent.setup();
+    let resolveStart;
+    startLocalLlmAssessmentSweep.mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
+    const onSweepFinished = vi.fn();
+    renderPanel({ onSweepFinished });
+    await user.click(await screen.findByRole('button', { name: 'Measure all models' }));
+    await user.click(screen.getByRole('button', { name: /start sweep/i }));
+    await receive('localLlm:sweep:changed', { ...idle, status: 'complete', settled: true, total: 2, completed: 2 });
+    await act(async () => { resolveStart({ ...idle, status: 'running', settled: false, total: 2 }); });
+    expect(screen.queryByRole('button', { name: /stop sweep/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Last sweep complete/)).toBeInTheDocument();
+    expect(onSweepFinished).toHaveBeenCalledTimes(1);
   });
 
   it('offers nothing to press when no runtime lists a model to measure', async () => {
@@ -394,7 +468,7 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
 
   // The terminal socket frame is not the only way out of the wind-down: lose it
   // to a reconnect and every per-model button would stay disabled forever.
-  it('keeps polling through the wind-down so a lost terminal frame cannot wedge it', async () => {
+  it('reconciles a lost terminal frame once on reconnect without polling through wind-down', async () => {
     vi.useFakeTimers();
     getLocalLlmAssessmentSweep.mockResolvedValue({
       ...idle, status: 'cancelled', mode: 'tunings', settled: false, total: 3, completed: 1,
@@ -407,7 +481,10 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
       ...idle, status: 'cancelled', mode: 'tunings', settled: true, total: 3, completed: 1,
     });
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(1);
+    expect(onRunningChange).toHaveBeenLastCalledWith(true);
+    await receive('connect');
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(2);
     expect(onRunningChange).toHaveBeenLastCalledWith(false);
     vi.useRealTimers();
   });
@@ -434,11 +511,12 @@ describe('AssessmentSweepPanel — tuning sweep', () => {
     });
     expect(onSweepFinished).toHaveBeenCalledTimes(1);
 
-    // The restore finishes; the poll is what observes it.
-    getLocalLlmAssessmentSweep.mockResolvedValue({
+    // The restore finishes; its state event owns the final report refresh.
+    await receive('localLlm:sweep:changed', {
       ...idle, status: 'cancelled', mode: 'tunings', settled: true, total: 3, completed: 1,
     });
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(getLocalLlmAssessmentSweep).toHaveBeenCalledTimes(1);
 
     expect(onSweepFinished).toHaveBeenCalledTimes(2);
     vi.useRealTimers();

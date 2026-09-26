@@ -31,7 +31,7 @@ import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import { formatContextTokens, throughputLabel, timeAgo } from '../../utils/formatters';
 import {
   getLocalLlmAssessmentSweep, startLocalLlmAssessmentSweep, cancelLocalLlmAssessmentSweep,
@@ -46,7 +46,6 @@ const SCOPES = [
 // How often to re-read the queue while it runs. Socket frames drive the live
 // message; this is the reload-safe backstop that also catches the transition to
 // finished when the last frame is missed.
-const POLL_MS = 5000;
 
 const isRunning = (status) => status?.status === 'running';
 
@@ -299,32 +298,60 @@ export default function AssessmentSweepPanel({
   const [message, setMessage] = useState('');
   const mountedRef = useMounted();
 
-  const refresh = useCallback(async () => {
-    const next = await getLocalLlmAssessmentSweep({ silent: true }).catch(() => null);
-    if (!next || !mountedRef.current) return null;
-    setStatus(next);
-    return next;
-  }, [mountedRef]);
-
-  // A sweep that started in another tab (or before a reload) has to show up here
-  // — the queue is server state, not this component's.
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const running = isRunning(status);
-  // `onSweepFinished` is a fresh closure on every parent render, so keeping it in
-  // a ref stops the poll callback from re-registering on each one.
+  // Every read/mutation captures a generation. A later event or request owns
+  // the state, so a slow HTTP response cannot restore an older queue snapshot.
+  const generationRef = useRef(0);
+  const statusRef = useRef(null);
   const finishedRef = useRef(onSweepFinished);
   finishedRef.current = onSweepFinished;
-
-  // `onSweepFinished` re-reads the whole assessment report, which probes every
-  // runtime — expensive enough that firing it twice for one finish (a poll tick
-  // racing the terminal socket frame) is worth latching out.
   const finishNotifiedRef = useRef(false);
-  const notifyFinished = useCallback(() => {
-    if (finishNotifiedRef.current) return;
-    finishNotifiedRef.current = true;
-    finishedRef.current?.();
-  }, []);
+
+  const applyStatus = useCallback((next, notify = true) => {
+    if (!next || !mountedRef.current) return;
+    const previous = statusRef.current;
+    statusRef.current = next;
+    setStatus(next);
+    if (previous?.current?.modelId !== next.current?.modelId
+      || previous?.current?.tuningLabel !== next.current?.tuningLabel
+      || !isRunning(next)) setMessage('');
+    if (isRunning(next) || next.settled === false || previous?.startedAt !== next.startedAt) {
+      finishNotifiedRef.current = false;
+    }
+    // Cancellation is not completion until the runtime restore has finished.
+    if (next.status !== 'idle' && !isRunning(next) && next.settled !== false) {
+      if (notify && !finishNotifiedRef.current) finishedRef.current?.();
+      finishNotifiedRef.current = true;
+    }
+  }, [mountedRef]);
+
+  const refresh = useCallback(async (notify = true) => {
+    const generation = ++generationRef.current;
+    const next = await getLocalLlmAssessmentSweep({ silent: true }).catch(() => null);
+    if (generation !== generationRef.current) return;
+    applyStatus(next, notify);
+  }, [applyStatus]);
+
+  useVisibilityEvent((visibility) => {
+    if (visibility === 'visible') refresh();
+  });
+
+  useEffect(() => {
+    const handleChange = (next) => {
+      generationRef.current += 1;
+      applyStatus(next);
+    };
+    const reconcile = () => { refresh(); };
+    socket.on('localLlm:sweep:changed', handleChange);
+    socket.on('connect', reconcile);
+    refresh(false);
+    return () => {
+      generationRef.current += 1;
+      socket.off('localLlm:sweep:changed', handleChange);
+      socket.off('connect', reconcile);
+    };
+  }, [applyStatus, refresh]);
+
+  const running = isRunning(status);
 
   // A single-model run started mid-sweep would contend with the model the queue
   // is measuring, and BOTH readings would describe that contention. Tell the
@@ -337,31 +364,6 @@ export default function AssessmentSweepPanel({
   const holdsMachine = running || status?.settled === false;
   useEffect(() => { onRunningChange?.(holdsMachine); }, [holdsMachine, onRunningChange]);
 
-  // Re-arm the latch for every queue that starts, not only one started from this
-  // tab: a sweep launched in another tab (or before a reload) would otherwise
-  // finish with the latch still set from a previous run, and this page would
-  // never re-read the ranking it just earned.
-  useEffect(() => { if (running) finishNotifiedRef.current = false; }, [running]);
-
-  // Poll only while something is running, and only while the tab is visible —
-  // `useAutoRefetch` gives both, which matters for a queue deliberately left
-  // running in a background tab all night.
-  useAutoRefetch(async () => {
-    const next = await refresh();
-    // The report is only worth re-reading once the queue is done — mid-sweep it
-    // would re-rank on partial evidence every five seconds. "Done" means the
-    // sweep has LET GO, not merely that it stopped queuing: a cancelled tuning
-    // sweep is still restoring the launch line, and a report read then describes
-    // a daemon mid-relaunch.
-    if (next && !isRunning(next) && next.settled !== false) notifyFinished();
-    // Keeps polling through the WIND-DOWN, past the point the status stops
-    // saying `running`: a stopped sweep is still aborting and still restoring,
-    // and the only other thing that clears that state in a live tab is the
-    // terminal socket frame. Lose that frame to a reconnect and `holdsMachine`
-    // would stay true forever, leaving every per-model button disabled with no
-    // way back but a reload.
-  }, POLL_MS, { enabled: holdsMachine, immediate: false, pollOnly: true });
-
   // Per-sample frames from the model in flight, on the same channel the
   // single-model run and model pulls use — hence the scope filter, or a
   // background model download would drive this line.
@@ -369,34 +371,19 @@ export default function AssessmentSweepPanel({
     const handleProgress = (frame) => {
       if (!mountedRef.current) return;
       if (frame?.scope !== 'assessment' && frame?.scope !== 'assessment-sweep') return;
-      if (frame.event === 'complete' && frame.scope === 'assessment-sweep') {
-        // Terminal frame for the QUEUE (not for one model): pull the final
-        // snapshot and let the parent re-read the now-complete report.
-        setMessage('');
-        refresh().then(notifyFinished);
-        return;
-      }
+      // Queue snapshots own counters, results and terminal state. This stream
+      // carries only the human-readable message for the current measurement.
+      if (frame.event === 'complete') return;
       if (frame.message) setMessage(frame.message);
-      // The counter moves when a model starts — and the frame already carries the
-      // new numbers, so take them from it rather than paying a round-trip per
-      // model for data we were just handed.
-      if (frame.event === 'model-start') {
-        setStatus((prev) => (prev ? {
-          ...prev,
-          completed: frame.completed ?? prev.completed,
-          total: frame.total ?? prev.total,
-          current: { backend: frame.backend, modelId: frame.modelId, tuningLabel: frame.tuningLabel ?? null },
-        } : prev));
-      }
     };
     socket.on('localLlm:progress', handleProgress);
     return () => socket.off('localLlm:progress', handleProgress);
-  }, [mountedRef, refresh, notifyFinished]);
+  }, [mountedRef]);
 
   const [start, starting] = useAsyncAction(async () => {
-    finishNotifiedRef.current = false;
+    const generation = ++generationRef.current;
     const next = await startLocalLlmAssessmentSweep({ scope });
-    setStatus(next);
+    if (generation === generationRef.current) applyStatus(next);
     setShowConsent(false);
     toast.success(`Sweep started — ${next.total} model${next.total === 1 ? '' : 's'} queued`);
     return next;
@@ -405,24 +392,26 @@ export default function AssessmentSweepPanel({
   // Same queue, same latch, same toast — the only difference from `start` is
   // which dimension the server is told to vary.
   const [startTuning, startingTuning] = useAsyncAction(async () => {
-    finishNotifiedRef.current = false;
+    const generation = ++generationRef.current;
     const next = await startLocalLlmAssessmentSweep({
       backend: tuningRequest.backend,
       modelId: tuningRequest.modelId,
       tunings: true,
     });
-    setStatus(next);
+    if (generation === generationRef.current) applyStatus(next);
     onTuningRequestClose?.();
     toast.success(`Tuning sweep started — ${next.total} configuration${next.total === 1 ? '' : 's'} queued`);
     return next;
   }, { errorMessage: 'Could not start the tuning sweep' });
 
   const [stop, stopping] = useAsyncAction(async () => {
-    setStatus(await cancelLocalLlmAssessmentSweep());
+    const generation = ++generationRef.current;
+    const next = await cancelLocalLlmAssessmentSweep();
+    if (generation === generationRef.current) applyStatus(next, false);
     // Whatever it measured before stopping is real evidence, so the report has
     // to catch up rather than waiting for the next mount.
     //
-    // Deliberately NOT through `notifyFinished`: latching here would swallow the
+    // The unsettled snapshot does not latch completion: that would swallow the
     // refresh that matters more — the one after the wind-down, once the launch
     // configuration is back and the runtime state on the page is the real one.
     // A cancel is worth two reads.

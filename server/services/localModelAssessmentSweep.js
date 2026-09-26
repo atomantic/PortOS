@@ -33,7 +33,7 @@
  *   - `startSweep()` is reachable only from `POST /api/local-llm/assessments/sweep`,
  *     behind a consent gate that names the exact measurement count (models, or
  *     tuning variants) and the total generation count.
- *   - `getSweepStatus()` reads module state only. Zero LLM calls, safe to poll.
+ *   - `getSweepStatus()` reads module state only. Zero LLM calls, safe to reconcile.
  *
  * The prohibition the single-model service states — "no scheduler, no boot hook,
  * no background sweep" — is about work the user did not ask for. This IS the ask:
@@ -131,8 +131,8 @@ function snapshot() {
     completed: sweep.results.length,
     // Which model is being measured right now — `null` between models and once
     // the sweep ends.
-    current: sweep.current,
-    results: sweep.results,
+    current: sweep.current ? { ...sweep.current } : null,
+    results: sweep.results.map((result) => ({ ...result })),
     cancelRequested: sweep.cancelRequested,
     error: sweep.error || null,
     // A sweep whose MEASUREMENTS all landed but whose daemon could not be put
@@ -218,6 +218,7 @@ export function cancelSweep() {
   // screen for a queue that is already winding down. The `finally` re-affirms
   // `cancelled` (it reads the same flag), so the two cannot disagree.
   sweep.status = 'cancelled';
+  sweep.notifyChange();
   console.log(`🛑 Local LLM: assessment sweep cancelled after ${sweep.results.length}/${sweep.total}`);
   return snapshot();
 }
@@ -245,6 +246,7 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
   for (const target of targets) {
     if (run.cancelRequested) break;
     run.current = { backend: target.backend, modelId: target.modelId, tuningLabel: target.tuningLabel, startedAt: nowIso() };
+    run.notifyChange();
     emit({
       scope: 'assessment-sweep',
       event: 'model-start',
@@ -289,7 +291,10 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
     run.current = null;
     // A cancelled run recorded nothing, so it is not a result — recording it as
     // one would make a stopped sweep look like it measured what it abandoned.
-    if (result?.cancelled) break;
+    if (result?.cancelled) {
+      run.notifyChange();
+      break;
+    }
     run.results.push({
       backend: target.backend,
       modelId: target.modelId,
@@ -311,6 +316,7 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
       tuningApplied: typeof result?.tuningApplied === 'boolean' ? result.tuningApplied : null,
       tuningNotApplied: result?.tuningNotApplied || null,
     });
+    run.notifyChange();
   }
 }
 
@@ -338,10 +344,11 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
  *   of measuring it under the tuning it already carries
  * @param {number[]} [options.contextTokens] passed through to each measurement
  * @param {(frame: object) => void} [options.onProgress] forwarded to the socket
+ * @param {(state: object) => void} [options.onChange] public queue snapshots on state changes
  * @returns {Promise<object>} the initial snapshot, or `{ rejected }` when a
  *   sweep is already running or the request covers nothing
  */
-export async function startSweep({ scope = 'unmeasured', backend, modelId, tunings = false, contextTokens, onProgress } = {}) {
+export async function startSweep({ scope = 'unmeasured', backend, modelId, tunings = false, contextTokens, onProgress, onChange } = {}) {
   if (sweep?.status === 'running' || startingSweep) return { ...snapshot(), rejected: 'a sweep is already running' };
   // A CANCELLED sweep is not finished with the machine: its last measurement is
   // still aborting and it may have a launch configuration to put back. Starting
@@ -355,13 +362,13 @@ export async function startSweep({ scope = 'unmeasured', backend, modelId, tunin
   // was refused and the slot is free again.
   startingSweep = true;
   try {
-    return await beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress });
+    return await beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange });
   } finally {
     startingSweep = false;
   }
 }
 
-async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress }) {
+async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange }) {
   const resolvedScope = SWEEP_SCOPES.includes(scope) ? scope : 'unmeasured';
   const named = backend && modelId ? { backend, modelId } : null;
 
@@ -479,8 +486,15 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     settled: false,
     launchStates,
     controller: new AbortController(),
+    notifyChange: () => {
+      if (sweep !== run || typeof onChange !== 'function') return;
+      // Socket delivery must not abort the user's running measurements.
+      try { onChange(snapshot()); }
+      catch (err) { console.error(`❌ Local LLM: sweep state listener failed: ${err.message}`); }
+    },
   };
   sweep = run;
+  run.notifyChange();
 
   // A tuning sweep measures ONE thing many ways, so counting "models" would be
   // wrong in exactly the place the user is reading for reassurance.
@@ -526,6 +540,7 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
       // A queue the user already replaced has nothing to report — emitting its
       // terminal frame would tell the page the CURRENT sweep just finished.
       if (sweep !== run) return;
+      run.notifyChange();
       emit({
         scope: 'assessment-sweep',
         event: 'complete',

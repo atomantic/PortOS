@@ -680,9 +680,10 @@ describe('measured assessments wiring', () => {
     expect(res.status).toBe(409);
   });
 
-  it('forwards sweep progress to the shared localLlm:progress socket event', async () => {
-    startSweep.mockImplementation(async ({ onProgress }) => {
+  it('forwards sweep progress and public queue snapshots to their socket events', async () => {
+    startSweep.mockImplementation(async ({ onProgress, onChange }) => {
       onProgress({ scope: 'assessment-sweep', event: 'start', total: 2, completed: 0 });
+      onChange({ status: 'running', settled: false, total: 2, completed: 0, results: [], cancelRequested: false });
       return { status: 'running', total: 2, completed: 0 };
     });
     const app = makeApp();
@@ -690,6 +691,9 @@ describe('measured assessments wiring', () => {
 
     expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:progress', {
       scope: 'assessment-sweep', event: 'start', total: 2, completed: 0,
+    });
+    expect(app.get('io').emit).toHaveBeenCalledWith('localLlm:sweep:changed', {
+      status: 'running', settled: false, total: 2, completed: 0, results: [], cancelRequested: false,
     });
   });
 
