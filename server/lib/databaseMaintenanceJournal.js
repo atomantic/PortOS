@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
+import { assertNotRealDataWrite } from './testDataIsolation.js';
 
 const endpointSchema = z.object({
   mode: z.enum(['native', 'docker']),
@@ -81,6 +82,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   };
 
   const begin = ({ source, target }) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance begin');
     const record = journalSchema.parse({
       version: 1, id: randomUUID(), stage: 'accepted',
       createdAt: new Date().toISOString(), source, target,
@@ -102,6 +104,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   };
 
   const cancel = (id, source) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance cancel');
     // A per-operation exclusive cancellation claim prevents two cancellations
     // from renaming a later operation after the first has released this one.
     // An interrupted cancellation leaves this marker and fails closed; it must
