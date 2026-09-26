@@ -57,6 +57,7 @@ const registerBeeperScheduler = createSyncScheduler({
   label: 'Beeper',
   icon: '🫧',
   source: 'beeperScheduler',
+  listenForSettings: false, // beeperArming owns the feature and credential gates
   getConfig: getBeeperSyncConfig,
   runSync: () => runBeeperSweep({ reason: 'scheduler' }),
 });
