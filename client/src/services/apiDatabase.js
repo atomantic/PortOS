@@ -2,10 +2,6 @@ import { request } from './apiCore.js';
 
 // Database
 export const getDatabaseStatus = (options) => request('/database/status', options);
-export const switchDatabase = (target, migrate = false) => request('/database/switch', {
-  method: 'POST',
-  body: JSON.stringify({ target, migrate })
-});
 export const setupNativeDatabase = () => request('/database/setup-native', { method: 'POST' });
 export const exportDatabase = (backend) => request('/database/export', {
   method: 'POST',
