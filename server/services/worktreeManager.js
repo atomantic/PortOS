@@ -45,7 +45,20 @@ const DIRT_PATHS_IN_WARNING = 5;
 // Dependencies are linked from the source checkout for ordinary ephemeral
 // worktrees. Dependency-update tasks opt out so package managers cannot mutate
 // the source checkout's installed tree through these links.
-const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'server/node_modules'];
+async function worktreeDependencyPaths(sourceWorkspace, worktreePath) {
+  const entries = await readdir(sourceWorkspace, { withFileTypes: true });
+  const children = await Promise.all(entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
+    .map(async ({ name }) => {
+      const targetDirectory = await lstat(join(worktreePath, name)).catch(() => null);
+      if (!targetDirectory?.isDirectory()) return null;
+      if (existsSync(join(sourceWorkspace, name, '.git')) || existsSync(join(worktreePath, name, '.git'))) return null;
+      const manifest = await lstat(join(worktreePath, name, 'package.json')).catch(() => null);
+      if (!manifest?.isFile()) return null;
+      return join(name, 'node_modules');
+    }));
+  return ['node_modules', ...children.filter(Boolean)];
+}
 
 /**
  * Make installed dependencies available to a fresh worktree without copying
@@ -54,10 +67,11 @@ const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'serve
  * layout. Existing paths are preserved, including real directories and links.
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
-  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
+  await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
-    const sourceExists = await lstat(sourcePath).then(() => true).catch(() => false);
+    const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
     if (!sourceExists) return;
     const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
     if (targetExists) return;
@@ -70,7 +84,8 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
  * Real dependency directories and links managed by another tool stay intact.
  */
 export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) {
-  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
+  await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
     const targetStat = await lstat(targetPath).catch((err) => {
