@@ -402,3 +402,36 @@ describe('meetingUrl projection (#6289)', () => {
     expect(event.meetingUrl).toBeNull();
   });
 });
+
+describe('Google batch identity reconciliation (#8635)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccount.mockResolvedValue(account());
+    loadCache.mockResolvedValue({ events: [] });
+  });
+
+  it('adds one row for duplicate deliveries and retains the last mutable fields', async () => {
+    const result = await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [
+      rawEvent('a', 'Earlier'), rawEvent('a', 'Latest'),
+    ]);
+    expect(result).toMatchObject({ newEvents: 1, total: 1 });
+    expect(savedCache().events).toEqual([expect.objectContaining({ title: 'Latest' })]);
+  });
+
+  it('heals old duplicates with a stable id while preserving other calendars and partial omissions', async () => {
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [rawEvent('a', 'Earlier')]);
+    const retained = savedCache().events[0];
+    const otherCalendar = { ...retained, id: 'other-calendar', subcalendarId: 'other@example.com' };
+    const omitted = { ...retained, id: 'omitted', externalId: 'omitted' };
+    loadCache.mockResolvedValue({ events: [
+      retained, { ...retained, id: 'old-duplicate' }, otherCalendar, omitted,
+    ] });
+    const result = await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [
+      rawEvent('a', 'Current'),
+    ], null, { prune: false });
+    expect(result).toMatchObject({ newEvents: 0, total: 3, pruned: 0 });
+    expect(savedCache().events).toEqual([
+      expect.objectContaining({ id: retained.id, title: 'Current' }), otherCalendar, omitted,
+    ]);
+  });
+});

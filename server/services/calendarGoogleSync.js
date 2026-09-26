@@ -95,12 +95,14 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
   const cache = await loadCache(accountId);
   const normalized = rawEvents.map(e => normalizeGoogleEvent(e, calendarId, calendarName));
 
-  // Build map of existing events for this subcalendar
-  const existingMap = new Map(
-    cache.events
-      .filter(e => e.externalId && e.subcalendarId === calendarId)
-      .map(e => [e.externalId, e])
-  );
+  // Heal legacy duplicates in this subcalendar, retaining the first local id.
+  const existingMap = new Map();
+  cache.events = cache.events.filter(event => {
+    if (!event.externalId || event.subcalendarId !== calendarId) return true;
+    if (existingMap.has(event.externalId)) return false;
+    existingMap.set(event.externalId, event);
+    return true;
+  });
 
   let newCount = 0;
   let updatedCount = 0;
@@ -135,7 +137,9 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     } else {
       // A newly cached event always carries the key, so `meetingUrl` is absent
       // from the cache only for records written before this shipped.
-      cache.events.push({ ...event, meetingUrl: event.meetingUrl ?? null });
+      const retained = { ...event, meetingUrl: event.meetingUrl ?? null };
+      cache.events.push(retained);
+      existingMap.set(event.externalId, retained);
       newCount++;
     }
   }
