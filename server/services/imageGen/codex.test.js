@@ -33,9 +33,9 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    spawn: vi.fn((bin, args) => {
+    spawn: vi.fn((bin, args, options) => {
       const child = makeFakeChild();
-      spawnCalls.push({ bin, args, child });
+      spawnCalls.push({ bin, args, options, child });
       return child;
     }),
   };
@@ -76,6 +76,53 @@ afterEach(async () => {
   vi.useRealTimers();
   codex._internals.setHarvestTimeoutForTests();
   await rm(TEST_HOME, { recursive: true, force: true }).catch(() => {});
+});
+
+describe('codex provider — checkConnection', () => {
+  it.each([
+    ['stdout', 'codex-cli 1.2.3', 'codex-cli 1.2.3'],
+    ['stderr', 'Codex version 2.3.4', 'codex-cli 2.3.4'],
+    ['stdout', 'unknown version', 'codex-cli'],
+  ])('preserves the model label from %s output: %s', async (stream, output, model) => {
+    const result = codex.checkConnection({ codexPath: '/opt/example/codex' });
+    const { bin, args, options, child } = spawnCalls[0];
+    expect(bin).toBe('/opt/example/codex');
+    expect(args).toEqual(['--version']);
+    expect(options.shell).toBe(false);
+    child[stream].emit('data', Buffer.from(output));
+    child.emit('close', 0);
+    await expect(result).resolves.toEqual({ connected: true, mode: 'codex', model });
+  });
+
+  it('preserves spawn-error and nonzero-exit reasons', async () => {
+    const missing = codex.checkConnection();
+    spawnCalls[0].child.emit('error', new Error('spawn codex ENOENT'));
+    await expect(missing).resolves.toEqual({
+      connected: false, mode: 'codex', reason: 'Codex CLI not found (spawn codex ENOENT)',
+    });
+    const failed = codex.checkConnection();
+    spawnCalls[1].child.emit('close', 2);
+    await expect(failed).resolves.toEqual({
+      connected: false, mode: 'codex', reason: 'codex --version exited 2',
+    });
+  });
+
+  it('settles a stalled version probe at 15 seconds and requests termination', async () => {
+    vi.useFakeTimers();
+    const result = codex.checkConnection();
+    const settled = vi.fn();
+    result.then(settled);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].args).toEqual(['--version']);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toEqual({
+      connected: false, mode: 'codex', reason: 'codex --version timed out',
+    });
+    expect(spawnCalls[0].child.kill).toHaveBeenCalled();
+    vi.clearAllTimers();
+  });
 });
 
 describe('codex provider — generateImage', () => {
