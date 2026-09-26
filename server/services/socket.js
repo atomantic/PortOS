@@ -431,7 +431,7 @@ function setupCosEventForwarding() {
   for (const event of ['goals:changed', 'backup:changed']) {
     dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
   }
-  for (const event of ['cos:schedule:changed', 'cos:decisions:changed']) {
+  for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
   settingsEvents.on('settings:updated', () => ioInstance?.emit('backup:changed', {}));

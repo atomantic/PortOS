@@ -44,6 +44,11 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'cos:day:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate UTC-day aggregates when the current activity-calendar day expires.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'goals:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate goals after a local write or peer merge.',

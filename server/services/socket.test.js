@@ -175,6 +175,9 @@ describe('socket.js — initSocket', () => {
       expect(subscriber.emitted).toContainEqual([target, {}]);
       expect(other.emitted.some(([event]) => event === target)).toBe(false);
     }
+    dashboardEvents.emit('cos:day:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:day:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:day:changed')).toBe(false);
     dashboardEvents.emit('cos:decisions:changed');
     expect(subscriber.emitted).toContainEqual(['cos:decisions:changed', {}]);
     expect(other.emitted.some(([event]) => event === 'cos:decisions:changed')).toBe(false);

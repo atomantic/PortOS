@@ -86,6 +86,18 @@ describe('dashboard resource subscriptions', () => {
     expect(api[read]).toHaveBeenCalledTimes(4);
   });
 
+  it('reconciles CoS day aggregates on the server midnight event', async () => {
+    api.getCosRecentTasks.mockResolvedValue({ tasks: [], summary: {} });
+    api.getCosQuickSummary.mockResolvedValue({ today: { completed: 7, succeeded: 7 }, queue: {}, status: { running: true } });
+    render(<MemoryRouter><CosDashboardWidget /></MemoryRouter>);
+    await flush();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    api.getCosQuickSummary.mockResolvedValue({ today: { completed: 0, succeeded: 0 }, queue: {}, status: { running: true } });
+    await act(async () => socket.receive('cos:day:changed'));
+    expect(screen.queryByText('7')).not.toBeInTheDocument();
+    expect(api.getCosQuickSummary).toHaveBeenCalledTimes(2);
+  });
+
   it('advances overdue coloring and schedule countdowns with no network reads', async () => {
     vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
     api.listThreads.mockResolvedValue({ threads: [{ id: 'example', title: 'Example deadline', status: 'open', dueAt: '2026-01-01T12:00:30Z' }], total: 1 });
