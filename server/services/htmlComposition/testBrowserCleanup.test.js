@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanupTestBrowser } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser } from './testBrowserCleanup.js';
 
 function child() {
   const proc = new EventEmitter();
@@ -31,7 +31,7 @@ describe('owned test Chrome cleanup', () => {
     proc.signalCode = 'SIGTERM';
     proc.emit('close', null, 'SIGTERM');
     const cleanup = vi.fn();
-    await cleanupTestBrowser({ proc, cleanup });
+    await _cleanupTestBrowser({ proc, cleanup });
     expect(proc.kill).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledOnce();
     expect(proc.listenerCount('close')).toBe(0);
@@ -44,7 +44,7 @@ describe('owned test Chrome cleanup', () => {
       proc.signalCode = signal;
       proc.emit('close', null, signal);
     });
-    await cleanupTestBrowser({ proc, cleanup: vi.fn() });
+    await _cleanupTestBrowser({ proc, cleanup: vi.fn() });
     expect(proc.kill.mock.calls).toEqual([['SIGTERM']]);
     expect(proc.listenerCount('close')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
@@ -59,7 +59,7 @@ describe('owned test Chrome cleanup', () => {
       }
     });
     const cleanup = vi.fn();
-    const result = cleanupTestBrowser({ proc, cleanup });
+    const result = _cleanupTestBrowser({ proc, cleanup });
     await vi.advanceTimersByTimeAsync(3000);
     expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
     expect(cleanup).not.toHaveBeenCalled();
@@ -73,7 +73,7 @@ describe('owned test Chrome cleanup', () => {
   it('still terminates the child and cleans data when disconnect rejects', async () => {
     const proc = child();
     const cleanup = vi.fn();
-    const result = cleanupTestBrowser({
+    const result = _cleanupTestBrowser({
       browser: { close: () => Promise.reject(new Error('disconnect failed')) }, proc, cleanup,
     });
     const rejected = expect(result).rejects.toThrow('disconnect failed');
@@ -88,7 +88,7 @@ describe('owned test Chrome cleanup', () => {
     const proc = child();
     proc.kill.mockImplementation(() => true);
     const cleanup = vi.fn();
-    const result = cleanupTestBrowser({
+    const result = _cleanupTestBrowser({
       browser: { close: () => new Promise(() => {}) }, proc, cleanup,
     });
     const rejected = expect(result).rejects.toThrow(

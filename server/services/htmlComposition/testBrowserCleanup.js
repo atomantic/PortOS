@@ -40,7 +40,7 @@ async function terminateOwnedChrome(proc) {
 
 // Test-only lifecycle boundary. Disconnect failure must not strand the owned
 // child, and neither failure may prevent removal of temporary test data.
-export async function cleanupTestBrowser({ browser, proc, cleanup }) {
+export async function _cleanupTestBrowser({ browser, proc, cleanup }) {
   const errors = [];
   try {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect').catch(error => errors.push(error));

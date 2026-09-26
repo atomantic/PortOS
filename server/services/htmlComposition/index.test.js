@@ -11,7 +11,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
-import { cleanupTestBrowser } from './testBrowserCleanup.js';
+import { _cleanupTestBrowser } from './testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -61,7 +61,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
 
-  afterAll(() => cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
+  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
 
   it('awaits every seek, encodes exactly 12 frames, keeps the target hidden and registers a thumbnail', async () => {
     const input = await composition();
