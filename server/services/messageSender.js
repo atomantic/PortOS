@@ -13,6 +13,8 @@ export async function sendDraft(draftId, io) {
   if (!draft) return { success: false, status: 404, code: 'DRAFT_NOT_FOUND', error: 'Draft not found' };
   if (draft.status !== 'approved') return { success: false, status: 409, code: 'DRAFT_STATE_CONFLICT', error: `Draft status is "${draft.status}", must be "approved"` };
 
+  // accountId and sendVia are immutable after creation (updateDraft's allowlist).
+  // Validate those before claiming so configuration errors leave approval intact.
   const account = await getAccount(draft.accountId);
   if (!account) return { success: false, status: 404, code: 'ACCOUNT_NOT_FOUND', error: 'Account not found' };
 
