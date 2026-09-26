@@ -60,6 +60,20 @@ describe('backup routes', () => {
       });
     });
 
+    it('serves a process-local persistence failure without hiding the last successful snapshot', async () => {
+      const state = {
+        status: 'error', lastSnapshotId: 'previous-snapshot',
+        lastRun: '2026-01-02T00:00:00.000Z', pgBackup: null,
+        error: 'Backup failed; status persistence failed (EACCES). See server logs.',
+      };
+      backup.getState.mockResolvedValue(state);
+      backup.getNextRunTime.mockReturnValue(null);
+      getSettings.mockResolvedValue({ backup: { destPath: '/backup/target' } });
+      const res = await request(buildApp()).get('/api/backup/status');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(state);
+    });
+
     it('returns null destPath when backup is not configured', async () => {
       backup.getState.mockResolvedValue({});
       backup.getNextRunTime.mockReturnValue(null);
