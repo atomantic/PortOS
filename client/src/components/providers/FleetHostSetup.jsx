@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, HelpCircle, Server, XCircle } from 'lucide-react';
 import { getFleetLlmHost, getFleetPeerHosts, revealFleetLlmHostKey, stopFleetLlmHost } from '../../services/apiProviders';
 import FleetHostUsage from './FleetHostUsage';
 import { isFleetHostConfigured } from '../../utils/providers';
 import { copyToClipboard } from '../../lib/clipboard';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import Banner from '../ui/Banner';
 import { PORTS } from '../../lib/ports.js';
 import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
+
+const HOST_EVENTS = ['fleet-host:changed', 'fleet-host:usage:changed'];
+const PEER_EVENTS = ['instances:peers:updated'];
+const readHost = () => getFleetLlmHost({ silent: true });
+const readPeerHosts = () => getFleetPeerHosts({ silent: true });
 
 // A self-host provider (the auto-created Direct API one from `configure()` in
 // server/services/fleetLlmHost.js, and the OpenCode one from `?selfHost=1`)
@@ -20,8 +25,13 @@ import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMember
 const SELF_HOST_ENDPOINT = `http://127.0.0.1:${PORTS.FLEET_LLM}/v1`;
 
 export default function FleetHostSetup({ compact = false, providers = [], onConfigured }) {
-  const [status, setStatus] = useState(null);
-  const [peerHosts, setPeerHosts] = useState([]);
+  const { data: status, error: statusError, refetch: load, updateData: setStatus } = useSocketResource(
+    readHost, { namespace: 'fleet-host', events: HOST_EVENTS },
+  );
+  const { data: peerResult, error: peerError, refetch: loadPeers } = useSocketResource(
+    readPeerHosts, { namespace: 'instances', events: PEER_EVENTS, enabled: compact },
+  );
+  const peerHosts = peerResult?.hosts || [];
   const [error, setError] = useState('');
   const [installing, setInstalling] = useState(false);
   const [key, setKey] = useState('');
@@ -34,19 +44,11 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
   const [stopArmed, setStopArmed] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopNote, setStopNote] = useState('');
-  const load = useCallback(() => {
-    getFleetLlmHost({ silent: true })
-      .then((value) => { setStatus(value); setError(''); })
-      .catch(() => setError('Could not check this machine. Retry to detect hardware and model readiness.'));
-    if (compact) {
-      getFleetPeerHosts({ silent: true })
-        .then((res) => { setPeerHosts(Array.isArray(res?.hosts) ? res.hosts : []); })
-        .catch(() => setPeerHosts([]));
-    }
-  }, [compact]);
-  useEffect(() => { load(); }, [load]);
-  useAutoRefetch(load, 15000, { enabled: !compact && !installing, pollOnly: true, immediate: false });
-  const completed = useCallback(() => { load(); onConfigured?.(); }, [load, onConfigured]);
+  const completed = useCallback((receipt) => {
+    if (receipt?.status) setStatus(receipt.status);
+    else load();
+    onConfigured?.();
+  }, [load, setStatus, onConfigured]);
 
   const unconfiguredPeerHosts = useMemo(() => {
     if (!compact) return [];
@@ -82,15 +84,19 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
           : result?.containerStopped
             ? 'Host stopped. The container was removed; its image and weights are still on disk, so starting it again takes minutes, not another download.'
             : 'Host stopped and disabled.');
-        load();
+        if (result.status) setStatus(result.status);
+        else load();
         onConfigured?.();
       })
       .catch(() => setStopNote('Could not stop the host. Check that Docker is responding, then try again.'))
       .finally(() => setStopping(false));
   };
   const actionClass = 'inline-flex items-center justify-center min-h-[40px] px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50';
+  const loadError = statusError ? 'Could not check this machine. Retry to detect hardware and model readiness.'
+    : (peerError || peerResult?.unavailable) ? 'Could not discover peer hosts. Retry when the peer is available.' : '';
   const title = status?.recommendation.title || 'Recommended model host setup';
   if (compact) {
+    if (loadError) return <Banner tone="error">{loadError}<button type="button" onClick={() => { load(); loadPeers(); }}>Retry</button></Banner>;
     if (selfNeedsProvider || unconfiguredPeerHosts.length > 0) {
       return (
         <div className="space-y-3" aria-label="Available model hosts">
@@ -146,7 +152,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
         <p>{status?.recommendation.reason || 'Detecting this machine…'}</p>
         {status && <p className="mt-2 text-xs">{status.specs.platform} · {status.specs.totalMemoryGb ?? 'Unknown'} GB RAM{status.specs.cuda?.gpus?.map((gpu) => ` · ${gpu.name} (${gpu.vramGb ?? '?'} GB VRAM)`).join('')}</p>}
       </Banner>
-      {error && <Banner tone="error">{error}</Banner>}
+      {(error || loadError) && <Banner tone="error">{error || loadError}</Banner>}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={load} className="min-h-[40px] px-3 rounded-lg bg-port-border text-sm">Refresh host status</button>
         <Link to={manageHref} className="min-h-[40px] px-3 py-2 text-sm text-port-accent">Manage model servers</Link>

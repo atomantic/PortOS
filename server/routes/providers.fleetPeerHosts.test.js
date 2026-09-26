@@ -70,9 +70,10 @@ describe('this host\'s inbound usage and stop controls', () => {
       return { success: true, containerStopped: true };
     });
 
+    fleetLlmHost.getFleetLlmHostStatus.mockResolvedValue({ enabled: false, stoppable: false });
     const res = await request(buildApp()).post('/api/providers/fleet-host/stop');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ success: true, containerStopped: true });
+    expect(res.body).toMatchObject({ success: true, containerStopped: true, status: { enabled: false, stoppable: false } });
     expect(res.body.log[0]).toContain('Closing the shared API queue');
   });
 });
