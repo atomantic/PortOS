@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
-import { loadCache, saveCache, logCalendarTouchpoints, recordCalendarActivity } from './calendarSync.js';
+import { mutateCache, logCalendarTouchpoints, recordCalendarActivity } from './calendarSync.js';
 import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
@@ -90,72 +90,77 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
 export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io, options = {}) {
   const { prune: shouldPrune = true, status = 'success' } = options;
   const account = await getAccount(accountId);
-  if (!account) throw new Error('Account not found');
+  if (!account) throw new ServerError('Account not found', { status: 404 });
 
-  const cache = await loadCache(accountId);
   const normalized = rawEvents.map(e => normalizeGoogleEvent(e, calendarId, calendarName));
 
-  // Heal legacy duplicates in this subcalendar, retaining the first local id.
-  const existingMap = new Map();
-  cache.events = cache.events.filter(event => {
-    if (!event.externalId || event.subcalendarId !== calendarId) return true;
-    if (existingMap.has(event.externalId)) return false;
-    existingMap.set(event.externalId, event);
-    return true;
-  });
-
-  let newCount = 0;
-  let updatedCount = 0;
-  const incomingIds = new Set();
-
-  for (const event of normalized) {
-    incomingIds.add(event.externalId);
-    if (existingMap.has(event.externalId)) {
-      // Update mutable fields
-      const existing = existingMap.get(event.externalId);
-      existing.title = event.title;
-      existing.description = event.description;
-      existing.location = event.location;
-      existing.startTime = event.startTime;
-      existing.endTime = event.endTime;
-      existing.isAllDay = event.isAllDay;
-      existing.isCancelled = event.isCancelled;
-      // Refresh the identity fields too so an event already in cache gains
-      // organizer/attendees for Tribe touchpoint matching and an up-to-date
-      // declined status (#2033) — not just newly-added events.
-      existing.organizer = event.organizer;
-      existing.attendees = event.attendees;
-      existing.myStatus = event.myStatus;
-      // `undefined` means this producer never described the event's
-      // conferencing — a legacy push, or an MCP payload predating the field —
-      // so the cached link stands. Anything else is the current snapshot:
-      // replace it, or clear it to null when the meeting no longer has one.
-      // Without this gate an older client silently drops a working Join action.
-      if (event.meetingUrl !== undefined) existing.meetingUrl = event.meetingUrl;
-      existing.syncedAt = event.syncedAt;
-      updatedCount++;
-    } else {
-      // A newly cached event always carries the key, so `meetingUrl` is absent
-      // from the cache only for records written before this shipped.
-      const retained = { ...event, meetingUrl: event.meetingUrl ?? null };
-      cache.events.push(retained);
-      existingMap.set(event.externalId, retained);
-      newCount++;
+  const { newCount, updatedCount, pruned, total } = await mutateCache(accountId, (cache, currentAccount) => {
+    const subcalendar = currentAccount.subcalendars?.find(sc => sc.calendarId === calendarId);
+    if (subcalendar && (!subcalendar.enabled || subcalendar.dormant)) {
+      throw new ServerError('Subcalendar is disabled', { status: 409 });
     }
-  }
+    // Heal legacy duplicates in this subcalendar, retaining the first local id.
+    const existingMap = new Map();
+    cache.events = cache.events.filter(event => {
+      if (!event.externalId || event.subcalendarId !== calendarId) return true;
+      if (existingMap.has(event.externalId)) return false;
+      existingMap.set(event.externalId, event);
+      return true;
+    });
 
-  // Prune events for this subcalendar that are no longer present. Skipped when
-  // the caller can't vouch that `rawEvents` is complete (see options.prune).
-  let pruned = 0;
-  if (shouldPrune) {
-    const before = cache.events.length;
-    cache.events = cache.events.filter(e =>
-      e.subcalendarId !== calendarId || incomingIds.has(e.externalId)
-    );
-    pruned = before - cache.events.length;
-  }
+    let newCount = 0;
+    let updatedCount = 0;
+    const incomingIds = new Set();
 
-  await saveCache(accountId, cache);
+    for (const event of normalized) {
+      incomingIds.add(event.externalId);
+      if (existingMap.has(event.externalId)) {
+        // Update mutable fields
+        const existing = existingMap.get(event.externalId);
+        existing.title = event.title;
+        existing.description = event.description;
+        existing.location = event.location;
+        existing.startTime = event.startTime;
+        existing.endTime = event.endTime;
+        existing.isAllDay = event.isAllDay;
+        existing.isCancelled = event.isCancelled;
+        // Refresh the identity fields too so an event already in cache gains
+        // organizer/attendees for Tribe touchpoint matching and an up-to-date
+        // declined status (#2033) — not just newly-added events.
+        existing.organizer = event.organizer;
+        existing.attendees = event.attendees;
+        existing.myStatus = event.myStatus;
+        // `undefined` means this producer never described the event's
+        // conferencing — a legacy push, or an MCP payload predating the field —
+        // so the cached link stands. Anything else is the current snapshot:
+        // replace it, or clear it to null when the meeting no longer has one.
+        // Without this gate an older client silently drops a working Join action.
+        if (event.meetingUrl !== undefined) existing.meetingUrl = event.meetingUrl;
+        existing.syncedAt = event.syncedAt;
+        updatedCount++;
+      } else {
+        // A newly cached event always carries the key, so `meetingUrl` is absent
+        // from the cache only for records written before this shipped.
+        const retained = { ...event, meetingUrl: event.meetingUrl ?? null };
+        cache.events.push(retained);
+        existingMap.set(event.externalId, retained);
+        newCount++;
+      }
+    }
+
+    // Prune events for this subcalendar that are no longer present. Skipped when
+    // the caller can't vouch that `rawEvents` is complete (see options.prune).
+    let pruned = 0;
+    if (shouldPrune) {
+      const before = cache.events.length;
+      cache.events = cache.events.filter(e =>
+        e.subcalendarId !== calendarId || incomingIds.has(e.externalId)
+      );
+      pruned = before - cache.events.length;
+    }
+
+    return { newCount, updatedCount, pruned, total: cache.events.length };
+  });
   await updateSyncStatus(accountId, status);
 
   // Auto-log Tribe touchpoints from this subcalendar batch (#2033) — secondary
@@ -181,7 +186,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
   });
 
   console.log(`📅 Google push sync for ${calendarName}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned${shouldPrune ? '' : ' (prune skipped — partial payload)'}`);
-  return { newEvents: newCount, updated: updatedCount, pruned, total: cache.events.length, status };
+  return { newEvents: newCount, updated: updatedCount, pruned, total, status };
 }
 
 /**
@@ -210,6 +215,15 @@ const mcpSyncLock = new Map();
 export async function mcpSyncAccount(accountId, io) {
   if (mcpSyncLock.has(accountId)) throw new ServerError('MCP sync already in progress', { status: 409 });
 
+  mcpSyncLock.set(accountId, true);
+  try {
+    return await runMcpSyncAccount(accountId, io);
+  } finally {
+    mcpSyncLock.delete(accountId);
+  }
+}
+
+async function runMcpSyncAccount(accountId, io) {
   const account = await getAccount(accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });
@@ -217,7 +231,6 @@ export async function mcpSyncAccount(accountId, io) {
   const enabledCalendars = (account.subcalendars || []).filter(sc => sc.enabled && !sc.dormant);
   if (enabledCalendars.length === 0) throw new ServerError('No enabled subcalendars', { status: 400 });
 
-  mcpSyncLock.set(accountId, true);
   io?.emit('calendar:sync:started', { accountId, method: 'mcp' });
   console.log(`📅 Starting MCP sync for ${account.name} (${enabledCalendars.length} calendars)`);
 
@@ -309,8 +322,6 @@ Include the full events arrays as returned by gcal_list_events, with every field
     io?.emit('calendar:sync:failed', { accountId, error: error.message, method: 'mcp' });
     await updateSyncStatus(accountId, 'error').catch(() => {});
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
-  }).finally(() => {
-    mcpSyncLock.delete(accountId);
   });
 }
 
