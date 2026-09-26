@@ -121,6 +121,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
 
+  // Restores replace records and machine-local execution policy; previews
+  // require the same operator authority as execution (#8772).
+  'POST /api/backup/restore',
+  'POST /api/backup/restore-db',
+
   // Scaffolding writes a new repo and runs git/npm in it.
   'POST /api/scaffold',
   'POST /api/scaffold/templates/create',
