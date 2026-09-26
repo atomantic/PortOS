@@ -1,3 +1,4 @@
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { recordEvents } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
@@ -226,6 +227,7 @@ function registerAuthRevocationHandler(io) {
 }
 
 function setupEventForwarding() {
+  meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
   setupCosEventForwarding();
   setupErrorEventForwarding();
   setupAppsEventForwarding();
@@ -414,6 +416,7 @@ function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event
 // Set up CoS event forwarding
 function setupCosEventForwarding() {
   // Status events
+  cosEvents.on('goals:changed', data => broadcastToCos('cos:goals:changed', data));
   cosEvents.on('status', (data) => broadcastToCos('cos:status', data));
   for (const event of ['config:changed', 'status:paused', 'status:resumed']) {
     cosEvents.on(event, data => broadcastToCos(`cos:${event}`, data));

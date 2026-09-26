@@ -6,6 +6,7 @@
  * No data is ever lost — unique records from both sides are kept (union semantics).
  */
 
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -562,6 +563,7 @@ async function applyMeatspaceRemote(remoteData) {
       const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
       if (changed) {
         await atomicWrite(filePath, merged);
+        if (filename === 'config.json') meatspaceEvents.emit('death-clock:changed', {});
         totalApplied++;
       }
     } else {

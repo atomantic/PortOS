@@ -1,3 +1,4 @@
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
@@ -147,6 +148,13 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
+    meatspaceEvents.removeAllListeners();
+  });
+
+  it('forwards death-clock invalidations without personal data', () => {
+    io.emitted.length = 0;
+    meatspaceEvents.emit('death-clock:changed', {});
+    expect(io.emitted).toEqual([['meatspace:death-clock:changed', {}]]);
   });
 
   it('forwards Digital Twin changes without leaking source records', () => {

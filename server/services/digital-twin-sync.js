@@ -55,6 +55,7 @@
  * account id (#3532) — see mergeSocialAccounts.
  */
 
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { join, basename } from 'path';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -797,6 +798,7 @@ async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   if (!changed) return 0;
   if (dir) await ensureDir(dir);
   await atomicWrite(path, merged);
+  if (path === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   return 1;
 }
 
