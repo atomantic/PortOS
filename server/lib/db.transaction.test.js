@@ -14,7 +14,7 @@ vi.mock('pg', () => ({
   },
 }));
 
-import { withTransaction } from './db.js';
+import { withTransaction, query, withDatabaseMaintenance } from './db.js';
 
 function makeClient(query) {
   return {
@@ -107,5 +107,42 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => { throw dropError; })).rejects.toBe(dropError);
 
     expect(client.release).toHaveBeenCalledWith(dropError);
+  });
+});
+
+
+describe('database restore admission', () => {
+  it('drains whole transactions, rejects new work, permits recovery, and releases after failure', async () => {
+    pool.client = makeClient(vi.fn().mockResolvedValue({}));
+    let finishTransaction;
+    let enteredTransaction;
+    const entered = new Promise(resolve => { enteredTransaction = resolve; });
+    const transaction = withTransaction(async client => {
+      enteredTransaction();
+      await new Promise(resolve => { finishTransaction = resolve; });
+      await client.query('SELECT 1');
+    });
+    await entered;
+    let enteredMaintenance = false;
+    let finishMaintenance;
+    const maintenance = withDatabaseMaintenance(async () => {
+      enteredMaintenance = true;
+      await query('SELECT 2');
+      await withTransaction(client => client.query('SELECT 3'));
+      await new Promise(resolve => { finishMaintenance = resolve; });
+      throw new Error('replay failed');
+    });
+    const rejected = expect(maintenance).rejects.toThrow('replay failed');
+    await expect(query('SELECT 4')).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE', status: 503 });
+    await expect(withTransaction(() => {})).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+    await expect(withDatabaseMaintenance(() => {})).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+    expect(enteredMaintenance).toBe(false);
+    finishTransaction();
+    await transaction;
+    await vi.waitFor(() => expect(finishMaintenance).toBeTypeOf('function'));
+    finishMaintenance();
+    await rejected;
+    await expect(query('SELECT 5')).resolves.toBeUndefined();
+    await expect(withDatabaseMaintenance(async () => 'recovered')).resolves.toBe('recovered');
   });
 });

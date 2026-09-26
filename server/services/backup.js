@@ -17,7 +17,7 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth, ensureSchema, getServerMajorVersion } from '../lib/db.js';
+import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
@@ -1459,7 +1459,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_error'|'timeout'|'restore_schema_reconciliation', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation', error? }
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -1507,86 +1507,90 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   const sql = await readFile(sqlPath, 'utf-8').catch(() => '');
   const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
 
-  if (dryRun) {
-    return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
-  }
-
-  // Never half-restore: require a reachable DB before replaying.
+  // Preview remains read-only. Recheck inside the replay transaction as well,
+  // so a changed catalog cannot turn a previously safe preview into a cascade.
   const health = await checkHealth();
-  if (!health.connected) {
-    return { status: 'skipped', reason: 'not_configured' };
+  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
+  const { getDatabaseResetPlan } = await import('./backupDatabaseReset.js');
+  const { preflight, reset } = await getDatabaseResetPlan();
+  const preflightError = await query(preflight).then(() => null, error => error);
+  if (preflightError) {
+    return { status: 'failed', reason: 'restore_preflight', error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.' };
   }
+  if (dryRun) return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
 
-  const pgHost = process.env.PGHOST || 'localhost';
-  const pgPort = process.env.PGPORT || '5432';
-  const pgDb = process.env.PGDATABASE || 'portos';
-  const pgUser = process.env.PGUSER || 'portos';
+  return withDatabaseMaintenance(async () => {
+    const pgHost = process.env.PGHOST || 'localhost';
+    const pgPort = process.env.PGPORT || '5432';
+    const pgDb = process.env.PGDATABASE || 'portos';
+    const pgUser = process.env.PGUSER || 'portos';
 
-  const replay = await new Promise((resolveP) => {
-    // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
-    // wraps the whole replay in one transaction so that abort ROLLs BACK every
-    // prior statement. Together they make the restore atomic: it either fully
-    // applies or leaves the live DB untouched — never a mixed snapshot/current
-    // state. (The dump is written with --clean --if-exists, so the DROPs and
-    // recreates all commit or roll back as one unit.)
-    const proc = spawn('psql', [
-      '-v', 'ON_ERROR_STOP=1',
-      '--single-transaction',
-      '--echo-all',
-      '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
-    ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+    const replay = await new Promise((resolveP) => {
+      // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
+      // wraps the whole replay in one transaction so that abort ROLLs BACK every
+      // prior statement. Together they make the restore atomic: it either fully
+      // applies or leaves the live DB untouched — never a mixed snapshot/current
+      // state. (The dump is written with --clean --if-exists, so the DROPs and
+      // recreates all commit or roll back as one unit.)
+      const proc = spawn('psql', [
+        '-X', '-v', 'ON_ERROR_STOP=1',
+        '--single-transaction',
+        '--echo-all',
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', sqlPath
+      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
-    let stderr = '';
-    const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
-    // `--echo-all` echoes input as psql consumes it, including rows within a
-    // long COPY. The output is never retained, but it must be drained: unread
-    // piped output can backpressure and deadlock a verbose restore. Each chunk
-    // is also the progress signal that keeps an active long restore alive.
-    proc.stdout.on('data', watchdog.markActivity);
-    proc.stderr.on('data', (chunk) => {
-      watchdog.markActivity();
-      stderr += chunk.toString();
+      let stderr = '';
+      const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
+      // `--echo-all` echoes input as psql consumes it, including rows within a
+      // long COPY. The output is never retained, but it must be drained: unread
+      // piped output can backpressure and deadlock a verbose restore. Each chunk
+      // is also the progress signal that keeps an active long restore alive.
+      proc.stdout.on('data', watchdog.markActivity);
+      proc.stderr.on('data', (chunk) => {
+        watchdog.markActivity();
+        stderr += chunk.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (!watchdog.finish()) return;
+        const timeoutError = watchdog.getTimeoutError();
+        if (timeoutError) {
+          resolveP({ status: 'failed', reason: 'timeout', error: timeoutError.message });
+          return;
+        }
+        if (code === 0) {
+          console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
+          resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
+        } else {
+          console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
+          resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });
+        }
+      });
+      proc.on('error', (err) => {
+        if (watchdog.getTimeoutError() || !watchdog.finish()) return;
+        console.warn(`⚠️ psql not available: ${err.message}`);
+        resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
+      });
     });
+    if (replay.status !== 'ok') return replay;
 
-    proc.on('close', (code) => {
-      if (!watchdog.finish()) return;
-      const timeoutError = watchdog.getTimeoutError();
-      if (timeoutError) {
-        resolveP({ status: 'failed', reason: 'timeout', error: timeoutError.message });
-        return;
-      }
-      if (code === 0) {
-        console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
-        resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
-      } else {
-        console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
-        resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });
-      }
-    });
-    proc.on('error', (err) => {
-      if (watchdog.getTimeoutError() || !watchdog.finish()) return;
-      console.warn(`⚠️ psql not available: ${err.message}`);
-      resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
-    });
+    // Replay has committed. Reapply this version's upgrades even when readiness
+    // was cached before the restore, then honor the restored migration ledger.
+    const reconciliationError = await (async () => {
+      await ensureSchema({ force: true });
+      const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
+      await runDbMigrations();
+    })().then(() => null, (err) => err);
+    if (reconciliationError) {
+      console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
+      return {
+        status: 'failed',
+        reason: 'restore_schema_reconciliation',
+        error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
+      };
+    }
+    return replay;
   });
-  if (replay.status !== 'ok') return replay;
-
-  // Replay has committed. Reapply this version's upgrades even when readiness
-  // was cached before the restore, then honor the restored migration ledger.
-  const reconciliationError = await (async () => {
-    await ensureSchema({ force: true });
-    const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
-    await runDbMigrations();
-  })().then(() => null, (err) => err);
-  if (reconciliationError) {
-    console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
-    return {
-      status: 'failed',
-      reason: 'restore_schema_reconciliation',
-      error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
-    };
-  }
-  return replay;
 }
 
 /**

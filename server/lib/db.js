@@ -6,6 +6,7 @@
  */
 
 import pg from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { isTestRunner } from './runtimeEnv.js';
 
 const { Pool } = pg;
@@ -198,6 +199,47 @@ const GUARDED_CLIENT_HANDLER = {
   },
 };
 
+// Admission is synchronous, before any pool checkout. A maintenance operation
+// closes admission and drains existing operations (including whole transactions)
+// before touching the schema. Only its async context can run reconciliation.
+const databaseContext = new AsyncLocalStorage();
+const activeOperations = new Set();
+let maintenanceActive = false;
+
+function maintenanceError() {
+  return Object.assign(new Error('Database restore in progress; retry after it finishes.'), {
+    status: 503, code: 'DATABASE_MAINTENANCE',
+  });
+}
+
+async function databaseOperation(fn) {
+  if (databaseContext.getStore()?.active) return fn();
+  if (maintenanceActive) throw maintenanceError();
+  const context = { active: true };
+  const pending = databaseContext.run(context, async () => fn());
+  activeOperations.add(pending);
+  try {
+    return await pending;
+  } finally {
+    context.active = false;
+    activeOperations.delete(pending);
+  }
+}
+
+/** Drain admitted database work and reject new work until restore completes. */
+export async function withDatabaseMaintenance(fn) {
+  if (maintenanceActive || databaseContext.getStore()?.active) throw maintenanceError();
+  maintenanceActive = true;
+  const context = { active: true };
+  try {
+    await Promise.allSettled([...activeOperations]);
+    return await databaseContext.run(context, fn);
+  } finally {
+    context.active = false;
+    maintenanceActive = false;
+  }
+}
+
 /**
  * Execute a query against the connection pool.
  * @param {string} text - SQL query text with $1, $2, etc. placeholders
@@ -210,7 +252,7 @@ export async function query(text, params) {
   // author calls query('INSERT …') directly, or a backend selector mis-chose
   // Postgres because NODE_ENV wasn't 'test').
   assertWriteAllowed(text);
-  return pool.query(text, params);
+  return databaseOperation(() => pool.query(text, params));
 }
 
 /**
@@ -238,6 +280,10 @@ export async function getServerMajorVersion() {
  * @returns {Promise<T>}
  */
 export async function withTransaction(fn) {
+  return databaseOperation(() => runTransaction(fn));
+}
+
+async function runTransaction(fn) {
   const client = await pool.connect();
   // Guard the client's row writes with the same backstop as query(). The raw
   // pg client bypasses query() entirely, so without this wrapper a test-runner
@@ -350,7 +396,11 @@ let schemaUpgradeLogged = false;
  * Concurrent calls share an execution; later calls reuse successful readiness.
  * `force` explicitly reapplies the current process's DDL for repair tooling.
  */
-export async function ensureSchema({ force = false } = {}) {
+export async function ensureSchema(options = {}) {
+  return databaseOperation(() => ensureSchemaReady(options));
+}
+
+async function ensureSchemaReady({ force = false } = {}) {
   if (ensureSchemaInFlight) return ensureSchemaInFlight;
   if (schemaEnsured && !force) return;
   schemaEnsured = false;

@@ -49,6 +49,8 @@ afterAll(() => {
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  query: vi.fn().mockResolvedValue({ rows: [] }),
+  withDatabaseMaintenance: vi.fn(fn => fn()),
   ensureSchema: vi.fn().mockResolvedValue(undefined),
   // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
   // path and the existing status tests don't trigger live binary discovery.
@@ -58,7 +60,10 @@ vi.mock('../lib/db.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
-import { ensureSchema } from '../lib/db.js';
+import { ensureSchema, query, withDatabaseMaintenance } from '../lib/db.js';
+vi.mock('./backupDatabaseReset.js', () => ({
+  getDatabaseResetPlan: async () => ({ preflight: 'SELECT 1', reset: 'RESET_APPROVED_SCHEMA' }),
+}));
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
@@ -1020,6 +1025,7 @@ describe('restorePostgres', () => {
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
+    checkHealth.mockResolvedValue({ connected: true });
     ({ restorePostgres } = await import('./backup.js'));
   });
 
@@ -1060,6 +1066,16 @@ describe('restorePostgres', () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('refuses unexpected schema objects before entering maintenance or spawning replay', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    query.mockRejectedValueOnce(new Error('unexpected object'));
+    expect(await restorePostgres('/dest', 'snap-1', { dryRun: false }))
+      .toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('reads a previous-machine dump from the explicitly selected namespace', async () => {
@@ -1116,6 +1132,9 @@ describe('restorePostgres', () => {
       expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
       expect(opts.shell).toBe(false);
       expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+      expect(args.indexOf('-c')).toBeLessThan(args.indexOf('-f'));
+      expect(args).toContain('RESET_APPROVED_SCHEMA');
+      expect(args).toContain('-X');
       expect(child.stdin).toBeNull();
       expect(child.stdout).not.toBeNull();
     } finally {
