@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Telegram Bot Service
  *
@@ -90,6 +91,7 @@ export async function init(sendTestMessage = false) {
 
   botUsername = me.username;
   isConnected = true;
+  noteReadinessChanged();
   console.log(`📱 Telegram: connected as @${botUsername}`);
 
   // Register /start handler (always works, no auth required)
@@ -204,6 +206,7 @@ export async function cleanup() {
     bot = null;
   }
   isConnected = false;
+  noteReadinessChanged();
   botUsername = null;
   authorizedChatId = null;
   cachedForwardTypes = null;
@@ -239,6 +242,7 @@ async function healthCheck() {
   await bot.getMe().catch(async (err) => {
     console.error(`📱 Telegram: health check failed — ${err.message}`);
     isConnected = false;
+    noteReadinessChanged();
     await reconnect();
   });
 }
@@ -257,6 +261,7 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
   const result = await bot.sendMessage(authorizedChatId, text, opts).catch(async (err) => {
     console.error(`📱 Telegram: send failed — ${err.message}`);
     isConnected = false;
+    noteReadinessChanged();
     await reconnect();
     return null;
   });

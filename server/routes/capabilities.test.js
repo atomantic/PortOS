@@ -114,8 +114,8 @@ describe('GET /api/capabilities', () => {
     getGenomeSummary.mockRejectedValueOnce(new Error('disk gone'));
     const res = await request(makeApp()).get('/api/capabilities');
     expect(res.status).toBe(200);
-    // the failed source falls back to "not set up" rather than 500-ing the page
-    expect(byId(res.body, 'genome').status).toBe('unconfigured');
+    // A failed probe is unavailable, not proof that the integration is absent.
+    expect(byId(res.body, 'genome')).toMatchObject({ status: 'warn', summary: 'Readiness unavailable — probe failed' });
     // unrelated rows are unaffected
     expect(byId(res.body, 'providers').configured).toBe(true);
   });
@@ -124,7 +124,7 @@ describe('GET /api/capabilities', () => {
     countMemories.mockRejectedValueOnce(new Error('boom'));
     const res = await request(makeApp()).get('/api/capabilities');
     expect(res.status).toBe(200);
-    expect(byId(res.body, 'brain').detail.memoryCount).toBe(0);
+    expect(byId(res.body, 'brain')).toMatchObject({ status: 'warn', summary: 'Readiness unavailable — probe failed' });
   });
 
   it('keeps provider setup incomplete when strict prerequisite probing fails', async () => {

@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Compatibility shim for PortOS services that import from providers.js
  * Re-exports toolkit provider service functions
@@ -96,19 +97,27 @@ export async function getActiveProvider() {
 }
 
 export async function setActiveProvider(id) {
-  return requireToolkit().services.providers.setActiveProvider(id);
+  const result = await requireToolkit().services.providers.setActiveProvider(id);
+  noteReadinessChanged();
+  return result;
 }
 
 export async function createProvider(data) {
-  return requireToolkit().services.providers.createProvider(data);
+  const result = await requireToolkit().services.providers.createProvider(data);
+  noteReadinessChanged();
+  return result;
 }
 
 export async function updateProvider(id, data) {
-  return requireToolkit().services.providers.updateProvider(id, data);
+  const result = await requireToolkit().services.providers.updateProvider(id, data);
+  noteReadinessChanged();
+  return result;
 }
 
 export async function deleteProvider(id) {
-  return requireToolkit().services.providers.deleteProvider(id);
+  const result = await requireToolkit().services.providers.deleteProvider(id);
+  noteReadinessChanged();
+  return result;
 }
 
 export async function testProvider(id) {
@@ -116,7 +125,9 @@ export async function testProvider(id) {
 }
 
 export async function refreshProviderModels(id) {
-  return requireToolkit().services.providers.refreshProviderModels(id);
+  const result = await requireToolkit().services.providers.refreshProviderModels(id);
+  noteReadinessChanged();
+  return result;
 }
 
 /**
@@ -135,5 +146,7 @@ export async function fetchProviderModels(id) {
  * the caller logs group-level context instead of one line per member.
  */
 export async function refreshProviderModelsBatch(ids) {
-  return requireToolkit().services.providers.refreshProviderModelsBatch(ids);
+  const result = await requireToolkit().services.providers.refreshProviderModelsBatch(ids);
+  noteReadinessChanged();
+  return result;
 }

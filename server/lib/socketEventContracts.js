@@ -49,6 +49,26 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate updater status after runtime, configuration or external git ref changes.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'system:health:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate health after a service change or changed shared readiness sample.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'capabilities:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate capabilities after a persisted change or changed readiness sample.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'readiness:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Observe health and capability readiness while a view is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'readiness:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release readiness observation; the last subscriber stops the observer.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',

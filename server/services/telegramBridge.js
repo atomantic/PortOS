@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Telegram MCP Bridge Service
  *
@@ -100,6 +101,7 @@ export async function init() {
 
   botUsername = me.username;
   isActive = true;
+  noteReadinessChanged();
   console.log(`📱 TG Bridge: active as @${botUsername} → chat ${chatId}`);
 
   // Subscribe to notification events
@@ -116,6 +118,7 @@ export async function cleanup() {
     notificationSubscription = null;
   }
   isActive = false;
+  noteReadinessChanged();
   botToken = null;
   chatId = null;
   botUsername = null;
