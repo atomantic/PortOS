@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -9,6 +9,8 @@ import { copyToClipboard } from '../../lib/clipboard.js';
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const sendingRef = useRef(new Set());
+  const [sendingIds, setSendingIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
@@ -40,7 +42,13 @@ export default function DraftsTab({ accounts }) {
   };
 
   const handleSend = async (id) => {
-    const result = await api.sendMessageDraft(id).catch(() => null);
+    if (sendingRef.current.has(id)) return;
+    sendingRef.current.add(id);
+    setSendingIds(new Set(sendingRef.current));
+    const result = await api.sendMessageDraft(id).catch(() => null).finally(() => {
+      sendingRef.current.delete(id);
+      setSendingIds(new Set(sendingRef.current));
+    });
     if (!result || result.success === false) return;
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'sent' } : d));
     toast.success('Message sent');
@@ -125,9 +133,11 @@ export default function DraftsTab({ accounts }) {
                     onClick={() => handleSend(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
                     title="Send" aria-label="Send"
+                    disabled={sendingIds.has(draft.id)}
+                    aria-busy={sendingIds.has(draft.id)}
                     data-voice-guard="confirm"
                   >
-                    <Send size={16} />
+                    {sendingIds.has(draft.id) ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
                   </button>
                 )}
                 {draft.sendVia === 'review' && (

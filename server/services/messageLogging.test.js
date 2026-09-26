@@ -85,10 +85,11 @@ describe('mailbox operational log privacy', () => {
     expect((await getDraft(draft.id)).status).toBe('sent');
     expect((await getDraft(draft.id)).body).toBe(PRIVATE.body);
 
-    await updateDraft(draft.id, { status: 'approved' });
+    const failedDraft = await createDraft({ ...PRIVATE, to: [PRIVATE.email], accountId: account.id });
+    await updateDraft(failedDraft.id, { status: 'approved' });
     doubles.send.mockRejectedValueOnce(failure());
-    expect(await sendDraft(draft.id)).toMatchObject({ success: false, code: 'GMAIL_SEND_FAILED' });
-    expect((await getDraft(draft.id)).status).toBe('failed');
+    expect(await sendDraft(failedDraft.id)).toMatchObject({ success: false, code: 'GMAIL_SEND_FAILED' });
+    expect((await getDraft(failedDraft.id)).status).toBe('failed');
     expect(output()).toContain(draft.id);
     expect(output()).toContain(account.id);
     expect(output()).toContain('HTTP 403');

@@ -1,13 +1,15 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import DraftsTab from './DraftsTab.jsx';
 import { buildIndex } from '../../services/domIndex.js';
 
 vi.mock('../../services/api', () => ({
   getMessageDrafts: vi.fn(),
+  sendMessageDraft: vi.fn(),
 }));
 
 import * as api from '../../services/api';
+beforeEach(() => vi.clearAllMocks());
 
 // jsdom doesn't do layout, so domIndex's isVisible() geometry checks would
 // drop every element — same stub domIndex.test.jsx uses.
@@ -45,5 +47,32 @@ describe('DraftsTab — voice confirmation annotation on Send (#5907)', () => {
     const entry = idx.elements.find((e) => e.label === 'Send');
     expect(entry).toBeTruthy();
     expect(entry.guard).toBe('confirm');
+  });
+});
+
+
+describe('DraftsTab pending sends', () => {
+  it('immediately disables only the sending draft and clears pending on failure', async () => {
+    api.getMessageDrafts.mockResolvedValue([
+      { id: 'd1', status: 'approved', sendVia: 'api', subject: 'First' },
+      { id: 'd2', status: 'approved', sendVia: 'api', subject: 'Second' }
+    ]);
+    let rejectSend;
+    api.sendMessageDraft.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSend = reject; }));
+    render(<DraftsTab accounts={[]} />);
+    const [first, second] = await screen.findAllByRole('button', { name: 'Send' });
+    fireEvent.click(first);
+    fireEvent.click(first);
+    expect(first).toBeDisabled();
+    expect(first).toHaveAttribute('aria-busy', 'true');
+    expect(second).toBeEnabled();
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    await act(async () => { rejectSend(new Error('Example send failure')); });
+    await waitFor(() => expect(first).toBeEnabled());
+    api.sendMessageDraft.mockResolvedValueOnce({ success: true });
+    fireEvent.click(first);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1));
+    expect(screen.getByText('sent')).toBeInTheDocument();
+    expect(api.getMessageDrafts).toHaveBeenCalledTimes(1);
   });
 });
