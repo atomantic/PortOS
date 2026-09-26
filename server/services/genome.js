@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
@@ -36,6 +37,7 @@ async function loadMeta() {
 async function saveMeta(meta) {
   await ensureGenomeDir();
   await atomicWrite(META_FILE, meta);
+  noteReadinessChanged();
 }
 
 /**
@@ -372,6 +374,7 @@ export async function deleteGenome() {
   await unlinkGuarded(META_FILE).catch(() => {});
   snpIndex = null;
   indexBuiltAt = 0;
+  noteReadinessChanged();
   console.log('🧬 Genome data deleted');
 
   return { success: true };

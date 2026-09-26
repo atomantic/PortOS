@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 import pm2 from 'pm2';
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
@@ -26,6 +27,8 @@ const jlistFailureState = new Map(); // home -> { lastError: string }
  * @param {string|null} [pm2Home=null]
  */
 export function clearJlistCache(pm2Home = null) {
+  noteReadinessChanged('health');
+  noteReadinessChanged('capabilities');
   if (pm2Home !== undefined && pm2Home !== null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {
@@ -212,6 +215,7 @@ function spawnPm2Cli(action, name, pm2Home) {
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {
       if (code !== 0) return reject(new Error(stderr || `pm2 ${action} exited with code ${code}`));
+      clearJlistCache();
       resolve({ success: true });
     });
     child.on('error', reject);
@@ -272,6 +276,7 @@ export async function startApp(name, options = {}) {
 
       pm2.start(startOptions, (err, proc) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true, process: proc });
       });
     });
@@ -293,6 +298,7 @@ export async function stopApp(name, pm2Home = null) {
     return new Promise((resolve, reject) => {
       pm2.stop(name, (err) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true });
       });
     });
@@ -331,6 +337,7 @@ export async function deleteApp(name, pm2Home = null) {
     return new Promise((resolve, reject) => {
       pm2.delete(name, (err) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true });
       });
     });
@@ -652,6 +659,7 @@ export async function startWithCommand(name, cwd, command, options = {}) {
 
       pm2.start(opts, (err, proc) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true, process: proc });
       });
     });
@@ -685,6 +693,7 @@ function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestart
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {
       if (code !== 0) return reject(new Error(stderr || `pm2 start exited with code ${code}`));
+      clearJlistCache();
       resolve({ success: true });
     });
     child.on('error', reject);
@@ -724,6 +733,7 @@ function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
       if (code !== 0) {
         return reject(new Error(stderr || `pm2 start exited with code ${code}`));
       }
+      clearJlistCache();
       resolve({ success: true, output: stdout });
     });
 

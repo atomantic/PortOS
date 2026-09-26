@@ -48,6 +48,7 @@ import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
 import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
+import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -198,6 +199,7 @@ function registerLifecycleHandlers(socket, _io) {
 
 const SOCKET_HANDLER_REGISTRARS = [
   registerAuthHandlers,
+  registerReadinessSocket,
   registerVoiceHandlers,
   registerBuildHandlers,
   registerImporterHandlers,
@@ -304,6 +306,9 @@ export function initSocket(io) {
   // Invalidation only. Clients coalesce the frame into one bounded activity
   // read; a missed frame is repaired by the reconnect read, not by polling.
   bindSystemActivityIo(io);
+  armReadinessWatchers().catch((err) => {
+    console.error(`❌ Readiness watchers failed: ${err.message}`);
+  });
   armSystemActivityWatchers().catch((err) => {
     console.error(`❌ system activity watchers failed: ${err.message}`);
   });

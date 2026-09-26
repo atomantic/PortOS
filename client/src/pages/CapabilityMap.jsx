@@ -7,7 +7,10 @@ import {
 import * as api from '../services/api';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import NetworkSetupGuide from '../components/NetworkSetupGuide.jsx';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+
+const READINESS_EVENTS = ['capabilities:changed', 'localLlm:progress'];
+const matchesReadinessEvent = (payload, event) => event !== 'localLlm:progress' || ['complete', 'error'].includes(payload?.event);
 
 // Status presentation. Mirrors the server's CAPABILITY_STATUS tiers.
 const STATUS_STYLE = {
@@ -50,9 +53,9 @@ function CapabilityRow({ cap }) {
 export default function CapabilityMap() {
   const [savedPreference, setSavedPreference] = useState(null);
   const [saving, setSaving] = useState(false);
-  const { data, loading } = useAutoRefetch(
+  const { data, loading, error } = useSocketResource(
     () => api.getCapabilities({ silent: true }),
-    20_000,
+    { namespace: 'readiness', events: READINESS_EVENTS, matchesEvent: matchesReadinessEvent },
   );
 
   if (loading) {
@@ -91,6 +94,7 @@ export default function CapabilityMap() {
 
   return (
     <div className="space-y-4">
+      {error && <p role="status" className="text-port-warning">Capability refresh failed. Showing the last available reading.</p>}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
           <ListChecks size={20} />

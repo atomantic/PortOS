@@ -3,8 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { awaitEnabled } from '../test/enabledBarrier.js';
 
-vi.mock('../hooks/useAutoRefetch', () => ({
-  useAutoRefetch: () => ({
+vi.mock('../hooks/useSocketResource', () => ({
+  useSocketResource: () => ({
     loading: false,
     data: {
       networkSetupPreference: 'tailscale',
