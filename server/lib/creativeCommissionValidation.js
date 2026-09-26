@@ -103,6 +103,18 @@ export const creativeCommissionMusicTasteUpdateSchema = z.object({
   musicModelId: musicTasteEngineId,
 }).nullable();
 
+// Scope + style source. `universeId` scopes a series AND supplies the style
+// base (its style guide + images); `moodBoardId` picks the board whose
+// through-line and pins join that base — absent/null follows the universe's
+// linked board, '' means none, any other string names a board (see
+// services/creativeCommissions/styleSource.js). No defaults, so the PATCH
+// path's one-level-deeper merge preserves an omitted key.
+const commissionConstraintsSchema = z.object({
+  universeId: z.string().max(120).nullable().optional(),
+  seriesId: z.string().max(120).nullable().optional(),
+  moodBoardId: z.string().max(120).nullable().optional(),
+});
+
 // The brief the commission steers by. `intent` is the free-text core ("something
 // surreal, dreamlike, unsettlingly beautiful"); `genre`/`category` are optional
 // lightweight tags (a real taxonomy arrives in Phase 5); `styleSpec` maps to the
@@ -112,10 +124,7 @@ export const creativeCommissionBriefSchema = z.object({
   genre: z.string().trim().max(COMMISSION_BRIEF_TAG_MAX).nullable().optional(),
   category: z.string().trim().max(COMMISSION_BRIEF_TAG_MAX).nullable().optional(),
   styleSpec: z.string().max(COMMISSION_STYLE_SPEC_MAX).default(''),
-  constraints: z.object({
-    universeId: z.string().max(120).nullable().optional(),
-    seriesId: z.string().max(120).nullable().optional(),
-  }).default({}),
+  constraints: commissionConstraintsSchema.default({}),
   // Catalog ingredient ids to seed future generations from (Phase 3+ folds these
   // into the CD cast). Accepted now so the record shape is forward-stable.
   seedRefs: z.array(z.string().trim().max(64)).max(50).default([]),
@@ -277,10 +286,7 @@ export const creativeCommissionBriefUpdateSchema = z.object({
   genre: z.string().trim().max(COMMISSION_BRIEF_TAG_MAX).nullable().optional(),
   category: z.string().trim().max(COMMISSION_BRIEF_TAG_MAX).nullable().optional(),
   styleSpec: z.string().max(COMMISSION_STYLE_SPEC_MAX).optional(),
-  constraints: z.object({
-    universeId: z.string().max(120).nullable().optional(),
-    seriesId: z.string().max(120).nullable().optional(),
-  }).optional(),
+  constraints: commissionConstraintsSchema.optional(),
   seedRefs: z.array(z.string().trim().max(64)).max(50).optional(),
   musicTaste: creativeCommissionMusicTasteUpdateSchema.optional(),
 });

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
 import { getProviders, getSettings, listImageModels, listVideoModels, listMusicEngines } from '../../services/api';
+import UniverseMoodBoardPicker, { useStyleSourceLists } from '../media/UniverseMoodBoardPicker';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends';
 import CronSchedulePicker from '../CronSchedulePicker';
 import useUserTimezone from '../../hooks/useUserTimezone.js';
@@ -132,6 +133,9 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         </div>
       </section>
 
+      {/* Style source — a universe / mood board as the art-direction base */}
+      <StyleSourceSection styleSource={form.styleSource} patchForm={patchForm} />
+
       {/* Schedule */}
       <section className="space-y-3 border-t border-port-border pt-4">
         <h3 className="text-sm font-semibold text-gray-200">Schedule</h3>
@@ -200,6 +204,35 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         )}
       </div>
     </div>
+  );
+}
+
+// The universe and/or mood board a commission draws its look from — the same
+// pickers Code Animation offers. Each run resolves them fresh on the server
+// (services/creativeCommissions/styleSource.js): the universe's style tags,
+// notes, and style images plus the board's through-line and pins become the
+// art-direction base the Creative Director works from; the Style notes above
+// refine it.
+function StyleSourceSection({ styleSource, patchForm }) {
+  const lists = useStyleSourceLists();
+  return (
+    <section className="space-y-3 border-t border-port-border pt-4">
+      <h3 className="text-sm font-semibold text-gray-200">Style source</h3>
+      <p className="text-xs text-gray-500">
+        Pick a universe or mood board and each run loads its style tags and reference images as the
+        Creative Director&apos;s art-direction base. Style notes above refine it.
+      </p>
+      <UniverseMoodBoardPicker
+        lists={lists}
+        idPrefix="commission"
+        labelClass={labelCls}
+        inputClass={inputCls}
+        universeId={styleSource.universeId}
+        moodBoardChoice={styleSource.moodBoardChoice}
+        onUniverseChange={(value) => patchForm(['styleSource', 'universeId'], value)}
+        onBoardChoiceChange={(value) => patchForm(['styleSource', 'moodBoardChoice'], value)}
+      />
+    </section>
   );
 }
 

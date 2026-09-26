@@ -8,6 +8,7 @@
  */
 
 import { describeRecurrence } from '../../utils/cronHelpers.js';
+import { BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../../lib/styleSourceChoice.js';
 
 // The brief field caps are the server's own (server/lib/creativeBriefLimits.js),
 // used here as the inputs' `maxLength`.
@@ -231,6 +232,22 @@ export function generationToPayload(ability, generation) {
   return out;
 }
 
+// The style-source picker's board choice, mapped onto the server's wire
+// contract (services/creativeCommissions/styleSource.js): a null moodBoardId
+// follows the universe's linked board, '' means no board, any other string
+// names one.
+export { BOARD_FOLLOW_UNIVERSE, BOARD_NONE };
+
+function boardChoiceFromRecord(moodBoardId) {
+  if (moodBoardId == null) return BOARD_FOLLOW_UNIVERSE;
+  return moodBoardId === '' ? BOARD_NONE : moodBoardId;
+}
+
+function boardIdFromChoice(choice) {
+  if (choice === BOARD_FOLLOW_UNIVERSE) return null;
+  return choice === BOARD_NONE ? '' : choice;
+}
+
 // Human-readable cadence summary for the list card + detail header.
 export function describeSchedule(schedule) {
   if (!schedule) return 'No schedule';
@@ -260,6 +277,12 @@ export function toForm(c) {
       intent: c.brief?.intent || '',
       genre: c.brief?.genre || '',
       styleSpec: c.brief?.styleSpec || '',
+    },
+    // The universe / mood board whose style tags and reference images are the
+    // art-direction base each run hands the Creative Director.
+    styleSource: {
+      universeId: c.brief?.constraints?.universeId || '',
+      moodBoardChoice: boardChoiceFromRecord(c.brief?.constraints?.moodBoardId),
     },
     musicTaste: c.brief?.musicTaste ? {
       enabled: true,
@@ -334,6 +357,11 @@ export function toPayload(form) {
       intent: form.brief.intent.trim(),
       genre: form.brief.genre.trim() || null,
       styleSpec: form.brief.styleSpec,
+      // Merged one level deep server-side, so a stored seriesId survives.
+      constraints: {
+        universeId: form.styleSource.universeId || null,
+        moodBoardId: boardIdFromChoice(form.styleSource.moodBoardChoice),
+      },
       musicTaste: form.targetAbility === 'music' && form.musicTaste.enabled ? {
         source: 'digital-twin',
         window: form.musicTaste.window,

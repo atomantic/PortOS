@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CommissionConfigForm from './CommissionConfigForm.jsx';
 import { patchFormState, toForm } from './commissionForm.js';
@@ -7,10 +8,14 @@ import { patchFormState, toForm } from './commissionForm.js';
 const api = vi.hoisted(() => ({
   listMusicEngines: vi.fn(), getProviders: vi.fn(), getSettings: vi.fn(),
   listImageModels: vi.fn(), listVideoModels: vi.fn(),
+  listUniverseNames: vi.fn(), listUniverseStyles: vi.fn(), listMoodBoardNames: vi.fn(),
 }));
 vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ providers: [] })) }));
 
+
+// The style-source picker links to universe / mood-board pages.
+const render = (ui) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
 
 function Harness({ assignment } = {}) {
   const [form, setForm] = useState(toForm({
@@ -37,6 +42,9 @@ beforeEach(() => {
   api.getSettings.mockResolvedValue({});
   api.listImageModels.mockResolvedValue([]);
   api.listVideoModels.mockResolvedValue([]);
+  api.listUniverseNames.mockResolvedValue([]);
+  api.listUniverseStyles.mockResolvedValue([]);
+  api.listMoodBoardNames.mockResolvedValue([]);
   api.listMusicEngines.mockResolvedValue({
     defaultEngine: 'musicgen',
     engines: [{
@@ -103,6 +111,34 @@ describe('CommissionConfigForm music taste controls', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /use my digital twin music taste/i }));
     expect(screen.queryByLabelText('Listening window')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Creative output')).toHaveValue('music');
+  });
+});
+
+describe('CommissionConfigForm style source', () => {
+  it('picks a universe, previews its style tags, and picks a mood board', async () => {
+    api.listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
+    api.listUniverseStyles.mockResolvedValue([{ id: 'u1', name: 'Example Universe', influences: { embrace: ['ink wash'], avoid: ['neon'] } }]);
+    api.listMoodBoardNames.mockResolvedValue([{ id: 'b1', name: 'Example Board' }]);
+    let latest;
+    function StyleHarness() {
+      const [form, setForm] = useState(toForm({ brief: { intent: 'a drifting city' } }));
+      latest = form;
+      return (
+        <CommissionConfigForm
+          form={form}
+          patchForm={(path, value) => setForm((prev) => patchFormState(prev, path, value))}
+          saving={false}
+          onSave={() => {}}
+        />
+      );
+    }
+    render(<StyleHarness />);
+    await waitFor(() => expect(screen.getByLabelText('Universe')).toContainHTML('Example Universe'));
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    expect(await screen.findByText('ink wash')).toBeInTheDocument();
+    expect(screen.getByText('neon')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Mood board'), { target: { value: 'b1' } });
+    expect(latest.styleSource).toEqual({ universeId: 'u1', moodBoardChoice: 'b1' });
   });
 });
 

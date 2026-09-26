@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
 import { usePagedCollection } from '../hooks/usePagedCollection';
@@ -18,10 +19,7 @@ import {
   getCodeAnimationJob,
   getCodeAnimationOptions,
   listCodeAnimationJobPage,
-  listMoodBoardNames,
   listTracks,
-  listUniverseNames,
-  listUniverseStyles,
   startCodeAnimationGeneration,
   uploadFile,
 } from '../services/api';
@@ -32,9 +30,6 @@ import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
 const JOB_EVENTS = ['code-animation:changed'];
-// Mood-board choice sentinels: follow the universe's linked board, or none.
-const BOARD_FOLLOW_UNIVERSE = 'universe';
-const BOARD_NONE = 'none';
 
 const DEFAULT_DRAFT = {
   title: '',
@@ -278,9 +273,8 @@ export default function CodeAnimation() {
   const navigate = useNavigate();
   const jobId = routeParams.jobId || searchParams.get('job') || '';
   const [options, setOptions] = useState(null);
-  const [universes, setUniverses] = useState([]);
-  const [universeStyles, setUniverseStyles] = useState({});
-  const [boards, setBoards] = useState([]);
+  const styleLists = useStyleSourceLists();
+  const { boards } = styleLists;
   const [libraryTracks, setLibraryTracks] = useState([]);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [draft, setDraft] = useState(loadDraft);
@@ -339,11 +333,6 @@ export default function CodeAnimation() {
 
   useEffect(() => {
     getCodeAnimationOptions({ silent: true }).then(setOptions).catch(() => toast.error('Failed to load Code Animation options'));
-    listUniverseNames({ silent: true }).then((rows) => setUniverses(Array.isArray(rows) ? rows : [])).catch(() => {});
-    listUniverseStyles({ silent: true })
-      .then((rows) => setUniverseStyles(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.id, row]))))
-      .catch(() => {});
-    listMoodBoardNames({ silent: true }).then((rows) => setBoards(Array.isArray(rows) ? rows : [])).catch(() => {});
     listTracks({ silent: true })
       .then((rows) => setLibraryTracks(Array.isArray(rows) ? rows : rows?.tracks || []))
       .catch(() => {});
@@ -352,7 +341,6 @@ export default function CodeAnimation() {
   const brief = useMemo(() => toBrief(draft), [draft]);
   const briefKey = useMemo(() => JSON.stringify(brief), [brief]);
   const promptStale = !!built && built.briefKey !== briefKey;
-  const activeStyle = draft.universeId ? universeStyles[draft.universeId] : null;
   const limits = options?.limits;
   const maxRefs = limits?.referenceImagesMax ?? 8;
   const audioAccept = (options?.audioExtensions || ['mp3', 'wav', 'ogg', 'm4a']).map((ext) => `.${ext}`).join(',');
@@ -613,38 +601,17 @@ export default function CodeAnimation() {
         <div className="space-y-4">
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-style-heading">
             <h2 id="ca-style-heading" className="flex items-center gap-2 text-sm font-semibold text-white"><Globe className="h-4 w-4 text-port-accent" /> Style</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label htmlFor="ca-universe" className={labelClass}>Universe (sets the art style)</label>
-                <select id="ca-universe" value={draft.universeId} onChange={(event) => update({ universeId: event.target.value })} className={inputClass}>
-                  <option value="">No universe</option>
-                  {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ca-board" className={labelClass}>Mood board</label>
-                <select id="ca-board" value={draft.moodBoardChoice} onChange={(event) => update({ moodBoardChoice: event.target.value })} className={inputClass}>
-                  <option value={BOARD_FOLLOW_UNIVERSE}>Universe&apos;s linked board</option>
-                  <option value={BOARD_NONE}>No mood board</option>
-                  {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
-                </select>
-              </div>
-            </div>
-            {activeStyle && (activeStyle.influences?.embrace?.length > 0 || activeStyle.influences?.avoid?.length > 0) && (
-              <div className="flex flex-wrap gap-1 text-[11px]">
-                {(activeStyle.influences.embrace || []).slice(0, 12).map((token) => (
-                  <span key={`e-${token}`} className="rounded bg-port-accent/15 px-1.5 py-0.5 text-port-accent">{token}</span>
-                ))}
-                {(activeStyle.influences.avoid || []).slice(0, 6).map((token) => (
-                  <span key={`a-${token}`} className="rounded bg-port-error/15 px-1.5 py-0.5 text-port-error line-through">{token}</span>
-                ))}
-              </div>
-            )}
-            {draft.universeId && !activeStyle && (
-              <p className="text-xs text-gray-500">
-                This universe has no style tokens yet, so only its notes and style references will be used. <Link to={`/universes/${encodeURIComponent(draft.universeId)}`} className="text-port-accent hover:underline">Edit its style guide</Link>
-              </p>
-            )}
+            <UniverseMoodBoardPicker
+              lists={styleLists}
+              idPrefix="ca"
+              universeLabel="Universe (sets the art style)"
+              labelClass={labelClass}
+              inputClass={inputClass}
+              universeId={draft.universeId}
+              moodBoardChoice={draft.moodBoardChoice}
+              onUniverseChange={(universeId) => update({ universeId })}
+              onBoardChoiceChange={(moodBoardChoice) => update({ moodBoardChoice })}
+            />
             <div>
               <label htmlFor="ca-style-notes" className={labelClass}>Style refinements <span className="text-gray-600">(optional, applied on top of the universe style)</span></label>
               <textarea id="ca-style-notes" rows={2} value={draft.styleNotes} maxLength={limits?.styleNotesMax} onChange={(event) => update({ styleNotes: event.target.value })} placeholder="Heavier film grain, slower camera, dusk palette" className={`${inputClass} resize-y`} />

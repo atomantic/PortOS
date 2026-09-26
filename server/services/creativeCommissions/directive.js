@@ -35,6 +35,10 @@ export const MAX_DIGEST_LEN = 1500;
 // music taste recipe). Not derived — those strings are prose, not capped fields —
 // so directive.test.js measures the real ones against this allowance.
 export const MAX_SYSTEM_PREFIX_LEN = 3000;
+// The art-direction base a commission's universe / mood board contributes
+// (styleSource.js renders it at fire time). Bounded so the derived goal budget
+// below stays under CREATIVE_DIRECTOR_GOAL_MAX.
+export const MAX_STYLE_SOURCE_LEN = 2000;
 // DERIVED, not tuned: the sum of every bounded part one goal can hold. The clamp
 // drops the TAIL and the adapters put system text FIRST, so a budget short of
 // this sum eats the user's own words rather than erroring — which is why raising
@@ -43,9 +47,10 @@ export const MAX_DIRECTIVE_GOAL_LEN = COMMISSION_INTENT_MAX
   + COMMISSION_STYLE_SPEC_MAX
   + (COMMISSION_BRIEF_TAG_MAX * 2) // genre + category
   + MAX_DIGEST_LEN
+  + MAX_STYLE_SOURCE_LEN
   + MAX_SYSTEM_PREFIX_LEN;
 
-const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
+export const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
 const clampNote = (note) => clamp(note, MAX_DIGEST_NOTE_LEN);
 
 const MONTHLY_DAY_RANGES = Object.freeze({

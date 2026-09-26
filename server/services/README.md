@@ -10,6 +10,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `imageGen/index.js` | Mode-aware image backend dispatcher and shared image-generation helpers. Direct queue consumers still resolve local model identity before enqueueing. |
 | `universeBuilderRender.js` | Universe Builder batch render jobs. |
 | `pipeline/visualStageHelpers.js` | Shared pipeline visual prompt, LoRA compatibility, and image-job enqueue helpers. |
+| `creativeStyleSources.js` | Resolves a universe style guide or mood board into art-direction text plus local reference images; shared by Code Animation and Creative Commissions. |
 | `creativeDirector/firstPassGen.js` | Gracefully gated first-pass portraits and scene frames. |
 | `universeCharacterSheet.js` | Character reference-sheet render and completion workflow. |
 | `loraDatasetGenerate.js` | Training-image render and dataset lifecycle. |

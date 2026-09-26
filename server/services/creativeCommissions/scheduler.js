@@ -440,10 +440,14 @@ async function fireCommission(commission, trigger) {
     // the planner (routing it through dequeueNextTask instead of the direct
     // task:ready emit shared with the CD directive flow) is the deeper CoS-queue
     // gap tracked on #2657.
-    const [{ createProject }, { advanceAfterPlanStepSettled }, { defaultVideoModelId }] = await Promise.all([
+    const [
+      { createProject }, { advanceAfterPlanStepSettled }, { defaultVideoModelId },
+      { composeCommissionStyleSpec, resolveCommissionStyleSource },
+    ] = await Promise.all([
       import('../creativeDirector/local.js'),
       import('../creativeDirector/planAdvance.js'),
       import('../videoGen/local.js'),
+      import('./styleSource.js'),
     ]);
 
     const settings = (commission.targetAbility === 'video' || commission.targetAbility === 'music-video')
@@ -457,7 +461,13 @@ async function fireCommission(commission, trigger) {
     const effectiveVideoModelId = effectiveVideoMode === VIDEO_GEN_MODE.LOCAL
       ? renderTargetDefaults(settings, RENDER_TARGET.CREATIVE_AGENT).videoModel
       : null;
+    // The configured universe / mood board is the art-direction base for both
+    // the planner (via the goal) and the treatment/evaluation stages (via the
+    // project styleSpec). Resolved per fire so edits to the universe or board
+    // reach the next run.
+    const styleSource = await resolveCommissionStyleSource(commission);
     const directive = buildCommissionDirective(commission, {
+      styleSource,
       tasteRecipe: startedTasteRecipe,
       defaultVideoModelId,
       effectiveVideoMode,
@@ -479,7 +489,7 @@ async function fireCommission(commission, trigger) {
     const project = await createProject({
       name: `${baseName}${dateSuffix}`,
       ...projectParams,
-      styleSpec: commission.brief?.styleSpec || '',
+      styleSpec: composeCommissionStyleSpec(commission.brief?.styleSpec, styleSource),
       directive,
       // The back-pointer, NOT a copy of the commission's provider pin. agentBridge
       // resolves that pin live from this id at every dispatch, so an edit to the
