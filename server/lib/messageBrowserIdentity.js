@@ -83,13 +83,23 @@ async function actOnMessageRow(provider, identity, action, readOutlookRow) {
       date: dated?.getAttribute('title') || ''
     };
   }
+  function sameTimestamp(actual, expected) {
+    if (actual === expected) return true;
+    // Normalize only complete, timezone-qualified timestamps. Relative dates,
+    // date-only labels and timezone-less wall clocks are not exact identities.
+    const complete = value => typeof value === 'string' && /\d{4}/.test(value)
+      && /\d{1,2}:\d{2}/.test(value) && /(?:Z|[+-]\d{2}:?\d{2}|GMT|UTC)(?:\s|$)/i.test(value);
+    if (!complete(actual) || !complete(expected)) return false;
+    const actualTime = Date.parse(actual);
+    return Number.isFinite(actualTime) && actualTime === Date.parse(expected);
+  }
   function matches(row) {
     const actual = read(row);
     if (identity.providerRowId) return actual.providerRowId === identity.providerRowId;
     // Legacy records must supply every identity dimension. Do not normalize
     // case, truncate subjects, or guess missing dates/senders.
     if (!identity.subject?.trim() || !identity.date || !(identity.from?.email || identity.from?.name)) return false;
-    return actual.subject === identity.subject && actual.date === identity.date
+    return actual.subject === identity.subject && sameTimestamp(actual.date, identity.date)
       && (!identity.from.email || actual.fromEmail === identity.from.email)
       && (!identity.from.name || actual.from === identity.from.name);
   }

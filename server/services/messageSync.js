@@ -222,15 +222,23 @@ export async function syncAccount(accountId, io, options = {}) {
 
     // Deduplicate by externalId; update flags and body on existing messages
     const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.providerRowId ? `${m.externalId}|${m.providerRowId}` : m.externalId, m]));
+    const uniqueByExternalId = new Map();
+    for (const message of cache.messages) {
+      uniqueByExternalId.set(message.externalId, uniqueByExternalId.has(message.externalId) ? null : message);
+    }
+    const incomingCounts = new Map();
+    for (const message of newMessages) {
+      incomingCounts.set(message.externalId, (incomingCounts.get(message.externalId) || 0) + 1);
+    }
     const uniqueNew = [];
     for (const msg of newMessages) {
       const identityKey = msg.providerRowId ? `${msg.externalId}|${msg.providerRowId}` : msg.externalId;
-      // Upgrade a legacy identity only when both sides are unique. Duplicate
-      // summaries must never move an existing local ID to a different row.
-      const legacy = msg.providerRowId && existingMap.get(msg.externalId);
-      const canUpgrade = legacy && cache.messages.filter(m => m.externalId === msg.externalId).length === 1
-        && newMessages.filter(m => m.externalId === msg.externalId).length === 1;
-      const existing = existingMap.get(identityKey) || (canUpgrade ? legacy : null);
+      // A missing row ID on either side permits a summary fallback only
+      // when both sides are unique; never overwrite a different known row ID.
+      const fallback = uniqueByExternalId.get(msg.externalId);
+      const canMatchSummary = fallback && incomingCounts.get(msg.externalId) === 1
+        && (!msg.providerRowId || !fallback.providerRowId);
+      const existing = existingMap.get(identityKey) || (canMatchSummary ? fallback : null);
       if (!msg.externalId || !existing) {
         uniqueNew.push(msg);
       } else {

@@ -574,6 +574,14 @@ describe('syncAccount', () => {
     ]);
   });
 
+  it('retains a known row ID when a later unambiguous extraction omits it', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'local', externalId: 'summary', providerRowId: 'stable-row' }] }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: [{ id: 'new-local', externalId: 'summary', providerRowId: null, isRead: true }] });
+    await syncAccount(VALID_UUID, mockIo);
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([expect.objectContaining({ id: 'local', providerRowId: 'stable-row', isRead: true })]);
+  });
+
   it('upgrades a unique legacy cache entry with its ingested provider row ID', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'legacy-local', externalId: 'summary' }] }));

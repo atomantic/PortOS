@@ -59,6 +59,12 @@ for (const provider of ['gmail', 'outlook']) describe(`${provider} browser ident
     await executeAction(accountId, message.id, 'archive');
     expect(clicked).toEqual([{ index: 2, label: 'Archive' }]);
   });
+  it('matches a cached ISO timestamp to an equivalent complete provider timestamp', async () => {
+    mocks.message.mockResolvedValue({ ...message, date: '2026-09-26T10:30:00.000Z' });
+    const clicked = mailbox([{ ...message, date: 'Sat, 26 Sep 2026 10:30:00 GMT' }]);
+    await executeAction(accountId, message.id, 'archive');
+    expect(clicked).toEqual([{ index: 0, label: 'Archive' }]);
+  });
   it.each(['duplicate', 'blank', 'missing-date', 'missing-sender', 'missing-id', 'virtualized'])('rejects %s identity without action or cache writes', async scenario => {
     const target = { ...message };
     if (scenario === 'blank') target.subject = '';
