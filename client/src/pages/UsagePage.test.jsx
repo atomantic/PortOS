@@ -233,6 +233,32 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.getByText('10% used')).toBeInTheDocument();
   });
 
+  // The per-card control was a bare 12-14px icon (#8779): a finger that missed
+  // it fell back on Refresh all, which respawns every family's scrape.
+  it('gives both refresh controls a 44px touch target and blocks a duplicate per-card request', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const grokRefresh = await screen.findByRole('button', { name: 'Refresh Grok usage' });
+    const refreshAll = screen.getByRole('button', { name: /Refresh all/ });
+    for (const button of [grokRefresh, refreshAll]) {
+      expect(button.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-11', 'min-h-11']));
+    }
+
+    let settle;
+    api.getProviderUsage.mockClear();
+    api.getProviderUsage.mockReturnValueOnce(new Promise((resolve) => { settle = resolve; }));
+    fireEvent.click(grokRefresh);
+    await waitFor(() => expect(grokRefresh).toBeDisabled());
+    fireEvent.click(grokRefresh);
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
+    expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: true, family: 'grok', silent: false });
+    // The untouched card stays tappable while Grok's scrape is in flight.
+    expect(screen.getByRole('button', { name: 'Refresh Claude Code usage' })).toBeEnabled();
+
+    settle({ providers: [card('grok', 'Grok', 50)] });
+    expect(await screen.findByText('50% used')).toBeInTheDocument();
+    expect(grokRefresh).toBeEnabled();
+  });
+
   it('keeps the four provider cards in a compact mobile grid', async () => {
     api.getProviderUsage.mockResolvedValue({
       providers: ['claude', 'agy', 'codex', 'grok'].map((family) => card(family, family, 20))

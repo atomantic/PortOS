@@ -51,12 +51,14 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           <FleetSourcesPill fleet={quota.fleet} />
           {/* Per-card refresh: every family's reading is its own multi-second
               CLI/TUI scrape, so re-reading one provider must not respawn all
-              of them. */}
+              of them. The button is a 44px touch target around the small
+              icon; its negative margins let it overhang the header's line box
+              and the card padding, so the compact phone card doesn't grow. */}
           <button
             type="button"
             onClick={() => onRefresh(quota.family)}
             disabled={refreshing || disabled}
-            className="text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center min-w-11 min-h-11 -my-2.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
             title={`Refresh ${quota.label} usage`}
             aria-label={`Refresh ${quota.label} usage`}
           >
@@ -159,9 +161,10 @@ function ProviderQuotaSection() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl sm:text-2xl font-bold text-white">Subscription Usage</h1>
         <button
+          type="button"
           onClick={() => load(true)}
           disabled={loading}
-          className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs sm:text-sm text-gray-400 hover:text-white disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 min-w-11 min-h-11 -my-2 px-2 sm:px-3 text-xs sm:text-sm text-gray-400 hover:text-white disabled:opacity-50"
           title="Refresh every provider's usage"
         >
           {/* `will-change-transform` promotes the icon to its own compositor
