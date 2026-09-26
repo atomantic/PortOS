@@ -745,3 +745,5 @@ export * from './messageLogError.js';
 
 export * from './launchVideoValidation.js';
 export * from './styleSourcePrompt.js';
+
+export * from './messageBrowserIdentity.js';

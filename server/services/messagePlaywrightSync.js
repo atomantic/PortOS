@@ -1,3 +1,4 @@
+import { readOutlookMessageRow } from '../lib/messageBrowserIdentity.js';
 import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -104,6 +105,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   const buildMessage = (msg, extId, overrides = {}) => ({
     id: uuidv4(),
     externalId: extId,
+    providerRowId: msg.providerRowId || null,
     threadId: null,
     from: { name: msg.from || '', email: msg.fromEmail || '' },
     to: [], cc: [],
@@ -143,7 +145,7 @@ export async function syncPlaywright(account, cache, io, options = {}) {
 
     // Click into conversation to get full body + thread
     if (account.type === 'outlook') {
-      const detail = await fetchOutlookConversationDetail(page, msg.subject, msg.from);
+      const detail = await fetchOutlookConversationDetail(page, msg.subject, msg.from, msg.date, msg.providerRowId);
       if (detail && detail.length > 0) {
         detailsFetched++;
         const threadKey = `thread-${extId}`;
@@ -187,32 +189,29 @@ export async function syncPlaywright(account, cache, io, options = {}) {
  *       > h3[aria-label^="Cc:"]        (cc)
  * Returns an array of { from, fromEmail, to, cc, date, body } for each message in the thread.
  */
-async function fetchOutlookConversationDetail(page, subject, sender) {
-  // Find and click the row by matching subject text (not index, since Outlook virtualizes the list)
+async function fetchOutlookConversationDetail(page, subject, sender, date, providerRowId) {
+  // Preserve the same provider row identity when loading detail from a virtualized list.
   const safeSubject = JSON.stringify(subject || '');
   const safeSender = JSON.stringify(sender || '');
   const clickResult = await evaluateOnPage(page, `
     (async function() {
       const listbox = document.querySelector("[role='listbox']");
       if (!listbox) return { found: false, hasListbox: false };
-      const targetSubject = ${safeSubject}.toLowerCase();
-      const targetSender = ${safeSender}.toLowerCase();
+      const targetSubject = ${safeSubject};
+      const targetSender = ${safeSender};
+      const targetDate = ${JSON.stringify(date || '')};
+      const targetId = ${JSON.stringify(providerRowId || null)};
+      const readRow = ${readOutlookMessageRow.toString()};
       const scrollContainer = listbox.closest('[role="region"]') || listbox.parentElement;
 
       function findMatch() {
-        const rows = listbox.querySelectorAll('[role="option"]');
-        let fallback = null;
-        for (const row of rows) {
-          const label = (row.getAttribute('aria-label') || '').toLowerCase();
-          const text = (row.innerText || '').toLowerCase();
-          if (targetSubject && (label.includes(targetSubject) || text.includes(targetSubject))) {
-            if (!targetSender || label.includes(targetSender) || text.includes(targetSender)) {
-              return row;
-            }
-            if (!fallback) fallback = row;
-          }
-        }
-        return fallback;
+        const matches = [...listbox.querySelectorAll('[role="option"]')].filter(row => {
+          const data = readRow(row);
+          if (targetId) return data.providerRowId === targetId;
+          return targetSubject && targetSender && targetDate
+            && data.subject === targetSubject && data.from === targetSender && data.date === targetDate;
+        });
+        return matches.length === 1 ? matches[0] : null;
       }
 
       // Check visible rows first, then scroll to find the message
@@ -362,53 +361,7 @@ function buildExtractionScript(type, sels, mode = 'unread') {
         const maxScroll = ${maxScrolls};
         const unreadOnly = ${mode === 'unread'};
 
-        function extractRow(row) {
-          const ariaLabel = row.getAttribute('aria-label') || '';
-          const isUnread = !!row.querySelector('button[aria-label="Mark as read"]');
-          const isPinned = !!row.querySelector('button[aria-label*="Unpin"]');
-          const isFlagged = !!row.querySelector('button[aria-label*="Unflag"]');
-          const isReplied = ariaLabel.includes('Replied');
-          const hasMeetingInvite = !!row.querySelector('button[aria-label="RSVP"]');
-
-          const avatarSpan = row.querySelector('div[aria-label="Select a conversation"] > span[aria-label]');
-          const from = avatarSpan?.getAttribute('aria-label') || '';
-
-          const checkbox = row.querySelector('div[aria-label="Select a conversation"]');
-          const contentArea = checkbox?.parentElement?.nextElementSibling;
-          const contentDivs = contentArea ? Array.from(contentArea.children) : [];
-
-          let subject = '', date = '', preview = '', fromEmail = '';
-
-          if (contentDivs.length >= 3) {
-            const senderDiv = contentDivs[0];
-            const emailSpan = senderDiv?.querySelector('span[title*="@"]');
-            fromEmail = emailSpan?.getAttribute('title') || '';
-
-            const subDateDiv = contentDivs[1];
-            const spans = subDateDiv ? Array.from(subDateDiv.querySelectorAll('span')) : [];
-            subject = spans[0]?.textContent?.trim() || '';
-            const dateSpan = spans.find(s => s.getAttribute('title')?.match(/\\d{4}/));
-            date = dateSpan?.getAttribute('title') || spans[spans.length - 1]?.textContent?.trim() || '';
-
-            preview = contentDivs[2]?.textContent?.trim() || '';
-          } else if (contentDivs.length >= 1) {
-            const allSpans = contentDivs[0]?.querySelectorAll('span[title]') || [];
-            const spanArr = Array.from(allSpans);
-            const emailSpan = spanArr.find(s => (s.getAttribute('title') || '').includes('@'));
-            fromEmail = emailSpan?.getAttribute('title') || '';
-            // In compact layout: first titled span is sender, second is subject
-            const titledSpans = spanArr.filter(s => s.closest('[class]'));
-            subject = titledSpans.length > 1 ? titledSpans[titledSpans.length - 1]?.textContent?.trim() || '' : '';
-            // Fallback: find span whose text differs from sender name
-            if (!subject) {
-              subject = spanArr.find(s => s.textContent?.trim() && s.textContent.trim() !== from && !(s.getAttribute('title') || '').includes('@'))?.textContent?.trim() || '';
-            }
-            const dateMatch = ariaLabel.match(/(\\d{1,2}\\/\\d{1,2}(?:\\/\\d{2,4})?)/);
-            date = dateMatch?.[1] || '';
-          }
-
-          return { from, fromEmail, subject, date, preview, isUnread, isPinned, isFlagged, isReplied, hasMeetingInvite };
-        }
+        const extractRow = ${readOutlookMessageRow.toString()};
 
         function scrapeVisible() {
           const rows = listbox.querySelectorAll('[role="option"]');
@@ -417,7 +370,7 @@ function buildExtractionScript(type, sels, mode = 'unread') {
             if (seen.size >= maxMsg) break;
             const data = extractRow(row);
             if (!data.from && !data.subject) continue;
-            const key = data.from + '|' + data.subject + '|' + data.date;
+            const key = data.providerRowId || data.from + '|' + data.subject + '|' + data.date;
             if (seen.has(key)) continue;
             if (unreadOnly && !data.isUnread) continue;
             seen.set(key, data);
@@ -491,7 +444,7 @@ export async function refreshMessageDetail(account, message) {
   }
 
   console.log(`📧 Refresh: clicking into ${message.id}`);
-  const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name);
+  const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name, message.date, message.providerRowId);
   if (!detail) {
     console.log(`📧 Refresh: click/extraction failed for ${message.id}`);
   } else {

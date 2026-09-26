@@ -763,3 +763,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `messageLogError.js` | `messageLogError(error)` projects mailbox failures to allowlisted codes and HTTP error status, excluding provider text and credentials. |
 
 | `launchVideoValidation.js` | `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time, duration, and poster position before rendering. |
+
+| `messageBrowserIdentity.js` | Shared Outlook row extraction and identity-safe browser action scripts; exact unique targets and confirmed row removal. |

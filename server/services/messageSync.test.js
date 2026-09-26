@@ -100,7 +100,7 @@ vi.mock('./userTimezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
+import { getMessages, getMessage, removeMessageFromCache, syncAccount, deleteCache, getSyncStatus, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus, markSentIngested } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -531,6 +531,12 @@ describe('syncAccount', () => {
     expect(syncPlaywright).toHaveBeenCalled();
   });
 
+  it('removes only the confirmed action target from the current cache', async () => {
+    readFile.mockResolvedValue(JSON.stringify({ syncCursor: 'keep-cursor', messages: [{ id: 'target' }, { id: 'other' }] }));
+    await removeMessageFromCache(VALID_UUID, 'target');
+    expect(atomicWrite.mock.calls[0][1]).toEqual({ syncCursor: 'keep-cursor', messages: [{ id: 'other' }] });
+  });
+
   it('should deduplicate by externalId during sync', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
     const existingCache = {
@@ -552,6 +558,36 @@ describe('syncAccount', () => {
     // Verify saved cache has 2 messages
     const savedData = atomicWrite.mock.calls[0][1];
     expect(savedData.messages).toHaveLength(2);
+  });
+
+  it('keeps provider row identities separate when summary hashes collide', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'local-first', externalId: 'same-summary', providerRowId: 'first' }] }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: [
+      { id: 'incoming-first', externalId: 'same-summary', providerRowId: 'first' },
+      { id: 'incoming-second', externalId: 'same-summary', providerRowId: 'second' }
+    ] });
+    await syncAccount(VALID_UUID, mockIo);
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([
+      expect.objectContaining({ id: 'local-first', providerRowId: 'first' }),
+      expect.objectContaining({ id: 'incoming-second', providerRowId: 'second' })
+    ]);
+  });
+
+  it('retains a known row ID when a later unambiguous extraction omits it', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'local', externalId: 'summary', providerRowId: 'stable-row' }] }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: [{ id: 'new-local', externalId: 'summary', providerRowId: null, isRead: true }] });
+    await syncAccount(VALID_UUID, mockIo);
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([expect.objectContaining({ id: 'local', providerRowId: 'stable-row', isRead: true })]);
+  });
+
+  it('upgrades a unique legacy cache entry with its ingested provider row ID', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'legacy-local', externalId: 'summary' }] }));
+    syncPlaywright.mockResolvedValue({ status: 'success', messages: [{ id: 'new-local', externalId: 'summary', providerRowId: 'stable-row' }] });
+    await syncAccount(VALID_UUID, mockIo);
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([expect.objectContaining({ id: 'legacy-local', providerRowId: 'stable-row' })]);
   });
 
   it('should keep messages without externalId (no dedup for those)', async () => {
