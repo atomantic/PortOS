@@ -268,6 +268,9 @@ describe('structured failure diagnostics', () => {
       ], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_ENV: 'test' } });
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
+      expect(result.stdout).toContain('Test Files');
+      expect(result.stdout).toContain('Tests');
+      expect(result.stderr).toContain('Failed Tests');
       // Inspect only the structured fallback, independent of terminal summaries.
       const diagnostic = result.stderr.slice(result.stderr.indexOf('Structured Vitest'));
       expect(diagnostic).toContain('fixture.test.js > synthetic assertion diagnostic');
