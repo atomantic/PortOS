@@ -68,7 +68,7 @@ const ALLOWED = {
   'src/components/meatspace/post/PostDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/PostLlmDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/WordplayDrillUI.jsx': 'elapsed-time clock tick; no I/O',
-  'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (the job itself polls via useAutoRefetch)',
+  'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (job state arrives through socket events)',
   'src/components/music/strudelFrame.js': 'source text for the sandboxed player frame: its recording-progress tick runs inside the iframe, not in PortOS; no I/O',
   'src/components/sprites/LoopTrimmer.jsx': 'advances the sprite playback frame; no I/O',
   'src/components/sprites/WalkWorkflow.jsx': 'counts ticks to self-cancel a stale-queued attach after ~60s — useAutoRefetch does not model a bounded poll',

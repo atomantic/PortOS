@@ -96,6 +96,7 @@ export const state = {
   models: [imageGenModel('dev', { name: 'FLUX.1 Dev' })],
   listImageModels: vi.fn(async () => state.models),
   getGalleryImages: vi.fn(async () => []),
+  listMediaJobs: vi.fn(async () => []),
   locationSearch: '',
   initImagePickerProps: null,
   loraPickerProps: null,
@@ -148,6 +149,7 @@ export function resetImageGenMockState() {
   state.models = [imageGenModel('dev', { name: 'FLUX.1 Dev' })];
   state.listImageModels.mockReset().mockImplementation(async () => state.models);
   state.getGalleryImages.mockReset().mockResolvedValue([]);
+  state.listMediaJobs.mockReset().mockResolvedValue([]);
   state.locationSearch = '';
   state.initImagePickerProps = null;
   state.loraPickerProps = null;
@@ -190,7 +192,7 @@ vi.mock('../services/api', () => ({
   getActiveImageJob: vi.fn(async () => ({ activeJob: state.activeJob })),
   getSettings: (...args) => state.getSettings(...args),
   buildFormData: vi.fn(() => new FormData()),
-  listMediaJobs: vi.fn(async () => ({ jobs: [] })),
+  listMediaJobs: (...args) => state.listMediaJobs(...args),
   regenerateGalleryImage: vi.fn(async () => ({})),
   getRegenAvailability: vi.fn(async () => ({ available: false })),
   removeImageWatermark: vi.fn(async () => ({})),
