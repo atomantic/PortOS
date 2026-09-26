@@ -7,6 +7,7 @@ import {
   readTerminalTheme,
   TERMINAL_SCROLLBACK_LINES,
 } from '../components/shell/createShellTerminal';
+import { attachDictationBridge } from '../lib/terminalDictation';
 
 export const ITERM_SHELL_PATH = '/shell/iterm';
 
@@ -86,11 +87,18 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
   }, [socket]);
 
   // Keystrokes typed into the terminal go to the viewed iTerm2 session verbatim.
+  // Dictation takes the bridge (lib/terminalDictation.js): the terminal runs in
+  // screen-reader mode, where xterm drops the insertText events dictation fires.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return undefined;
-    const disposable = term.onData((data) => emitInput(data, { focus: false }));
-    return () => disposable.dispose();
+    const send = (data) => emitInput(data, { focus: false });
+    const disposable = term.onData(send);
+    const detachDictation = attachDictationBridge(term, send);
+    return () => {
+      detachDictation();
+      disposable.dispose();
+    };
   }, [emitInput, enabled]);
 
   // List subscription + event wiring.
