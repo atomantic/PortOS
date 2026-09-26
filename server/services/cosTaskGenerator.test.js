@@ -2094,7 +2094,7 @@ describe('buildClaimWorkTask reviewer pin', () => {
     const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
     expect(prompt).toContain('kind: "claim-review"');
     expect(prompt).toContain('toolFree: true');
-    expect(prompt).toContain('a provider without that profile returns REVIEWER_UNSUPPORTED before launch');
+    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
   });

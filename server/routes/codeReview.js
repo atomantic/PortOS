@@ -4,7 +4,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest, cliReviewerOutcomeSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
-import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
+import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewCapability, withoutResolvedUnsupportedFaults, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
 const router = Router()
 
@@ -56,12 +56,13 @@ const localReviewRequestSchema = z.object({
 // the picker warns at selection time instead of letting the user discover it as
 // a review gate that never clears. Warn-only in exactly the same way.
 router.get('/defaults', asyncHandler(async (_req, res) => {
-  const [defaults, installed, providerReviewUnsupported] = await Promise.all([
+  const [defaults, installed, { unsupported, capable }] = await Promise.all([
     getCodeReviewDefaults(),
     getReviewerCliInstalled(),
-    getProviderReviewUnsupported(),
+    getProviderReviewCapability(),
   ])
-  res.json({ ...defaults, installed, providerReviewUnsupported })
+  const reviewerConfigFaults = withoutResolvedUnsupportedFaults(defaults.reviewerConfigFaults || {}, capable)
+  res.json({ ...defaults, reviewerConfigFaults, installed, providerReviewUnsupported: unsupported })
 }))
 
 // POST /api/code-review/local — run a single review pass against the

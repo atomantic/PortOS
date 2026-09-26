@@ -23,7 +23,7 @@ import { killProcessTree, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
-import { buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
+import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
@@ -106,10 +106,11 @@ export function pickCliProvider(providers, config = {}) {
  * @param {object|null} [args.bootstrapEnv] - Credential-command output, filtered by buildCliChildEnv.
  * @param {boolean} [args.exactPins] - Per-call model/effort selections override saved CLI argv pins.
  * @param {string} [args.safetyProfile] - Optional maintained no-tool profile. Refuses unsupported providers and extra argv; both argv and environment use the same profile.
+ * @param {boolean} [args.codeReview] - Code review only, with the no-tool `safetyProfile`: the argv is the vendor's strongest enforced reviewer mode (`buildCodeReviewSpawnConfig`), or its ordinary argv when it maintains none — the caller confines that run to a scratch directory. The environment keeps the no-tool allowlist either way.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null, exactPins = false } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null, exactPins = false, codeReview = false } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -117,7 +118,7 @@ export function runCliProviderPrompt(args = {}) {
   if (typeof prompt !== 'string' || prompt.length === 0) {
     return Promise.resolve({ error: 'prompt must be a non-empty string' });
   }
-  if (safetyProfile && (!isPublicReviewNoToolProfile(safetyProfile) || !supportsPublicReviewProvider(provider) || extraArgs.length)) {
+  if (safetyProfile && (!isPublicReviewNoToolProfile(safetyProfile) || !(codeReview || supportsPublicReviewProvider(provider)) || extraArgs.length)) {
     return Promise.resolve({ error: 'Provider has no enforced tool-free review mode, or extra arguments would override it.' });
   }
 
@@ -127,7 +128,7 @@ export function runCliProviderPrompt(args = {}) {
   if (exactPins) effectiveProvider.args = stripProviderPinArgs(effectiveProvider.args || [], {
     model: model != null, effort: Boolean(effectiveProvider.effort),
   });
-  const restrictedConfig = safetyProfile ? buildVendorSpawnConfig(effectiveProvider, {
+  const restrictedConfig = safetyProfile ? (codeReview ? buildCodeReviewSpawnConfig : buildVendorSpawnConfig)(effectiveProvider, {
     safetyProfile, effectiveModel: resolveCliModel(effectiveProvider.defaultModel), effort: effectiveProvider.effort,
   }) : null;
   const builtArgs = restrictedConfig?.args || [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
