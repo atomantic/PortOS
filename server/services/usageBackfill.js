@@ -1,3 +1,4 @@
+import { notifyUsageBackfillUpdated } from './usageBackfillEvents.js';
 import { Worker } from 'worker_threads';
 import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
@@ -71,6 +72,8 @@ export async function startHistoricalUsageBackfill({
     completedAt: null
   };
 
+  notifyUsageBackfillUpdated();
+
   // Resolved HERE, not inside the worker: the toolkit singleton that backs
   // `listProviders()` is never initialized in a worker thread, so a worker-side
   // lookup would silently find no provider to attribute a nested session to.
@@ -98,10 +101,12 @@ export async function startHistoricalUsageBackfill({
     messageTail = messageTail.then(async () => {
       if (message?.type === 'progress') {
         job = { ...job, ...message.progress };
+        notifyUsageBackfillUpdated();
         return;
       }
       if (message?.type === 'error') {
         job = { ...job, status: 'error', error: message.error || 'Backfill failed', completedAt: new Date().toISOString() };
+        notifyUsageBackfillUpdated();
         return;
       }
       if (message?.type !== 'complete') return;
@@ -120,12 +125,15 @@ export async function startHistoricalUsageBackfill({
         corrected: applied.corrected,
         completedAt: new Date().toISOString()
       };
+      notifyUsageBackfillUpdated();
     }).catch((error) => {
       job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
+      notifyUsageBackfillUpdated();
     });
   });
   worker.on('error', (error) => {
     job = { ...job, status: 'error', error: error.message, completedAt: new Date().toISOString() };
+    notifyUsageBackfillUpdated();
   });
   worker.unref();
   return publicJob();

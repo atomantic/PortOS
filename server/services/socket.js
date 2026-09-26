@@ -36,6 +36,7 @@ import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
+import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import { callStateEvents } from './voice/callSession.js';
@@ -245,6 +246,7 @@ function setupEventForwarding() {
   modelLifecycleEvents.on('image-to-3d:changed', data => ioInstance?.emit('image-to-3d:changed', data));
   modelLifecycleEvents.on('threejs-model:changed', data => ioInstance?.emit('threejs-model:changed', data));
   meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
+  usageBackfillEvents.on('updated', () => ioInstance?.emit('usage-backfill:updated', {}));
   providerQuotaEvents.on('updated', () => ioInstance?.emit('provider-quota:updated', {}));
   setupCosEventForwarding();
   setupErrorEventForwarding();
