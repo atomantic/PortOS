@@ -148,7 +148,6 @@ describe('ProcessesTab', () => {
     fireEvent.click(screen.getByTitle('Fullscreen'));
 
     const dialog = screen.getByRole('dialog', { name: 'Logs for example-api' });
-    const exitButton = screen.getByRole('button', { name: 'Exit fullscreen' });
 
     // Focus should be inside the modal (on the exit button or another control)
     expect(dialog.contains(document.activeElement)).toBe(true);
