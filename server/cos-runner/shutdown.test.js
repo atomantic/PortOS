@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { join, basename } from 'node:path';
 import { runInNewContext } from 'node:vm';
 
@@ -22,9 +24,9 @@ const deferred = () => {
 // Execute the real route/signal wiring with isolated transports, children and
 // storage. No listening port, real child, live PATHS or runner data is touched.
 const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-  .replace(/\r\n/g, '\n').replace(/^import .+ from .+;\n/gm, '');
+  .replace(/\r\n/g, '\n').replace(/^import (?:.+ from )?['"][^'"]+['"];\n/gm, '');
 
-function runner() {
+function runner(assertDatabaseAdmission = vi.fn()) {
   const routes = new Map();
   const app = { use: vi.fn(), get: vi.fn(), post: (path, handler) => routes.set(path, handler) };
   const express = Object.assign(() => app, { json: vi.fn() });
@@ -55,6 +57,7 @@ function runner() {
   const pty = { spawn: vi.fn(makeChild) };
   const commandExists = vi.fn(async () => true);
   runInNewContext(source, {
+    assertDatabaseAdmission,
     express, http: { createServer: () => server }, SocketServer: function () { return io; },
     process, console, Buffer, Date, setTimeout, clearTimeout, join, basename,
     PATHS: { root: '/example', cosAgents: '/example/agents' }, PORTS: { COS: 0 },
@@ -137,6 +140,30 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
     expect(run.spawn).not.toHaveBeenCalled();
     expect(run.pty.spawn).not.toHaveBeenCalled();
     expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it('refuses headless and TUI work when maintenance starts during spawn preparation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'runner-maintenance-'));
+    const journal = createDatabaseMaintenanceJournal(root);
+    try {
+      const run = runner(journal.assertAdmission);
+      const probe = deferred();
+      run.commandExists.mockReturnValueOnce(probe.promise);
+      const preparing = run.request('/spawn-tui');
+      const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
+      journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+      for (const path of ['/spawn', '/spawn-tui']) {
+        await expect(run.request(path).done).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      }
+      const rejected = expect(preparing.done).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+      probe.resolve(true);
+      await rejected;
+      expect(run.spawn).not.toHaveBeenCalled();
+      expect(run.pty.spawn).not.toHaveBeenCalled();
+      expect(run.state.stats.spawned).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('escalates a resistant TUI and waits for its terminal evidence and final state write', async () => {
