@@ -21,6 +21,9 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 ## `db-primary` — app-native relational records
 
+- Beeper's `beeper_reconcile_cursors` stores a machine-local per-account rotating checkpoint and a fixed per-rotation upper bound over already mirrored message IDs. Each sweep refetches at most 20 stored messages per account, independently of forward ingestion; failed retrievals retain the archive and retry on the next rotation. Checkpoints survive restart, cascade on account deletion, and are covered by PostgreSQL backup. They never federate. `beeper_messages.observed_at` records fetch-start time to break equal source-version ties; source edit timestamps prevent stale sweep/outbox writes from replacing edits. Additive schema initialization upgrades existing installs without a data seed.
+
+
 - `mind_tool_recipes` / `mind_tool_recipe_versions` — machine-local authored read-tool definitions, stable IDs, active revision/archive metadata, and immutable revisions linked by recipe ID (#7194). No execution output is stored; no definitions or literals enter federation/status payloads. PostgreSQL backup covers both tables. Migration 381 registers schema-only installation; empty installs receive no user recipe seed. Unknown future definitions are retained but unavailable.
 
 **Definition.** Records that PortOS itself authors and relates: they have foreign keys, statuses, audit trails, search/vector indexes, and federated sync cursors/tombstones. The DB is the source of truth; there is no meaningful file representation of the record.

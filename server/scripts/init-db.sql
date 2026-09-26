@@ -1799,6 +1799,7 @@ CREATE TABLE IF NOT EXISTS beeper_messages (
   -- against the local user (accounts[].user.id differs from senderID on every
   -- network), so this is the only reliable inbound/outbound signal.
   is_sender BOOLEAN NOT NULL DEFAULT FALSE,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -2244,3 +2245,9 @@ DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredi
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
 DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+
+CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
+    account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    upper_bound TEXT
+  );

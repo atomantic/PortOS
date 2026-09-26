@@ -85,6 +85,7 @@ import {
   getJoinedAccounts,
   listChatsPage,
   listMessagesPage,
+  getMessage,
 } from './beeperClient.js';
 import { upsertParticipant, logSenderTouchpoints, loadRosterIndex } from './beeperTribe.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
@@ -246,6 +247,7 @@ export function normalizeMessageRow(message, observedAt) {
     // comparison against the local user cannot be made. Strict `=== true`, so a
     // bridge that omits the field lands on inbound rather than on `undefined`.
     isSender: message?.isSender === true,
+    observedAt,
   };
 }
 
@@ -445,61 +447,65 @@ async function upsertConversation(chat) {
   return result.rows[0]?.id ?? null;
 }
 
-/**
- * Message rows, attachment references and the cursor row — the one atomic
- * unit. Attachments are written after their message inside the SAME
- * transaction because `beeper_attachments.message_id` is a foreign key onto a
- * row this transaction is itself creating.
- *
- * Three COALESCE guards make a re-observation non-destructive, which matters
- * because an unsend arrives as a normal message with its text stripped:
- * `body` never regresses to empty, `unsent_at` never un-tombstones, and
- * `edited_at` never clears. #7's rule is that a body is never discarded
- * automatically, so the archive keeps the caption even after the source
- * forgets it.
+/** Shared transaction writer: source edit versions outrank fetch-start time.
+ * Tombstones are terminal and preserve the archived body and attachments.
  */
+export async function upsertMirroredMessage(client, conversationId, message, attachments = []) {
+  const result = await client.query(
+    `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender, observed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (id) DO UPDATE SET
+       body = CASE WHEN EXCLUDED.unsent_at IS NOT NULL OR beeper_messages.unsent_at IS NOT NULL
+         THEN beeper_messages.body ELSE COALESCE(NULLIF(EXCLUDED.body, ''), beeper_messages.body) END,
+       sender_id = COALESCE(NULLIF(EXCLUDED.sender_id, ''), beeper_messages.sender_id),
+       sent_at = COALESCE(EXCLUDED.sent_at, beeper_messages.sent_at),
+       edited_at = GREATEST(EXCLUDED.edited_at, beeper_messages.edited_at),
+       unsent_at = COALESCE(beeper_messages.unsent_at, EXCLUDED.unsent_at),
+       sort_key = COALESCE(NULLIF(EXCLUDED.sort_key, ''), beeper_messages.sort_key),
+       -- Never downgrades a stored TRUE to FALSE: the field is optional on
+       -- the inbound Message, so a later page that omits it must not flip a
+       -- message the user actually sent onto the other side of the thread.
+       is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
+       observed_at = EXCLUDED.observed_at, updated_at = NOW()
+     WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
+       AND (EXCLUDED.unsent_at IS NOT NULL OR
+         (beeper_messages.unsent_at IS NULL
+          AND COALESCE(EXCLUDED.edited_at, 'epoch'::timestamptz) >= COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
+          AND (EXCLUDED.edited_at > COALESCE(beeper_messages.edited_at, 'epoch'::timestamptz)
+               OR EXCLUDED.observed_at >= beeper_messages.observed_at)))
+     RETURNING id`,
+    [
+      message.id, conversationId, message.senderId, message.body,
+      message.sentAt, message.editedAt, message.unsentAt, message.sortKey,
+      message.isSender, message.observedAt,
+    ],
+  );
+  // A stale observation or tombstone must not rewrite attachment references.
+  if (result.rowCount === 0 || message.unsentAt) return;
+  for (const attachment of attachments) {
+    // eslint-disable-next-line no-await-in-loop -- same transaction, ordered after its message
+    await client.query(
+      `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
+         byte_length, file_name, width, height)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
+         mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
+         mime_type = EXCLUDED.mime_type, byte_length = EXCLUDED.byte_length,
+         file_name = EXCLUDED.file_name, width = EXCLUDED.width, height = EXCLUDED.height,
+         updated_at = NOW()`,
+      [
+        conversationId, message.id, attachment.idx, attachment.mxcId, attachment.mimeType,
+        attachment.byteLength, attachment.fileName, attachment.width, attachment.height,
+      ],
+    );
+  }
+}
+
 async function commitMessages({ conversationId, accountId, sourceChatId, rows, cursor, lastActivity }) {
   return withTransaction(async (client) => {
     for (const { message, attachments } of rows) {
       // eslint-disable-next-line no-await-in-loop -- ordered writes inside one transaction
-      await client.query(
-        `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (id) DO UPDATE SET
-           body = COALESCE(NULLIF(EXCLUDED.body, ''), beeper_messages.body),
-           sender_id = COALESCE(NULLIF(EXCLUDED.sender_id, ''), beeper_messages.sender_id),
-           sent_at = COALESCE(EXCLUDED.sent_at, beeper_messages.sent_at),
-           edited_at = COALESCE(EXCLUDED.edited_at, beeper_messages.edited_at),
-           unsent_at = COALESCE(beeper_messages.unsent_at, EXCLUDED.unsent_at),
-           sort_key = COALESCE(NULLIF(EXCLUDED.sort_key, ''), beeper_messages.sort_key),
-           -- Never downgrades a stored TRUE to FALSE: the field is optional on
-           -- the inbound Message, so a later page that omits it must not flip a
-           -- message the user actually sent onto the other side of the thread.
-           is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
-           updated_at = NOW()`,
-        [
-          message.id, conversationId, message.senderId, message.body,
-          message.sentAt, message.editedAt, message.unsentAt, message.sortKey,
-          message.isSender,
-        ],
-      );
-      for (const attachment of attachments) {
-        // eslint-disable-next-line no-await-in-loop -- same transaction, ordered after its message
-        await client.query(
-          `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
-             byte_length, file_name, width, height)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
-             mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
-             mime_type = EXCLUDED.mime_type, byte_length = EXCLUDED.byte_length,
-             file_name = EXCLUDED.file_name, width = EXCLUDED.width, height = EXCLUDED.height,
-             updated_at = NOW()`,
-          [
-            conversationId, message.id, attachment.idx, attachment.mxcId, attachment.mimeType,
-            attachment.byteLength, attachment.fileName, attachment.width, attachment.height,
-          ],
-        );
-      }
+      await upsertMirroredMessage(client, conversationId, message, attachments);
     }
 
     // The cursor moves LAST and only inside this transaction, so a failure
@@ -703,6 +709,7 @@ async function sweepChat({
  * the checkpoint so failed chats remain reachable on subsequent traversals.
  */
 async function sweepAccount(account, clientOptions, observedAt, personIndex) {
+  await reconcileStoredMessages(account.accountId, clientOptions);
   const cursors = await readAccountCursors(account.accountId);
   const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [account.accountId]);
   let cursor = checkpoint.rows[0]?.chat_cursor || undefined;
@@ -769,6 +776,112 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
   }
 
   return { chatsSwept, messagesWritten, failedChats, continuationPending, cursorRestarts };
+}
+
+// One bounded rotation per account, independent of the forward message cursor.
+// A persisted upper bound makes each rotation finite even during new ingestion.
+// Advance past failures so one inaccessible message cannot starve the archive;
+// a later rotation retries it. No failure is interpreted as a deletion.
+const RECONCILE_LIMIT = 20;
+
+async function reconcileStoredRow(row, clientOptions) {
+  const observedAt = new Date().toISOString();
+  const raw = await getMessage(row.source_chat_id, row.id, clientOptions);
+  if (raw?.id !== row.id) throw new Error('Unexpected Beeper message identity');
+  await withTransaction(async (client) => {
+    // Lock the existing row: purge must not resurrect a message while HTTP was in flight.
+    const existing = await client.query(
+      'SELECT id FROM beeper_messages WHERE id = $1 AND conversation_id = $2 FOR UPDATE',
+      [row.id, row.conversation_id],
+    );
+    if (!existing.rows.length) return;
+    await upsertMirroredMessage(client, row.conversation_id,
+      normalizeMessageRow(raw, observedAt), normalizeAttachmentRows(raw));
+  });
+  beeperSocketEvents.emit('invalidate', {
+    kind: 'beeper-reconciled', chatID: row.source_chat_id, ids: [row.id],
+    seq: null, ts: observedAt,
+  });
+}
+
+async function reconcileStoredMessages(accountId, clientOptions) {
+  const checkpoint = await query(
+    'SELECT message_id, upper_bound FROM beeper_reconcile_cursors WHERE account_id = $1', [accountId],
+  );
+  let position = checkpoint.rows[0];
+  if (!position?.upper_bound) {
+    const boundary = await query(
+      `SELECT MAX(m.id) AS upper_bound FROM beeper_messages m
+       JOIN beeper_conversations c ON c.id = m.conversation_id WHERE c.account_id = $1`, [accountId],
+    );
+    if (!boundary.rows[0]?.upper_bound) return;
+    position = { message_id: '', upper_bound: boundary.rows[0].upper_bound };
+    await query(
+      `INSERT INTO beeper_reconcile_cursors (account_id, message_id, upper_bound) VALUES ($1, '', $2)
+       ON CONFLICT (account_id) DO UPDATE SET message_id = '', upper_bound = EXCLUDED.upper_bound`,
+      [accountId, position.upper_bound],
+    );
+  }
+  const result = await query(
+    `SELECT m.id, m.conversation_id, c.source_chat_id
+       FROM beeper_messages m JOIN beeper_conversations c ON c.id = m.conversation_id
+      WHERE c.account_id = $1 AND m.id > $2 AND m.id <= $4 ORDER BY m.id LIMIT $3`,
+    [accountId, position.message_id, RECONCILE_LIMIT, position.upper_bound],
+  );
+  for (const row of result.rows) {
+    // eslint-disable-next-line no-await-in-loop -- bounded sequential upstream work
+    await reconcileStoredRow(row, clientOptions).catch(() => {
+      console.warn('🫧 Beeper reconciliation deferred a message until the next rotation');
+    });
+    // Progress commits after persistence; a crash before this repeats harmlessly.
+    // eslint-disable-next-line no-await-in-loop -- durable checkpoint follows each attempt
+    await query(
+      `UPDATE beeper_reconcile_cursors SET message_id = $2 WHERE account_id = $1`,
+      [accountId, row.id],
+    );
+  }
+  if (result.rows.length === 0) {
+    await query('DELETE FROM beeper_reconcile_cursors WHERE account_id = $1', [accountId]);
+  }
+}
+
+// Bound both the event queue and concurrency. Overflow is repaired by the
+// durable rotation; event payloads never authorize ingesting unmirrored history.
+const pendingReconciliations = new Map();
+let eventReconciliation = null;
+export function reconcileBeeperEvent(frame) {
+  if (!['message.upserted', 'message.deleted'].includes(frame?.kind) || !frame.chatID) return Promise.resolve();
+  for (const id of (frame.ids || []).slice(0, RECONCILE_LIMIT)) {
+    if (typeof id === 'string' && pendingReconciliations.size < 100) {
+      pendingReconciliations.set(JSON.stringify([frame.chatID, id]), { chatID: frame.chatID, id });
+    }
+  }
+  if (eventReconciliation) return eventReconciliation;
+  eventReconciliation = drainReconciliationEvents().finally(() => { eventReconciliation = null; });
+  return eventReconciliation;
+}
+
+async function drainReconciliationEvents() {
+  while (pendingReconciliations.size) {
+    const [key, item] = pendingReconciliations.entries().next().value;
+    pendingReconciliations.delete(key);
+    // eslint-disable-next-line no-await-in-loop -- recheck ingestion consent for queued work
+    const config = await getBeeperSyncConfig();
+    // eslint-disable-next-line no-await-in-loop -- credential/feature gate
+    if (!config.enabled || !await isBeeperIngestionArmed()) {
+      pendingReconciliations.clear();
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop -- one transport request at a time
+    await (async () => {
+      const result = await query(
+        `SELECT m.id, m.conversation_id, c.source_chat_id
+           FROM beeper_messages m JOIN beeper_conversations c ON c.id = m.conversation_id
+          WHERE m.id = $1 AND c.source_chat_id = $2`, [item.id, item.chatID],
+      );
+      if (result.rows[0]) await reconcileStoredRow(result.rows[0], await resolveBeeperConfig());
+    })().catch(() => console.warn('🫧 Beeper event reconciliation deferred to the periodic rotation'));
+  }
 }
 
 // A per-run re-entrancy guard: one sweep at a time, process-wide. The timer,

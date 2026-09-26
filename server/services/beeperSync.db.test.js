@@ -34,14 +34,14 @@
 import {
   describe, it, expect, beforeAll, afterAll, vi,
 } from 'vitest';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 vi.mock('./settings.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    getSettings: async () => ({ beeper: { baseUrl: 'http://127.0.0.1:23373' } }),
+    getSettings: async () => ({ beeper: { baseUrl: 'http://127.0.0.1:23373', enabled: true } }),
   };
 });
 
@@ -55,7 +55,10 @@ vi.mock('./beeperCredentials.js', async (importOriginal) => {
   };
 });
 
-const { runBeeperSweep } = await import('./beeperSync.js');
+vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: async () => true }));
+const { runBeeperSweep, reconcileBeeperEvent, upsertMirroredMessage, normalizeMessageRow } = await import('./beeperSync.js');
+const { listMessages: readThread } = await import('./beeperConversations.js');
+const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 
 let dbReady = false;
 let skipReason = '';
@@ -133,6 +136,11 @@ function installFetch({ chats, messages }) {
     if (pathname === '/v1/bridges') return jsonResponse(BRIDGES);
     if (pathname === '/v1/chats') return jsonResponse(chats);
     if (/\/messages$/.test(pathname)) return jsonResponse(messages);
+    if (/\/messages\//.test(pathname)) {
+      const message = messages.items?.find((item) => pathname.endsWith('/' + encodeURIComponent(item.id)));
+      if (message) return jsonResponse(message);
+      return { ok: false, status: 404, text: async () => '{}' };
+    }
     throw new Error(`unexpected fetch: ${url}`);
   }));
   return urls;
@@ -232,6 +240,68 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
       [conversation.rows[0].id, `${nonce}-user`],
     );
     expect(participant.rows[0]).toMatchObject({ display_name: 'Alice Example', handle: 'alice_example' });
+  });
+
+  it('repairs behind-cursor edits and missed events, preserving archive data and rejecting stale writers', async () => {
+    // Regression: neither forward pagination nor reader refetch could repair message 50.
+    const conversation = await query('SELECT conversation_id FROM beeper_messages WHERE id = $1', [MESSAGE_ID]);
+    const conversationId = conversation.rows[0].conversation_id;
+    const originalCursor = await query('SELECT cursor FROM beeper_sync_cursors WHERE account_id = $1', [ACCOUNT_ID]);
+    let upstream = { ...messageFixture(), text: 'Corrected example', editedTimestamp: '2026-09-04T12:00:00Z' };
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (new URL(url).pathname.endsWith('/messages/' + encodeURIComponent(MESSAGE_ID))) return jsonResponse(upstream);
+      return originalFetch(url);
+    }));
+    const persistedFrames = [];
+    const listener = (frame) => { if (frame.kind === 'beeper-reconciled') persistedFrames.push(frame); };
+    beeperSocketEvents.on('invalidate', listener);
+    try {
+      await reconcileBeeperEvent({ kind: 'message.upserted', chatID: CHAT_ID, ids: [MESSAGE_ID] });
+      expect((await readThread(conversationId)).messages[0]).toMatchObject({
+        body: 'Corrected example', editedAt: '2026-09-04T12:00:00.000Z',
+      });
+      expect(persistedFrames).toHaveLength(1);
+      // Both an older source version and an older same-version observation lose,
+      // even if a stale sweep/outbox transaction commits after the event.
+      await withTransaction(async (client) => {
+        await upsertMirroredMessage(client, conversationId,
+          normalizeMessageRow(messageFixture({ text: 'Stale example' }), '2099-01-01T00:00:00Z'));
+        await upsertMirroredMessage(client, conversationId,
+          normalizeMessageRow({ ...upstream, text: 'Older concurrent example' }, '2020-01-01T00:00:00Z'));
+      });
+      expect((await readThread(conversationId)).messages[0].body).toBe('Corrected example');
+
+      // Drop the event. An unchanged chat still participates in the independent
+      // stored-ID rotation. Persisted checkpoint is the only progress state.
+      upstream = { ...upstream, text: 'Missed event correction', editedTimestamp: '2026-09-05T12:00:00Z' };
+      await runBeeperSweep({ reason: 'db-test' });
+      expect((await readThread(conversationId)).messages[0].body).toBe('Missed event correction');
+      const progress = await query('SELECT message_id FROM beeper_reconcile_cursors WHERE account_id = $1', [ACCOUNT_ID]);
+      expect(progress.rows[0].message_id).toBe(MESSAGE_ID);
+      expect((await query('SELECT cursor FROM beeper_sync_cursors WHERE account_id = $1', [ACCOUNT_ID])).rows).toEqual(originalCursor.rows);
+
+      // End of rotation resets durably, then an unavailable fetch must not
+      // manufacture a source deletion. The next rotation retries the row.
+      upstream = null;
+      await runBeeperSweep({ reason: 'db-test' });
+      await runBeeperSweep({ reason: 'db-test' });
+      expect((await readThread(conversationId)).messages[0]).toMatchObject({
+        body: 'Missed event correction', unsentAt: null,
+      });
+      upstream = { ...messageFixture({ isDeleted: true }), text: 'Source tombstone placeholder' };
+      await reconcileBeeperEvent({ kind: 'message.deleted', chatID: CHAT_ID, ids: [MESSAGE_ID] });
+      await reconcileBeeperEvent({ kind: 'message.deleted', chatID: CHAT_ID, ids: [MESSAGE_ID] });
+      const archived = await query('SELECT body, unsent_at FROM beeper_messages WHERE id = $1', [MESSAGE_ID]);
+      expect(archived.rows[0].body).toBe('Missed event correction');
+      expect(archived.rows[0].unsent_at).toBeTruthy();
+      expect((await query('SELECT * FROM beeper_attachments WHERE message_id = $1', [MESSAGE_ID])).rows).toHaveLength(1);
+      expect((await readThread(conversationId)).messages[0]).toMatchObject({ body: '', unsentAt: expect.any(String) });
+    } finally {
+      beeperSocketEvents.off('invalidate', listener);
+      // Restore the fixture for the pre-existing forward-ingestion cases.
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+    }
   });
 
   it('keeps the body and stamps unsent_at when the source unsends the message', async () => {
@@ -358,4 +428,44 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     const second = await query('SELECT is_sender FROM beeper_messages WHERE id = $1', [messageId]);
     expect(second.rows[0].is_sender).toBe(true);
   });
+  it('resumes a durable bounded rotation and retries failures without starving later rows', async () => {
+    const conversation = await query('SELECT id FROM beeper_conversations WHERE account_id = $1 LIMIT 1', [ACCOUNT_ID]);
+    const conversationId = conversation.rows[0].id;
+    const ids = Array.from({ length: 21 }, (_, i) => MESSAGE_ID + '-rotation-' + String(i).padStart(2, '0'));
+    await query(
+      "INSERT INTO beeper_messages (id, conversation_id, body) SELECT id, $2, 'Original' FROM unnest($1::text[]) id",
+      [ids, conversationId],
+    );
+    // Represents a restart: progress already exists in PostgreSQL, with no
+    // process-local rotation state to restore.
+    await query(
+      `INSERT INTO beeper_reconcile_cursors (account_id, message_id, upper_bound) VALUES ($1, $2, $3)
+       ON CONFLICT (account_id) DO UPDATE SET message_id = EXCLUDED.message_id, upper_bound = EXCLUDED.upper_bound`,
+      [ACCOUNT_ID, MESSAGE_ID, ids.at(-1)],
+    );
+    let failFirst = true;
+    const fetched = [];
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/v1/accounts') return jsonResponse(ACCOUNTS);
+      if (pathname === '/v1/bridges') return jsonResponse(BRIDGES);
+      if (pathname === '/v1/chats') return jsonResponse({ items: [], hasMore: false });
+      const id = decodeURIComponent(pathname.split('/').at(-1));
+      fetched.push(id);
+      if (id === ids[0] && failFirst) return { ok: false, status: 404, text: async () => '{}' };
+      return jsonResponse({ id, text: 'Reconciled', editedTimestamp: '2026-09-06T00:00:00Z' });
+    }));
+    await runBeeperSweep({ reason: 'db-test' });
+    expect(fetched).toEqual(ids.slice(0, 20));
+    expect((await query('SELECT body, unsent_at FROM beeper_messages WHERE id = $1', [ids[0]])).rows[0])
+      .toMatchObject({ body: 'Original', unsent_at: null });
+    fetched.length = 0;
+    await runBeeperSweep({ reason: 'db-test' });
+    expect(fetched).toEqual([ids[20]]);
+    failFirst = false;
+    await runBeeperSweep({ reason: 'db-test' }); // end-of-rotation reset
+    await runBeeperSweep({ reason: 'db-test' });
+    expect((await query('SELECT body FROM beeper_messages WHERE id = $1', [ids[0]])).rows[0].body).toBe('Reconciled');
+  });
+
 });

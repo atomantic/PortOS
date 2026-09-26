@@ -59,6 +59,7 @@ let resolvedConfig = { baseUrl: 'http://127.0.0.1:23373', token: 'example-token'
 const sweeps = [];
 
 vi.mock('./beeperSync.js', () => ({
+  reconcileBeeperEvent: vi.fn(async () => {}),
   isBeeperIngestionArmed: vi.fn(async () => armed),
   getBeeperSyncConfig: vi.fn(async () => ({ enabled: syncEnabled, intervalMinutes: 5 })),
   runBeeperSweep: vi.fn(async ({ reason }) => { sweeps.push(reason); return { skipped: false }; }),
