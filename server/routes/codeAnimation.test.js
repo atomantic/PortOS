@@ -17,6 +17,16 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   getCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.get(id) ?? null),
   isCodeAnimationJobId: (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id),
   listCodeAnimationJobRecords: vi.fn(async () => [...codeAnimationRecords.values()]),
+  listRunningCodeAnimationJobIds: vi.fn(async () => [...codeAnimationRecords.values()].filter((job) => job.status === 'running').map((job) => job.id)),
+  listCodeAnimationJobPage: vi.fn(async ({ limit, cursor }) => [...codeAnimationRecords.values()]
+    .filter((job) => !cursor || job.createdAt < cursor.createdAt || (job.createdAt === cursor.createdAt && job.id < cursor.id))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    .slice(0, limit + 1).map(({ id, status, title, providerId, model, createdAt }) => ({ id, status, title, providerId, model, createdAt }))),
+  countCodeAnimationJobs: vi.fn(async () => ({
+    total: codeAnimationRecords.size,
+    running: [...codeAnimationRecords.values()].filter((job) => job.status === 'running').length,
+    completed: [...codeAnimationRecords.values()].filter((job) => job.status === 'completed').length,
+  })),
   readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
@@ -36,6 +46,7 @@ import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
 import { getProviderById } from '../services/providers.js';
 import { getTrack } from '../services/tracks/index.js';
+import { listCodeAnimationJobPage, listCodeAnimationJobRecords } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import routes from './codeAnimation.js';
 
@@ -94,6 +105,51 @@ beforeEach(() => {
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
+});
+
+describe('GET /api/code-animation/jobs', () => {
+  it('reconciles only stale running records before paging and counting', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    codeAnimationRecords.set(id, { id, status: 'running', title: 'Interrupted', concept: 'Private brief',
+      createdAt: '2026-01-01T00:00:00.000Z' });
+    const response = await request(makeApp()).get('/api/code-animation/jobs?limit=50');
+    expect(response.status).toBe(200);
+    expect(response.body.items).toMatchObject([{ id, status: 'failed' }]);
+    expect(response.body.counts).toEqual({ running: 0, completed: 0 });
+    expect(listCodeAnimationJobRecords).not.toHaveBeenCalled();
+    expect((await request(makeApp()).get(`/api/code-animation/generate/${id}`)).body.error)
+      .toMatch(/interrupted by a server restart/);
+  });
+
+  it('keeps the legacy array and pages a compact thousand-job archive with stable equal-time cursors', async () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    for (let n = 0; n < 1000; n += 1) {
+      const id = `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+      codeAnimationRecords.set(id, { id, status: 'completed', title: `Animation ${n}`, concept: 'x'.repeat(2000), createdAt });
+    }
+    const app = makeApp();
+    const legacy = await request(app).get('/api/code-animation/jobs');
+    expect(legacy.status).toBe(200);
+    expect(legacy.body).toHaveLength(1000);
+    expect(legacy.body[0].concept).toHaveLength(2000);
+
+    const first = await request(app).get('/api/code-animation/jobs?limit=50');
+    expect(first.status).toBe(200);
+    expect(first.body.items).toHaveLength(50);
+    expect(first.body.items[0]).not.toHaveProperty('concept');
+    expect(first.body.counts).toEqual({ running: 0, completed: 1000 });
+    expect(first.body.total).toBe(1000);
+    expect(JSON.stringify(first.body).length).toBeLessThan(JSON.stringify(legacy.body).length / 10);
+    expect(first.body.nextCursor).toBeTruthy();
+    expect(JSON.parse(Buffer.from(first.body.nextCursor, 'base64url').toString('utf8'))).toEqual([createdAt, first.body.items.at(-1).id]);
+    const second = await request(app).get(`/api/code-animation/jobs?limit=50&cursor=${encodeURIComponent(first.body.nextCursor)}`);
+    expect(second.body.items).toHaveLength(50);
+    expect(new Set([...first.body.items, ...second.body.items].map(({ id }) => id)).size).toBe(100);
+    const capped = await request(app).get('/api/code-animation/jobs?limit=1000');
+    expect(capped.body.items).toHaveLength(100);
+    expect(listCodeAnimationJobPage).toHaveBeenLastCalledWith({ limit: 100, cursor: null });
+    expect((await request(app).get('/api/code-animation/jobs?cursor=garbage')).status).toBe(400);
+  });
 });
 
 describe('POST /api/code-animation/brief', () => {

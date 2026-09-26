@@ -5,15 +5,19 @@ import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
+import { usePagedCollection } from '../hooks/usePagedCollection';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
-  listCodeAnimationJobs,
+  listCodeAnimationJobPage,
   listMoodBoardNames,
   listTracks,
   listUniverseNames,
@@ -28,7 +32,6 @@ import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
 const JOB_POLL_MS = 3_000;
-const GALLERY_POLL_MS = 10_000;
 // Mood-board choice sentinels: follow the universe's linked board, or none.
 const BOARD_FOLLOW_UNIVERSE = 'universe';
 const BOARD_NONE = 'none';
@@ -231,7 +234,6 @@ function galleryJob(job) {
     id: job.id,
     status: job.status,
     title: job.title,
-    concept: job.concept || job.input?.concept || '',
     providerId: job.providerId,
     model: job.model,
     error: job.error,
@@ -289,9 +291,7 @@ export default function CodeAnimation() {
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState(null);
-  const [savedJobs, setSavedJobs] = useState([]);
-  const [galleryLoaded, setGalleryLoaded] = useState(false);
-  const [galleryError, setGalleryError] = useState('');
+  const [galleryCounts, setGalleryCounts] = useState({ running: 0, completed: 0 });
   const [effort, setEffort] = useState('');
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
@@ -299,7 +299,6 @@ export default function CodeAnimation() {
   const jobIdRef = useRef(jobId);
   const hydratedJobIdRef = useRef('');
   const locallyStartedJobIdRef = useRef('');
-  const galleryRequestRef = useRef(0);
   const {
     providers,
     selectedProviderId,
@@ -322,21 +321,20 @@ export default function CodeAnimation() {
   const update = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
 
-  const refreshGallery = useCallback(async () => {
-    const requestId = ++galleryRequestRef.current;
-    const rows = await listCodeAnimationJobs({ silent: true }).catch((error) => {
-      if (requestId !== galleryRequestRef.current) return null;
-      setGalleryError(error.message || 'Failed to load animation gallery');
-      setGalleryLoaded(true);
-      return null;
-    });
-    if (requestId !== galleryRequestRef.current) return;
-    if (!Array.isArray(rows)) return;
-    setSavedJobs(rows);
-    setGalleryError('');
-    setGalleryLoaded(true);
+  const fetchGalleryPage = useCallback(async ({ cursor, signal }) => {
+    const page = await listCodeAnimationJobPage({ cursor, signal });
+    if (!signal.aborted) setGalleryCounts(page.counts);
+    return page;
   }, []);
-  useAutoRefetch(refreshGallery, GALLERY_POLL_MS, { enabled: true, pollOnly: true });
+  const gallery = usePagedCollection(fetchGalleryPage);
+  const savedJobs = gallery.items;
+  const setSavedJobs = gallery.setItems;
+  useSocketSubscription('code-animation', { onResubscribe: gallery.refreshFirst });
+  useEffect(() => {
+    const refresh = () => gallery.refreshFirst();
+    socket.on('code-animation:changed', refresh);
+    return () => socket.off('code-animation:changed', refresh);
+  }, [gallery.refreshFirst]);
 
   useEffect(() => { safeWriteJsonStorage(DRAFT_KEY, draft); }, [draft]);
 
@@ -365,8 +363,8 @@ export default function CodeAnimation() {
   // blank-slate idea generator.
   const briefSeeds = !!(draft.universeId || draft.seedIdea.trim() || draft.concept.trim() || draft.title.trim());
   const canWriteBrief = briefSeeds && !writingBrief;
-  const inProgressCount = savedJobs.filter((item) => item.status === 'running').length;
-  const completedCount = savedJobs.filter((item) => item.status === 'completed').length;
+  const inProgressCount = galleryCounts.running;
+  const completedCount = galleryCounts.completed;
 
   // Poll the generation job named in the URL until it settles. The ref drops a
   // response for a job the user has since replaced.
@@ -391,7 +389,6 @@ export default function CodeAnimation() {
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
     else setPreview(null);
     if (next.status !== 'missing') {
-      galleryRequestRef.current += 1;
       setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
         .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
     }
@@ -534,7 +531,6 @@ export default function CodeAnimation() {
     setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);
-    galleryRequestRef.current += 1;
     setSavedJobs((previous) => [galleryJob(started), ...previous.filter((item) => item.id !== started.id)]);
     navigate(`/code-animation/${encodeURIComponent(started.id)}`);
   };
@@ -567,9 +563,8 @@ export default function CodeAnimation() {
             <Sparkles className="h-4 w-4" /> New animation
           </Link>
         </div>
-        {galleryError && <p role="status" className="text-xs text-port-error">{galleryError}</p>}
-        {!galleryLoaded && <p className="text-xs text-gray-500">Loading animations…</p>}
-        {galleryLoaded && savedJobs.length === 0 && !galleryError && (
+        {!gallery.loaded && <p className="text-xs text-gray-500">Loading animations…</p>}
+        {gallery.loaded && savedJobs.length === 0 && !gallery.error && (
           <p className="text-xs text-gray-500">Generated animations will appear here so you can reopen them later.</p>
         )}
         {savedJobs.length > 0 && (
@@ -594,7 +589,7 @@ export default function CodeAnimation() {
                 >
                   <div className="flex items-center gap-2">
                     <StatusIcon className={`h-4 w-4 shrink-0 ${item.status === 'failed' ? 'text-port-error' : item.status === 'completed' ? 'text-port-success' : 'text-port-accent'}`} />
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || item.concept || 'Untitled animation'}</p>
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || 'Untitled animation'}</p>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-2 text-xs text-gray-500">
                     <span>{statusLabel}{item.model ? ` · ${item.model}` : ''}</span>
@@ -605,6 +600,8 @@ export default function CodeAnimation() {
             })}
           </div>
         )}
+        <InfiniteScrollFooter hasMore={gallery.hasMore} loading={gallery.loading} error={gallery.error}
+          onLoadMore={gallery.loadMore} autoLoad={false} label="Load older animations" />
       </section>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

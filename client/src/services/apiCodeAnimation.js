@@ -26,7 +26,9 @@ export const startCodeAnimationGeneration = (brief, options) => request('/code-a
   ...options,
 });
 
-export const listCodeAnimationJobs = (options) => request('/code-animation/jobs', options);
+export const listCodeAnimationJobPage = ({ cursor, signal, limit = 50 } = {}) =>
+  request(`/code-animation/jobs?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+    { signal, silent: true });
 
 export const getCodeAnimationJob = (id, options) =>
   request(`/code-animation/generate/${encodeURIComponent(id)}`, options);

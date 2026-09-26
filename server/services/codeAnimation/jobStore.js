@@ -34,6 +34,34 @@ export async function listCodeAnimationJobRecords() {
   return rows;
 }
 
+export async function listRunningCodeAnimationJobIds() {
+  const { rows } = await query("SELECT id FROM code_animation_jobs WHERE status = 'running'");
+  return rows.map(({ id }) => id);
+}
+
+export async function listCodeAnimationJobPage({ limit, cursor }) {
+  const { rows } = await query(
+    `SELECT id, status, COALESCE(NULLIF(title, ''), LEFT(concept, 120)) AS title,
+            provider_id AS "providerId", model, created_at AS "createdAt"
+       FROM code_animation_jobs
+      WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1::timestamptz, $2::text))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $3`,
+    [cursor?.createdAt ?? null, cursor?.id ?? null, limit + 1],
+  );
+  return rows;
+}
+
+export async function countCodeAnimationJobs() {
+  const { rows } = await query(
+    `SELECT COUNT(*)::integer AS total,
+            COUNT(*) FILTER (WHERE status = 'running')::integer AS running,
+            COUNT(*) FILTER (WHERE status = 'completed')::integer AS completed
+       FROM code_animation_jobs`,
+  );
+  return rows[0];
+}
+
 export async function getCodeAnimationJobRecord(id) {
   if (!isCodeAnimationJobId(id)) return null;
   const { rows } = await query('SELECT data FROM code_animation_jobs WHERE id = $1', [id]);
