@@ -48,8 +48,6 @@ export const startLoomEditorialAutopilot = (id, body = {}, options = {}) =>
   });
 export const getLoomEditorialAutopilotStatus = (id, options = {}) =>
   request(loomPath(id, '/editorial/autopilot/status'), options);
-export const getLoomEditorialAutopilotRun = (id, runId, options = {}) =>
-  request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}`), options);
 export const cancelLoomEditorialAutopilot = (id, runId, options = {}) =>
   request(loomPath(id, `/editorial/autopilot/${encodeURIComponent(runId)}/cancel`), {
     method: 'POST', body: JSON.stringify({}), ...options,
@@ -172,9 +170,6 @@ export const startLoomEpisodeProductionBatch = (id, episodeId, body = {}, option
 
 export const getLoomEpisodeProductionBatchStatus = (id, episodeId, options = {}) =>
   request(episodePath(id, episodeId, '/production/batch'), options);
-
-export const getLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
-  request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}`), options);
 
 export const cancelLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
   request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}/cancel`), {

@@ -6,7 +6,6 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../services/api', () => ({
   cancelLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
-  getLoomEditorialAutopilotRun: vi.fn(),
   getLoomEditorialAutopilotStatus: vi.fn(),
   getProviders: vi.fn(),
   remediateLoomEditorial: vi.fn(),
@@ -265,7 +264,6 @@ it('renders snapshots without timer reads and reconciles reconnect/reshow once',
   await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
   vi.useRealTimers();
   expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
-  expect(api.getLoomEditorialAutopilotRun).not.toHaveBeenCalled();
   await act(async () => editorialEvent(editorialRun({ revision: 2, message: 'Reviewer running' })));
   expect(screen.getAllByText('Reviewer running')[0]).toBeInTheDocument();
   await act(async () => editorialEvent(editorialRun({ loomId: 'other', revision: 3, message: 'Wrong loom' })));

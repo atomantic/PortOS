@@ -225,7 +225,6 @@ describe('LoomProductionPanel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
     vi.useRealTimers();
     expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1);
-    expect(api.getLoomEpisodeProductionBatch).not.toHaveBeenCalled();
     expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
     await act(async () => emit({ ...run, episodeId: 'other', status: 'completed', revision: 2 }));
     expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);

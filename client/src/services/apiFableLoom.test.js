@@ -94,9 +94,6 @@ describe('apiFableLoom', () => {
     await api.getLoomEditorialAutopilotStatus('loom-1', { silent: true });
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/status', { silent: true });
 
-    await api.getLoomEditorialAutopilotRun('loom-1', 'run/1', { silent: true });
-    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/run%2F1', { silent: true });
-
     await api.cancelLoomEditorialAutopilot('loom-1', 'run-1');
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/editorial/autopilot/run-1/cancel', {
       method: 'POST', body: JSON.stringify({}),
@@ -169,8 +166,8 @@ describe('apiFableLoom', () => {
       body: JSON.stringify({ mode: 'exact_inputs' }),
     });
 
-    await api.getLoomEpisodeProductionBatch('loom-1', 'ep-1', 'batch-1', { silent: true });
-    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch/batch-1', { silent: true });
+    await api.getLoomEpisodeProductionBatchStatus('loom-1', 'ep-1', { silent: true });
+    expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch', { silent: true });
 
     await api.cancelLoomEpisodeProductionBatch('loom-1', 'ep-1', 'batch-1');
     expect(request).toHaveBeenCalledWith('/fableloom/loom-1/episodes/ep-1/production/batch/batch-1/cancel', {
