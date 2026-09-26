@@ -2427,9 +2427,19 @@ export const mindBundleApplySchema = z.object({
   )).strict(),
 }).strict();
 
+export const appLaunchVideoRequestSchema = z.object({
+  tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
+  direction: z.string().trim().max(2000).default(''),
+  format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
+  targetDurationSec: z.number().int().min(15).max(25).default(20),
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
+}).strict();
+
 export const launchVideoOptionsSchema = z.object({
   targetDurationSec: z.number().min(15).max(25),
-}).strict();
+  appId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
+}).strict().refine(value => Boolean(value.appId) === Boolean(value.runId), 'appId and runId must be supplied together');
 
 export const launchVideoStoryboardSchema = z.object({
   posterSec: z.number().nonnegative(),

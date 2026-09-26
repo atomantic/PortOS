@@ -7,6 +7,7 @@
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 export const PROMPT_VERSIONS = {
+  'app-launch-video': 1,
   'model-comparison-refresh': 4, // v4: installed inventory, sourced composite estimates and authenticated import
   // Current claim-flow bumps retire the Copilot fallback, drive local reviewers
   // fail closed, verify the remote merge state, and clean up without force-delete.

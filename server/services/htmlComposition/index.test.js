@@ -37,8 +37,7 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720,
   async seek(t) { await new Promise(resolve => setTimeout(resolve, 150)); document.getElementById('block').style.left = (40 + t * 480) + 'px'; }, ${contract} };
 ${extra}</script></body></html>`;
 
-async function composition(html = fixture()) {
-  const directory = `compositions/${randomUUID()}`;
+async function composition(html = fixture(), directory = `compositions/${randomUUID()}`) {
   await mkdir(join(PATHS.data, directory), { recursive: true });
   await writeFile(join(PATHS.data, directory, 'index.html'), html);
   await writeFile(join(PATHS.data, directory, 'pixel.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
@@ -108,17 +107,28 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
       globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,
         async seek(t) { document.body.style.background = t >= 10 ? 'rgb(255,0,0)' : 'rgb(0,0,255)'; }
       };</script></body></html>`;
-    const input = await composition(html);
+    const runId = randomUUID();
+    const input = await composition(html, `launch-videos/example/${runId}/composition`);
     await writeFile(join(PATHS.data, input.directory, 'plan.md'), 'A fictional product demonstration.');
     await writeFile(join(PATHS.data, input.directory, 'caption.txt'), 'Make a clear plan.');
     await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({
       posterSec: 11, scenes: [{ durationSec: 15, lines: [] }],
     }));
-    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15 } });
+    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15, appId: 'example', runId } });
+    const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
+    expect(await readdir(runRoot)).toEqual(expect.arrayContaining(['composition', 'plan.md', 'storyboard.json', 'caption.txt', 'video.mp4', 'poster.jpg']));
+    expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
+    expect(await loadHistory()).toContainEqual(expect.objectContaining({ id: input.jobId, appId: 'example', launchVideo: { appId: 'example', runId, caption: 'Make a clear plan.', posterSec: 11 } }));
     const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videoThumbnails, result.thumbnail),
       '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     expect(pixel[0]).toBeGreaterThan(220);
     expect(pixel[2]).toBeLessThan(30);
+    // Exclusive delivery cannot replace an earlier successful run on retry.
+    const retryId = randomUUID();
+    await expect(renderComposition({ ...input, jobId: retryId, launchVideo: { targetDurationSec: 15, appId: 'example', runId } })).rejects.toThrow(/EEXIST/);
+    expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
+    expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
+    expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
   }, 60000);
 
   it('refuses a remote request by its full URL and removes partial artifacts', async () => {

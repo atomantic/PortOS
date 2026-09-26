@@ -626,6 +626,7 @@ function SettingsPane({
       // window-level listener that owns close-precedence.
       onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
+      {item.raw?.appId && <a className="block p-3 text-port-accent" href={`/apps/${encodeURIComponent(item.raw.appId)}/overview`}>Open source app</a>}
       <header className="flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
         <div className="flex items-center gap-2">
