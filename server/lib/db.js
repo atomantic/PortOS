@@ -343,14 +343,14 @@ export async function checkHealth() {
     };
   }
   try {
-    const result = await pool.query(`
+    const result = await databaseOperation(() => pool.query(`
       SELECT
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
         EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
-    `);
+    `));
     const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
     return {
       connected: true,

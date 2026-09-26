@@ -65,7 +65,7 @@ describe('persistent database maintenance boundary', () => {
     }`);
     const dbUrl = new URL('./db.js', import.meta.url).href;
     const guardsUrl = new URL('../services/agentGuards.js', import.meta.url).href;
-    const code = `import {query, withTransaction, withDatabaseMaintenance, ensureSchema} from ${JSON.stringify(dbUrl)};
+    const code = `import {query, withTransaction, withDatabaseMaintenance, ensureSchema, checkHealth} from ${JSON.stringify(dbUrl)};
       import {withSpawnDedupGuard} from ${JSON.stringify(guardsUrl)};
       const outcomes = [];
       for (const call of [
@@ -75,12 +75,15 @@ describe('persistent database maintenance boundary', () => {
         () => ensureSchema(),
         () => withSpawnDedupGuard(new Set(), 'example', () => {throw Error('SPAWN_REACHED')})
       ]) { try { await call(); outcomes.push('unexpected'); } catch(e) {outcomes.push(e.code || e.message);} }
+      const health=await checkHealth();
+      if(health.connected || !health.error?.includes('Persistent database maintenance')) throw Error('HEALTH_BYPASSED');
+      outcomes.push('DATABASE_MAINTENANCE');
       console.log(JSON.stringify(outcomes));`;
     // A second invocation is a restarted process, not a module-cache reset.
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = node(code, ['--loader', pathToFileURL(loader).href]);
       expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout.trim())).toEqual(Array(5).fill('DATABASE_MAINTENANCE'));
+      expect(JSON.parse(result.stdout.trim())).toEqual(Array(6).fill('DATABASE_MAINTENANCE'));
     }
     const bootUrl = new URL('../services/databaseBootFence.js', import.meta.url).href;
     const boot = node(`try {await import(${JSON.stringify(bootUrl)}); process.exitCode=2;}
