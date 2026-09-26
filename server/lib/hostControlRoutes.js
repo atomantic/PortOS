@@ -27,6 +27,8 @@
  * listed handler by a spelling this list does not match.
  */
 
+import { escapeRegExp } from './textUtils.js';
+
 export const HOST_CONTROL_ROUTES = Object.freeze([
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
@@ -97,8 +99,6 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/standardize/apply',
   'POST /api/standardize/backup',
 ]);
-
-const escapeRegExp = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
 
 const compileSegment = (segment) => {
   if (segment.startsWith(':')) return '[^/]+';
