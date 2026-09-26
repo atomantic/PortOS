@@ -78,7 +78,7 @@ export default function useSingleImageRender({ buildPrompt, onComplete, onError,
   const render = useCallback(async (imageCfg, key = singleKeyRef.current, extraParams = undefined) => {
     const built = buildPromptRef.current?.(key);
     if (!built) return null; // caller aborted (already toasted why)
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg, extraParams);
     // `extraParams` lets a caller attach extra fields to the generate payload
     // (e.g. the base-style probe's `universeRun` collection target) so the
     // server can route the finished render — the front-end does no

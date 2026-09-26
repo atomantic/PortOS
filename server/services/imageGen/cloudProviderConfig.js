@@ -26,6 +26,7 @@ import {
   isModeUsable,
   pickUsableMode,
   renderTargetDefaults,
+  resolveRenderTargetPins,
 } from '../../lib/renderModeLadder.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
@@ -223,28 +224,12 @@ export function resolveRenderTargetConfig(settings, target, {
   recordModel = null,
   fallbackMode = null,
 } = {}) {
-  const defaults = renderTargetDefaults(settings, target);
-  // Pins are usability-gated: a pinned backend whose enable toggle is off (or
-  // that isn't queueable) falls through to the next rung instead of bricking
-  // every render on this surface with a disabled-error. An explicit
-  // per-request `mode` deliberately is NOT gated — it keeps each surface's
-  // existing explicit-request error semantics.
-  const recordPinnedMode = recordMode && isModeUsable(settings, recordMode) ? recordMode : null;
-  const pinnedMode = defaults.imageMode && isModeUsable(settings, defaults.imageMode)
-    ? defaults.imageMode
-    : null;
-  const finalMode = mode || recordPinnedMode || pinnedMode || settings?.imageGen?.mode || fallbackMode;
-  // A model pin rides WITH its backend pin: apply recordModel/defaults.imageModel
-  // only when the resolved mode is still that pin's backend. When the mode fell
-  // back (pin disabled) or an explicit request chose another backend, the
-  // pinned model must not leak — codex would happily accept `--model` with a
-  // gemini id (supportsModelOverride gates by PROVIDER, not by id namespace).
-  const requestedModel = (typeof model === 'string' && model.trim()) ? model.trim() : null;
-  const finalModel = requestedModel
-    || (recordMode && finalMode === recordMode ? recordModel : null)
-    || (defaults.imageMode && finalMode === defaults.imageMode ? defaults.imageModel : null);
+  const resolved = resolveRenderTargetPins(settings, target, {
+    mode, model, recordMode, recordModel, fallbackMode,
+  });
   return {
-    mode: finalMode,
-    cloud: resolveCloudProviderConfig(settings, finalMode, { model: finalModel }),
+    mode: resolved.mode,
+    modelCandidates: resolved.modelCandidates,
+    cloud: resolveCloudProviderConfig(settings, resolved.mode, { model: resolved.modelId }),
   };
 }

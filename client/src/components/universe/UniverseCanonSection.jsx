@@ -405,7 +405,7 @@ export default function UniverseCanonSection({
       toast.error(`Add a description before generating a reference for ${entry.name}`);
       return;
     }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg, { universeRun: { universeId: universe?.id } });
     const styled = composeCanonStyledPrompt({
       name: entry.name,
       description,
@@ -472,7 +472,7 @@ export default function UniverseCanonSection({
       toast.error(`Add a description, palette, or recurring details before generating a clean plate for ${entry.name}`);
       return;
     }
-    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
+    const baseOpts = pipelineImageCfgToRenderOpts(imageCfg, { universeRun: { universeId: universe?.id } });
     const plate = composeCleanPlatePrompt(entry, baseOpts.negativePrompt || '');
     // Layer the universe style on top of the clean-plate composition so the
     // empty-location render shares the visual language of the populated refs.

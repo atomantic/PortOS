@@ -107,3 +107,33 @@ export function imageModeCandidates(settings, target, record = null) {
     settings?.imageGen?.mode,
   ];
 }
+
+/**
+ * Pure pin projection shared by browser previews and server dispatch. A
+ * mode-only pin inherits models from lower pins on the SAME usable backend.
+ * Keep all candidates so local catalog/hardware validation can skip stale pins.
+ */
+export function resolveRenderPins(sources, { mode = null, usable = () => true } = {}) {
+  const pins = sources.map(recordRenderPin).filter((pin) => pin.mode && usable(pin.mode));
+  const finalMode = mode || pins[0]?.mode || null;
+  const modelCandidates = pins.filter((pin) => pin.mode === finalMode)
+    .map((pin) => pin.modelId).filter(Boolean);
+  return { mode: finalMode, modelId: modelCandidates[0] || null, modelCandidates };
+}
+
+/** Resolve preferences without filesystem, catalog, or provider dependencies. */
+export function resolveRenderTargetPins(settings, target, {
+  mode = null, model = null, recordMode = null, recordModel = null, fallbackMode = null,
+} = {}) {
+  const defaults = renderTargetDefaults(settings, target);
+  const sources = [
+    { imageMode: recordMode, imageModelId: recordModel },
+    { imageMode: defaults.imageMode, imageModelId: defaults.imageModel },
+  ];
+  const usable = (candidate) => isModeUsable(settings, candidate);
+  const pin = resolveRenderPins(sources, { usable });
+  const finalMode = mode || pin.mode || settings?.imageGen?.mode || fallbackMode;
+  const resolved = resolveRenderPins(sources, { mode: finalMode, usable });
+  const requestedModel = typeof model === 'string' && model.trim() ? model.trim() : null;
+  return { ...resolved, modelId: requestedModel || resolved.modelId };
+}

@@ -115,7 +115,7 @@ export function selectLocalImageModel(modelId, allModels = getImageModels(), pin
  * heavy before init images exist.
  */
 export function selectLocalImageModelFromSettings(settings, modelId, allModels = getImageModels(), recordModelId = null) {
-  return selectLocalImageModel(modelId, allModels, [recordModelId, settings?.imageGen?.local?.modelId].filter(Boolean));
+  return selectLocalImageModel(modelId, allModels, [recordModelId, settings?.imageGen?.local?.modelId].flat().filter(Boolean));
 }
 
 /**
@@ -191,6 +191,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // whichever branch ran last silently overwrite the other's mode while
   // inheriting its model. Adding a surface is one row here, matching the
   // "one entry + one resolve call" contract in lib/renderTargets.js.
+  let localModelCandidates = [];
   const source = data.mode ? null : RECORD_PIN_SOURCES.find((s) => data[s.tag]?.[s.idKey]);
   if (source) {
     const record = await source.load(data[source.tag][source.idKey]).catch(() => null);
@@ -202,6 +203,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
       fallbackMode: IMAGE_GEN_MODE.EXTERNAL,
     });
     mode = resolved.mode;
+    localModelCandidates = resolved.modelCandidates;
     // Stamping the id ERASES where it came from, and the dispatch below
     // re-resolves from `data.cloudModel` alone — so a shipped default
     // materialized here would arrive there looking like a deliberate choice and
@@ -219,7 +221,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
 
-  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId) : null;
+  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
+  // Freeze the selected preference before capability checks. Explicit ids stay
+  // untouched so the existing unknown/hardware rejection still applies.
+  if (!data.modelId && localModel?.id) data.modelId = localModel.id;
   const referenceCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : 4;
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
