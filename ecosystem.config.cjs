@@ -164,13 +164,17 @@ const PORTS = {
 // mapping PGPORT_DOCKER — see docker-compose.yml), so resolve whichever one
 // applies to the active pgMode; PORTS.POSTGRES (above) is already the correct
 // per-mode default when neither is set.
+// PGPORT becomes the ACTIVE port in each managed process below. Preserve the
+// original native port separately so a child reloading this config cannot
+// reinterpret an inherited Docker PGPORT as the native endpoint (#8815).
+// PORTOS_NATIVE_PGPORT is internal inherited identity, not a .env setting.
 // Expose the exact, credential-free endpoint identities to offline maintenance
 // tools. Both modes must use the same precedence as managed-process startup.
 const databaseEndpoint = (mode, port) => ({
   mode, host: PG_HOST, port: Number(port), database: PG_DATABASE, user: PG_USER
 });
 const DATABASE_ENDPOINTS = {
-  native: databaseEndpoint('native', process.env.PGPORT || envPgPort || 5432),
+  native: databaseEndpoint('native', process.env.PORTOS_NATIVE_PGPORT || process.env.PGPORT || envPgPort || 5432),
   docker: databaseEndpoint('docker', process.env.PGPORT_DOCKER || envPgPortDocker || PORTS.POSTGRES_DOCKER)
 };
 const PG_PORT = DATABASE_ENDPOINTS[pgMode === 'native' ? 'native' : 'docker'].port;
@@ -212,6 +216,8 @@ module.exports = {
         HOST: '0.0.0.0',
         PGHOST: PG_HOST,
         PGPORT: PG_PORT,
+        PORTOS_NATIVE_PGPORT: DATABASE_ENDPOINTS.native.port,
+        PGPORT_DOCKER: DATABASE_ENDPOINTS.docker.port,
         PGUSER: PG_USER,
         PGDATABASE: PG_DATABASE,
         PGPASSWORD: PG_PASSWORD,
@@ -285,6 +291,8 @@ module.exports = {
         // they agree with what setup actually provisioned (#8447).
         PGHOST: PG_HOST,
         PGPORT: PG_PORT,
+        PORTOS_NATIVE_PGPORT: DATABASE_ENDPOINTS.native.port,
+        PGPORT_DOCKER: DATABASE_ENDPOINTS.docker.port,
         PGUSER: PG_USER,
         PGDATABASE: PG_DATABASE,
         PGPASSWORD: PG_PASSWORD

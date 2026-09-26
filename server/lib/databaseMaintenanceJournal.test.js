@@ -173,7 +173,7 @@ describe('persistent database maintenance boundary', () => {
     const run = (...args) => spawnSync(process.execPath, [fileURLToPath(cli), ...args], {
       encoding: 'utf8', timeout: 10_000,
       env: { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '', PGPORT_DOCKER: '',
-        PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only', ...overrides },
+        PORTOS_NATIVE_PGPORT: '', PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only', ...overrides },
     });
     expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
     expect(run('begin', 'docker', 'native').status).toBe(1);
@@ -203,6 +203,27 @@ describe('persistent database maintenance boundary', () => {
     expect(run('cancel', overrideId).status).toBe(1);
     overrides = { PGPORT: '7001', PGPORT_DOCKER: '7002', PGHOST: 'example.invalid' };
     expect(run('cancel', overrideId).status).toBe(0);
+  });
+
+  it('keeps maintenance direction when invoked by a Docker-managed process', () => {
+    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    writeFileSync(join(root, '.env'), 'PGMODE=docker\nPGPORT=6543\nPGPORT_DOCKER=6544\n');
+    const cli = fileURLToPath(new URL('../../scripts/database-maintenance.mjs', import.meta.url));
+    const env = { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '6544',
+      PORTOS_NATIVE_PGPORT: '6543', PGPORT_DOCKER: '6544',
+      PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' };
+    const run = (...args) => spawnSync(process.execPath, [cli, ...args], {
+      env, encoding: 'utf8', timeout: 10_000,
+    });
+    const result = run('begin', 'docker', 'native');
+    expect(result.status, result.stderr).toBe(0);
+    const operation = JSON.parse(result.stdout);
+    expect(journal.read()).toMatchObject({
+      source: { mode: 'docker', port: 6544 }, target: { mode: 'native', port: 6543 },
+    });
+    expect(JSON.parse(run('status').stdout)).toEqual(operation);
+    expect(run('begin', 'native', 'docker').status).toBe(1);
+    expect(run('cancel', operation.id).status).toBe(0);
   });
 
   it.skipIf(process.platform === 'win32')('never releases a symlinked active directory or journal', () => {
