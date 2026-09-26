@@ -289,6 +289,11 @@ const sseJobs = new Map();
 
 let workerStarted = false;
 let initPromise = null;
+// Shutdown latch (#8691): once set, nothing promotes a waiting job to running —
+// neither the worker nor Run Now — and nothing re-arms the worker. Waiting jobs
+// stay durably queued for the next process, which restores them untouched.
+let dispatchQuiesced = false;
+export const MEDIA_QUEUE_SHUTTING_DOWN = 'MEDIA_QUEUE_SHUTTING_DOWN';
 const terminalOperations = new Set();
 
 function trackTerminalOperation(operation) {
@@ -670,9 +675,9 @@ export async function initMediaJobQueue() {
 }
 
 function startWorker() {
-  if (workerStarted) return;
+  if (workerStarted || dispatchQuiesced) return;
   workerStarted = true;
-  // Detach from awaiting so init can return; the loop runs forever.
+  // Detach from awaiting so init can return; the loop runs until shutdown quiesces it.
   drainLoop().catch((err) => {
     console.error(`❌ mediaJobQueue worker crashed: ${err.message}`, err.stack || '');
     workerStarted = false;
@@ -682,6 +687,9 @@ function startWorker() {
 // Every lane uses fire-and-forget so the poll loop is never blocked by a
 // running job in another lane.
 function startLaneJob(job, { lane }) {
+  // The one promotion boundary every dispatch path crosses, so the shutdown
+  // latch holds here even for a caller that raced past its own check.
+  if (dispatchQuiesced) return false;
   // If the job isn't in the queue, it was already promoted (e.g. by a parallel
   // runJobNow). Skip — promoting again would double-start the job and corrupt
   // the lane (push it onto cloudRunning/running twice). Silently splice(-1)
@@ -689,7 +697,7 @@ function startLaneJob(job, { lane }) {
   const idx = queue.indexOf(job);
   if (idx < 0) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
-    return;
+    return false;
   }
   queue.splice(idx, 1);
   job.status = 'running';
@@ -757,12 +765,15 @@ function startLaneJob(job, { lane }) {
     recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
   })();
+  return true;
 }
 
 async function drainLoop() {
-  while (true) {
+  while (!dispatchQuiesced) {
     const candidates = queue.slice();
     await videoHolds.resolveCohorts(candidates);
+    // Shutdown may have begun while cohorts resolved; exit without promoting.
+    if (dispatchQuiesced) break;
     videoHolds.updateQueued(queue);
     // Single queue scan, promoting work independently into each open lane.
     const limits = laneLimits();
@@ -775,12 +786,24 @@ async function drainLoop() {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
-      startLaneJob(job, { lane });
+      if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
     }
     await sleep(150);
   }
+}
+
+// Stop dispatch for server shutdown (#8691). Synchronous and idempotent so the
+// signal handler can call it before its first await. Waiting jobs are neither
+// canceled nor failed — they persist as queued and the next boot restores
+// them; already-running jobs keep their normal completion path, which the
+// shutdown flush then captures. Returns true on the call that latched it.
+export function quiesceMediaJobQueue() {
+  if (dispatchQuiesced) return false;
+  dispatchQuiesced = true;
+  console.log(`⏸️  mediaJobQueue dispatch stopped for shutdown (${queue.length} waiting job(s) kept queued)`);
+  return true;
 }
 
 // Drop a job from the archive (e.g. after a successful retry — the old failed
@@ -813,6 +836,9 @@ export function runJobNow(jobId) {
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
   if (!isCloudImageJob(job)) {
     return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
+  }
+  if (dispatchQuiesced) {
+    return { ok: false, code: MEDIA_QUEUE_SHUTTING_DOWN, error: 'The server is shutting down; the job stays queued and resumes after restart' };
   }
   startLaneJob(job, { lane: 'cloud' });
   return { ok: true, status: 'running' };
@@ -1573,6 +1599,7 @@ export function __resetForTests() {
   videoHolds.clear();
   sseJobs.clear();
   workerStarted = false;
+  dispatchQuiesced = false;
   initPromise = null;
   // Reset the lane limit too — a test that called setCodexParallelLimit(N)
   // otherwise leaks N into subsequent tests and makes ordering matter.

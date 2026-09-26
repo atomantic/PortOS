@@ -181,8 +181,17 @@ describe('shutdown handler — detached-group teardown (#7496)', () => {
 // #8325. An admitted media job is acknowledged only once its snapshot is on
 // disk; shutdown must not exit while that write, a terminal transition, or the
 // final progress snapshot is still in the persist chain.
-describe('shutdown handler — media-job queue flush (#8325)', () => {
+describe('shutdown handler — media-job queue quiesce + flush (#8325, #8691)', () => {
   const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  // #8691: dispatch stops at the signal, not at the flush — a lane freed while
+  // accepted requests drain must not start a waiting job the exit abandons.
+  it('quiesces media-job dispatch before the handler awaits anything', () => {
+    const quiesceAt = code.indexOf('quiesceMediaJobQueue()');
+    expect(quiesceAt, 'quiesceMediaJobQueue() is not called in shutdown()').toBeGreaterThan(-1);
+    expect(quiesceAt).toBeLessThan(code.search(/\bawait\b/));
+    expect(quiesceAt).toBeLessThan(code.indexOf('flushMediaJobQueue('));
+  });
 
   it('flushes after admissions stop, before the DB close, and awaits it before exiting', () => {
     const flushAt = code.indexOf('flushMediaJobQueue(');

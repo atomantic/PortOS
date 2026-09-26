@@ -21,6 +21,7 @@ const stubs = {
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   JOB_KINDS: ['video', 'image'],
   JOB_STATUSES: ['queued', 'running', 'completed', 'failed', 'canceled'],
+  MEDIA_QUEUE_SHUTTING_DOWN: 'MEDIA_QUEUE_SHUTTING_DOWN',
   listJobs: () => Array.from(jobStore.values()),
   listQueueJobs: (...args) => stubs.listQueueJobs(...args),
   getJob: (id) => jobStore.get(id) || null,
@@ -538,6 +539,13 @@ describe('mediaJobs routes', () => {
     const r = await request(makeApp()).post('/api/media-jobs/j-gpu/run-now').send({});
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('NOT_CODEX');
+  });
+
+  it('POST /:id/run-now 503s while server shutdown keeps the job queued (#8691)', async () => {
+    stubs.runJobNow.mockReturnValueOnce({ ok: false, code: 'MEDIA_QUEUE_SHUTTING_DOWN', error: 'shutting down' });
+    const r = await request(makeApp()).post('/api/media-jobs/j-codex/run-now').send({});
+    expect(r.status).toBe(503);
+    expect(r.body.code).toBe('MEDIA_QUEUE_SHUTTING_DOWN');
   });
 
   it('POST /:id/run-now 404s for unknown / not-queued ids', async () => {
