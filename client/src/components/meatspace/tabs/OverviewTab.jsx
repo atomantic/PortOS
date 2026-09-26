@@ -147,12 +147,14 @@ function riskColor(level) {
   return 'text-port-error';
 }
 
-const OVERVIEW_EVENTS = ['meatspace:changed'];
+const OVERVIEW_EVENTS = ['meatspace:changed', 'meatspace:death-clock:changed'];
 const fetchHealthBody = () => api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']);
 function useOverviewResource(resource, fetchResource) {
   return useSocketResource(fetchResource, {
     events: OVERVIEW_EVENTS,
-    matchesEvent: payload => payload?.resources?.includes(resource),
+    matchesEvent: (payload, event) => event === 'meatspace:death-clock:changed'
+      ? resource === 'overview' || resource === 'calendar'
+      : payload?.resources?.includes(resource),
   });
 }
 

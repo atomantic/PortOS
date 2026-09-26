@@ -50,6 +50,13 @@ it('renders local and mirrored invalidations selectively, retaining good data on
   api.getBodyHistory.mockRejectedValue(new Error('temporarily unavailable'));
   await act(async () => { socket.emit('meatspace:changed', { resources: ['body'] }); });
   expect(screen.getByText('172 lbs')).toBeInTheDocument();
+
+  api.getMeatspaceOverview.mockResolvedValue({ summary: { totalEntries: 1234 } });
+  await act(async () => { socket.emit('meatspace:death-clock:changed', {}); });
+  expect(screen.getByText('1234')).toBeInTheDocument();
+  expect(api.getMeatspaceOverview).toHaveBeenCalledTimes(3);
+  expect(api.getLifeCalendar).toHaveBeenCalledTimes(2);
+  expect(api.getBodyHistory).toHaveBeenCalledTimes(3);
 });
 
 it('reconciles each resource once on reconnect and once on tab re-show, then unsubscribes', async () => {
