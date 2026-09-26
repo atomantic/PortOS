@@ -87,6 +87,68 @@ const renderTab = (path = '/cos/mind') => render(
 );
 
 describe('MindTab', () => {
+  it('retains an in-flight visibility invalidation but drops queued reads after unmount', async () => {
+    let resolveVisibility;
+    api.getPersistentMindVisibility.mockReturnValueOnce(new Promise(resolve => { resolveVisibility = resolve; }));
+    const view = renderTab();
+    await screen.findByText('Review the next bounded slice.');
+    act(() => socket.emitServer('cos:mind:visibility', {}));
+    expect(api.getPersistentMindVisibility).toHaveBeenCalledTimes(1);
+    await act(async () => resolveVisibility({ readiness: 'ready' }));
+    expect(api.getPersistentMindVisibility).toHaveBeenCalledTimes(2);
+
+    let resolveHistory;
+    api.getPersistentMind.mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve; }));
+    act(() => socket.emitServer('cos:mind:event', {}));
+    act(() => socket.emitServer('cos:mind:status', {}));
+    const before = api.getPersistentMind.mock.calls.length;
+    view.unmount();
+    await act(async () => resolveHistory(response({ hasMore: true })));
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(before);
+  });
+
+  it('reconciles Mind consumers from events and reshow without recurring API reads', async () => {
+    const view = renderTab();
+    await screen.findByText('Review the next bounded slice.');
+    vi.useFakeTimers();
+    const reads = [api.getPersistentMind, api.getPersistentMindRuntime, api.getPersistentMindVisibility];
+    const counts = () => reads.map(read => read.mock.calls.length);
+    try {
+      const initial = counts();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(counts()).toEqual(initial);
+      for (const name of ['cos:mind:event', 'cos:mind:status', 'connect']) {
+        const before = counts();
+        await act(async () => socket.emitServer(name, {}));
+        expect(counts()).toEqual(before.map(count => count + 1));
+      }
+      const before = counts();
+      await act(async () => socket.emitServer('cos:mind:visibility', {}));
+      expect(counts()).toEqual([before[0], before[1], before[2] + 1]);
+      const hidden = counts();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+      await act(async () => socket.emitServer('cos:mind:event', {}));
+      expect(counts()).toEqual(hidden);
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+      expect(counts()).toEqual(hidden.map(count => count + 1));
+      await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+      expect(counts()).toEqual(hidden.map(count => count + 1));
+      view.unmount();
+      await act(async () => {
+        socket.emitServer('connect');
+        socket.emitServer('cos:mind:event', {});
+        socket.emitServer('cos:mind:visibility', {});
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(counts()).toEqual(hidden.map(count => count + 1));
+    } finally {
+      vi.useRealTimers();
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    }
+  });
+
   it('shows a prominent chosen identity and refreshes a rename from the trajectory notification', async () => {
     api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Example Star' } }));
     renderTab();
