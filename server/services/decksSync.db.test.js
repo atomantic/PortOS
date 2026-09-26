@@ -3,11 +3,17 @@
  * lifecycle, and the machine-local fields a remote win must not reset.
  * Runs only against portos_test.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-decks-sync-') }));
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { sanitizeRecordForWire } from '../lib/syncWire.js';
-import { contentHashForRecord } from '../lib/conflictJournal.js';
+import { contentHashForRecord, flushBaseHashes, __resetBaseHashCacheForTests } from '../lib/conflictJournal.js';
 import {
   DECK_KIND, createDeck, getDeck, updateDeck, updateCard, deleteDeck,
   getDeckForSync, listDecksForSync, listDeckIdsForSync,
@@ -22,6 +28,9 @@ const ids = [];
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM decks WHERE id = ANY($1::uuid[])', [ids]);
   await close();
+  await flushBaseHashes();
+  __resetBaseHashCacheForTests();
+  cleanupTempDataRoots();
 });
 
 const make = async (name) => {
@@ -46,6 +55,14 @@ describe.skipIf(!ready)('deck federation', () => {
     expect(await mergeDecksFromSync([remote])).toEqual({ applied: true, count: 1 });
     expect((await getDeck(deck.id)).name).toBe('Renamed On Peer');
     expect((await getDeck(deck.id)).styleNotes).toBe('etched linework');
+    // Prove the real merge persists its baseline outside the install data tree.
+    await flushBaseHashes();
+    const bases = JSON.parse(await readFile(
+      join(lazyTempDataRoot('portos-decks-sync-'), 'sharing', 'sync_base_hashes.json'), 'utf8',
+    ));
+    expect(bases[`${DECK_KIND}:${deck.id}`].h)
+      .toBe(contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id)));
+
 
     const stale = asWire(deck, { name: 'Stale', updatedAt: later(deck.updatedAt, -60_000) });
     expect(await mergeDecksFromSync([stale])).toEqual({ applied: false, count: 0 });
