@@ -2,6 +2,7 @@ import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
+import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
@@ -99,7 +100,6 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged } from './apps.js';
 import { resolvePm2HomeForProcess } from './appProcessStatus.js';
 import { logAction } from './history.js';
-import { cosEvents } from './cosEvents.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -153,7 +153,6 @@ describe('socket.js — initSocket', () => {
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
-    dashboardEvents.removeAllListeners();
     modelLifecycleEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
   });
@@ -237,6 +236,39 @@ describe('socket.js — initSocket', () => {
     dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
     dashboardEvents.emit('backup:changed', { destPath: '/private/example' });
     expect(io.emitted).toEqual([['goals:changed', {}], ['backup:changed', {}]]);
+  });
+
+  it('retains one CoS/dashboard/settings subscription and forwards through the latest IO after reinitialization', () => {
+    const previousIo = io;
+    const settingsCount = settingsEvents.listenerCount('settings:updated');
+    const dashboardCounts = dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)]);
+    const cosCount = queueListeners.cos.length;
+    io = makeIo();
+    initSocket(io);
+    initSocket(io);
+    expect(settingsEvents.listenerCount('settings:updated')).toBe(settingsCount);
+    expect(dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)])).toEqual(dashboardCounts);
+    expect(queueListeners.cos).toHaveLength(cosCount);
+
+    const subscriber = makeSocket('reinitialized-cos');
+    createdSockets.push(subscriber);
+    io.connect(subscriber);
+    subscriber.handlers['cos:subscribe']();
+    subscriber.emitted.length = 0;
+    previousIo.emitted.length = 0;
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['backup:changed', {}]]);
+    dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
+    dashboardEvents.emit('cos:day:changed', { privateContent: 'Example day' });
+    const taskChange = { action: 'updated', task: { id: 'example-task', status: 'pending' } };
+    queueListeners.cos.filter(([event]) => event === 'tasks:changed').forEach(([, handler]) => handler(taskChange));
+    expect(io.emitted).toEqual([['backup:changed', {}], ['goals:changed', {}], ['review:queue:changed']]);
+    expect(previousIo.emitted).toEqual([]);
+    expect(subscriber.emitted).toEqual([
+      ['cos:day:changed', {}],
+      ['cos:tasks:changed', taskChange],
+    ]);
   });
 
   it('forwards Digital Twin changes without leaking source records', () => {
@@ -458,7 +490,7 @@ describe('socket.js — initSocket', () => {
     io.connect(socket);
     socket.handlers['cos:subscribe']();
 
-    const listener = cosEvents.on.mock.calls.find(([event]) => event === 'tasks:changed')?.[1];
+    const listener = queueListeners.cos.find(([event]) => event === 'tasks:changed')?.[1];
     const payload = {
       type: 'user',
       action: 'updated',
@@ -493,7 +525,7 @@ describe('socket.js — initSocket', () => {
       socket.handlers['cos:subscribe']();
 
       const long = 'Refactor the queue. '.repeat(5000);
-      const listener = cosEvents.on.mock.calls.find(([name]) => name === event)?.[1];
+      const listener = queueListeners.cos.find(([name]) => name === event)?.[1];
       listener({
         id: 'agent-001',
         taskId: 'task-1',
@@ -645,7 +677,7 @@ describe('socket.js — initSocket', () => {
     expect(shellService.detachSocketSessions).toHaveBeenCalledWith(s1);
 
     // Verify broadcast no longer reaches s1 — emit a cos:status event via the captured listener
-    const statusListener = cosEvents.on.mock.calls.find(([ev]) => ev === 'status')?.[1];
+    const statusListener = queueListeners.cos.find(([ev]) => ev === 'status')?.[1];
     const s1EmitsBefore = s1.emitted.length;
     if (statusListener) statusListener({ running: true });
 
