@@ -35,7 +35,7 @@ const RESUME_MESSAGES = {
 
 const needsAgentFeedback = isAgentFeedbackEligible;
 
-export default function AgentsTab({ completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
+export default function AgentsTab({ agentsLoaded = true, agentsError = null, onRetryAgents, completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
   const [focusedAgent, setFocusedAgent] = useState(null);
   const [focusLoading, setFocusLoading] = useState(false);
@@ -255,11 +255,19 @@ export default function AgentsTab({ completedRevision = 0, agents, onRefresh, li
             </span>
           )}
         </div>
-        {runningAgents.length === 0 ? (
+        {agentsError && (
+          <div role="alert" className="mb-3 text-sm text-red-400">
+            {agentsError} {agentsLoaded && 'Showing the last loaded agents.'}
+            <button type="button" onClick={onRetryAgents || onRefresh} className="ml-2 underline">Retry agents</button>
+          </div>
+        )}
+        {!agentsLoaded && !agentsError && <div role="status">Loading active agents…</div>}
+        {runningAgents.length === 0 && agentsLoaded && !agentsError && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             No active agents. Start CoS and add tasks to see agents working.
           </div>
-        ) : (
+        )}
+        {runningAgents.length > 0 && (
           <div className="space-y-2">
             {runningAgents.map(agent => (
               <AgentCard

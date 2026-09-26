@@ -145,6 +145,9 @@ export default function ChiefOfStaff() {
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
   const [agents, setAgents] = useState([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [agentsError, setAgentsError] = useState(null);
+  const agentReadRef = useRef(null);
   const [completedRevision, setCompletedRevision] = useState(0);
   const [taskHistoryRevision, setTaskHistoryRevision] = useState(0);
   const [health, setHealth] = useState(null);
@@ -297,6 +300,30 @@ export default function ChiefOfStaff() {
     return 'thinking';
   }, []);
 
+  // Agent snapshots settle independently of status/tasks. Overlay socket changes
+  // received during the read so a slow snapshot cannot undo a live transition.
+  const readAgents = useCallback(async (controller) => {
+    if (!needsAgents) return null;
+    const request = { updates: new Map() };
+    agentReadRef.current = request;
+    setAgentsError(null);
+    const data = await api.getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null);
+    if (controller.signal.aborted || queryRef.current !== queryKey || agentReadRef.current !== request) return null;
+    agentReadRef.current = null;
+    if (Array.isArray(data)) {
+      const merged = new Map(data.map(agent => [agent.id, agent]));
+      for (const [id, agent] of request.updates) merged.set(id, agent);
+      const snapshot = [...merged.values()].filter(agent => agent.status !== 'completed');
+      setAgents(snapshot);
+      setAgentsLoaded(true);
+    } else {
+      setAgentsError('Could not load active agents.');
+    }
+    // Opening Agents must not wait for unrelated status or task summaries.
+    if (activeTab === 'agents') setLoading(false);
+    return data;
+  }, [needsAgents, queryKey, activeTab]);
+
   const fetchData = useCallback(async function refreshPageData() {
     const route = activeTab;
     if (inFlight.current?.key === queryKey && !inFlight.current.controller.signal.aborted) {
@@ -311,7 +338,7 @@ export default function ChiefOfStaff() {
       const coreRead = Promise.all([
         api.getCosStatus().catch(() => null),
         needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve(null),
-        needsAgents ? api.getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null) : Promise.resolve([]),
+        readAgents(controller),
       ]);
       const healthRead = api.getCosHealth().catch(() => null).then((data) => {
         // Health is independently useful to the Health tab. Commit it as soon
@@ -340,7 +367,6 @@ export default function ChiefOfStaff() {
       // returns to the pending-AND-active state this guard exists to remove.
       if (queueSeqRef.current === queueSeq) {
         if (tasksData) setTasks(tasksData);
-        if (agentResult) setAgents(agentsData);
       }
 
       setLoading(false);
@@ -388,7 +414,7 @@ export default function ChiefOfStaff() {
       if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, applyProviders, applyApps]);
+  }, [activeTab, queryKey, selectedTask, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, applyProviders, applyApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -408,12 +434,11 @@ export default function ChiefOfStaff() {
     request.promise = Promise.all([
       api.getCosStatus().catch(() => null),
       needsTasks ? api.getCosTasks({ view: 'queue', selected: selectedTask, signal: controller.signal, silent: true }).catch(() => null) : null,
-      needsAgents ? api.getCosAgents({ active: true, signal: controller.signal, silent: true }).catch(() => null) : null,
-    ]).then(async ([summary, tasksData, agentsData]) => {
+      readAgents(controller),
+    ]).then(async ([summary, tasksData]) => {
       if (controller.signal.aborted || queryRef.current !== queryKey || queueSeqRef.current !== queueSeq) return;
       if (summary) setStatus(summary);
       if (tasksData) setTasks(tasksData);
-      if (agentsData) setAgents(agentsData);
       const insightsData = await insightsRead;
       if (!controller.signal.aborted && queueSeqRef.current === queueSeq && insightsData?.insights) setInsights(insightsData.insights);
     }).finally(() => {
@@ -421,7 +446,7 @@ export default function ChiefOfStaff() {
       if (request.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshQueueData();
     });
     return request.promise;
-  }, [queryKey, needsTasks, needsAgents, selectedTask]);
+  }, [queryKey, needsTasks, selectedTask, readAgents]);
 
   // All page insight reads use cached health. Explicit Run Check owns repairs;
   // task invalidations must never trigger a health-check/socket feedback loop.
@@ -512,7 +537,7 @@ export default function ChiefOfStaff() {
 
     const handleAgentSpawned = (data) => {
       if (needsAgents && data?.id) {
-        queueSeqRef.current += 1;
+        agentReadRef.current?.updates.set(data.id, data);
         setAgents(prev => [...prev.filter(agent => agent.id !== data.id), data]);
       }
       setAgentState('coding');
@@ -533,6 +558,7 @@ export default function ChiefOfStaff() {
 
     const handleAgentUpdated = (updatedAgent) => {
       if (!needsAgents) return;
+      agentReadRef.current?.updates.set(updatedAgent.id, updatedAgent);
       // Update the specific agent in the agents list without fetching all data
       setAgents(prev => prev.map(agent =>
         agent.id === updatedAgent.id ? updatedAgent : agent
@@ -552,6 +578,11 @@ export default function ChiefOfStaff() {
     socket.on('cos:agent:output', handleAgentOutput);
 
     const handleAgentCompleted = (data) => {
+      const id = data?.id || data?.agentId;
+      if (needsAgents && id) {
+        agentReadRef.current?.updates.set(id, { ...data, id, status: 'completed' });
+        setAgents(prev => prev.filter(agent => agent.id !== id));
+      }
       setCompletedRevision(value => value + 1);
       setAgentState('reviewing');
       // Three outcomes, not two: a run retired by Resume/Relaunch never reached a
@@ -1358,7 +1389,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'agents' && (
           <div role="tabpanel" id="tabpanel-agents" aria-labelledby="tab-agents">
             <Suspense fallback={<TabLoadFallback label="agents" />}>
-              <AgentsTab completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+              <AgentsTab agentsLoaded={agentsLoaded} agentsError={agentsError} onRetryAgents={fetchQueue} completedRevision={completedRevision} agents={agents} onRefresh={fetchData} liveOutputs={liveOutputs} providers={providers} providersLoaded={providersLoaded} apps={apps} />
             </Suspense>
           </div>
         )}
