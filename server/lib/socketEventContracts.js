@@ -57,6 +57,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'laya:status': {
+    direction: 'server-to-client',
+    summary: 'Invalidate Laya runtime status after install progress, completion, failure or scoring transitions; no experiment content.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'usage-backfill:updated': {
     direction: 'server-to-client',
     summary: 'Invalidate historical usage backfill status after progress or a durable terminal transition.',

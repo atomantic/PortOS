@@ -1,4 +1,5 @@
 /** Explicit, experimental Laya execution. No boot hooks, automatic routing or prompt persistence. */
+import { notifyLayaStatus } from './layaMlxEvents.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -41,6 +42,7 @@ export async function getLayaStatus() {
 async function performInstall() {
   const { detectVenvBasePythonSync } = await import('../lib/pythonSetup.js');
   stage = 'python';
+  notifyLayaStatus();
   const base = detectVenvBasePythonSync();
   if (!base) throw new Error('python');
   await execFileAsync(base, ['-c', 'import sys,platform; assert sys.version_info >= (3,11) and platform.machine() == "arm64" and int(platform.mac_ver()[0].split(".")[0]) >= 14'],
@@ -48,14 +50,17 @@ async function performInstall() {
   await mkdir(root(), { recursive: true });
   await unlink(marker()).catch(error => { if (error.code !== 'ENOENT') throw error; });
   stage = 'runtime';
+  notifyLayaStatus();
   await execFileAsync(base, ['-m', 'venv', join(root(), 'venv')], { env: environment(), timeout: 120000, maxBuffer: 4096 });
   await execFileAsync(python(), ['-m', 'pip', 'install', '--force-reinstall', '--disable-pip-version-check',
     `https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`],
   { env: environment(false), timeout: 600000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' });
   stage = 'model';
+  notifyLayaStatus();
   await execFileAsync(python(), [script(), 'download', model(), LAYA_MLX.repository, LAYA_MLX.revision],
     { env: environment(false), timeout: 1200000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' });
   stage = 'verify';
+  notifyLayaStatus();
   await execFileAsync(python(), [script(), 'verify', model()],
     { env: environment(), timeout: 120000, maxBuffer: 4096, killSignal: 'SIGKILL' });
   await writeFile(`${marker()}.tmp`, JSON.stringify(LAYA_MLX));
@@ -68,7 +73,8 @@ export async function installLaya() {
   if (!installation) {
     installError = null;
     installation = performInstall().catch(() => { installError = `laya-install-${stage}-failed`; })
-      .finally(() => { installation = null; stage = null; });
+      .finally(() => { installation = null; stage = null; notifyLayaStatus(); });
+    notifyLayaStatus();
   }
   return { ok: true, installing: true };
 }
@@ -82,6 +88,7 @@ export async function scoreLaya(input, signal) {
   // Reserve before the first asynchronous readiness check: overlapping requests
   // must not each load a separate copy of the model into unified memory.
   scoring = true;
+  notifyLayaStatus();
   const started = Date.now();
   return (async () => {
     const status = await getLayaStatus();
@@ -99,5 +106,5 @@ export async function scoreLaya(input, signal) {
     const result = normalizeLayaResult(raw, parsed.data.options, parsed.data.minMargin);
     return result ? { ...result, elapsedMs: Date.now() - started } : failure('laya-response-invalid');
   })().catch(() => failure(signal?.aborted ? 'laya-cancelled' : 'laya-scoring-failed'))
-    .finally(() => { scoring = false; });
+    .finally(() => { scoring = false; notifyLayaStatus(); });
 }
