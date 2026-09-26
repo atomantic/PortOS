@@ -5,7 +5,7 @@ import {Brain as BrainIcon} from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
 import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
@@ -29,6 +29,8 @@ const SpotifyTab = lazy(() => import('../components/brain/tabs/SpotifyTab'));
 const YoutubeTab = lazy(() => import('../components/brain/tabs/YoutubeTab'));
 const ThreadsTab = lazy(() => import('../components/brain/tabs/ThreadsTab'));
 
+const BRAIN_EVENTS = ['brain:changed'];
+
 export default function Brain() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -38,9 +40,7 @@ export default function Brain() {
   // is derived from the TABS registry so it can't drift from the tab list.
   const fullBleed = FULL_BLEED_TAB_IDS.has(activeTab);
 
-  // Let errors throw — `useAutoRefetch` preserves the last-good data on
-  // transient failures. `silent: true` keeps the 30s poll from spamming
-  // toasts when a single blip would otherwise fire two of them.
+  // Preserve the last good snapshot when a reconciliation read fails.
   const fetchData = useCallback(async () => {
     const [summary, settings] = await Promise.all([
       api.getBrainSummary({ silent: true }),
@@ -49,7 +49,8 @@ export default function Brain() {
     return { summary, settings };
   }, []);
 
-  const { data, loading, refetch } = useAutoRefetch(fetchData, 30_000, {
+  const { data, loading, refetch } = useSocketResource(fetchData, {
+    events: BRAIN_EVENTS,
     compare: sameJsonShape,
   });
   const summary = data?.summary ?? null;

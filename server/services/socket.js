@@ -9,7 +9,7 @@ import { platformAccountEvents } from './platformAccounts.js';
 import { updateEvents } from './updateChecker.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
-import { brainEvents } from './brainStorage.js';
+import { brainEvents, BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { queueEvents } from './moltworldQueue.js';
@@ -512,6 +512,18 @@ function setupAgentEventForwarding() {
 
 // Set up brain event forwarding - broadcast to all clients
 function setupBrainEventForwarding() {
+  // Invalidation only: record bodies, local paths and settings stay behind HTTP.
+  const changed = (type, id) => {
+    ioInstance?.emit('brain:changed', { type, id });
+    if (type === 'links') ioInstance?.emit('brain:links:changed', { id });
+  };
+  for (const type of BRAIN_ENTITY_TYPES) {
+    brainEvents.on(`${type}:upserted`, ({ id }) => changed(type, id));
+    brainEvents.on(`${type}:deleted`, ({ id }) => changed(type, id));
+  }
+  brainEvents.on('record:changed', ({ type, id }) => changed(type, id));
+  brainEvents.on('meta:changed', () => changed('meta'));
+
   brainEvents.on('classified', (data) => {
     if (ioInstance) {
       ioInstance.emit('brain:classified', data);

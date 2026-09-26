@@ -10,6 +10,12 @@ const api = vi.hoisted(() => ({
   getBrainSettings: vi.fn(),
 }));
 
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+import socket from '../services/socket';
+
 vi.mock('../services/api', () => api);
 
 // Keep this suite scoped to the tab bar itself — each lazy tab body has its
@@ -72,4 +78,27 @@ describe('Brain mobile tab navigation', () => {
 
     expect(await screen.findByTestId('memory-tab')).toBeInTheDocument();
   });
+});
+
+it('updates its summary from events without polling and reconciles once on reconnect', async () => {
+  await renderSettledAt('links');
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+    expect(api.getBrainSummary).toHaveBeenCalledTimes(1);
+    api.getBrainSummary.mockResolvedValue({ counts: { links: 7 }, needsReview: 2 });
+    await act(async () => { socket.emit('brain:changed', { type: 'links', id: 'example' }); });
+    expect(screen.getByText('7 links')).toBeInTheDocument();
+    expect(screen.getByText('2 needs review')).toBeInTheDocument();
+    await act(async () => { socket.emit('connect'); });
+    expect(api.getBrainSummary).toHaveBeenCalledTimes(3);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getBrainSummary).toHaveBeenCalledTimes(4);
+    visibility.mockRestore();
+  } finally {
+    vi.useRealTimers();
+  }
 });

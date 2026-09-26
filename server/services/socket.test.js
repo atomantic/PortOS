@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
 // clearing, just as the process-wide event buses retain their subscriptions.
-const queueListeners = vi.hoisted(() => ({ cos: [], review: [] }));
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [] }));
 
 /**
  * Tests for socket.js initSocket behavior.
@@ -35,7 +35,7 @@ vi.mock('./updateChecker.js', () => ({ updateEvents: { on: vi.fn() } }));
 vi.mock('../lib/buildId.js', () => ({ getBuildId: vi.fn(() => 'test-build-id') }));
 vi.mock('./automationScheduler.js', () => ({ scheduleEvents: { on: vi.fn() } }));
 vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
-vi.mock('./brainStorage.js', () => ({ brainEvents: { on: vi.fn() } }));
+vi.mock('./brainStorage.js', () => ({ BRAIN_ENTITY_TYPES: ['links', 'inbox', 'memories'], brainEvents: { on: vi.fn((...args) => queueListeners.brain.push(args)) } }));
 vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
 // The Beeper realtime bus is a real EventEmitter here — the relay boundary test
@@ -143,6 +143,25 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
+  });
+
+  it('forwards persisted Brain changes as bounded invalidations', () => {
+    const dispatch = (event, payload) => {
+      const listener = queueListeners.brain.find(([name]) => name === event)?.[1];
+      expect(listener).toBeTypeOf('function');
+      listener(payload);
+    };
+    io.emitted.length = 0;
+    dispatch('links:upserted', { id: 'example-link', record: { localPath: '/private/example', malwareScan: { status: 'completed' } } });
+    expect(io.emitted).toEqual([
+      ['brain:changed', { type: 'links', id: 'example-link' }],
+      ['brain:links:changed', { id: 'example-link' }]
+    ]);
+    io.emitted.length = 0;
+    dispatch('record:changed', { type: 'links', id: 'remote-link' });
+    dispatch('meta:changed', { defaultProvider: 'example' });
+    expect(io.emitted).toContainEqual(['brain:links:changed', { id: 'remote-link' }]);
+    expect(io.emitted).toContainEqual(['brain:changed', { type: 'meta', id: undefined }]);
   });
 
   beforeEach(() => {
