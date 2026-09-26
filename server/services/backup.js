@@ -1606,7 +1606,8 @@ export async function getState() {
 export async function saveState(patch, onFailure) {
   return queueStateWrite(() => (async () => {
     await ensureDir(join(PATHS.data, 'backup'));
-    const current = await getState();
+    // Status projections are read-only and must never become durable state.
+    const current = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
     const updated = { ...current, ...patch };
     await atomicWrite(STATE_PATH, updated);
     failedStateProjection = null;

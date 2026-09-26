@@ -2969,8 +2969,9 @@ describe('runBackup lifecycle', () => {
     atomicWrite.mockRejectedValueOnce(new Error('still unavailable'));
     await expect(saveState({ status: 'ok' })).rejects.toThrow('still unavailable');
     expect((await getState()).status).toBe('error');
-    await saveState({ status: 'ok', error: null });
+    await saveState({ pgBackup: { status: 'skipped' } });
     expect(await getState()).toMatchObject({ status: 'ok', error: null, lastSnapshotId: 'previous-snapshot' });
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json'))).toMatchObject({ status: 'ok', error: null });
     // Prove the overlay is gone, rather than merely masked by matching values.
     const fsp = await actualFs();
     await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastSnapshotId: 'recovered-snapshot' }));
