@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { writeFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
@@ -40,18 +40,36 @@ const resetSettings = async () => {
   await writeSettingsFile({});
 };
 
-const buildApp = async () => {
+const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }));
+vi.mock('../services/instanceIdentity.js', async () => ({
+  ...(await vi.importActual('../services/instanceIdentity.js')),
+  loadData: async () => instanceRegistry.data,
+}));
+
+const buildApp = async ({ remoteAddress } = {}) => {
   // Re-import the route module under the current mock state so the test sees
   // a fresh auth-service binding each time.
   vi.resetModules();
   const { default: authRoutes } = await import('./auth.js');
   const app = express();
+  if (remoteAddress) {
+    // Model the socket peer, never an HTTP header, ahead of production gates.
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
+      next();
+    });
+    const { authGate, hostControlRouteGate, requireHostControl } = await import('../services/authGate.js');
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ reached: true }));
+  }
   app.use(express.json());
   app.use('/api/auth', authRoutes);
   return app;
 };
 
 beforeEach(async () => {
+  instanceRegistry.data = { self: null, peers: [] };
   await resetSettings();
 });
 
@@ -279,5 +297,87 @@ describe('password-free risk status', () => {
     expect((await request(app).get('/api/auth/password-risk')).status).toBe(503);
     const { readFileSync } = await import('fs');
     expect(readFileSync(join(tempRoot, 'settings.json'), 'utf8')).toBe('{corrupt');
+  });
+});
+
+describe('password setup through production authorization gates (#8771)', () => {
+  const stores = () => ['settings.json', 'auth-sessions.json']
+    .map((name) => readFileSync(join(tempRoot, name), 'utf8'));
+  const passwordBody = { newPassword: 'example-password' };
+
+  it.each([
+    ['direct remote caller', '192.0.2.10', {}],
+    ['forged forwarding headers', '192.0.2.10', {
+      'X-Forwarded-For': '127.0.0.1',
+      'X-PortOS-Dev-Proxy-Client-Address': '127.0.0.1',
+    }],
+    ['remote Vite client', '127.0.0.1', {
+      'X-PortOS-Dev-Proxy-Client-Address': '192.0.2.10',
+    }],
+  ])('refuses %s without changing settings or sessions or granting host control', async (_name, remoteAddress, headers) => {
+    const app = await buildApp({ remoteAddress });
+    const auth = await import('../services/auth.js');
+    // Even an existing session must survive a rejected setup unchanged.
+    await auth.createSession();
+    const before = stores();
+    const send = (path) => Object.entries(headers).reduce(
+      (req, [key, value]) => req.set(key, value), request(app).post(path),
+    );
+    const refused = await send('/api/auth/password').send(passwordBody);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(refused.headers['set-cookie']).toBeUndefined();
+    expect(stores()).toEqual(before);
+    const command = await send('/api/commands/execute').send({});
+    expect(command.status).toBe(403);
+    expect(command.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+  });
+
+  it.each([undefined, '127.0.0.1'])('allows local setup with Vite client marker %s', async (proxyClient) => {
+    const app = await buildApp({ remoteAddress: '127.0.0.1' });
+    let setup = request(app).post('/api/auth/password');
+    if (proxyClient) setup = setup.set('X-PortOS-Dev-Proxy-Client-Address', proxyClient);
+    const response = await setup.send(passwordBody);
+    expect(response.status).toBe(200);
+    expect(response.headers['set-cookie']).toMatch(/portos_auth_\d+=/);
+    const command = await request(app).post('/api/commands/execute')
+      .set('Cookie', response.headers['set-cookie']).send({});
+    expect(command.body).toEqual({ reached: true });
+  });
+
+  it('rotates only with an operator session and current password, never peer credentials', async () => {
+    const app = await buildApp({ remoteAddress: '192.0.2.10' });
+    const auth = await import('../services/auth.js');
+    const { token } = await auth.setPassword(passwordBody);
+    const peer = { id: 'example-peer', instanceId: 'example-instance', enabled: true,
+      syncSecret: 'example-pair-secret-0123456789-abcdef' };
+    instanceRegistry.data.peers = [peer];
+    const { derivePeerAuthToken } = await import('../lib/peerHttpClient.js');
+    const body = { currentPassword: 'example-password', newPassword: 'example-replacement' };
+    const before = stores();
+    const scoped = await request(app).post('/api/auth/password')
+      .set('X-PortOS-Instance-Id', peer.instanceId)
+      .set('X-PortOS-Peer-Auth', derivePeerAuthToken(peer.syncSecret, peer.instanceId)).send(body);
+    expect(scoped.status).toBe(403);
+    expect(scoped.body.code).toBe('PEER_SCOPE_FORBIDDEN');
+    expect(scoped.headers['set-cookie']).toBeUndefined();
+    const basic = await request(app).post('/api/auth/password')
+      .set('Authorization', 'Basic ' + Buffer.from(':example-password').toString('base64')).send(body);
+    expect(basic.status).toBe(403);
+    expect(basic.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(basic.headers['set-cookie']).toBeUndefined();
+    const cookie = `portos_auth=${token}`;
+    const wrong = await request(app).post('/api/auth/password').set('Authorization', `Bearer ${token}`)
+      .send({ ...body, currentPassword: 'wrong-password' });
+    expect(wrong.status).toBe(401);
+    expect(wrong.body.code).toBe('AUTH_BAD_CURRENT');
+    expect(stores()).toEqual(before);
+    const rotated = await request(app).post('/api/auth/password').set('Authorization', `Bearer ${token}`).send(body);
+    expect(rotated.status).toBe(200);
+    expect(rotated.headers['set-cookie']).toMatch(/portos_auth_\d+=/);
+    expect((await request(app).post('/api/commands/execute').set('Cookie', cookie).send({})).status).toBe(401);
+    expect((await request(app).post('/api/commands/execute')
+      .set('Cookie', rotated.headers['set-cookie']).send({})).body).toEqual({ reached: true });
+    expect(await auth.verifyPassword(body.newPassword)).toBe(true);
   });
 });
