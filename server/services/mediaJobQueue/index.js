@@ -49,6 +49,10 @@ import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
+import {
+  canReceiveProgress, canRequestCancellation, claimTerminalOutcome,
+  snapshotCancellationIntent, applyCancellationIntent, restoreCancellationIntent,
+} from './jobLifecycle.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
@@ -987,8 +991,7 @@ async function runJob(job) {
   // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
   async function terminate(state, apply) {
-    if (job.terminating || job.status !== 'running') return;
-    job.terminating = true;
+    if (!claimTerminalOutcome(job)) return;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
     // Timeout handle, so this is purely stylistic.)
@@ -1030,7 +1033,7 @@ async function runJob(job) {
 
   const handlers = {
     progress: (payload) => {
-      if (job.terminating || job.status !== 'running') return;
+      if (!canReceiveProgress(job)) return;
       let didUpdatePersistedProgress = false;
       if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
         job.progress = Math.max(0, Math.min(1, payload.progress));
@@ -1162,7 +1165,7 @@ async function runJob(job) {
     // job.terminating closes the window terminate() opens: it now awaits a
     // disk drain before flipping job.status, so a tick that only checked
     // status could fire mod.cancel on a job that is already terminating.
-    if (job.terminating || job.status !== 'running') return;
+    if (!canRequestCancellation(job)) return;
     const idleFor = Date.now() - lastActivityAt;
     if (idleFor < idleTimeoutMs) return;
     watchdogInFlight = true;
@@ -1177,7 +1180,7 @@ async function runJob(job) {
       const mod = await getGenModuleForJob(job);
       // Re-check after the await — terminate() may have started (and is
       // draining to disk with job.status still 'running') during the import.
-      if (job.terminating || job.status !== 'running') return;
+      if (!canRequestCancellation(job)) return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
       if (mod?.cancel) mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
@@ -1430,36 +1433,27 @@ export async function cancelJob(jobId) {
     // async progress-drain leaves job.status === 'running' for a beat, but the
     // outcome is decided. Don't fire a redundant provider cancel or report
     // 'canceling' — treat it like an already-terminal job (route maps to 409).
-    if (runningJob.terminating) {
+    if (!canRequestCancellation(runningJob)) {
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
     const mod = await getGenModuleForJob(runningJob);
-    if (runningJob.terminating || runningJob.status !== 'running') {
+    // Completion may claim the outcome while provider resolution yields.
+    if (!canRequestCancellation(runningJob)) {
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
-    const previousCancelRequested = runningJob.cancelRequested;
-    const previousRemoteMedia = runningJob.params?.remoteMedia;
-    // cancelRequested flips the dispatcher's `failed` handler into the
-    // `canceled` branch instead of marking it failed.
-    runningJob.cancelRequested = true;
+    const previousIntent = snapshotCancellationIntent(runningJob);
+    // Set intent before a provider can emit failure synchronously.
+    applyCancellationIntent(runningJob);
     if (isRemoteMediaJob(runningJob)) {
-      // Remote cancellation can outlive this process when the peer is down.
-      // Persist the intent before signaling the adapter so boot reconciliation
-      // replays the stable submission and resumes cancellation instead of
-      // silently resurrecting the render.
-      runningJob.params.remoteMedia = {
-        ...(runningJob.params.remoteMedia && typeof runningJob.params.remoteMedia === 'object'
-          ? runningJob.params.remoteMedia : {}),
-        cancelRequested: true,
-      };
+      // Durable intent precedes the adapter call so boot recovery resumes
+      // cancellation rather than silently resurrecting the remote render.
       await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
     }
     if (mod?.cancel && mod.cancel(jobId) === false) {
       // A provider may have crossed its durable finalization boundary before
       // its completed event reaches the queue. Refusal must not turn a later
       // finalization failure into a cancellation or leave retry markers set.
-      runningJob.cancelRequested = previousCancelRequested;
-      if (isRemoteMediaJob(runningJob)) runningJob.params.remoteMedia = previousRemoteMedia;
+      restoreCancellationIntent(runningJob, previousIntent);
       if (isRemoteMediaJob(runningJob)) await persist();
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
