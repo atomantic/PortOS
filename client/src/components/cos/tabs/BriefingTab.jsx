@@ -19,7 +19,9 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+
+const BRIEFING_EVENTS = ['cos:agent:completed'];
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -157,10 +159,7 @@ const renderInlineFormatting = (text) => {
 };
 
 export default function BriefingTab() {
-  const [briefings, setBriefings] = useState([]);
-  const [currentBriefing, setCurrentBriefing] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
   const [generationPending, setGenerationPending] = useState(false);
   const generationInFlightRef = useRef(false);
@@ -174,8 +173,7 @@ export default function BriefingTab() {
         throw new Error(result?.reason || 'The briefing could not be generated');
       }
       setGenerationPending(true);
-      const latest = await loadData({ showLoading: false });
-      if (latest) setGenerationPending(false);
+      await refetch();
     } finally {
       generationInFlightRef.current = false;
     }
@@ -186,53 +184,28 @@ export default function BriefingTab() {
     generateBriefing();
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async ({ showLoading = true } = {}) => {
-    if (showLoading) setLoading(true);
-    const [listResult, latest] = await Promise.all([
-      api.getCosBriefings().catch(() => ({ briefings: [] })),
-      api.getCosLatestBriefing().catch(() => null)
+  const { data, loading, refetch } = useSocketResource(async () => {
+    const [listResult, briefing] = await Promise.all([
+      api.getCosBriefings(),
+      selectedDate ? api.getCosBriefing(selectedDate) : api.getCosLatestBriefing(),
     ]);
-    setBriefings(listResult.briefings || []);
-    if (latest) {
-      setCurrentBriefing(latest);
-      setSelectedDate(latest.date);
-      // Expand all sections by default
-      const parsed = parseBriefingMarkdown(latest.content);
-      const expanded = {};
-      parsed.sections.forEach((_s, i) => { expanded[i] = true; });
-      setExpandedSections(expanded);
-    }
-    if (showLoading) setLoading(false);
-    return latest;
-  };
+    return { briefings: listResult.briefings || [], briefing };
+  }, {
+    namespace: 'cos',
+    events: BRIEFING_EVENTS,
+    resourceKey: selectedDate,
+    // Daily briefings are persisted by this job's agent, not the weekly digest.
+    matchesEvent: agent => agent?.metadata?.jobId === 'job-daily-briefing',
+  });
+  const briefings = data?.briefings || [];
+  const currentBriefing = data?.briefing;
 
-  useAutoRefetch(
-    async () => {
-      const latest = await loadData({ showLoading: false });
-      if (latest) setGenerationPending(false);
-      return latest;
-    },
-    5000,
-    { enabled: generationPending, immediate: false, pollOnly: true },
-  );
-
-  const loadBriefing = async (date) => {
-    setLoading(true);
-    setSelectedDate(date);
-    const briefing = await api.getCosBriefing(date).catch(() => null);
-    if (briefing) {
-      setCurrentBriefing(briefing);
-      const parsed = parseBriefingMarkdown(briefing.content);
-      const expanded = {};
-      parsed.sections.forEach((_s, i) => { expanded[i] = true; });
-      setExpandedSections(expanded);
-    }
-    setLoading(false);
-  };
+  useEffect(() => {
+    if (!currentBriefing) return;
+    setGenerationPending(false);
+    const parsed = parseBriefingMarkdown(currentBriefing.content);
+    setExpandedSections(Object.fromEntries(parsed.sections.map((_section, i) => [i, true])));
+  }, [currentBriefing]);
 
   const toggleSection = (idx) => {
     setExpandedSections(prev => ({ ...prev, [idx]: !prev[idx] }));
@@ -258,8 +231,8 @@ export default function BriefingTab() {
           {briefings.length > 0 && (
             <select
               aria-label="Date"
-              value={selectedDate || ''}
-              onChange={(e) => loadBriefing(e.target.value)}
+              value={selectedDate || currentBriefing?.date || ''}
+              onChange={(e) => setSelectedDate(e.target.value)}
               className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"
             >
               {briefings.map(b => (
@@ -279,9 +252,7 @@ export default function BriefingTab() {
             />
           )}
           <button
-            onClick={() => loadData({ showLoading: false }).then((latest) => {
-              if (latest) setGenerationPending(false);
-            })}
+            onClick={() => refetch()}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
           >
             <RefreshCw size={14} />
