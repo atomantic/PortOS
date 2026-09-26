@@ -39,6 +39,7 @@ const DEFAULT_LOCAL_PORT = PORTS.TAILCAT_INGRESS;
 const SERVE_READY_MS = 20_000;
 const DIAGNOSTIC_TAIL_CHARS = 4096;
 const GENKEY_TIMEOUT_MS = 60_000;
+const RELAY_OBSERVATION_MS = 5 * 60 * 1000;
 const DEFAULT_DATA = { version: 1, serve: null };
 
 const withLock = createMutex();
@@ -47,6 +48,71 @@ const withLifecycle = createMutex();
 /** @type {{ child: import('node:child_process').ChildProcess, localPort: number, keyName: string } | null} */
 let liveServe = null;
 let shuttingDown = false;
+
+/** Observe complete stderr lines without exposing their private endpoints or tokens. */
+function observeServeRelay(child) {
+  let partial = '';
+  let droppingLine = false;
+  let expiry;
+  let closed = false;
+  // Relay evidence belongs to this process, never the persisted serve config.
+  child.tailcatRelay = { status: 'unknown', error: null, at: null };
+  let failedRegion = null;
+  const publish = (status, error, at = new Date().toISOString()) => {
+    clearTimeout(expiry);
+    if (status === 'unknown') failedRegion = null;
+    child.tailcatRelay = { status, error, at };
+    child.emit('tailcat:relay');
+    if (status !== 'unknown') {
+      expiry = setTimeout(() => {
+        if (!closed) publish('unknown', null, null);
+      }, RELAY_OBSERVATION_MS);
+      expiry.unref?.();
+    }
+  };
+  const lineReceived = (line) => {
+    if (!/\bderp(?:http|[-.( :])/i.test(line)) return;
+    const region = line.match(/\bderp-(\d+)\b/)?.[1] || null;
+    if (/\bmagicsock: derp-\d+ connected\b/.test(line)) {
+      // A different relay connecting does not disprove the observed failure.
+      if (failedRegion && region !== failedRegion) return;
+      failedRegion = null;
+      publish('connected', null);
+    } else if (/\b(?:error|failed|timeout|timed out|deadline exceeded|refused|no such host|socket is not connected)\b/i.test(line)
+      || /\bclosing connection to derp-\d+.*\(conn-close\)/.test(line)) {
+      failedRegion = region;
+      // Fixed messages intentionally avoid replaying arbitrary CLI text. Even a
+      // truncated capability, password or endpoint cannot cross this boundary.
+      const error = /timeout|timed out|deadline exceeded/i.test(line)
+        ? 'Tailcat relay connection timed out.'
+        : 'Tailcat reported a relay connection failure or loss.';
+      publish('degraded', error);
+    }
+  };
+  child.stderr?.on('data', (chunk) => {
+    if (closed) return;
+    try {
+      for (const part of String(chunk).split(/(\n)/)) {
+        if (part === '\n') {
+          if (!droppingLine) lineReceived(partial);
+          partial = '';
+          droppingLine = false;
+        } else if (!droppingLine) {
+          if (partial.length + part.length > DIAGNOSTIC_TAIL_CHARS) {
+            partial = '';
+            droppingLine = true;
+          } else partial += part;
+        }
+      }
+    } catch { /* process stream boundary: diagnostics must not stop PortOS */ }
+  });
+  child.disposeTailcatRelay = () => {
+    closed = true;
+    partial = '';
+    clearTimeout(expiry);
+  };
+  child.once('exit', child.disposeTailcatRelay);
+}
 
 /**
  * Normalize a stored serve record. Drop anything that cannot drive a restore
@@ -145,6 +211,9 @@ export async function getTailcatServeStatus() {
       enabled: false,
       status: 'stopped',
       live: false,
+      relayStatus: 'unknown',
+      relayError: null,
+      relayObservedAt: null,
       localPort: DEFAULT_LOCAL_PORT,
       keyName: DEFAULT_KEY_NAME,
       tcAddress: null,
@@ -160,6 +229,9 @@ export async function getTailcatServeStatus() {
     enabled: entry.enabled,
     status: live ? 'active' : (entry.status === 'active' ? 'stopped' : entry.status),
     live,
+    relayStatus: live ? (liveServe.child.tailcatRelay?.status || 'unknown') : 'unknown',
+    relayError: live ? (liveServe.child.tailcatRelay?.error || null) : null,
+    relayObservedAt: live ? (liveServe.child.tailcatRelay?.at || null) : null,
     localPort: entry.localPort,
     keyName: entry.keyName,
     tcAddress: entry.tcAddress,
@@ -251,6 +323,8 @@ export async function startServeProcess({
     }),
   );
 
+  observeServeRelay(child);
+
   let stdoutTail = '';
   let stderrTail = '';
   let settled = false;
@@ -271,7 +345,10 @@ export async function startServeProcess({
     clearTimeout(timer);
     clearInterval(poller);
     const diagnostics = error ? redactTailcatDiagnostics(stderrTail || stdoutTail) : '';
+    stdoutTail = '';
+    stderrTail = '';
     if (error) {
+      child.disposeTailcatRelay?.();
       if (diagnostics) error.message = `${error.message} — tailcat said: ${diagnostics}`;
       try { child.kill('SIGTERM'); } catch { /* process event boundary */ }
       rejectReady(error);
@@ -302,10 +379,12 @@ export async function startServeProcess({
   poller = setInterval(() => { tryResolve().catch(() => {}); }, 150);
 
   child.stdout?.on('data', (chunk) => {
+    if (settled) return;
     stdoutTail = (stdoutTail + String(chunk)).slice(-DIAGNOSTIC_TAIL_CHARS);
     tryResolve().catch(() => {});
   });
   child.stderr?.on('data', (chunk) => {
+    if (settled) return;
     stderrTail = (stderrTail + String(chunk)).slice(-DIAGNOSTIC_TAIL_CHARS);
     // Human line often includes the address before --json flushes; harvest it.
     const fromErr = parseServeListenAddr(stderrTail);
@@ -335,6 +414,7 @@ function killLiveServe() {
   const child = liveServe?.child;
   // Relinquish ownership before signalling: a synchronous exit is intentional.
   liveServe = null;
+  child?.disposeTailcatRelay?.();
   if (child) instanceEvents.emit('tailcat:serve:changed');
   if (child && !child.killed) {
     try { child.kill('SIGTERM'); } catch { /* best-effort */ }
@@ -344,6 +424,9 @@ function killLiveServe() {
 function trackServe(child, localPort, keyName) {
   liveServe = { child, localPort, keyName };
   const owned = liveServe;
+  child.on('tailcat:relay', () => {
+    if (liveServe === owned && !child.killed) instanceEvents.emit('tailcat:serve:changed');
+  });
   child.on('exit', (code, signal) => {
     if (liveServe !== owned) return;
     // Serialize the terminal write behind startup persistence. Retry/stop may

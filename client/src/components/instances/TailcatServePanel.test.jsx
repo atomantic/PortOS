@@ -183,3 +183,21 @@ it.each([false, true])('reconciles changes received during a mutation (failed=%s
   expect(getTailcatServe).toHaveBeenCalledTimes(2);
   expect(screen.getByText('Example process exited')).toBeInTheDocument();
 });
+
+
+it('shows relay degradation and socket-driven recovery without claiming peer health', async () => {
+  getTailcatServe.mockReset().mockResolvedValue({ ...serving, relayStatus: 'degraded',
+    relayError: 'Tailcat relay connection timed out.', relayObservedAt: '2026-01-01T00:00:00Z' });
+  render(<TailcatServePanel />);
+  expect(await screen.findByText('relay degraded')).toBeInTheDocument();
+  expect(screen.getByText(/Tailcat relay connection timed out/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  getTailcatServe.mockResolvedValue({ ...serving, relayStatus: 'connected', relayError: null });
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.queryByText('relay degraded')).not.toBeInTheDocument();
+  expect(screen.getByText('process running')).toBeInTheDocument();
+  expect(screen.getByText(/End-to-end peer health is not verified/)).toBeInTheDocument();
+  getTailcatServe.mockResolvedValue({ ...serving, relayStatus: 'unknown' });
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.getByText(/Relay reachability is unknown/)).toBeInTheDocument();
+});

@@ -63,6 +63,7 @@ describe('tailcatServe helpers', () => {
 
   afterEach(() => {
     _resetLiveServeForTests();
+    vi.useRealTimers();
   });
 
   it('surfaces shared installation failure without starting a tunnel', async () => {
@@ -300,6 +301,77 @@ describe('tailcatServe helpers', () => {
     expect(first.kill).toHaveBeenCalled();
     expect(status.live).toBe(true);
     expect(_liveServeForTests()?.child).toBe(second);
+  });
+
+  it('reports fragmented relay failures, recovery, expiry and replacement isolation through serve status', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    let saved = { version: 1, serve: null };
+    readJSONFile.mockImplementation(async () => saved);
+    atomicWrite.mockImplementation(async (_path, data) => { saved = data; });
+    const children = [];
+    const deps = {
+      ensureInstalled: async () => ({ bin: '/example/tailcat' }),
+      primeDerpMap: async () => ({}),
+      ensureKey: async () => ({}),
+      startServe: (options) => startServeProcess({
+        ...options,
+        mkdirFn: async () => {},
+        readFileFn: async () => '',
+        spawnFn: () => {
+          const child = fakeChild();
+          children.push(child);
+          Promise.resolve().then(() => child.stdout.emit('data', `${JSON.stringify({ listenAddr: EXAMPLE_TC })}\n`));
+          return child;
+        },
+      }),
+    };
+    expect(await ensureTailcatServe(deps)).toMatchObject({ live: true, relayStatus: 'unknown' });
+    const child = children[0];
+    instanceEvents.emit.mockClear();
+    const writes = atomicWrite.mock.calls.length;
+    const raw = `magicsock: derp.Recv(derp-301): ${EXAMPLE_TC} https://user:example-secret@relay.example.com:443 context deadline exceeded`;
+    child.stderr.emit('data', raw.slice(0, 45));
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'unknown' });
+    child.stderr.emit('data', raw.slice(45) + '\n');
+    const failed = await getTailcatServeStatus();
+    expect(failed).toMatchObject({ live: true, status: 'active', relayStatus: 'degraded',
+      relayError: 'Tailcat relay connection timed out.', relayObservedAt: '2026-01-01T00:00:00.000Z' });
+    expect(failed.relayError).not.toMatch(/example-secret|relay.example|tcEX/);
+    expect(instanceEvents.emit).toHaveBeenCalledWith('tailcat:serve:changed');
+    expect(atomicWrite).toHaveBeenCalledTimes(writes);
+
+    child.stderr.emit('data', 'derphttp.Client.Connect: connecting to derp-301 (example)\n');
+    child.stderr.emit('data', 'magicsock: derp-302 connected; connGen=1\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'degraded' });
+    child.stderr.emit('data', 'magicsock: derp-301 connected; connGen=2\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'connected', relayError: null });
+    child.stderr.emit('data', 'magicsock: closing connection to derp-301 (conn-close), age 10s\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'degraded' });
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'unknown', relayError: null, relayObservedAt: null });
+
+    child.stderr.emit('data', 'magicsock: derp-302 connected; connGen=3\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'connected' });
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'unknown' });
+
+    // Oversized lines are dropped as a whole, not classified from a private suffix.
+    child.stderr.emit('data', 'x'.repeat(5000));
+    child.stderr.emit('data', raw + '\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ relayStatus: 'unknown' });
+    child.stderr.emit('data', raw + '\n');
+    await retryTailcatServe(deps);
+    instanceEvents.emit.mockClear();
+    child.stderr.emit('data', raw + '\n');
+    expect(await getTailcatServeStatus()).toMatchObject({ live: true, relayStatus: 'unknown', relayError: null });
+    expect(instanceEvents.emit).not.toHaveBeenCalled();
+    children[1].stderr.emit('data', raw + '\n');
+    await stopTailcatServe();
+    instanceEvents.emit.mockClear();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(await getTailcatServeStatus()).toMatchObject({ live: false, relayStatus: 'unknown', relayError: null });
+    expect(instanceEvents.emit).not.toHaveBeenCalled();
   });
 
   it('getTailcatServeStatus never invents a live process', async () => {
