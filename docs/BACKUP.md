@@ -13,8 +13,8 @@ Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/ser
 
 ## Database backend migration
 
-Migration between Docker and native PostgreSQL is temporarily unavailable in
-Settings and `scripts/db.sh migrate`. Copying a live database and switching
+Migration and switching between Docker and native PostgreSQL are temporarily
+unavailable in Settings. `scripts/db.sh migrate` also refuses. Copying a live database and switching
 mode can strand writes accepted after the snapshot. Backups and standalone
 exports remain available; they do not make a new backend authoritative.
 

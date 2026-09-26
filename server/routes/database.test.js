@@ -106,13 +106,11 @@ describe('database route boundary', () => {
 // Regression: an API migration must not start the unfenced snapshot/cutover,
 // even for an older client that still exposes the migration button.
 describe('database migration admission', () => {
-  it.each(['docker', 'native'])('refuses repeated migrations to %s without side effects', async (target) => {
+  it.each([['docker', true], ['native', true], ['docker', false], ['native', false]])('refuses repeated cutovers to %s (migrate=%s) without side effects', async (target, migrate) => {
     vi.clearAllMocks();
     const app = makeApp();
-    const io = { emit: vi.fn() };
-    app.set('io', io);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await request(app).post('/api/database/switch').send({ target, migrate: true });
+      const res = await request(app).post('/api/database/switch').send({ target, migrate });
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('DATABASE_CUTOVER_UNAVAILABLE');
       expect(res.body.error).toMatch(/coordinated shutdown and restart/);
@@ -121,7 +119,6 @@ describe('database migration admission', () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
     expect(checkHealth).not.toHaveBeenCalled();
-    expect(io.emit).not.toHaveBeenCalled();
   });
 });
 

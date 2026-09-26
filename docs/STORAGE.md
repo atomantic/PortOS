@@ -203,8 +203,8 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-Automatic backend migration is temporarily unavailable. Both the Settings
-migration request and `scripts/db.sh migrate` refuse before copying data or
+Automatic backend migration and switching are temporarily unavailable.
+The Settings switch/migration requests and `scripts/db.sh migrate` refuse before copying data or
 changing mode. The former path could accept writes after its dump snapshot
 and strand them on the source; changing `.env` also leaves the running server
 connected to its original pool.

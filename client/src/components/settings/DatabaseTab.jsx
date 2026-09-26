@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
+import { Container, HardDrive, Download, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount } from '../../utils/formatters';
 import {
-  getDatabaseStatus, switchDatabase, setupNativeDatabase, exportDatabase, fixDatabase,
+  getDatabaseStatus, setupNativeDatabase, exportDatabase, fixDatabase,
   syncDatabase, startDatabase, stopDatabase, destroyDatabase
 } from '../../services/api';
 import socket from '../../services/socket';
@@ -99,20 +99,6 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
         {/* Non-active backend actions */}
         {!isActive && (data?.installed || data?.configured) && (
           <>
-            {/* Switch without migration */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'switch',
-                label: `Switch to ${displayLabel} without migrating data?`,
-                action: () => runAction(`switch-${backend}`, () => switchDatabase(backend, false), `Switched to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
-            >
-              <ArrowRightLeft size={12} />
-              Switch
-            </button>
-
             {/* Sync data from active into this backend */}
             <button
               onClick={() => setConfirmAction({
@@ -262,7 +248,7 @@ export function DatabaseTab() {
             </div>
 
             <p className="text-sm text-port-warning">
-              Database migration is temporarily unavailable to protect writes made while PortOS is running.
+              Database migration and switching are temporarily unavailable to protect writes made while PortOS is running.
               Keep using the current backend until a coordinated shutdown and restart is available.
               Backups remain available.
             </p>
