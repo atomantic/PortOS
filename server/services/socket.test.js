@@ -150,6 +150,7 @@ describe('socket.js — initSocket', () => {
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
+    dashboardEvents.removeAllListeners();
   });
 
   it('forwards death-clock invalidations without personal data', () => {

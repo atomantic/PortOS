@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
+import { useTimeTick } from '../hooks/useTimeTick';
+import { timeAgo, timeUntil } from '../utils/formatters';
 
 const RESOURCE_EVENTS = ['cos:schedule:changed', 'cos:scheduler:changed', 'cos:tasks:changed', 'cos:learning:changed', 'cos:config:changed'];
 
@@ -23,6 +25,10 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     () => api.getCosUpcomingTasks(6, { silent: true }),
     { namespace: 'cos', events: RESOURCE_EVENTS }
   );
+
+  // Countdown labels keep moving without an API read. Eligibility remains
+  // authoritative server state and changes on scheduler/task events.
+  useTimeTick(60000);
 
   // Don't render during the initial load.
   if (loading) {
@@ -51,8 +57,13 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   }
 
   // Separate ready tasks from scheduled ones
-  const readyTasks = upcoming.filter(t => t.status === 'ready');
-  const scheduledTasks = upcoming.filter(t => t.status === 'scheduled');
+  const currentTasks = upcoming.map(task => ({
+    ...task,
+    eligibleInFormatted: Number.isFinite(task.eligibleAt) ? timeUntil(task.eligibleAt) : task.eligibleInFormatted,
+    lastRunFormatted: task.lastRun ? timeAgo(task.lastRun) : task.lastRunFormatted,
+  }));
+  const readyTasks = currentTasks.filter(t => t.status === 'ready');
+  const scheduledTasks = currentTasks.filter(t => t.status === 'scheduled');
 
   // Get interval type label
   const getIntervalLabel = (intervalType) => {

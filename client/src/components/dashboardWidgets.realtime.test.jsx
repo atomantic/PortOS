@@ -86,6 +86,22 @@ describe('dashboard resource subscriptions', () => {
     expect(api[read]).toHaveBeenCalledTimes(4);
   });
 
+  it('advances overdue coloring and schedule countdowns with no network reads', async () => {
+    vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
+    api.listThreads.mockResolvedValue({ threads: [{ id: 'example', title: 'Example deadline', status: 'open', dueAt: '2026-01-01T12:00:30Z' }], total: 1 });
+    api.getCosUpcomingTasks.mockResolvedValue([{ taskType: 'example', description: 'Example task', status: 'scheduled', eligibleAt: Date.now() + 120000 }]);
+    render(<MemoryRouter><OpenThreadsWidget /><UpcomingTasksWidget /></MemoryRouter>);
+    await flush();
+    const dueDate = screen.getByText('Jan 1, 2026');
+    expect(dueDate).not.toHaveClass('text-port-error');
+    expect(screen.getByText('Next: in 2m')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    expect(dueDate).toHaveClass('text-port-error');
+    expect(screen.getByText('Next: in 1m')).toBeInTheDocument();
+    expect(api.listThreads).toHaveBeenCalledTimes(1);
+    expect(api.getCosUpcomingTasks).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes the open snapshot list after backup finalization without a timer', async () => {
     api.getBackupSnapshots.mockResolvedValue([{ id: 'example-before', fileCount: 1 }]);
     render(<MemoryRouter><BackupWidget /></MemoryRouter>);

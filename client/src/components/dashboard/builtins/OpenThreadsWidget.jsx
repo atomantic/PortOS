@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { ListTodo, Pin } from 'lucide-react';
 import * as api from '../../../services/api';
 import { useSocketResource } from '../../../hooks/useSocketResource';
+import { useTimeTick } from '../../../hooks/useTimeTick';
 import { isThreadOverdue, threadNextLine } from '../../../lib/brainThreads.js';
 import { formatCount, formatDateShort } from '../../../utils/formatters';
 import ThreadSourceClosedAction from '../../brain/ThreadSourceClosedAction';
@@ -24,6 +25,8 @@ const WIDGET_STATUSES = 'open,waiting';
 
 export default function OpenThreadsWidget() {
   const [completed, setCompleted] = useState({});
+  // Overdue coloring is local clock state, not a reason to re-read the API.
+  useTimeTick(60000);
   const { data, loading } = useSocketResource(
     () => api.listThreads({ status: WIDGET_STATUSES, limit: ROWS, offset: 0 }, { silent: true }),
     { events: RESOURCE_EVENTS },
