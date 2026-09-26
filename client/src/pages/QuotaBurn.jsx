@@ -23,7 +23,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import FamilyCard from '../components/quotaBurn/FamilyCard';
 import { NumberField } from '../components/quotaBurn/fields';
 import * as api from '../services/api';
-import { useQuotaPendingPoll } from '../hooks/useQuotaPendingPoll';
+import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
 import { buildQuotaBurnTaskCatalog, flattenTaskCatalog } from '../lib/quotaBurnTasks';
 import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage';
@@ -254,8 +254,8 @@ export default function QuotaBurn() {
   // A cold quota cache comes back as `pending` families rather than holding the
   // response open for a 20s-per-family PTY scrape, so the page renders its plan
   // immediately and fills the numbers in when the scrape lands. The shared hook
-  // owns the cadence and the hidden-tab pause (hooks/useQuotaPendingPoll.js).
-  useQuotaPendingPoll(load, status?.families);
+  // subscribes to completion events and reconciles after reconnect/tab show (hooks/useQuotaUpdates.js).
+  useQuotaUpdates(load);
 
   // There is no Save button: an edit lands in local state immediately and is
   // persisted on a trailing edge. Successive edits fold into ONE patch body, so

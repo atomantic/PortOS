@@ -126,6 +126,22 @@ describe('createStaleWhileRevalidate', () => {
     expect(await cache.read('k', produce)).toBe('full'); // …and revalidated
   });
 
+  it('keeps a settled reading usable when its synchronous notification throws', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const cache = createStaleWhileRevalidate({
+        ttlMs: TTL, onSettled: () => { throw new Error('example listener failure'); },
+      });
+      const produce = vi.fn().mockResolvedValue('reading');
+      expect(await cache.read('k', produce)).toBe('reading');
+      expect(await cache.read('k', produce)).toBe('reading');
+      expect(produce).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('keys entries independently and clears them', async () => {
     const cache = createStaleWhileRevalidate({ ttlMs: TTL });
     await cache.read('a', () => Promise.resolve(1));
