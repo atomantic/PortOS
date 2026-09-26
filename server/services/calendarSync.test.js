@@ -1,7 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+
+import { readFile, writeFile, rm } from 'fs/promises';
+import { join } from 'path';
+import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('./calendarAccounts.js', () => ({
   getAccount: vi.fn(),
+  listAccounts: vi.fn(),
   updateSyncStatus: vi.fn(),
   updateSubcalendars: vi.fn(),
   mergeDiscoveredSubcalendars: vi.fn()
@@ -23,7 +28,7 @@ vi.mock('./tribe.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', async importOriginal => ({
-  ...await importOriginal(),
+  ...makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('calendar-cache-defaults-') }),
   ensureDir: vi.fn(),
   readJSONFile: vi.fn(),
   atomicWrite: vi.fn(),
@@ -35,13 +40,13 @@ vi.mock('./humanActivity.js', () => ({
 }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
 
-import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
-import { syncAccount, logCalendarTouchpoints } from './calendarSync.js';
+import { syncAccount, logCalendarTouchpoints, loadCache, getEvents, CACHE_DIR } from './calendarSync.js';
 import { autoLogTouchpoints } from './tribe.js';
-import { mcpSyncAccount, mcpDiscoverCalendars } from './calendarGoogleSync.js';
+import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';
-import { getAccount } from './calendarAccounts.js';
+import { getAccount, listAccounts } from './calendarAccounts.js';
 
 const ACCOUNT_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -186,5 +191,70 @@ describe('Outlook batch identity reconciliation (#8635)', () => {
       { id: 'retained', externalId: 'a', title: 'Current' },
       ...(status === 'partial' ? [omitted] : []),
     ]);
+  });
+});
+
+// Real file I/O is essential: cloning a mock's ENOENT fallback hides the bug.
+afterAll(cleanupTempDataRoots);
+
+describe('calendar cache default isolation', () => {
+  const OTHER_ID = '22222222-2222-2222-2222-222222222222';
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actual = await vi.importActual('../lib/fileUtils.js');
+    ensureDir.mockImplementation(actual.ensureDir);
+    readJSONFile.mockImplementation(actual.readJSONFile);
+    atomicWrite.mockImplementation(actual.atomicWrite);
+    await rm(CACHE_DIR, { recursive: true, force: true });
+    const accounts = [ACCOUNT_ID, OTHER_ID].map(id => ({ id, type: 'google-calendar' }));
+    getAccount.mockImplementation(async id => accounts.find(account => account.id === id));
+    listAccounts.mockResolvedValue(accounts);
+  });
+
+  it('keeps first Google pushes and aggregate events in their own account caches', async () => {
+    const rawEvent = id => ({
+      id, summary: id,
+      start: { dateTime: '2099-01-01T10:00:00Z' },
+      end: { dateTime: '2099-01-01T11:00:00Z' }
+    });
+    await pushSyncEvents(ACCOUNT_ID, 'calendar-a', 'Example A', [rawEvent('event-a')]);
+    const first = await loadCache(ACCOUNT_ID);
+    const absent = await loadCache(OTHER_ID);
+    const anotherAbsent = await loadCache(OTHER_ID);
+    expect(absent).toEqual({ syncCursor: null, events: [] });
+    expect(absent).not.toBe(first);
+    expect(absent.events).not.toBe(first.events);
+    expect(absent).not.toBe(anotherAbsent);
+    expect(absent.events).not.toBe(anotherAbsent.events);
+
+    await pushSyncEvents(OTHER_ID, 'calendar-b', 'Example B', [rawEvent('event-b')]);
+    const persisted = JSON.parse(await readFile(join(CACHE_DIR, `${OTHER_ID}.json`), 'utf8'));
+    expect(persisted.events.map(event => event.apiId)).toEqual(['event-b']);
+    const aggregate = await getEvents();
+    expect(aggregate.total).toBe(2);
+    expect(aggregate.events.map(event => [event.apiId, event.accountId])).toEqual(
+      expect.arrayContaining([['event-a', ACCOUNT_ID], ['event-b', OTHER_ID]])
+    );
+  });
+
+  it('isolates invalid-shape fallbacks and preserves valid stored caches', async () => {
+    await ensureDir(CACHE_DIR);
+    await writeFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), JSON.stringify({ events: null }));
+    await writeFile(join(CACHE_DIR, `${OTHER_ID}.json`), JSON.stringify({ events: {} }));
+    const first = await loadCache(ACCOUNT_ID);
+    const second = await loadCache(OTHER_ID);
+    expect(first).not.toBe(second);
+    expect(first.events).not.toBe(second.events);
+    first.events.push({ id: 'unsaved' });
+    first.syncCursor = 'unsaved-cursor';
+    expect(second).toEqual({ syncCursor: null, events: [] });
+    expect(await loadCache(ACCOUNT_ID)).toEqual({ syncCursor: null, events: [] });
+
+    const valid = { syncCursor: 'example-cursor', events: [{ id: 'stored-event' }], extra: true };
+    const serialized = JSON.stringify(valid);
+    await writeFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), serialized);
+    expect(await loadCache(ACCOUNT_ID)).toEqual(valid);
+    expect(await readFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), 'utf8')).toBe(serialized);
   });
 });
