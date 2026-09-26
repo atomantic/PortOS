@@ -31,6 +31,13 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
 }));
+vi.mock('../services/socket.js', () => ({
+  // Observe the persisted state at emit time: a notification before a save
+  // would make a socket-driven client read stale data with no later retry.
+  emitCodeAnimationChanged: vi.fn((id) => ({
+    id, status: codeAnimationRecords.get(id)?.status, html: codeAnimationHtml.get(id),
+  })),
+}));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
@@ -41,6 +48,7 @@ vi.mock('../services/promptRunner.js', () => ({
   assertProvider: vi.fn(),
 }));
 
+import { emitCodeAnimationChanged } from '../services/socket.js';
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
@@ -116,6 +124,9 @@ describe('GET /api/code-animation/jobs', () => {
     expect(response.status).toBe(200);
     expect(response.body.items).toMatchObject([{ id, status: 'failed' }]);
     expect(response.body.counts).toEqual({ running: 0, completed: 0 });
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id, status: 'failed', html: undefined },
+    ]);
     expect(listCodeAnimationJobRecords).not.toHaveBeenCalled();
     expect((await request(makeApp()).get(`/api/code-animation/generate/${id}`)).body.error)
       .toMatch(/interrupted by a server restart/);
@@ -370,6 +381,10 @@ describe('POST /api/code-animation/generate', () => {
     const job = await pollUntilSettled(app, res.body.id);
     expect(job).toMatchObject({ status: 'completed', providerId: 'api-1', model: 'example-model', runId: 'run-1' });
     expect(job.html).toBe('<!DOCTYPE html><html><body><canvas></canvas></body></html>');
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id: job.id, status: 'running', html: undefined },
+      { id: job.id, status: 'completed', html: job.html },
+    ]);
     const call = runPromptThroughProvider.mock.calls[0][0];
     expect(call.source).toBe('code-animation-generation');
     expect(call.cwd).toBe(PATHS.data);
@@ -390,6 +405,10 @@ describe('POST /api/code-animation/generate', () => {
     const job = await pollUntilSettled(app, res.body.id);
     expect(job.status).toBe('failed');
     expect(job.error).toMatch(/did not contain an HTML document/);
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id: job.id, status: 'running', html: undefined },
+      { id: job.id, status: 'failed', html: undefined },
+    ]);
   });
 
   it('refuses a disabled provider before starting a job', async () => {

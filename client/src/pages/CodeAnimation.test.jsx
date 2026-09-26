@@ -1,9 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
-const pollHarness = vi.hoisted(() => ({ callbacks: new Map() }));
 const socketHarness = vi.hoisted(() => ({ handlers: new Map() }));
 
 vi.mock('../services/socket', () => ({ default: {
@@ -40,12 +39,6 @@ vi.mock('../hooks/useProviderModels', () => ({
     setSelectedModel: vi.fn(),
     loading: false,
   }),
-}));
-vi.mock('../hooks/useAutoRefetch', () => ({
-  useAutoRefetch: (callback, interval, { enabled }) => {
-    if (enabled) pollHarness.callbacks.set(interval, callback);
-    else pollHarness.callbacks.delete(interval);
-  },
 }));
 
 import CodeAnimation from './CodeAnimation';
@@ -85,10 +78,34 @@ const renderPage = async (initialEntry = '/code-animation') => {
   return result;
 };
 
+const emitSocket = async (event, payload) => {
+  await act(async () => {
+    for (const handler of socketHarness.handlers.get(event) || []) handler(payload);
+  });
+};
+
+const changeVisibility = async (value) => {
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+};
+
+const runningJob = {
+  id: 'job-1', status: 'running', title: 'Example animation',
+  input: { title: 'Example animation', concept: 'A lantern rises' },
+  prompt: 'Example prompt', createdAt: '2026-01-01T00:00:00.000Z',
+};
+const completedJob = {
+  ...runningJob, status: 'completed', html: '<html><body>Finished animation</body></html>',
+  audioUrl: '/api/uploads/example-audio.mp3',
+  frame: { width: 1280, height: 720, durationSeconds: 20, fps: 30 },
+};
+
 describe('Code Animation page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    pollHarness.callbacks.clear();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
     socketHarness.handlers.clear();
     listCodeAnimationJobPage.mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null });
     localStorage.clear();
@@ -104,6 +121,76 @@ describe('Code Animation page', () => {
       audioUrl: null,
       moodBoardId: 'b1',
     });
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('restores a routed job, updates its preview on its event, and never polls', async () => {
+    getCodeAnimationJob.mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Example animation');
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('A lantern rises');
+    expect(screen.getByLabelText('Generated prompt')).toHaveValue('Example prompt');
+    vi.useFakeTimers();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+
+    await emitSocket('code-animation:changed', { id: 'unrelated-job' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    getCodeAnimationJob.mockResolvedValue(completedJob);
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Example animation/ })).toHaveTextContent('Completed');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Preview without audio' }));
+    expect(screen.getByTitle('Code animation preview')).toHaveAttribute('srcdoc', expect.stringContaining('Finished animation'));
+
+    // Terminal records still reconcile: a missing output can be discovered later.
+    getCodeAnimationJob.mockResolvedValue({ ...completedJob, status: 'failed', error: 'Output missing', html: null });
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(screen.getByText('Generation failed: Output missing')).toBeInTheDocument();
+    expect(screen.queryByTitle('Code animation preview')).not.toBeInTheDocument();
+  });
+
+  it('reconciles once per reconnect and tab re-show, including transient errors and missing jobs', async () => {
+    getCodeAnimationJob.mockRejectedValueOnce(new Error('Temporary outage')).mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    expect(screen.queryByText('That generation is no longer available.')).not.toBeInTheDocument();
+    await emitSocket('connect');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Example animation');
+    await changeVisibility('hidden');
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    getCodeAnimationJob.mockRejectedValueOnce({ status: 404, message: 'Missing' });
+    await changeVisibility('visible');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+    expect(screen.getByText('That generation is no longer available.')).toBeInTheDocument();
+    await changeVisibility('visible');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+  });
+
+  it('drops a pending response after selecting another job and releases listeners on unmount', async () => {
+    let resolveFirst;
+    getCodeAnimationJob.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockResolvedValue({ ...runningJob, id: 'job-2', title: 'Second animation',
+        input: { title: 'Second animation', concept: 'Another scene' } });
+    listCodeAnimationJobPage.mockResolvedValue({ items: [{ ...runningJob, id: 'job-2', title: 'Second animation' }],
+      total: 1, counts: { running: 1, completed: 0 }, nextCursor: null });
+    const view = await renderPage('/code-animation/job-1');
+    await userEvent.setup().click(screen.getByRole('link', { name: /Second animation/ }));
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
+    await act(async () => resolveFirst(completedJob));
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
+    expect(screen.queryByRole('button', { name: 'Run with audio' })).not.toBeInTheDocument();
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await emitSocket('code-animation:changed', { id: 'job-2' });
+    await emitSocket('connect');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
   });
 
   it('recovers from a parseable but malformed saved draft', async () => {
@@ -129,7 +216,6 @@ describe('Code Animation page', () => {
     await renderPage();
     await waitFor(() => expect(screen.getAllByRole('link', { name: /Animation \d+/ })).toHaveLength(50));
     expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
-    expect(pollHarness.callbacks.has(10_000)).toBe(false);
     expect(screen.getByText('0 in progress · 1,000 completed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Load older animations' })).toBeInTheDocument();
     vi.useFakeTimers();
@@ -243,12 +329,12 @@ describe('Code Animation page', () => {
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('My style');
   });
 
-  it('keeps edits made after starting a generation when the first poll returns its input snapshot', async () => {
+  it('keeps edits made after starting a generation when an invalidation returns its input snapshot', async () => {
     const user = userEvent.setup();
     startCodeAnimationGeneration.mockResolvedValueOnce({
       id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
     });
-    getCodeAnimationJob.mockResolvedValueOnce({
+    getCodeAnimationJob.mockResolvedValue({
       id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
     });
     await renderPage();
@@ -259,7 +345,7 @@ describe('Code Animation page', () => {
     await waitFor(() => expect(startCodeAnimationGeneration).toHaveBeenCalledOnce());
     await user.type(screen.getByLabelText(/^title/i), 'Edited after submit');
 
-    await act(async () => pollHarness.callbacks.get(3_000)());
+    await emitSocket('code-animation:changed', { id: 'job-1' });
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Edited after submit');
   });
