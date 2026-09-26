@@ -38,6 +38,23 @@
  *     or self-improvement on it queues CoS agents. Every other pipeline route
  *     generates text or media through an already-configured provider, the
  *     same as any AI feature; the caller never chooses what runs.
+ *   - browser: navigate uses the configured browser with its URL/IP guards;
+ *     downloads DELETE removes data. Harness models/refresh re-reads the
+ *     configured harness catalog; neither selects or installs an executable.
+ *   - local-llm (#8798): install/delete/migrate and llama-server download-model
+ *     (including cancel/remove), mtplx models/pull/remove and slotstream
+ *     models/download (including cancel) manage model data, not executables.
+ *     download-preflight only reads. switch selects a built-in backend and
+ *     registers its fixed provider. unload and jev/unload release weights;
+ *     security-guard/install/cancel and jev/install/cancel cancel work.
+ *     laya-mlx/score, jev/score, test (including stream), compare,
+ *     assessments/run/sweep (including sweep/cancel), capability-tests/run
+ *     use configured runtimes for inference, not tool-enabled agent work;
+ *     assessments/delete and capability-tests/delete remove result records.
+ *     In contrast, installers, explicit service lifecycle/startup persistence,
+ *     persistent-mind setup, agent-benchmark and JEV policy/head mutations
+ *     require operator authority. Head training reads git/forge history;
+ *     adoption/discard changes the classifier admitting agent work.
  *   - settings: feature toggles and the Eidoverse host bridge (they arm
  *     PortOS's own integrations or open a listener), orchestration profiles,
  *     AI assignments and credentials (they choose among configured providers
@@ -179,6 +196,39 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/providers/runtimes/install',
   'POST /api/providers/opencode/install',
   'POST /api/providers/fleet-host/setup',
+
+  // Browser executable/profile selection and process lifecycle; harness
+  // install/update/uninstall; local-runtime installation, service lifecycle,
+  // agent execution and execution-policy writes (#8798).
+  'PUT /api/browser/config',
+  'POST /api/browser/launch',
+  'POST /api/browser/restart',
+  'POST /api/browser/stop',
+  'POST /api/harnesses/action',
+  'POST /api/local-llm/laya-mlx/install',
+  'POST /api/local-llm/security-guard/install',
+  'POST /api/local-llm/jev/install',
+  'POST /api/local-llm/jev/heads/train',
+  'POST /api/local-llm/jev/heads/adopt',
+  'POST /api/local-llm/jev/heads/discard',
+  'POST /api/local-llm/install-backend',
+  'POST /api/local-llm/upgrade-backend',
+  'POST /api/local-llm/ollama-service',
+  'POST /api/local-llm/lmstudio-service',
+  'POST /api/local-llm/llama-server/install',
+  'POST /api/local-llm/llama-server/upgrade',
+  'POST /api/local-llm/llama-server/start',
+  'POST /api/local-llm/llama-server/stop',
+  'POST /api/local-llm/mtplx/install',
+  'POST /api/local-llm/mtplx/start',
+  'POST /api/local-llm/mtplx/stop',
+  'POST /api/local-llm/slotstream/install',
+  'POST /api/local-llm/slotstream/start',
+  'POST /api/local-llm/slotstream/stop',
+  'POST /api/local-llm/save-startup',
+  'POST /api/local-llm/persistent-mind-setup/apply',
+  'POST /api/local-llm/assessments/agent-benchmark',
+  'PUT /api/local-llm/jev/policy',
 
   // Autopilots and support requests that queue CoS agents.
   'POST /api/pipeline/series/:id/autopilot/start',
