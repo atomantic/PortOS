@@ -765,3 +765,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `launchVideoValidation.js` | `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time, duration, and poster position before rendering. |
 
 | `messageBrowserIdentity.js` | Shared Outlook row extraction and identity-safe browser action scripts; exact unique targets and confirmed row removal. |
+
+| `databaseMaintenanceJournal.js` | Durable cross-process database admission fence and immutable accepted-operation journal; source-only cancellation archives the operation. |

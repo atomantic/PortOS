@@ -8,6 +8,7 @@
 import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isTestRunner } from './runtimeEnv.js';
+import { assertDatabaseAdmission } from './databaseMaintenanceJournal.js';
 
 const { Pool } = pg;
 
@@ -213,6 +214,8 @@ function maintenanceError() {
 }
 
 async function databaseOperation(fn) {
+  // A process-local restore context cannot bypass a durable cutover fence.
+  assertDatabaseAdmission();
   if (maintenanceActive && !databaseContext.getStore()?.active) throw maintenanceError();
   const context = { active: true };
   const pending = databaseContext.run(context, async () => fn());
@@ -227,6 +230,7 @@ async function databaseOperation(fn) {
 
 /** Drain admitted database work and reject new work until restore completes. */
 export async function withDatabaseMaintenance(fn) {
+  assertDatabaseAdmission();
   if (maintenanceActive || databaseContext.getStore()?.active) throw maintenanceError();
   maintenanceActive = true;
   const context = { active: true };
@@ -339,14 +343,14 @@ export async function checkHealth() {
     };
   }
   try {
-    const result = await pool.query(`
+    const result = await databaseOperation(() => pool.query(`
       SELECT
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
         EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
-    `);
+    `));
     const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
     return {
       connected: true,

@@ -1,3 +1,4 @@
+import '../services/databaseBootFence.js';
 /**
  * CoS Agent Runner - Standalone PM2 Process
  *
@@ -9,6 +10,7 @@
  */
 
 import express from 'express';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { spawn } from '../lib/childProcess.js';
 import * as pty from 'node-pty';
 import { join, basename } from 'path';
@@ -200,6 +202,7 @@ app.get('/agents', async (req, res) => {
  * restarts before the TUI exits.
  */
 app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -283,6 +286,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // transient runner refusal and sent the whole fleet into a retry storm. Name
   // the actual fault instead, and let the caller block on the unrecoverable ones.
   let tuiProcess;
+  assertDatabaseAdmission();
   try {
     tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
       name: 'xterm-256color',
@@ -406,6 +410,7 @@ app.get('/agents/:agentId/stats', async (req, res) => {
  * Spawn a new agent
  */
 app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -490,6 +495,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   //     and the trailing --print marker swallows the next flag as its "prompt".
   //   - Grok on Windows: `/dev/stdin` rewritten to a temp file → useStdin=false.
   //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
+  assertDatabaseAdmission();
   const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt, { cwd });
   const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, deliveredArgs, childEnv);
 

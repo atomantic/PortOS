@@ -96,6 +96,12 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 ---
 
+### Database maintenance journal
+
+`data/database-maintenance/operation.json` is `file-primary`, machine-local recovery state: it must be readable before PostgreSQL, including while either backend is unavailable. Its enclosing directory is the admission fence. The versioned record contains an operation UUID, accepted stage, timestamp, and explicit source/target connection identities; it contains no password, token, or application records. It is never federated and has no reference seed. Missing state is idle; an incomplete, malformed, unreadable, or newer-version operation stays fenced. No install migration is needed for an initially absent operation.
+
+A cancelled accepted operation moves to `data/database-maintenance-cancelled/<operation-id>/` as local recovery evidence. These records remain filesystem-backed and included in backups; they are not a growing application collection. Restoring an active journal deliberately restores its fence: do not delete it merely to make startup succeed. See [database maintenance admission](BACKUP.md#database-maintenance-admission) for the operator contract and current limitations.
+
 ## `asset-file-db-indexed` — bytes on disk, metadata in DB
 
 **Definition.** Large binary payloads (images, video, audio, model weights) stay on disk as bytes, while their **searchable metadata** — provenance, gen params, favorites, notes, lineage, collection membership — lives in PostgreSQL as asset rows that reference the file by a stable key.
