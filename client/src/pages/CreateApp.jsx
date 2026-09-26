@@ -337,7 +337,7 @@ export default function CreateApp() {
             {/* App Configuration - shown after detection */}
             {detected && (
               <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <h3 className="text-lg font-semibold text-white mb-4">App Configuration</h3>
+                <h2 className="text-lg font-semibold text-white mb-4">App Configuration</h2>
 
                 <div className="grid grid-cols-[1fr_auto] gap-4">
                   <div>
@@ -491,7 +491,7 @@ export default function CreateApp() {
             {/* Detection Progress */}
             {detecting && (
               <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Detecting</h3>
+                <h2 className="text-xs font-medium uppercase tracking-wide text-gray-500">Detecting</h2>
                 <StepRows defs={isNonPm2 ? DETECTION_STEPS_NON_PM2 : DETECTION_STEPS_PM2} state={steps} />
               </div>
             )}
@@ -522,7 +522,7 @@ export default function CreateApp() {
             {/* Standardize PM2 config — opt-in, because it rewrites the repo */}
             {detected && isStandardizable(appType) && !standardizeResult && (
               <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500">Optional</h3>
+                <h2 className="text-xs font-medium uppercase tracking-wide text-gray-500">Optional</h2>
                 <p className="text-sm text-white flex items-center gap-2">
                   <Wrench size={14} aria-hidden="true" /> Standardize PM2 config
                 </p>
