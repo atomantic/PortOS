@@ -30,6 +30,29 @@ target; overwriting or deleting it can destroy that recovery copy. Compare and
 recover the missing records before choosing an authoritative backend.
 See [storage mode guidance](STORAGE.md#moving-between-docker-and-native).
 
+### Explicit database endpoints for standalone transfers
+
+Standalone exports and imports can bind all connection fields explicitly:
+
+```bash
+scripts/db.sh export --endpoint localhost 5432 example_user example_db recovery-copy
+scripts/db.sh import --endpoint localhost 5561 example_user example_db data/db-dumps/portos-recovery-copy.sql
+```
+
+These commands require host `pg_dump` / `psql` and never fall back to a Docker
+container or select a backend from saved mode. Use a `pg_dump` version compatible
+with the source PostgreSQL server. The four endpoint arguments are host, port,
+user, and database name; connection strings are not accepted as database names.
+Supply credentials through `PGPASSWORD`, never as command arguments.
+A failed export does not replace an existing dump.
+Import retains the dump and uses one transaction with `ON_ERROR_STOP`.
+
+An explicit endpoint only selects where a standalone transfer runs. Import
+replaces database objects present in the dump: keep recovery copies and stop
+the target's writers before restoring. These commands do not stop PortOS,
+change saved mode, verify a restarted pool, or authorize a backend cutover.
+The complete offline migration lifecycle remains unavailable under #8816.
+
 ## What gets backed up
 
 A backup run (`runBackup` in `server/services/backup.js`) writes to:

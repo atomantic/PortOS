@@ -68,6 +68,45 @@ get_port() {
 }
 
 PGPORT=$(get_port)
+EXPLICIT_ENDPOINT=false
+
+# A coordinator must bind each transfer to its recorded endpoint, not saved
+# mode, inherited PGPORT, or whichever Docker container happens to be running.
+# Passwords remain in the environment, never command arguments.
+set_explicit_endpoint() {
+  if [ "$#" -ne 4 ] || [ -z "$1" ] || [ "${#1}" -gt 255 ] ||
+      [[ "$1" =~ [[:space:],=] ]] || [[ ! "$2" =~ ^[0-9]{1,5}$ ]] ||
+      [ "$((10#$2))" -lt 1 ] || [ "$((10#$2))" -gt 65535 ] ||
+      [ -z "$3" ] || [ "${#3}" -gt 63 ] ||
+      [ -z "$4" ] || [ "${#4}" -gt 63 ] || [[ "$4" == *"="* ]] ||
+      [[ "$4" == postgres://* ]] || [[ "$4" == postgresql://* ]]; then
+    err "Invalid explicit endpoint: expected host, port (1-65535), user, and database name" >&2
+    return 1
+  fi
+  PGHOST="$1"
+  PGPORT="$2"
+  PGUSER="$3"
+  PGDATABASE="$4"
+  EXPLICIT_ENDPOINT=true
+}
+
+cmd_transfer() {
+  local action="$1"
+  shift
+  if [ "${1:-}" = "--endpoint" ]; then
+    if [ "$#" -lt 5 ]; then
+      err "Usage: $action --endpoint <host> <port> <user> <database> [label|file]" >&2
+      return 1
+    fi
+    set_explicit_endpoint "$2" "$3" "$4" "$5" || return 1
+    shift 5
+  fi
+  if [ "$#" -gt 1 ] || { [ "$action" = "import" ] && [ "$#" -ne 1 ]; }; then
+    err "Expected one import file or an optional export label" >&2
+    return 1
+  fi
+  "cmd_$action" "${1:-}"
+}
 
 # Check if Docker PostgreSQL is running
 docker_running() {
@@ -485,8 +524,22 @@ cmd_setup_native() {
   info "Coordinated backend migration is not yet available. Keep using the current backend."
 }
 
+# Scope inherited libpq endpoint overrides out of explicit transfers. In
+# particular PGHOSTADDR takes precedence over -h's network destination.
+run_explicit_pg() (
+  unset PGHOSTADDR PGSERVICE PGSERVICEFILE
+  local binary="$1"
+  shift
+  PGPASSWORD="$PGPASSWORD" "$binary" -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+)
+
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
 run_psql() {
+  if [ "$EXPLICIT_ENDPOINT" = true ]; then
+    # Never fall back to container-local psql: that is a different endpoint.
+    run_explicit_pg psql "$@"
+    return $?
+  fi
   local mode
   mode=$(get_mode)
   if command -v psql >/dev/null 2>&1; then
@@ -501,6 +554,10 @@ run_psql() {
 
 # Run pg_dump, preferring Docker exec in Docker mode to avoid version mismatch
 run_pg_dump() {
+  if [ "$EXPLICIT_ENDPOINT" = true ]; then
+    run_explicit_pg pg_dump "$@"
+    return $?
+  fi
   local mode
   mode=$(get_mode)
   if [ "$mode" = "docker" ] && docker_running; then
@@ -629,6 +686,9 @@ Commands:
   migrate        Unavailable pending coordinated offline cutover
   export [label] Export database to data/db-dumps/
   import <file>  Import a SQL dump file
+  export --endpoint <host> <port> <user> <database> [label]
+  import --endpoint <host> <port> <user> <database> <file>
+                Use host PostgreSQL tools at this exact endpoint (no Docker fallback)
 
 Environment:
   PGMODE=docker|native   Set in .env to control default mode
@@ -647,8 +707,7 @@ case "${1:-help}" in
   use-docker)   cmd_migrate ;;
   use-native)   cmd_migrate ;;
   migrate)      cmd_migrate ;;
-  export)       cmd_export "${2:-}" ;;
-  import)       cmd_import "${2:?Usage: scripts/db.sh import <file>}" ;;
+  export|import) action="$1"; shift; cmd_transfer "$action" "$@" ;;
   logs)         cmd_logs ;;
   help|--help|-h) cmd_help ;;
   *)            err "Unknown command: $1"; cmd_help; exit 1 ;;
