@@ -262,7 +262,7 @@ export default function CodeReviewersTab({ view } = {}) {
                 : fault.code === 'REVIEWER_ACCESS_DENIED'
                   ? 'Select an accessible service or model, or correct provider access. A successful review clears this warning.'
                   : fault.code === 'REVIEWER_UNSUPPORTED'
-                    ? 'Check that the provider has a runnable command or API transport.'
+                    ? 'For tool-free claim/public reviews, configure its command, select API mode, or choose a supported reviewer harness.'
                     : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
             </Banner>
           ))}

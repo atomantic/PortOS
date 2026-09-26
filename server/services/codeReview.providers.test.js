@@ -229,6 +229,7 @@ describe('configured provider reviewers', () => {
     it('names missing CLI commands and unfamiliar harnesses with no enforced no-tool posture', async () => {
       listProviders.mockResolvedValue([
         provider,
+        { ...provider, id: 'supported-cli', type: 'cli', command: 'claude' },
         { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' },
         { ...provider, id: 'no-command', type: 'cli' },
         { ...provider, id: 'switched-off', type: 'cli', command: 'custom-agent', enabled: false },
@@ -241,6 +242,7 @@ describe('configured provider reviewers', () => {
         'provider:hosted-harness': 'REVIEWER_UNSUPPORTED',
       });
       expect(unsupported['provider:example-gpu']).toBeUndefined();
+      expect(unsupported['provider:supported-cli']).toBeUndefined();
       // A disabled provider is already badged `disabled` by the picker's own
       // provider-record check; reporting it here would badge one fact twice.
       expect(unsupported['provider:switched-off']).toBeUndefined();
