@@ -116,7 +116,7 @@ import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
-import { allowSocketRequest, authGate, socketAuthGate } from './services/authGate.js';
+import { allowSocketRequest, authGate, hostControlRouteGate, socketAuthGate } from './services/authGate.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
@@ -274,6 +274,9 @@ app.set('io', io);
 // except the small public set in services/authGate.js (auth status/whoami/login/
 // logout + /api/system/health). No-op when auth is off.
 app.use(authGate);
+// Host-executing routes (lib/hostControlRoutes.js) additionally need operator
+// authority: a session, or a local connection on a password-free install.
+app.use(hostControlRouteGate);
 
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.

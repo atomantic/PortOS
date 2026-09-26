@@ -10,6 +10,16 @@ import { join } from 'path';
 // runner, which is why this suite passed locally and 400'd there.
 const REAL_DIR = tmpdir();
 import lifecycleRoutes from './lifecycle.js';
+import { authGate, hostControlRouteGate } from '../../services/authGate.js';
+import { errorMiddleware } from '../../lib/errorHandler.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../../lib/portosAuthCore.js';
+
+// The real authGate, pinned to a password-free install so the developer's own
+// settings cannot change what the host-control cases below observe.
+vi.mock('../../services/auth.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isAuthEnabled: vi.fn().mockResolvedValue(false),
+}));
 
 // Mock the services this router touches. appBuilder is intentionally NOT mocked
 // so the build-command validation branch (INVALID_BUILD_COMMAND) runs for real.
@@ -523,5 +533,60 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(400);
     });
+  });
+});
+
+describe('host-control gate on app lifecycle (#8716)', () => {
+  const mockApp = {
+    id: 'app-001', name: 'Test App', repoPath: '/path/to/repo',
+    pm2ProcessNames: ['test-app'], startCommands: ['npm run dev'],
+  };
+
+  const buildGatedApp = (remoteAddress) => {
+    const gated = express();
+    gated.use((req, _res, next) => {
+      // Model the server's socket observation, never an HTTP header.
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
+      next();
+    });
+    gated.use(authGate);
+    gated.use(hostControlRouteGate);
+    gated.use(express.json());
+    gated.use('/api/apps', lifecycleRoutes);
+    gated.use(errorMiddleware);
+    return gated;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appsService.getAppById.mockResolvedValue(mockApp);
+    pm2Service.startWithCommand.mockResolvedValue({ success: true });
+    pm2Service.restartApp.mockResolvedValue({ success: true });
+  });
+
+  it('refuses a remote caller on a password-free install before PM2 runs anything', async () => {
+    const remote = buildGatedApp('192.0.2.10');
+    const local = buildGatedApp('127.0.0.1');
+    for (const action of ['start', 'restart']) {
+      for (const [app, headers] of [[remote, {}], [local, { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' }]]) {
+        const pending = request(app).post(`/api/apps/app-001/${action}`);
+        for (const [key, value] of Object.entries(headers)) pending.set(key, value);
+        const response = await pending;
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      }
+    }
+    expect(appsService.getAppById).not.toHaveBeenCalled();
+    expect(pm2Service.startWithCommand).not.toHaveBeenCalled();
+    expect(pm2Service.restartApp).not.toHaveBeenCalled();
+  });
+
+  it('keeps a local caller, direct or through the dev proxy, able to start the app', async () => {
+    const local = buildGatedApp('127.0.0.1');
+    const direct = await request(local).post('/api/apps/app-001/start');
+    const proxied = await request(local).post('/api/apps/app-001/start')
+      .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::ffff:127.0.0.1');
+    expect([direct.status, proxied.status]).toEqual([200, 200]);
+    expect(pm2Service.startWithCommand).toHaveBeenCalledTimes(2);
   });
 });
