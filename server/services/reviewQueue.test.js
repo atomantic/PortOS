@@ -13,7 +13,7 @@ const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert: vi.fn() };
 const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn() };
-const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
+const reviewService = { reviewEvents: { emit: vi.fn() }, getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
 const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn() };
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
@@ -1044,6 +1044,27 @@ describe('reviewQueue triage', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('emits one payload-free invalidation at snooze expiry and the next local day without periodic reads', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-20T23:58:00.000Z'));
+    userTimezone.getUserTimezone.mockResolvedValue('UTC');
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'brain.classify:b1', occurrence: '', revision: 'revision-1',
+      snoozedUntil: '2026-09-20T23:59:00.000Z', dismissed: false, deliveryGeneration: 0,
+    }]);
+    await buildQueue({ query: { view: 'today' } });
+    await buildQueue({ query: { view: 'today' } });
+    const reads = reviewQueueTriageStore.listReviewQueueTriage.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reviewService.reviewEvents.emit).toHaveBeenCalledExactlyOnceWith('queue:changed');
+    expect(reviewQueueTriageStore.listReviewQueueTriage).toHaveBeenCalledTimes(reads);
+    // The reconciling consumer read arms the next deadline, local midnight.
+    await buildQueue({ query: { view: 'today' } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reviewService.reviewEvents.emit).toHaveBeenCalledTimes(2);
+    __resetQueueSnapshots();
   });
 
   it('hides a snoozed row until the injected expiry, then shows it again', async () => {
