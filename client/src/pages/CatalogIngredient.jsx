@@ -127,8 +127,10 @@ function ingredientPayload(value) {
 
 export default function CatalogIngredient() {
   const { id } = useParams();
-  const activeIdRef = useRef(id);
-  activeIdRef.current = id;
+  const activeVisitRef = useRef({ id, generation: 0 });
+  if (activeVisitRef.current.id !== id) {
+    activeVisitRef.current = { id, generation: activeVisitRef.current.generation + 1 };
+  }
   const navigate = useNavigate();
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
@@ -331,6 +333,7 @@ export default function CatalogIngredient() {
   const handleSave = async () => {
     if (!record) return;
     const submittedId = record.id;
+    const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
     const submittedTags = tags;
     const submittedPayload = payload;
@@ -348,7 +351,9 @@ export default function CatalogIngredient() {
       toast.error(err?.message || 'Save failed');
       return null;
     });
-    if (activeIdRef.current !== submittedId) return;
+    const isCurrentVisit = () => activeVisitRef.current.id === submittedId
+      && activeVisitRef.current.generation === submittedGeneration;
+    if (!isCurrentVisit()) return;
     setSaving(false);
     if (!updated) return;
     const persistedName = typeof updated.name === 'string' ? updated.name : trimmedName;
@@ -356,14 +361,14 @@ export default function CatalogIngredient() {
     const persistedPayload = Object.hasOwn(updated, 'payload')
       ? ingredientPayload(updated.payload)
       : ingredientPayload(submittedPayload);
-    setRecord((prev) => prev?.id === submittedId ? ({
+    setRecord((prev) => isCurrentVisit() && prev?.id === submittedId ? ({
       ...prev, ...updated, name: persistedName, tags: persistedTags, payload: persistedPayload,
     }) : prev);
-    setName((current) => activeIdRef.current === submittedId && current === submittedName ? persistedName : current);
+    setName((current) => isCurrentVisit() && current === submittedName ? persistedName : current);
     // The server normalizes tags through the canonical table (casing/whitespace
     // collapse), so reflect the persisted set back into the chips.
-    setTags((current) => activeIdRef.current === submittedId && sameValue(current, submittedTags) ? persistedTags : current);
-    setPayload((current) => activeIdRef.current === submittedId && sameValue(current, submittedPayload) ? { ...persistedPayload } : current);
+    setTags((current) => isCurrentVisit() && sameValue(current, submittedTags) ? persistedTags : current);
+    setPayload((current) => isCurrentVisit() && sameValue(current, submittedPayload) ? { ...persistedPayload } : current);
     toast.success('Saved');
     refreshRevisions();
   };

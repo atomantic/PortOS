@@ -325,7 +325,7 @@ describe('CatalogIngredient — character sheet', () => {
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
     });
 
-    it('ignores a save response after switching to another record', async () => {
+    it('ignores a save response after switching records and returning', async () => {
       let finishSave;
       updateCatalogIngredient.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
       getCatalogIngredientDetails.mockImplementation(async (id) => detailsOf({
@@ -337,9 +337,11 @@ describe('CatalogIngredient — character sheet', () => {
       await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
       await act(async () => router.navigate('/catalog/character/cat-chr-2'));
       await screen.findByDisplayValue('Second ingredient');
+      await act(async () => router.navigate('/catalog/character/cat-chr-1'));
+      await screen.findByDisplayValue('First ingredient');
 
       await act(async () => finishSave({ ...CHAR_FIXTURE, name: 'Stale response' }));
-      expect(screen.getByLabelText('Name').value).toBe('Second ingredient');
+      expect(screen.getByLabelText('Name').value).toBe('First ingredient');
       expect(screen.queryByText('Stale response')).toBeNull();
     });
   });
