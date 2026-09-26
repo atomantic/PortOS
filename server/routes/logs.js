@@ -6,6 +6,7 @@ import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import { createLineReader } from '../lib/streamLines.js';
+import { validateRequest, logsQuerySchema } from '../lib/validation.js';
 
 const router = Router();
 
@@ -34,8 +35,8 @@ router.get('/processes', asyncHandler(async (req, res) => {
 // GET /api/logs/:processName - Get logs for a process (static or streaming)
 router.get('/:processName', asyncHandler(async (req, res) => {
   const { processName } = req.params;
-  const lines = parseInt(req.query.lines, 10) || 100;
-  const follow = req.query.follow === 'true';
+  const { lines, follow } = validateRequest(logsQuerySchema, req.query);
+  const followBool = follow === 'true';
 
   // Security: Validate process name to prevent command injection
   const safeProcessName = validateProcessName(processName);
@@ -45,7 +46,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
 
   const pm2Home = await resolvePm2HomeForProcess(safeProcessName);
 
-  if (!follow) {
+  if (!followBool) {
     // Static log fetch
     const logs = await pm2Service.getLogs(safeProcessName, lines, pm2Home)
       .catch(err => `Error: ${err.message}`);
@@ -109,7 +110,7 @@ router.get('/app/:appId', asyncHandler(async (req, res) => {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const lines = parseInt(req.query.lines, 10) || 100;
+  const { lines } = validateRequest(logsQuerySchema, req.query);
   const results = {};
 
   for (const processName of app.pm2ProcessNames || []) {

@@ -89,6 +89,11 @@ export {
 // the well-known labels (api, ui, devUi, cdp, health).
 export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
 
+export const logsQuerySchema = z.object({
+  lines: z.coerce.number().int().min(1).max(5000).default(100),
+  follow: z.enum(['true', 'false']).optional(),
+});
+
 export const processActionSchema = z.object({
   action: z.enum(['start', 'stop', 'restart']),
   appId: z.string().min(1).optional()

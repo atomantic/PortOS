@@ -139,4 +139,34 @@ describe('log routes PM2_HOME resolution', () => {
       ['close', 1],
     ]);
   });
+
+  it('rejects lines query parameter > 5000 with 400', async () => {
+    const response = await request(createApp()).get('/api/logs/example-api?lines=100000000');
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('rejects lines query parameter < 1 with 400', async () => {
+    const response = await request(createApp()).get('/api/logs/example-api?lines=-5');
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('rejects non-numeric lines query parameter with 400', async () => {
+    const response = await request(createApp()).get('/api/logs/example-api?lines=abc');
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('rejects out-of-range lines on app logs route with 400', async () => {
+    appsService.getAppById.mockResolvedValue({
+      id: 'app-1',
+      name: 'Example App',
+      pm2ProcessNames: ['example-api'],
+    });
+
+    const response = await request(createApp()).get('/api/logs/app/app-1?lines=100000000');
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
 });
