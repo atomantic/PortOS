@@ -305,7 +305,7 @@ function SceneDetail({ scene, plotlines, seriesId, navigate }) {
     <div className="border border-port-border rounded-lg p-4 bg-port-card flex flex-col gap-2">
       <div className="flex items-center gap-2">
         {plotline ? <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: plotline.color }} /> : null}
-        <h3 className="text-sm font-semibold text-white">{scene.heading || 'Scene'}</h3>
+        <h2 className="text-sm font-semibold text-white">{scene.heading || 'Scene'}</h2>
         <span className="text-xs text-gray-500">
           {plotline?.label || 'Unassigned'}
           {scene.issueNumber != null ? ` · Issue ${scene.issueNumber}` : ''}

@@ -880,9 +880,9 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
         </FormField>
 
         <div className="border-t border-port-border pt-4 space-y-3">
-          <h4 className="text-sm font-semibold flex items-center gap-1.5">
+          <h2 className="text-sm font-semibold flex items-center gap-1.5">
             <Sparkles size={14} className="text-port-accent" /> Expand the episode
-          </h4>
+          </h2>
           <FormField label="Guidance (optional)" labelClassName={labelClass}>
             <textarea
               rows={2}
