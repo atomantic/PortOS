@@ -1,4 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+afterEach(() => { vi.useRealTimers(); });
+
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({ default: {
+  on: (event, fn) => { if (!socketHandlers.has(event)) socketHandlers.set(event, new Set()); socketHandlers.get(event).add(fn); },
+  off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+} }));
+const emitModel = async (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useEffect, useRef } from 'react';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
@@ -105,6 +116,29 @@ function deferred() {
 describe('Media3DDetail', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('renders lifecycle progress and terminal updates without polling, with reconnect and visibility recovery', async () => {
+    getImageTo3dModel.mockResolvedValue(record({ status: 'generating', runs: [{ percent: 10 }] }));
+    renderAt();
+    await screen.findByText('Example Beacon');
+    vi.useFakeTimers();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    await emitModel('image-to-3d:changed', { id: 'other' });
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(1);
+    getImageTo3dModel.mockResolvedValue(record({ status: 'failed', error: 'Example render failure' }));
+    await emitModel('image-to-3d:changed', { id: 'image3d-1' });
+    expect(screen.getByText('Example render failure')).toBeInTheDocument();
+    await emitModel('connect');
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(3);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    getImageTo3dModel.mockResolvedValue(record());
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(screen.getByTestId('glb-viewer')).toBeInTheDocument();
+    expect(getImageTo3dModel).toHaveBeenCalledTimes(4);
+    vi.useRealTimers();
+  });
+
   it('renders the mesh viewer and source image for a ready record', async () => {
     getImageTo3dModel.mockResolvedValue(record({ generatedAt: '2026-07-25T12:34:56.000Z' }));
     renderAt();
@@ -142,9 +176,9 @@ describe('Media3DDetail', () => {
     getImageTo3dModel.mockImplementation((id) => (id === 'image3d-1' ? first.promise : second.promise));
     renderWithSwitcher();
 
-    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', { silent: true }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', expect.objectContaining({ silent: true })));
     fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
-    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', { silent: true }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', expect.objectContaining({ silent: true })));
 
     second.resolve(record({ id: 'image3d-2', name: 'Second Beacon' }));
     expect(await screen.findByText('Second Beacon')).toBeInTheDocument();
@@ -160,9 +194,9 @@ describe('Media3DDetail', () => {
     getImageTo3dModel.mockImplementation((id) => (id === 'image3d-1' ? first.promise : second.promise));
     renderWithSwitcher();
 
-    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', { silent: true }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', expect.objectContaining({ silent: true })));
     fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
-    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', { silent: true }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', expect.objectContaining({ silent: true })));
 
     second.resolve(record({ id: 'image3d-2', name: 'Second Beacon' }));
     expect(await screen.findByText('Second Beacon')).toBeInTheDocument();

@@ -82,6 +82,20 @@ export async function runVideoAssembly(projectId) {
     const { muxStripAudio, resolveMusicTrackPath } = await import('../pipeline/audioMux.js');
     const history = await loadHistory();
     const segments = await prepareClips(project, history);
+    // Use the actual trimmed segment offsets, not the requested shot lengths.
+    let offset = 0;
+    const scenes = project.directive && project.plan?.steps?.length ? []
+      : [...(project.treatment?.scenes || [])].sort((a, b) => a.order - b.order);
+    const beats = segments.map((segment, index) => {
+      const duration = segment.outSec - segment.inSec;
+      const scene = scenes[index];
+      const beat = { atSec: offset + duration / 2, duration, score: scene?.evaluation?.score };
+      offset += duration;
+      return beat;
+    });
+    const scored = beats.filter(beat => Number.isFinite(beat.score));
+    const best = (scored.length ? scored : beats).reduce((best, beat) =>
+      !best || (scored.length ? beat.score > best.score : beat.duration > best.duration) ? beat : best, null);
     const contentRevision = canonicalSnapshotChecksum({ segments, audio: project.videoExecution.choices.audio,
       input: project.videoExecution.inputRevision, revision: project.videoWorkRevision || 0 });
     let entry = project.videoRoughCut?.contentRevision === contentRevision
@@ -113,7 +127,7 @@ export async function runVideoAssembly(projectId) {
       entry = jobId ? history.find(row => row.id === jobId) : null;
       if (!entry && !['running', 'pending'].includes(timeline.getRenderJobStatus(jobId)?.status)) {
         if (!await isCurrent()) return;
-        ({ jobId } = await timeline.renderProject(timelineProject.id));
+        ({ jobId } = await timeline.renderProject(timelineProject.id, { posterSec: best?.atSec }));
         await mutateVideoProject(projectId, current => matches(current)
           ? { project: { ...current, videoExecution: { ...current.videoExecution, assembly: { jobId, contentRevision, timelineProjectId: timelineProject.id } } }, result: true }
           : { project: current, result: false, skipPersist: true });

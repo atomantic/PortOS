@@ -515,8 +515,7 @@ const DEFAULT_REGISTRY = {
   video: {
     // `applyVideoDisclosures` attaches the shipped provenance/licensing block
     // (lib/videoDisclosure.js) to each entry, so the seed written on a fresh
-    // install, the in-memory defaults, and data.reference/media-models.json all
-    // carry the same disclosure without repeating it inline here.
+    // install and the in-memory defaults carry the same disclosure without repeating it inline here.
     // `applyVideoFinishProfiles` attaches the shipped draft → delivery
     // `finishModelId` edges (lib/videoFinishProfiles.js) the same way, so the
     // Finish relationship is declared in one place instead of inline here.
@@ -1172,6 +1171,10 @@ const ensureDir = (file) => {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 };
 
+// The shipped default registry, cloned so a caller (a migration adding a new
+// shipped row to an existing install) can never mutate the in-memory defaults.
+export const getShippedMediaRegistry = () => structuredClone(DEFAULT_REGISTRY);
+
 const seedIfMissing = () => {
   if (existsSync(REGISTRY_FILE)) return;
   ensureDir(REGISTRY_FILE);
@@ -1250,7 +1253,7 @@ const backfillCfgDisabled = (list) => {
 // deep inside diffusers, so the route rejects (and the UI gates) it up-front.
 // Backfilled at load time — same pattern as cfgDisabled — so installs that
 // stored their `qwen-image-edit` entry before this flag existed pick it up
-// without a migration. Mirrored in data.reference/media-models.json.
+// without a migration.
 const EDIT_ONLY_IDS = new Set([
   'qwen-image-edit',
 ]);
@@ -1270,7 +1273,7 @@ const backfillEditOnly = (list) => {
 // with. Existing installs stored their `flux2-klein-9b-bf16` entry before
 // `kvRepo` existed, so backfill it at load (same pattern as
 // cfgDisabled/editOnly) AND ship migration 064 for installs that have already
-// persisted the registry. Mirrored in data.reference/media-models.json.
+// persisted the registry.
 //
 // Fork-preservation: only backfill when the entry's `repo` still matches the
 // shipped base repo. A user who pointed `repo` at a fork must NOT get the

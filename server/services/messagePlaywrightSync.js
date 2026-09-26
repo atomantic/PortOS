@@ -44,7 +44,7 @@ export async function launchProvider(accountType) {
   const url = accountType === 'teams' ? TEAMS_URL : OUTLOOK_URL;
   const page = await findOrOpenPage(url).catch(() => null);
   if (!page) return { success: false, error: 'Failed to open browser tab — is portos-browser running?' };
-  console.log(`📧 Launched ${accountType} in CDP browser: ${page.url}`);
+  console.log(`📧 Launched ${accountType} in CDP browser`);
   return { success: true, url: page.url, pageId: page.id, title: page.title };
 }
 
@@ -60,7 +60,7 @@ export async function launchProvider(accountType) {
 export async function syncPlaywright(account, cache, io, options = {}) {
   const mode = options.mode || 'unread';
   const targetUrl = account.type === 'teams' ? TEAMS_URL : OUTLOOK_URL;
-  console.log(`📧 Playwright sync (${mode}) for ${account.email} (${account.type})`);
+  console.log(`📧 Playwright sync (${mode}) for account ${account.id} (${account.type})`);
 
   // Find the provider page in CDP browser
   const page = await findOrOpenPage(targetUrl).catch(() => null);
@@ -171,7 +171,8 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   }
 
   console.log(`📧 Fetched detail for ${detailsFetched}/${extracted.length} conversations`);
-  return { messages, status: 'success' };
+  // A bounded DOM scrape cannot prove complete inbox membership.
+  return { messages, inboxComplete: false, status: 'success' };
 }
 
 /**
@@ -489,10 +490,10 @@ export async function refreshMessageDetail(account, message) {
     return { error: 'auth-required', message: 'Login required — sign into Outlook first' };
   }
 
-  console.log(`📧 Refresh: clicking into "${message.subject}"`);
+  console.log(`📧 Refresh: clicking into ${message.id}`);
   const detail = await fetchOutlookConversationDetail(page, message.subject, message.from?.name);
   if (!detail) {
-    console.log(`📧 Refresh: click/extraction failed for "${message.subject}"`);
+    console.log(`📧 Refresh: click/extraction failed for ${message.id}`);
   } else {
     console.log(`📧 Refresh: extracted ${detail.length} thread messages`);
   }
@@ -503,7 +504,7 @@ export async function refreshMessageDetail(account, message) {
  * Send message via Playwright browser automation
  */
 export async function sendPlaywright(account, draft) {
-  console.log(`📧 Playwright send for ${account.email} (${account.type}) — automation pending`);
+  console.log(`📧 Playwright send for account ${account.id} (${account.type}) — automation pending`);
   return { success: false, error: 'Playwright send not yet implemented', status: 501, code: 'NOT_IMPLEMENTED' };
 }
 

@@ -26,7 +26,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 const { createDocument, updateDocument, deleteDocument } = await import('./digital-twin-documents.js');
 const { ensureDocumentInMeta } = await import('./digital-twin-helpers.js');
-const { loadMeta, saveMeta, cache } = await import('./digital-twin-meta.js');
+const { loadMeta, saveMeta, cache, digitalTwinEvents } = await import('./digital-twin-meta.js');
 const { applyDigitalTwinRemote, getDigitalTwinSnapshot } = await import('./digital-twin-sync.js');
 
 const FILENAME = 'CUSTOM_ROUTINE.md';
@@ -153,4 +153,21 @@ describe('digital twin document tombstones (#3530)', () => {
     expect((await loadMeta()).documents.map((d) => d.filename)).toContain(FILENAME);
     expect(existsSync(docPath)).toBe(true);
   });
+});
+
+it('invalidates only after synchronized document files are available', async () => {
+  const observed = [];
+  const listener = () => observed.push(existsSync(docPath));
+  digitalTwinEvents.on('sync:completed', listener);
+  try {
+    await applyDigitalTwinRemote({
+      meta: { ...(await loadMeta()), documents: [{ id: 'remote-example', filename: FILENAME, title: 'Example', enabled: true }] },
+      documents: { [FILENAME]: CONTENT },
+    });
+    expect(observed).toEqual([true]);
+    await applyDigitalTwinRemote({ documents: { [FILENAME]: CONTENT } });
+    expect(observed).toEqual([true]);
+  } finally {
+    digitalTwinEvents.off('sync:completed', listener);
+  }
 });

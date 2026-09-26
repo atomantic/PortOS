@@ -1,7 +1,7 @@
 // Federation HTTP/Socket.IO client — TLS validation off (Tailnet is the trust boundary).
 import https from 'node:https';
 import { createHmac } from 'node:crypto';
-import { insecureFetch } from './httpClient.js';
+import { insecureFetch, RESPONSE_TOO_LARGE } from './httpClient.js';
 
 const peerHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 const httpsFetch = insecureFetch(peerHttpsAgent);
@@ -113,7 +113,8 @@ export async function peerFetch(url, options = {}, peer = null) {
     ? { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } : {};
   const finalOptions = {
     ...options,
-    ...(Object.keys(syncHeaders).length ? { redirect: 'error' } : {}),
+    // Peer credentials and sender identity must stay at the configured destination.
+    redirect: 'error',
     headers: {
       ...dropOverridden({
         ...(selfId ? { [PEER_INSTANCE_HEADER]: selfId } : {}),
@@ -127,17 +128,26 @@ export async function peerFetch(url, options = {}, peer = null) {
 }
 
 export const PEER_BODY_IDLE_TIMEOUT = 'PEER_BODY_IDLE_TIMEOUT';
+// Well above any legitimate snapshot; a body past it is a broken or hostile peer.
+export const PEER_BODY_DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
 
 /**
- * Consume a peer response with a deadline between received body chunks. Native
- * fetch resolves at headers; HTTPS already buffers under the caller's request
- * timeout, so its response methods keep their existing behavior.
+ * Consume a peer response with a deadline between received body chunks and a
+ * running byte cap. Native fetch resolves at headers and ignores `maxBytes`, so
+ * a chunked body with no Content-Length is only bounded here; overflow cancels
+ * the reader and rejects with the HTTPS shim's `RESPONSE_TOO_LARGE` code. HTTPS
+ * already buffers under the caller's request timeout and `maxBytes`, so its
+ * response methods keep their existing behavior.
  */
-export async function readPeerBody(response, method, { idleTimeoutMs = 60000 } = {}) {
+export async function readPeerBody(response, method, {
+  idleTimeoutMs = 60000,
+  maxBytes = PEER_BODY_DEFAULT_MAX_BYTES,
+} = {}) {
   if (!response.body) return response[method]();
 
   const reader = response.body.getReader();
   const chunks = [];
+  let total = 0;
   let timer;
   let rejectIdle;
   const idle = new Promise((_, reject) => { rejectIdle = reject; });
@@ -155,6 +165,13 @@ export async function readPeerBody(response, method, { idleTimeoutMs = 60000 } =
           const { done, value } = await reader.read();
           if (done) break;
           if (value.byteLength) {
+            total += value.byteLength;
+            if (total > maxBytes) {
+              throw Object.assign(
+                new Error(`Peer response body exceeded ${maxBytes} bytes`),
+                { code: RESPONSE_TOO_LARGE }
+              );
+            }
             chunks.push(value);
             resetIdle();
           }
@@ -165,7 +182,7 @@ export async function readPeerBody(response, method, { idleTimeoutMs = 60000 } =
     return new Response(Buffer.concat(chunks))[method]();
   } finally {
     clearTimeout(timer);
-    // Cancel a stalled native fetch to release its socket; do not let transport
+    // Cancel a stalled or oversized native fetch to release its socket; do not let transport
     // cleanup hold the sync lock after the deadline has already fired.
     reader.cancel().catch(() => {});
     reader.releaseLock();

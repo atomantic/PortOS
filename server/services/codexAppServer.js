@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from './modelObservation.js';
 /**
  * PortOS's client for the Codex **app-server** — the JSON-RPC-over-stdio
  * endpoint OpenAI documents for embedding Codex in a product.
@@ -218,10 +219,12 @@ const handleNotification = (method, params) => {
   routeTurnNotification(method, params);
   if (method === CODEX_NOTIFICATIONS.accountUpdated || method === CODEX_NOTIFICATIONS.rateLimitsUpdated) {
     readinessCache = null;
+    invalidateModelObservation('codex-account');
     return;
   }
   if (method !== CODEX_NOTIFICATIONS.loginCompleted) return;
   readinessCache = null;
+  invalidateModelObservation('codex-account');
   // A sign-in that actually completed changed the ACCOUNT, whoever started it —
   // so the cached catalog belongs to whoever was signed in before, and an
   // auth/quota bench was benching a subscription that is no longer the current

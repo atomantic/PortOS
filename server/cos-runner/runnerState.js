@@ -63,3 +63,8 @@ export function withState(mutatorFn) {
   });
   return stateLock;
 }
+
+/** Await queued state writes after spawn and exit producers have drained. */
+export function drainState() {
+  return stateLock;
+}

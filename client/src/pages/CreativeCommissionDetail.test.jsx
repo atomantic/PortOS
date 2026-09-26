@@ -10,7 +10,19 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, Link } from 'react-router';
+
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (event, fn) => { if (!socketHandlers.has(event)) socketHandlers.set(event, new Set()); socketHandlers.get(event).add(fn); },
+    off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+    emit: vi.fn(),
+  },
+}));
+const fireSocket = async (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
 
 vi.mock('../services/api', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -117,12 +129,11 @@ describe('CreativeCommissionDetail render-history project resolution (#4148)', (
  *
  * A commission fire creates the CD project and returns; the render lands minutes
  * later. The page used to sit on the stale "no render yet" card until a reload,
- * and the Run-now toast said as much. It now polls the referenced projects while
- * any `started` run still points at one that hasn't settled — and stops as soon
- * as they all have, so an idle detail page issues no traffic.
+ * and the Run-now toast said as much. Project invalidations now refresh the
+ * referenced batch while idle detail pages issue no recurring traffic.
  */
 describe('CreativeCommissionDetail live render refresh (#4149)', () => {
-  // Drain pending promises (and optionally advance the poll clock) inside act.
+  // Drain pending promises (and advance beyond the former polling interval) inside act.
   const settle = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
   const mountLoaded = async () => {
     render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
@@ -153,12 +164,18 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
     expect(screen.getByTestId('preview-cd-1').textContent).toBe('rendering');
     const beforePoll = api.getCreativeDirectorProjectsByIds.mock.calls.length;
 
-    await settle(5000);
-    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBeGreaterThan(beforePoll);
+    await settle(30000);
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
+    await fireSocket('creative-director:project:changed', { id: 'unrelated' });
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll);
+    const commissionCalls = api.getCommission.mock.calls.length;
+    await fireSocket('creative-director:project:changed', { id: 'cd-1' });
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(beforePoll + 1);
+    expect(api.getCommission).toHaveBeenCalledTimes(commissionCalls);
     expect(screen.getByTestId('preview-cd-1').textContent).toBe('complete');
   });
 
-  it('stops polling once every referenced project has settled', async () => {
+  it('reconciles a terminal project once per tab re-show', async () => {
     vi.useFakeTimers();
     api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
     api.getCreativeDirectorProjectsByIds.mockResolvedValue([
@@ -170,9 +187,18 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
 
     await settle(30000);
     expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(settledCalls);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    fireEvent(document, new Event('visibilitychange'));
+    await fireSocket('creative-director:project:changed', { id: 'cd-1' });
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => { fireEvent(document, new Event('visibilitychange')); });
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
+    await act(async () => { fireEvent(document, new Event('visibilitychange')); });
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(settledCalls + 1);
   });
 
-  it('never polls for a started run past the in-flight age ceiling', async () => {
+  it('does not poll even when a project remains rendering', async () => {
     vi.useFakeTimers();
     // A run whose project stalled mid-render hours ago: polling it forever would
     // burn a request every 5s on any tab left open, and no poll can rescue it.
@@ -202,18 +228,20 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
     expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBe(prunedCalls);
   });
 
-  it('keeps retrying while the project batch request is failing', async () => {
+  it('retries a failed project batch on reconnect without recurring reads', async () => {
     vi.useFakeTimers();
     // A FAILED fetch is not an authoritative "pruned" answer — an unresolved id
-    // still means "not known yet", so the poll has to stay armed.
+    // still means "not known yet"; reconnect must retry the read.
     api.getCommission.mockResolvedValue(withRun(new Date().toISOString()));
     api.getCreativeDirectorProjectsByIds.mockRejectedValue(new Error('offline'));
 
     await mountLoaded();
     const failedCalls = api.getCreativeDirectorProjectsByIds.mock.calls.length;
 
-    await settle(5000);
-    expect(api.getCreativeDirectorProjectsByIds.mock.calls.length).toBeGreaterThan(failedCalls);
+    await settle(30000);
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls);
+    await fireSocket('connect');
+    expect(api.getCreativeDirectorProjectsByIds).toHaveBeenCalledTimes(failedCalls + 1);
   });
 
   it('refetches the render batch for a new run and drops the reload advice', async () => {
@@ -326,4 +354,30 @@ describe('CreativeCommissionDetail stop controls', () => {
     expect(api.deleteCommission).toHaveBeenCalledWith('cc-1', { silent: true });
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('still in flight'));
   });
+});
+
+it('reconciles commission events and rejects project batches from a prior route', async () => {
+  let resolveOld;
+  const other = { ...COMMISSION, id: 'cc-other', name: 'Other commission', runs: [{ id: 'other-run', projectId: 'cd-other', status: 'started' }] };
+  api.getCommission.mockImplementation(id => Promise.resolve(id === 'cc-other' ? other : COMMISSION));
+  api.getCreativeDirectorProjectsByIds.mockImplementation(ids => ids.includes('cd-other')
+    ? Promise.resolve([{ id: 'cd-other', status: 'complete' }])
+    : new Promise(resolve => { resolveOld = resolve; }));
+  render(<MemoryRouter initialEntries={['/creative-commission/cc-1']}>
+    <Link to="/creative-commission/cc-other">Other</Link>
+    <Routes><Route path="/creative-commission/:id" element={<CreativeCommissionDetail />} /></Routes>
+  </MemoryRouter>);
+  await screen.findByRole('heading', { name: COMMISSION.name });
+  await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+  await act(async () => screen.getByRole('link', { name: 'Other' }).click());
+  await screen.findByTestId('preview-cd-other');
+  await act(async () => resolveOld([{ id: 'cd-1', status: 'rendering' }]));
+  expect(screen.queryByTestId('preview-cd-1')).not.toBeInTheDocument();
+  expect(screen.getByTestId('preview-cd-other')).toHaveTextContent('complete');
+  const calls = api.getCommission.mock.calls.length;
+  await fireSocket('commission:changed', { id: 'cc-1' });
+  expect(api.getCommission).toHaveBeenCalledTimes(calls);
+  api.getCommission.mockResolvedValue({ ...other, name: 'Renamed commission' });
+  await fireSocket('commission:changed', { id: 'cc-other' });
+  expect(screen.getByRole('heading', { name: 'Renamed commission' })).toBeInTheDocument();
 });

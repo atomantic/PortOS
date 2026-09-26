@@ -618,7 +618,7 @@ export function cancelRender(jobId) {
   return true;
 }
 
-export async function renderProject(projectId) {
+export async function renderProject(projectId, { posterSec } = {}) {
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
 
@@ -741,7 +741,7 @@ export async function renderProject(projectId) {
         job.status = 'complete';
         // The encode args already include -movflags +faststart, so no separate
         // remux pass is needed here.
-        const thumb = await generateThumbnail(outputPath, jobId);
+        const thumb = await generateThumbnail(outputPath, jobId, { atSec: posterSec });
 
         // Push to existing video history with a timelineProjectId flag so the
         // Media History page picks it up alongside generated clips.

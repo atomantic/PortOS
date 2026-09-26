@@ -54,8 +54,8 @@ import { isUpdateInProgress } from './updateChecker.js';
 import { createAgentSpawnContext, prepareAgentSpawn } from './agentSpawnPreparation.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { runAgentCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { dispatchRecoveredTaskOutputHook, finalizeAgent, releaseAgentLane, stampLiExecutionVerdict } from './agentFinalization.js';
+import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { finalizeAgent, releaseAgentLane, retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
@@ -413,9 +413,14 @@ export async function extractPipelineOutputSummary(task, workspacePath, outputBu
  * lands afterwards has no live record to finalize. This path deliberately
  * BYPASSES `finalizeAgent` (and therefore worktree cleanup): the dead run's
  * worktree is still on disk, and `handleOrphanedTask` needs it to resume rather
- * than redo the work. Because it bypasses finalize, everything finalize would
- * normally do that still matters here — notably the LI hand-off verdict stamp
- * (#2779) — has to be done explicitly below.
+ * than redo the work. `retireDeadAgent` (#8440) supplies everything finalize
+ * would normally do that still matters here — output hook, sentinel removal,
+ * run-record close, agent completion — as the same shared step list the
+ * orphan sweep uses. Only the direct-success LI verdict stamp below stays
+ * here: it doesn't go through `handleOrphanedTask`, so nothing else stamps
+ * it. The failure-path stamp moved INTO `handleOrphanedTask` (every terminal
+ * settlement there is now stamped), so this function no longer re-reads the
+ * task after calling it.
  *
  * Split out of `handleAgentCompletion` (#3872) so that function reads as
  * "route, then complete the live agent" instead of two unrelated jobs sharing
@@ -442,55 +447,36 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
   }
   console.log(`🔄 Completing untracked agent ${agentId} from cos state (post-restart)`);
   const task = cosAgent.taskId ? await getTaskById(cosAgent.taskId).catch(() => null) : null;
-  // Recovery has no immutable source inventory with which to validate a report.
-  if (isPrivateSecurityTask(task) || isPrivateSecurityTask(cosAgent)) success = false;
-  await dispatchRecoveredTaskOutputHook({
-    agentId,
+  // `retireDeadAgent` forces a private-security run to `success: false` no
+  // matter what the caller passed — mirror that here so the recorded `error`
+  // message agrees with the record it lands on instead of leaving a failed
+  // record with no error string.
+  const willSucceed = success && !isPrivateSecurityTask(task) && !isPrivateSecurityTask(cosAgent);
+  const { success: retiredSuccess } = await retireDeadAgent({
+    agent: cosAgent,
     task,
-    success,
-    workspacePath: cosAgent.metadata?.workspacePath || null,
-  });
-  // Recovery retires the run without reaching finalizeAgent's completion
-  // cleanup, so the sentinel has no other owner — and the hook above was the
-  // last thing to read it. Mirrored in agentManagement's orphan sweep.
-  await removeCompletionSentinel({ agentId, agentState: cosAgent })
-    .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agentId}: ${err.message}`, { agentId }));
-  await completeAgent(agentId, {
     success,
     exitCode,
     duration,
-    orphaned: true,
-    error: success ? undefined : 'Agent completed after server restart'
+    errorMessage: willSucceed ? undefined : 'Agent completed after server restart',
   });
-  if (cosAgent.taskId) {
-    if (task && task.status !== 'completed') {
-      if (success) {
-        // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
-        // recovery bypasses finalizeAgent, so without it a hand-off that finished while
-        // the server was down would never federate its outcome. Only `success` is known
-        // on this path (no validationPassed/errorAnalysis), so it records a clean success.
-        const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success });
-        await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
-      } else {
-        // Hand the dead run's metadata to the retry handler so it can resume what
-        // was left behind. This path bypasses `finalizeAgent` (and its worktree
-        // cleanup), so the worktree is still on disk, branch and all — without it
-        // the retry builds a fresh tree off the default branch and redoes work
-        // that is sitting right there.
-        await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
-        // If orphan recovery settled the task into a terminal `blocked` state (retry budget
-        // exhausted), the local completion already recorded the proposal failure — so stamp
-        // the LI failure verdict here too (#2779, codex P2) or the originating peer would
-        // receive a terminal task with no verdict. A revived (pending) task carries no
-        // settled outcome yet, so it is intentionally left unstamped until it re-completes.
-        const settled = await getTaskById(cosAgent.taskId).catch(() => null);
-        if (settled && settled.status === 'blocked' && settled.metadata?.liProposal) {
-          const stamp = await stampLiExecutionVerdict({}, settled, { success: false });
-          if (stamp.metadata) {
-            await updateTask(cosAgent.taskId, stamp, settled.taskType || 'user').catch(() => {});
-          }
-        }
-      }
+  if (cosAgent.taskId && task && task.status !== 'completed') {
+    if (retiredSuccess) {
+      // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
+      // recovery bypasses finalizeAgent, so without it a hand-off that finished while
+      // the server was down would never federate its outcome. Only `success` is known
+      // on this path (no validationPassed/errorAnalysis), so it records a clean success.
+      const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success: retiredSuccess });
+      await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
+    } else {
+      // Hand the dead run's metadata to the retry handler so it can resume what
+      // was left behind. This path bypasses `finalizeAgent` (and its worktree
+      // cleanup), so the worktree is still on disk, branch and all — without it
+      // the retry builds a fresh tree off the default branch and redoes work
+      // that is sitting right there. `handleOrphanedTask` stamps the LI verdict
+      // itself on every terminal settlement (#8440), so there is nothing left
+      // to re-read and stamp here.
+      await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById, { agentMetadata: cosAgent.metadata, agentStartedAt: cosAgent.startedAt });
     }
   }
 }

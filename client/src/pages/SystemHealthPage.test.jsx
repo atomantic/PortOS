@@ -93,6 +93,15 @@ describe('SystemHealthPage remediation links', () => {
     expect(within(banner).getByRole('link', { name: /Disk usage breakdown/ })).toHaveAttribute('href', '/system-resources/storage');
   });
 
+  it('shows the app probe warning without offering dismissal', async () => {
+    api.getSystemHealth.mockResolvedValue(withWarnings([
+      { type: 'probe-unavailable', source: 'apps', status: 'unavailable', severity: 'warning', message: 'Apps unavailable', dismissible: false },
+    ]));
+    renderPage();
+    expect(await screen.findByText('Apps unavailable')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss warning: Apps unavailable' })).not.toBeInTheDocument();
+  });
+
   it('renders an unavailable disk card when the disk probe fails', async () => {
     api.getSystemHealth.mockResolvedValue({
       ...HEALTH,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
+import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent.js';
 import useMounted from '../../../hooks/useMounted';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
@@ -132,6 +132,7 @@ export default function MindTab() {
   const deferredRuntimeRef = useRef(false);
   const runtimeLoadedRef = useRef(false);
   const visibilityPendingRef = useRef(false);
+  const deferredVisibilityRef = useRef(false);
   const deferredVisibilityRefreshRef = useRef(false);
   const visibilityLoadedRef = useRef(false);
   const runtimeMountedRef = useMounted();
@@ -156,6 +157,7 @@ export default function MindTab() {
   }, [activePanel]);
 
   const loadHistory = useCallback(async ({ reset = false } = {}) => {
+    if (!runtimeMountedRef.current) return;
     if (loadPendingRef.current) {
       deferredLoadRef.current = true;
       return;
@@ -173,6 +175,7 @@ export default function MindTab() {
     try {
       do {
         const response = await api.getPersistentMind({ cursor, limit: PAGE_LIMIT }, { silent: true });
+        if (!runtimeMountedRef.current) return;
         accumulated = mergeEvents(accumulated, response.events || []);
         sawGap ||= response.gap === true;
         cursor = response.gap === true ? response.cursor : response.cursor || cursor;
@@ -197,11 +200,11 @@ export default function MindTab() {
       setLoadError(null);
       if (needsMore) deferredLoadRef.current = true;
     } catch (error) {
-      setLoadError(error?.message || 'Could not load the persistent mind');
+      if (runtimeMountedRef.current) setLoadError(error?.message || 'Could not load the persistent mind');
     } finally {
-      setLoading(false);
+      if (runtimeMountedRef.current) setLoading(false);
       loadPendingRef.current = false;
-      if (deferredLoadRef.current) {
+      if (runtimeMountedRef.current && deferredLoadRef.current) {
         deferredLoadRef.current = false;
         void loadHistory();
       }
@@ -209,6 +212,7 @@ export default function MindTab() {
   }, []);
 
   const loadRuntime = useCallback(async () => {
+    if (!runtimeMountedRef.current) return;
     if (runtimePendingRef.current) {
       deferredRuntimeRef.current = true;
       return;
@@ -236,7 +240,9 @@ export default function MindTab() {
   }, []);
 
   const loadVisibility = useCallback(async ({ refresh = false } = {}) => {
+    if (!runtimeMountedRef.current) return;
     if (visibilityPendingRef.current) {
+      deferredVisibilityRef.current = true;
       deferredVisibilityRefreshRef.current ||= refresh;
       return;
     }
@@ -255,7 +261,8 @@ export default function MindTab() {
     } finally {
       if (runtimeMountedRef.current) setVisibilityLoading(false);
       visibilityPendingRef.current = false;
-      if (runtimeMountedRef.current && deferredVisibilityRefreshRef.current) {
+      if (runtimeMountedRef.current && deferredVisibilityRef.current) {
+        deferredVisibilityRef.current = false;
         const deferredRefresh = deferredVisibilityRefreshRef.current;
         deferredVisibilityRefreshRef.current = false;
         void loadVisibility({ refresh: deferredRefresh });
@@ -263,25 +270,36 @@ export default function MindTab() {
     }
   }, [runtimeMountedRef]);
 
-  useEffect(() => { void loadHistory({ reset: true }); }, [loadHistory]);
-  useAutoRefetch(loadRuntime, 10_000, { pollOnly: true });
-  useAutoRefetch(loadVisibility, 30_000, { pollOnly: true });
+  const refresh = useCallback(() => {
+    if (document.visibilityState === 'hidden') return;
+    void loadHistory();
+    void loadRuntime();
+    void loadVisibility();
+  }, [loadHistory, loadRuntime, loadVisibility]);
+
+  const lastVisibilityRef = useRef(document.visibilityState);
+  useVisibilityEvent((state) => {
+    const changed = lastVisibilityRef.current !== state;
+    lastVisibilityRef.current = state;
+    if (changed && state === 'visible') refresh();
+  });
 
   useEffect(() => {
-    const refresh = () => {
-      void loadHistory();
-      void loadRuntime();
-      void loadVisibility();
+    refresh();
+    const refreshVisibility = () => {
+      if (document.visibilityState !== 'hidden') void loadVisibility();
     };
     socket.on('connect', refresh);
     socket.on('cos:mind:event', refresh);
     socket.on('cos:mind:status', refresh);
+    socket.on('cos:mind:visibility', refreshVisibility);
     return () => {
       socket.off('connect', refresh);
       socket.off('cos:mind:event', refresh);
       socket.off('cos:mind:status', refresh);
+      socket.off('cos:mind:visibility', refreshVisibility);
     };
-  }, [loadHistory, loadRuntime, loadVisibility, socket]);
+  }, [refresh, loadVisibility, socket]);
 
   useEffect(() => {
     const onCallState = (snapshot) => setCallState(snapshot?.error ? null : snapshot);

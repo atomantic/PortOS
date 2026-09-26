@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -400,6 +400,34 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
     if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('discards bytes whose advertised sha256 does not match before replacing local assets', async () => {
+    const original = Buffer.from('local audio');
+    const wrong = Buffer.from('wrong downloaded audio');
+    writeMusic('protected.mp3', original);
+    vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(wrong));
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'protected.mp3', kind: 'music', sha256: sha(Buffer.from('advertised audio')) },
+      { filename: 'absent.mp3', kind: 'music', sha256: sha(Buffer.from('advertised audio')) },
+    ]));
+    expect(readFileSync(join(tempRoot, 'music', 'protected.mp3'))).toEqual(original);
+    expect(existsSync(join(tempRoot, 'music', 'absent.mp3'))).toBe(false);
+    expect(arrivals).toEqual([]);
+  });
+
+  it('preserves an asset that arrives during a stale push download', async () => {
+    const newer = Buffer.from('new local audio');
+    const stale = Buffer.from('old remote audio');
+    vi.mocked(peerFetch).mockImplementation(async () => {
+      writeMusic('racing.mp3', newer);
+      return mkAssetResponse(stale);
+    });
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'racing.mp3', kind: 'music', sha256: sha(stale) },
+    ], { includeMismatched: false }));
+    expect(readFileSync(join(tempRoot, 'music', 'racing.mp3'))).toEqual(newer);
+    expect(arrivals).toEqual([]);
+  });
+
   it('rejects traversal-shaped filenames before fetching or touching disk', async () => {
     const unsafeNames = ['..', '../../secret.json', '/etc/passwd', 'folder\\secret.json'];
 
@@ -411,6 +439,16 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
     expect(peerFetch).not.toHaveBeenCalled();
     expect(arrivals).toEqual([]);
     expect(listAssetFiles('audio')).toEqual([]);
+  });
+
+  it('rejects unsupported extensions even when the pull worker is called directly', async () => {
+    const arrivals = await captureAssetArrivals(() => pullMissingAssetsFromPeer('peer-a', [
+      { filename: 'peer.svg', kind: 'image', sha256: 'unused' },
+      { filename: 'peer.html', kind: 'image', sha256: 'unused' },
+    ]));
+    expect(peerFetch).not.toHaveBeenCalled();
+    expect(arrivals).toEqual([]);
+    expect(listAssetFiles('images')).toEqual([]);
   });
 
   it('discards a truncated response without leaving destination or temporary files', async () => {

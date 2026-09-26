@@ -7,7 +7,7 @@ import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../lib/portosAuthCore.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER, devProxyForwardedOrigin } from '../lib/portosAuthCore.js';
 import {
   EIDOVERSE_HOST_PATH_PREFIX,
   EIDOVERSE_ROOT_EXACT_PATHS,
@@ -95,6 +95,33 @@ function buildStamp() {
 const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
 const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
 
+// The API sees Vite's loopback connection, not the browser's. Replace
+// caller-supplied provenance, including duplicate headers; unknown socket
+// peers must never become an implicit local caller. `proxyReqWs` covers a
+// websocket upgrade, which never fires `proxyReq`.
+function markProxyClientAddress(proxy) {
+  const mark = (proxyReq, req) => {
+    proxyReq.setHeader(DEV_PROXY_CLIENT_ADDRESS_HEADER, req.socket?.remoteAddress || 'unknown');
+  };
+  proxy.on('proxyReq', mark);
+  proxy.on('proxyReqWs', mark);
+}
+
+// The API's browser-relay guard compares Origin with Host in both auth modes;
+// changeOrigin rewrites Host to the target, so re-stamp a same-origin Origin
+// to match (a foreign one is forwarded as-is and refused). Covers the HTTP
+// hop and the websocket upgrade.
+function forwardSameOrigin(target) {
+  const stamp = (proxyReq, req) => {
+    const origin = devProxyForwardedOrigin(req, target);
+    if (origin) proxyReq.setHeader('origin', origin);
+  };
+  return (proxy) => {
+    proxy.on('proxyReq', stamp);
+    proxy.on('proxyReqWs', stamp);
+  };
+}
+
 // Dev proxies for the same-origin Eidoverse iframe. Root routes only forward
 // while the API host is active; `/node_modules/` + `/shared/` keep a Referer
 // bypass so Vite's own dependency graph is not stolen.
@@ -105,6 +132,7 @@ function eidoverseDevProxies(target) {
       changeOrigin: true,
       ws: true,
       secure: false,
+      configure: forwardSameOrigin(target),
     },
   };
   for (const exact of EIDOVERSE_ROOT_EXACT_PATHS) {
@@ -113,6 +141,7 @@ function eidoverseDevProxies(target) {
       changeOrigin: true,
       ws: exact === '/ws',
       secure: false,
+      configure: forwardSameOrigin(target),
     };
   }
   for (const prefix of EIDOVERSE_ROOT_PREFIX_PATHS) {
@@ -120,6 +149,7 @@ function eidoverseDevProxies(target) {
       target,
       changeOrigin: true,
       secure: false,
+      configure: forwardSameOrigin(target),
       bypass(req) {
         if (prefix !== '/node_modules/' && prefix !== '/shared/') return undefined;
         const referer = String(req.headers.referer || '');
@@ -190,12 +220,8 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           secure: false,
           configure(proxy) {
-            proxy.on('proxyReq', (proxyReq, req) => {
-              // The API sees Vite's loopback connection, not the browser's.
-              // Replace caller-supplied provenance, including duplicate headers;
-              // unknown socket peers must never become an implicit local caller.
-              proxyReq.setHeader(DEV_PROXY_CLIENT_ADDRESS_HEADER, req.socket?.remoteAddress || 'unknown');
-            });
+            markProxyClientAddress(proxy);
+            forwardSameOrigin(API_TARGET)(proxy);
           }
         },
         // Every `/data/**` asset mount at once, instead of a hand-maintained
@@ -210,13 +236,21 @@ export default defineConfig(({ command, mode }) => {
         '^/data/': {
           target: API_TARGET,
           changeOrigin: true,
-          secure: false
+          secure: false,
+          configure: forwardSameOrigin(API_TARGET)
         },
+        // The socket carries host-control events (shell, iTerm2, app updates)
+        // gated on a local caller, so its handshake needs the same marker —
+        // on both the polling requests and the websocket upgrade (#8708).
         '/socket.io': {
           target: API_TARGET,
           changeOrigin: true,
           ws: true,
-          secure: false
+          secure: false,
+          configure(proxy) {
+            markProxyClientAddress(proxy);
+            forwardSameOrigin(API_TARGET)(proxy);
+          }
         },
         ...eidoverseDevProxies(API_TARGET),
       }

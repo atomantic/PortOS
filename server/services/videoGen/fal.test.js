@@ -521,3 +521,114 @@ describe('videoGen/fal — cancel abandoned renders (#8340)', () => {
     expect(cancelCalls).toBe(1);
   });
 });
+
+describe('videoGen/fal — recover completed renders (#8564)', () => {
+  const submitUrl = 'https://queue.fal.run/fal-ai/x';
+  const resultUrl = `${submitUrl}/requests/completed`;
+  const videoUrl = 'https://cdn.fal.ai/example.mp4';
+  let counts;
+  let canceledBodies;
+  function installReads({ result, video } = {}) {
+    counts = { submit: 0, result: 0, video: 0 };
+    canceledBodies = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
+      if (url === submitUrl) {
+        counts.submit++;
+        return jsonResponse({ request_id: 'completed', response_url: resultUrl });
+      }
+      if (url === `${resultUrl}/status`) return jsonResponse({ status: 'COMPLETED' });
+      if (url === resultUrl) {
+        counts.result++;
+        return result ? result(counts.result, options.signal) : jsonResponse({ video: { url: videoUrl } });
+      }
+      if (url === videoUrl) {
+        counts.video++;
+        return video ? video(counts.video, options.signal) : new Response('complete-video');
+      }
+      throw new Error('Unexpected request');
+    }));
+  }
+  function failedResponse(status) {
+    const cancel = vi.fn(async () => {});
+    canceledBodies.push(cancel);
+    return { ok: false, status, body: { cancel } };
+  }
+  function stalledResponse(signal) {
+    return new Response(new ReadableStream({ start(controller) {
+      signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+    } }));
+  }
+  async function generate() {
+    vi.useFakeTimers();
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'Example clip' });
+    await vi.advanceTimersByTimeAsync(0);
+    return job;
+  }
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['result HTTP', 'result transport', 'video HTTP', 'video body'])('recovers %s failure without another generation', async (failure) => {
+    installReads({
+      result: (attempt) => {
+        if (failure === 'result HTTP' && attempt === 1) return failedResponse(503);
+        if (failure === 'result transport' && attempt === 1) throw new TypeError('fetch failed');
+        return jsonResponse({ video: { url: videoUrl } });
+      },
+      video: (attempt) => {
+        if (failure === 'video HTTP' && attempt === 1) return failedResponse(429);
+        if (failure === 'video body' && attempt === 1) return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+          controller.error(new TypeError('terminated', { cause: { code: 'UND_ERR_SOCKET' } }));
+        } }));
+        return new Response('complete-video');
+      },
+    });
+    const job = await generate();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(counts).toEqual({ submit: 1, result: failure.startsWith('result') ? 2 : 1, video: failure.startsWith('video') ? 2 : 1 });
+    expect(await readFile(join(FAKE_VIDEOS_DIR, job.filename), 'utf8')).toBe('complete-video');
+    expect((await loadHistory()).filter(item => item.id === job.jobId)).toHaveLength(1);
+    for (const canceled of canceledBodies) expect(canceled).toHaveBeenCalledOnce();
+  });
+  it.each(['result', 'video'])('limits transient %s failures to three reads', async (phase) => {
+    installReads({ [phase]: () => failedResponse(408) });
+    const job = await generate();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    expect(counts[phase]).toBe(3);
+    expect(counts.submit).toBe(1);
+    await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const canceled of canceledBodies) expect(canceled).toHaveBeenCalledOnce();
+  });
+  it.each(['result', 'video', 'schema', 'JSON'])('fails permanent %s errors without retries', async (phase) => {
+    installReads(phase === 'schema' ? { result: () => jsonResponse({ video: { url: 42 } }) }
+      : phase === 'JSON' ? { result: () => new Response('not JSON') }
+        : { [phase]: () => failedResponse(403) });
+    const job = await generate();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    expect(counts).toEqual({ submit: 1, result: 1, video: phase === 'video' ? 1 : 0 });
+    await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('shares the ten-minute budget across result timeouts, backoff and a stalled video body', async () => {
+    installReads({
+      result: (attempt, signal) => attempt < 3 ? stalledResponse(signal) : jsonResponse({ video: { url: videoUrl } }),
+      video: (_attempt, signal) => stalledResponse(signal),
+    });
+    const job = await generate();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    expect(counts).toEqual({ submit: 1, result: 3, video: 1 });
+    await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it.each(['backoff', 'result body', 'video body'])('cancels during %s without another read or publishing a video', async (phase) => {
+    installReads(phase === 'backoff' ? { result: () => failedResponse(503) }
+      : phase === 'result body' ? { result: (_attempt, signal) => stalledResponse(signal) }
+        : { video: (_attempt, signal) => stalledResponse(signal) });
+    const job = await generate();
+    expect(fal.cancel(job.jobId)).toBe(true);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed', error: expect.stringMatching(/cancel/i) });
+    expect(counts).toEqual({ submit: 1, result: 1, video: phase === 'video body' ? 1 : 0 });
+    await expect(readFile(join(FAKE_VIDEOS_DIR, job.filename))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});

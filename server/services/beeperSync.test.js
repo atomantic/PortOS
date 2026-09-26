@@ -15,10 +15,17 @@ const txCalls = [];
 // rather than inside it.
 const txWrites = [];
 let storedCursorRows = [];
+let accountCheckpoint = null;
+let checkpointFailure = false;
 let txFailPattern = null;
 
 const queryMock = vi.fn(async (text, params) => {
   dbCalls.push({ text, params });
+  if (/SELECT chat_cursor/.test(text)) return { rows: [{ chat_cursor: accountCheckpoint }] };
+  if (/UPDATE beeper_accounts SET chat_cursor/.test(text)) {
+    if (checkpointFailure) throw new Error('checkpoint write interrupted');
+    accountCheckpoint = params[1];
+  }
   if (/FROM beeper_sync_cursors/.test(text)) return { rows: storedCursorRows };
   if (/INSERT INTO beeper_conversations/.test(text)) return { rows: [{ id: `conv-${params[2]}` }] };
   return { rows: [] };
@@ -75,7 +82,8 @@ vi.mock('./beeperTribe.js', () => ({
 }));
 
 const {
-  runBeeperSweep, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
+  runBeeperSweep,
+  reconcileBeeperEvent, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
   normalizeAccountRow, normalizeMessageRow, normalizeAttachmentRows, DEFAULT_INTERVAL_MINUTES,
 } = await import('./beeperSync.js');
 const { getBeeperSweepProgress, __resetBeeperSweepProgressForTests } = await import('./beeperSweepProgress.js');
@@ -132,6 +140,8 @@ beforeEach(() => {
   txWrites.length = 0;
   fetchedUrls.length = 0;
   storedCursorRows = [];
+  accountCheckpoint = null;
+  checkpointFailure = false;
   txFailPattern = null;
   queryMock.mockClear();
   withTransactionMock.mockClear();
@@ -552,7 +562,7 @@ describe('cursor transactionality', () => {
 
     const insert = txWrites.find(({ text }) => text.includes('INSERT INTO beeper_messages'));
     expect(insert).toBeTruthy();
-    expect(insert.params.at(-1)).toBe(true);
+    expect(insert.params[8]).toBe(true);
     // A later page may omit the optional field; the upsert must not flip a
     // message the user actually sent onto the other side of the thread. This is
     // the guard's SHAPE against a mocked client — the row-level proof that a
@@ -1108,5 +1118,115 @@ describe('normalizers', () => {
     expect(chatNeedsSweep({ lastActivity: '2026-09-02T00:00:00.000Z' }, { lastActivity: null })).toBe(true);
     expect(chatNeedsSweep({ lastActivity: '2026-09-02T00:00:00.000Z' }, { lastActivity: '2026-09-01T00:00:00.000Z' })).toBe(true);
     expect(chatNeedsSweep({ lastActivity: '2026-09-01T00:00:00.000Z' }, { lastActivity: '2026-09-01T00:00:00.000Z' })).toBe(false);
+  });
+});
+
+// Public sweep regressions: the persisted checkpoint outlives a service reload,
+// while the wire still receives a bounded newest-first head refresh each run.
+describe('account enumeration continuation', () => {
+  function installPagedAccount({ pages = 21, rejectCursor, failChat } = {}) {
+    const visits = [];
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/v1/accounts') return jsonResponse(ACCOUNTS);
+      if (parsed.pathname === '/v1/bridges') return jsonResponse(BRIDGES);
+      if (parsed.pathname === '/v1/chats') {
+        const cursor = parsed.searchParams.get('cursor');
+        const page = cursor ? Number(cursor) : 1;
+        visits.push(page);
+        if (rejectCursor && cursor === rejectCursor.cursor) {
+          return { ok: false, status: rejectCursor.status, text: async () => JSON.stringify({ message: 'Invalid cursor' }) };
+        }
+        return jsonResponse({
+          items: [{ id: `chat-${page}`, accountID: 'acct-a', lastActivity: '2026-09-02T10:00:00.000Z', participants: { items: [] } }],
+          hasMore: page < pages, oldestCursor: String(page + 1),
+        });
+      }
+      const id = decodeURIComponent(parsed.pathname.split('/')[3]);
+      if (id === failChat) throw new Error('message fetch interrupted');
+      return jsonResponse({ items: [{ id: `msg-${id}`, chatID: id, accountID: 'acct-a', text: 'Example body' }], hasMore: false, newestCursor: `done-${id}` });
+    }));
+    return visits;
+  }
+
+  it.each([false, true])('reaches page 21 after restart with an existing backlog=%s and refreshes new head activity', async (backlog) => {
+    storedCursorRows = Array.from({ length: 20 }, (_, i) => ({
+      chat_id: `chat-${i + 1}`, cursor: `caught-up-${i + 1}`, last_activity: '2026-09-02T10:00:00.000Z',
+    }));
+    if (backlog) storedCursorRows.push({ chat_id: 'chat-21', cursor: 'unfinished', last_activity: '2026-08-01T00:00:00.000Z' });
+    const visits = installPagedAccount();
+    expect(await runBeeperSweep()).toMatchObject({ unfinishedAccounts: 1, enumerationComplete: false, messages: 0 });
+    expect(accountCheckpoint).toBe('21');
+    expect(visits).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+    storedCursorRows[0].last_activity = '2026-08-01T00:00:00.000Z';
+    vi.resetModules();
+    const restarted = await import('./beeperSync.js');
+    expect(await restarted.runBeeperSweep()).toMatchObject({ unfinishedAccounts: 0, enumerationComplete: true, messages: 2 });
+    expect(visits.slice(20)).toEqual([1, 21]);
+    expect(accountCheckpoint).toBeNull();
+    expect(txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages')).map(({ params }) => params[0])).toContain('msg-chat-21');
+  });
+
+  it('retains a failed page checkpoint and retries it on the next run', async () => {
+    accountCheckpoint = '21';
+    installPagedAccount({ rejectCursor: { cursor: '21', status: 404 } });
+    await expect(runBeeperSweep()).rejects.toMatchObject({ code: 'SWEEP_FAILED' });
+    expect(accountCheckpoint).toBe('21');
+    const visits = installPagedAccount();
+    expect(await runBeeperSweep()).toMatchObject({ enumerationComplete: true });
+    expect(visits).toEqual([1, 21]);
+  });
+
+  it('restarts a rejected cursor explicitly within the page budget', async () => {
+    accountCheckpoint = '99';
+    const visits = installPagedAccount({ rejectCursor: { cursor: '99', status: 400 } });
+    expect(await runBeeperSweep()).toMatchObject({ cursorRestarts: 1, enumerationComplete: false });
+    expect(visits).toHaveLength(20);
+    expect(visits.slice(0, 3)).toEqual([1, 99, 1]);
+    expect(accountCheckpoint).toBe('19');
+  });
+
+  it('replays committed page work after a checkpoint write interruption', async () => {
+    checkpointFailure = true;
+    installPagedAccount({ pages: 1 });
+    await expect(runBeeperSweep()).rejects.toMatchObject({ code: 'SWEEP_FAILED' });
+    expect(accountCheckpoint).toBeNull();
+    checkpointFailure = false;
+    expect(await runBeeperSweep()).toMatchObject({ enumerationComplete: true, messages: 1 });
+    const writes = txWrites.filter(({ text }) => text.includes('INSERT INTO beeper_messages'));
+    expect(writes).toHaveLength(2);
+    expect(writes[0].params[0]).toBe(writes[1].params[0]);
+    expect(writes.every(({ text }) => text.includes('ON CONFLICT'))).toBe(true);
+  });
+
+  it('revisits failed chats after finishing the traversal instead of permanently skipping them', async () => {
+    installPagedAccount({ failChat: 'chat-2' });
+    expect(await runBeeperSweep()).toMatchObject({ failedChats: 1, unfinishedAccounts: 1 });
+    const visits = installPagedAccount();
+    await runBeeperSweep();
+    await runBeeperSweep();
+    expect(visits.slice(0, 4)).toEqual([1, 21, 1, 2]);
+    expect(txWrites.some(({ text, params }) => text.includes('INSERT INTO beeper_messages') && params[0] === 'msg-chat-2')).toBe(true);
+  });
+
+  it('reports a stalled hasMore page as a failure and preserves its checkpoint', async () => {
+    accountCheckpoint = '21';
+    installFetch({ chatPages: [{ items: [], hasMore: true, oldestCursor: '21' }] });
+    await expect(runBeeperSweep()).rejects.toMatchObject({ code: 'SWEEP_FAILED' });
+    expect(accountCheckpoint).toBe('21');
+  });
+});
+
+describe('stored-message event reconciliation', () => {
+  it('does no transport work when ingestion is disabled or the message is not mirrored', async () => {
+    installFetch();
+    getSettingsMock.mockResolvedValue({ beeper: { enabled: false } });
+    await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['old-message'] });
+    expect(dbCalls).toEqual([]);
+    expect(fetchedUrls).toEqual([]);
+    getSettingsMock.mockResolvedValue({ beeper: { enabled: true, token: 'test-token' } });
+    await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['unknown-message'] });
+    expect(fetchedUrls).toEqual([]);
+    expect(txWrites).toEqual([]);
   });
 });

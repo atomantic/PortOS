@@ -107,7 +107,7 @@ The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a r
 
 Because the lock is taken in one place, the two entry points cannot run `update.sh` concurrently — and because that flag is what `subAgentSpawner`, `agentLifecycle` and `persistentMindSupervisor` gate on, holding it also stops a CoS agent from being spawned into a process the script is about to `pm2 delete` (#4124).
 
-`appUpdater` also **skips its own `restart` step** for that case: the script runs `pm2 start ecosystem.config.cjs` itself, so restarting on top of it would be redundant and would race the script.
+`appUpdater` also **skips its own `restart` step** for that case: the script starts the production app set from `ecosystem.config.cjs` itself, excluding `portos-ui`, so restarting on top of it would be redundant and would race the script.
 
 ### Launch and completion are separate phases
 
@@ -123,7 +123,7 @@ A PortOS record carrying a custom `updateCommand`, or a `repoPath` that is not t
 
 ## Post-update health verification
 
-`pm2 start` exiting 0 is not proof the server came back, and the process that would notice is the one that did not. Both platform scripts therefore close with a `verify` step that polls `/api/system/health` (`scripts/verify-server-health.js`) until it reports `ok` or the budget — `PORTOS_HEALTH_WAIT_MS`, default 120s — runs out. On failure they spend one more `pm2 start ecosystem.config.cjs` and then log the outcome loudly, with the manual recovery command.
+`pm2 start` exiting 0 is not proof the server came back, and the process that would notice is the one that did not. Both platform scripts therefore close with a `verify` step that polls `/api/system/health` (`scripts/verify-server-health.js`) until it reports `ok` or the budget — `PORTOS_HEALTH_WAIT_MS`, default 120s — runs out. On failure they retry the production app set with `--only` (excluding Vite), then log the outcome loudly with the manual recovery command.
 
 The probe tries the loopback HTTP mirror (`:5553`) first, then the API port over HTTP and HTTPS, because the listening scheme depends on whether a cert is provisioned; `/api/system/health` is in the always-public set, so it works with the optional instance password on. The recovery only fires when the probe fails, so it cannot make a healthy update worse.
 

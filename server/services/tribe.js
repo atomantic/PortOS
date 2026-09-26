@@ -15,24 +15,11 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { cadenceStatus } from '../lib/tribeCadence.js';
+import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
 import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { toUserDayKey } from '../lib/activeDays.js';
+import { getUserTimezone } from './userTimezone.js';
 import * as calendarSync from './calendarSync.js';
-
-// Default check-in cadence (days) per ring. Mirrored on the client in
-// `client/src/pages/Tribe.jsx` (the RINGS array's `cadenceDays`); the SQL column
-// default is a flat 45 (`cadence_days` in db.js / init-db.sql) because the
-// ring-aware default is resolved here before insert. Keep all three in sync.
-export const DEFAULT_RING_CADENCE = {
-  support: 7,
-  core: 21,
-  tribe: 45,
-  village: 90,
-  // `external` is for people outside the active tribe (former contacts, a nemesis):
-  // no care cadence is owed, so this default is a neutral yearly nudge and the UI
-  // excludes external people from the care queue entirely.
-  external: 365,
-};
 
 export function isoDate(value) {
   if (!value) return null;
@@ -373,6 +360,17 @@ export async function updatePerson(id, updates) {
   return result.rows[0] ? rowToPerson(result.rows[0]) : null;
 }
 
+// Days a deleted person stays recoverable before `purgeDeletedPeople` erases
+// them for good. It is also the retention for the `record_audit` snapshots of
+// the tribe tables: a third party's contact details and conversation summaries
+// must not outlive the user's delete, and the audit log copies the full row
+// (#8459).
+export const DELETED_PERSON_RETENTION_DAYS = 30;
+const TRIBE_AUDITED_TABLES = ['tribe_people', 'tribe_touchpoints', 'tribe_identities'];
+
+// Soft delete. The row keeps every field until `purgeDeletedPeople` hard-deletes
+// it DELETED_PERSON_RETENTION_DAYS later. Tribe is machine-local, so the
+// tombstone is never needed for sync — it is only a short recovery window.
 export async function deletePerson(id) {
   await ensureReady();
   const result = await query(
@@ -383,6 +381,54 @@ export async function deletePerson(id) {
     [id],
   );
   return result.rowCount > 0;
+}
+
+/**
+ * Erase people deleted more than `olderThanDays` ago, and expire the tribe
+ * tables' `record_audit` snapshots on the same window (#8459).
+ *
+ * The hard delete cascades to touchpoints, identities and memory links, and
+ * sets `beeper_participants.tribe_person_id` to NULL. The audit trigger writes a
+ * `hard_delete` snapshot for every row the cascade removes; those are erased in
+ * the same transaction, together with the person's earlier tombstone snapshot.
+ * Audit rows for the creative tables are never touched — there the log is the
+ * data-loss recovery source.
+ *
+ * Returns counts only, so callers can log without naming anyone.
+ */
+export async function purgeDeletedPeople({ olderThanDays = DELETED_PERSON_RETENTION_DAYS } = {}) {
+  if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
+    throw new ServerError('olderThanDays must be a non-negative integer', { status: 400, code: 'BAD_REQUEST' });
+  }
+  await ensureReady();
+  return withTransaction(async (client) => {
+    const purged = await client.query(
+      `DELETE FROM tribe_people
+       WHERE deleted = TRUE AND deleted_at < NOW() - make_interval(days => $1::int)
+       RETURNING id`,
+      [olderThanDays],
+    );
+    const ids = purged.rows.map((row) => String(row.id));
+    let auditRows = 0;
+    if (ids.length > 0) {
+      const snapshots = await client.query(
+        `DELETE FROM record_audit
+         WHERE (table_name = 'tribe_people' AND record_id = ANY($1::text[]))
+            OR (table_name IN ('tribe_touchpoints', 'tribe_identities')
+                AND row_snapshot->>'person_id' = ANY($1::text[]))`,
+        [ids],
+      );
+      auditRows += snapshots.rowCount;
+    }
+    const expired = await client.query(
+      `DELETE FROM record_audit
+       WHERE table_name = ANY($1::text[])
+         AND occurred_at < NOW() - make_interval(days => $2::int)`,
+      [TRIBE_AUDITED_TABLES, olderThanDays],
+    );
+    auditRows += expired.rowCount;
+    return { people: ids.length, auditRows };
+  });
 }
 
 export async function listTouchpoints(personId, limit = 50) {
@@ -439,8 +485,15 @@ export async function createTouchpoint(personId, data = {}) {
 export async function createCalendarTouchpoint(personId, { accountId, eventId, summary }) {
   const event = await calendarSync.getEvent(accountId, eventId);
   if (!event) throw new ServerError('Calendar event not found', { status: 404 });
+  const happenedAt = event.startTime || event.endTime || new Date().toISOString();
+  // `last_contact_on` is a user-facing calendar day, not a UTC one — an evening
+  // event must land on the day the user experienced it, not tomorrow's UTC date
+  // (#8451). `createTouchpoint` uses `localDate` (falling back to the raw instant
+  // only when the caller doesn't supply one).
+  const localDate = toUserDayKey(happenedAt, await getUserTimezone());
   return createTouchpoint(personId, {
-    happenedAt: event.startTime || event.endTime || new Date().toISOString(),
+    happenedAt,
+    localDate,
     channel: event.location || 'Calendar',
     summary: summary || event.title || 'Calendar touchpoint',
     source: 'calendar',
@@ -473,6 +526,12 @@ export async function createCalendarTouchpoint(personId, { accountId, eventId, s
 // advance instead of re-implementing it (#34).
 export async function autoCreateTouchpoint(personId, data) {
   const happenedAt = data.happenedAt || new Date().toISOString();
+  // Advance last_contact_on by the user's LOCAL calendar day, not the UTC day the
+  // raw instant's date part happens to fall on — an evening meeting/message must
+  // not advance the contact date to a day that, locally, hasn't happened yet
+  // (#8451). Falls back to the raw instant only if it doesn't parse as a date at
+  // all (toUserDayKey returns null), matching the manual-touchpoint fallback.
+  const contactDay = toUserDayKey(happenedAt, await getUserTimezone()) || happenedAt;
   return withTransaction(async (client) => {
     const result = await client.query(
       `INSERT INTO tribe_touchpoints (
@@ -507,7 +566,7 @@ export async function autoCreateTouchpoint(personId, data) {
        SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
            updated_at = NOW()
        WHERE id = $1`,
-      [personId, happenedAt],
+      [personId, contactDay],
     );
     return rowToTouchpoint(result.rows[0]);
   });

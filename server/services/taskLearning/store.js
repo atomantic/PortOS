@@ -457,6 +457,8 @@ export async function saveLearningData(data) {
   await atomicWrite(LEARNING_FILE, data);
   _learningCache = structuredClone(data);
   _learningCacheTime = Date.now();
+  cosEvents.emit('goals:changed', {});
+  cosEvents.emit('learning:changed');
 }
 
 /**

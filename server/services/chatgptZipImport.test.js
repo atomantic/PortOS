@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readdir, readFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -293,6 +293,60 @@ describe('chatgptZipImport service', () => {
       const written = await readdir(assetDir).catch(() => []);
       expect(written).toEqual([]);
     });
+
+    it('marks a freshly-written asset created:true', async () => {
+      const assetDir = join(TMP, 'assets');
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['file-IMG.dat', PNG],
+      ]);
+      const { assets } = await extractChatgptZip(zipPath, { assetDir });
+      expect(assets.get('file-IMG').created).toBe(true);
+    });
+
+    it('keeps (does not overwrite) an asset an earlier import already wrote, and marks it created:false', async () => {
+      // Asset ids are content ids — the same `file-service://` id recurs across
+      // separate exports of overlapping conversations. Simulate a prior
+      // successful import having already written the served file.
+      const assetDir = join(TMP, 'assets');
+      await mkdir(assetDir, { recursive: true });
+      await writeFile(join(assetDir, 'file-IMG.png'), 'earlier-import-bytes');
+
+      const zipPath = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['file-IMG.dat', PNG],
+      ]);
+      const { assets } = await extractChatgptZip(zipPath, { assetDir });
+
+      expect(assets.get('file-IMG').created).toBe(false);
+      // The earlier import's bytes were left untouched, not overwritten by the
+      // (different) bytes this run streamed.
+      expect((await readFile(join(assetDir, 'file-IMG.png'), 'utf8'))).toBe('earlier-import-bytes');
+    });
+
+    it('a later failure in the SAME run never deletes an asset an EARLIER import owns (the reported data-loss bug)', async () => {
+      // Reproduces the issue: import #1 succeeds and writes file-IMG.png. A
+      // re-upload (import #2) reuses the same asset id but has a truncated
+      // conversations shard, so it fails after extraction. The cleanup path
+      // must remove nothing it didn't create — file-IMG.png must survive.
+      const assetDir = join(TMP, 'assets');
+      const firstZip = await writeZip([
+        ['conversations-000.json', JSON.stringify([{ id: 'c1', title: 'A', mapping: {} }])],
+        ['file-IMG.dat', PNG],
+      ]);
+      await extractChatgptZip(firstZip, { assetDir });
+      expect(await readdir(assetDir)).toEqual(['file-IMG.png']);
+
+      const secondZip = await writeZip([
+        ['conversations-000.json', '[{ "id": "c1", "title": "A", "mapping": {} '], // truncated → throws
+        ['file-IMG.dat', PNG],
+      ]);
+      await expect(extractChatgptZip(secondZip, { assetDir }))
+        .rejects.toMatchObject({ status: 400, code: 'INVALID_CHATGPT_EXPORT' });
+
+      // Import #1's asset survives the failed re-import's cleanup.
+      expect(await readdir(assetDir)).toEqual(['file-IMG.png']);
+    });
   });
 
   describe('makeAssetResolver', () => {
@@ -320,7 +374,9 @@ describe('chatgptZipImport service', () => {
       });
       const created = [];
       vi.doMock('./brainStorage.js', () => ({
-        createMemoryEntry: vi.fn(async (d) => { created.push(d); return { id: `mem-${created.length}`, ...d }; })
+        createMemoryEntry: vi.fn(async (d) => { created.push(d); return { id: `mem-${created.length}`, ...d }; }),
+        updateMemoryEntry: vi.fn(async (id, d) => ({ id, ...d })),
+        query: vi.fn(async () => [])
       }));
       const { importChatgptZip: run } = await import('./chatgptZipImport.js');
 

@@ -311,7 +311,9 @@ export * from './schemaVersions.js';
 export * from './secretText.js';
 export * from './piiRedactionPatterns.js';
 export * from './imageClean.js';
+export * from './imageCleanDefaults.js';
 export * from './imageFrameStats.js';
+export * from './imageThumbnail.js';
 export * from './imageRgba.js';
 export * from './imageWatermark.js';
 export * from './localImageFilename.js';
@@ -474,6 +476,8 @@ export * from './chiptuneScore.js';
 export * from './pitchMath.js';
 export * from './wavAudioFile.js';
 export * from './waveSketch.js';
+export * from './paintedCanvas.js';
+export * from './spectrogramImage.js';
 export * from './civitai.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';
@@ -601,6 +605,7 @@ export * from './viteAllowedHosts.js';
 export * from './apiAccessPolicy.js';
 export * from './apiCatalog.js';
 export * from './apiRouteGraph.js';
+export * from './hostControlRoutes.js';
 export * from './socketEventCatalog.js';
 export * from './sourceScan.js';
 export * from './apiOperationContracts.js';
@@ -655,6 +660,7 @@ export * from './slashdoCatalog.js';
 export * from './slashdoInvocation.js';
 export * from './slashdoLoader.js';
 export * from './singleFlight.js';
+export * from './progressChannels.js';
 export * from './staleWhileRevalidate.js';
 export * from './staticImportGraph.js';
 export * from './streamAttachment.js';
@@ -708,6 +714,7 @@ export * from './videoTimelineFades.js';
 // `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
 export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
+export * from './httpCompression.js';
 
 export * from './auditQuality.js';
 
@@ -719,6 +726,8 @@ export * from './kilo.js';
 export * from './openchamber.js';
 
 export * from './layaMlx.js';
+export * from './layeredIntelligenceSources.js';
+export * from './layeredIntelligenceSourceKeys.js';
 
 export * from './persistentMindMaintainer.js';
 
@@ -732,3 +741,7 @@ export * from './markdownImages.js';
 export * from './chatgptText.js';
 
 export * from './modelComparisonComposite.js';
+export * from './messageLogError.js';
+
+export * from './launchVideoValidation.js';
+export * from './styleSourcePrompt.js';

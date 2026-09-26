@@ -215,6 +215,54 @@ describe('sweepTombstones — no peers subscribed', () => {
   });
 });
 
+describe('sweepTombstones — unreadable peer registry fails closed (#8412)', () => {
+  it('rejects and prunes nothing when getPeers() rejects, instead of treating the failure as "no peers"', async () => {
+    getPeers.mockRejectedValue(new Error('EIO: instances.json unreadable'));
+    mockSubs({});
+
+    await expect(sweepTombstones({ now: NOW })).rejects.toThrow('EIO: instances.json unreadable');
+
+    expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
+    expect(pruneTombstonedSeries).not.toHaveBeenCalled();
+    expect(pruneTombstonedIssues).not.toHaveBeenCalled();
+    expect(pruneTombstonedCollections).not.toHaveBeenCalled();
+    expect(pruneTombstonedLooms).not.toHaveBeenCalled();
+    expect(pruneTombstonedAuthors).not.toHaveBeenCalled();
+    expect(pruneTombstonedArtists).not.toHaveBeenCalled();
+    expect(pruneTombstonedAlbums).not.toHaveBeenCalled();
+    expect(pruneTombstonedTracks).not.toHaveBeenCalled();
+    expect(pruneTombstonedProjects).not.toHaveBeenCalled();
+    expect(pruneTombstonedMusicVideoProjects).not.toHaveBeenCalled();
+    expect(pruneTombstonedBoards).not.toHaveBeenCalled();
+    expect(pruneTombstonedWorks).not.toHaveBeenCalled();
+    expect(pruneTombstonedFolders).not.toHaveBeenCalled();
+    expect(pruneTombstonedExercises).not.toHaveBeenCalled();
+    expect(pruneTombstonedCommissionFeedback).not.toHaveBeenCalled();
+    expect(pruneTombstonedCommissions).not.toHaveBeenCalled();
+    expect(pruneTombstonedDecks).not.toHaveBeenCalled();
+    expect(pruneOrphanedBaseHashes).not.toHaveBeenCalled();
+    expect(pruneOrphanedPeerSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('getSweepStatus() rejects under the same condition instead of returning { refused: [] }', async () => {
+    getPeers.mockRejectedValue(new Error('EIO: instances.json unreadable'));
+    mockSubs({});
+
+    await expect(getSweepStatus({ now: NOW })).rejects.toThrow('EIO: instances.json unreadable');
+  });
+
+  it('still prunes after the grace window when getPeers() resolves [] (no federation, e.g. ENOENT)', async () => {
+    getPeers.mockResolvedValue([]);
+    mockSubs({});
+
+    const res = await sweepTombstones({ now: NOW });
+
+    expect(res.refused).toEqual([]);
+    const expectedCutoff = NOW - TOMBSTONE_GRACE_MS + 1;
+    expect(pruneTombstonedUniverses).toHaveBeenCalledWith(expectedCutoff);
+  });
+});
+
 describe('sweepTombstones — full-sync peer resurrection guard', () => {
   it('a full-sync peer with an empty category map still blocks snapshot-kind pruning', async () => {
     // A full-sync peer mirrors every category regardless of its stored

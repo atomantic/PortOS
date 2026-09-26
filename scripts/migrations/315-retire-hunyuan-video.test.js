@@ -3,10 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { repoRoot } from './_testHelpers.js';
-import { RETIRED_VIDEO_MODELS } from '../../server/lib/mediaModels.js';
+import { RETIRED_VIDEO_MODELS, getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import migration, { REPLACEMENT_ID, RETIRED_ID, SHIPPED_REPO } from './315-retire-hunyuan-video.js';
 
-const REFERENCE_PATH = join(repoRoot, 'data.reference', 'media-models.json');
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
 
@@ -55,7 +54,7 @@ describe('migration 315 — retire legacy HunyuanVideo', () => {
   });
 
   it('matches the fresh-install catalog', () => {
-    const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'));
+    const seeded = getShippedMediaRegistry();
     expect(seeded.video.mlx.some((entry) => entry.id === RETIRED_ID)).toBe(false);
     expect(seeded.video.mlx.some((entry) => entry.id === REPLACEMENT_ID)).toBe(true);
   });

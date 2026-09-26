@@ -24,6 +24,37 @@ import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '
 // 250ms is invisible to the live tail but cuts I/O by 1-2 orders of magnitude.
 const OUTPUT_FLUSH_INTERVAL_MS = 250;
 
+/**
+ * Create a per-run transcript write failure reporter. Logs the first failure
+ * per (agentId, fileLabel) and updates agent metadata to flag the transcript
+ * as incomplete, deduplicating multiple errors from a failing disk.
+ *
+ * @param {object} opts
+ * @param {string} opts.agentId  Agent id (used in logs and metadata updates).
+ * @returns {object} Reporter with `report(fileLabel, err)` method.
+ */
+export function createTranscriptWriteReporter({ agentId }) {
+  const reportedFailures = new Set();
+
+  return {
+    report(fileLabel, err) {
+      const failureKey = `${fileLabel}`;
+      if (reportedFailures.has(failureKey)) {
+        // Already reported this failure — skip duplicate logging
+        return;
+      }
+      reportedFailures.add(failureKey);
+
+      // Log the first failure with error code and message
+      console.error(`❌ agent ${agentId} ${fileLabel} write failed (${err.code || 'error'}): ${err.message}`);
+
+      // Update agent metadata to flag transcript as incomplete
+      updateAgent(agentId, { metadata: { transcriptWriteFailed: { file: fileLabel, code: err.code || 'unknown' } } })
+        .catch(metaErr => console.error(`❌ agent ${agentId} transcriptWriteFailed metadata write failed: ${metaErr.message}`));
+    },
+  };
+}
+
 // RAW_SPOOL_MAX_BYTES lives in tuiHandshake.js so the test suite can shrink the
 // cap via the same vi.mock pattern that overrides the output-buffer thresholds
 // — saves the truncation test from having to push hundreds of MB through the
@@ -63,14 +94,16 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
   let rawBytesWritten = 0;
   let rawSpoolTruncationWarned = false;
 
+  const reporter = createTranscriptWriteReporter({ agentId });
+
   const flushPendingLines = async () => {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     if (pendingLines.length === 0) return;
     const batch = pendingLines;
     pendingLines = [];
     await Promise.all([
-      appendAgentOutputLines(agentId, batch).catch(() => {}),
-      appendFile(outputFile, batch.map(l => `${l}\n`).join('')).catch(() => {})
+      appendAgentOutputLines(agentId, batch).catch((err) => reporter.report('state', err)),
+      appendFile(outputFile, batch.map(l => `${l}\n`).join('')).catch((err) => reporter.report('output.txt', err))
     ]);
   };
 
@@ -134,11 +167,17 @@ export function createOutputSpooler({ agentId, outputFile, rawFile }) {
       // Only update the byte counter on successful write — a failed write
       // would otherwise inflate rawBytesWritten and make subsequent flush
       // decisions race the actual on-disk state.
-      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch(() => false);
+      const wrote = await writeFile(rawFile, writeBuf).then(() => true).catch((err) => {
+        reporter.report('raw.txt', err);
+        return false;
+      });
       if (wrote) rawBytesWritten = writeBytes;
       return;
     }
-    const wrote = await appendFile(rawFile, batch).then(() => true).catch(() => false);
+    const wrote = await appendFile(rawFile, batch).then(() => true).catch((err) => {
+      reporter.report('raw.txt', err);
+      return false;
+    });
     if (wrote) rawBytesWritten += batchBytes;
   };
 

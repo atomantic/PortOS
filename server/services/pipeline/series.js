@@ -892,19 +892,58 @@ async function reconcileDraftParentUniverse(universeId) {
     });
 }
 
-export async function updateSeries(id, patch = {}) {
+export async function updateSeries(id, patchOrMutator = {}) {
+  // `patchOrMutator` overloads (mirrors updateUniverse in
+  // server/services/universeBuilder/crud.js):
+  //   - Plain object: patch is applied directly inside the queue (legacy).
+  //   - `async (latest) => patch | null`: mutator runs INSIDE the write queue
+  //     against the freshest persisted record so a caller whose read-modify-
+  //     write straddles a slow LLM call (commitImport's cleanupFormatting
+  //     pass) can't clobber a concurrent edit to the same series (issue
+  //     #8453). Returning `null`/`undefined` short-circuits the write and
+  //     resolves with the unchanged record.
+  const isMutator = typeof patchOrMutator === 'function';
   // Pre-B.4 canon (characters/settings/objects) lives on the universe, not the
   // series — but a stale browser tab can still POST a legacy series shape and
   // see a silent 200. Warn so a regression that re-introduces the legacy
-  // payload is observable in logs instead of vanishing canon.
-  const legacyFields = ['characters', 'settings', 'objects'].filter((k) => k in patch);
-  if (legacyFields.length > 0) {
-    console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
+  // payload is observable in logs instead of vanishing canon. Only checkable
+  // for a literal-object patch; a mutator's patch isn't known until it runs
+  // inside the queue, and mutator callers are trusted (server-authored).
+  if (!isMutator) {
+    const legacyFields = ['characters', 'settings', 'objects'].filter((k) => k in patchOrMutator);
+    if (legacyFields.length > 0) {
+      console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
+    }
   }
-  const { merged, nameChanged, prevEphemeral, nextEphemeral, linkedUniverseId } = await store().queueRecordWrite(id, async () => {
+  const {
+    merged, nameChanged, skipped, prevEphemeral, nextEphemeral, linkedUniverseId,
+  } = await store().queueRecordWrite(id, async () => {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+
+    let patch;
+    if (isMutator) {
+      patch = await patchOrMutator(cur);
+      if (patch === null || patch === undefined) {
+        return {
+          merged: cur,
+          nameChanged: false,
+          skipped: true,
+          prevEphemeral: cur.ephemeral === true,
+          nextEphemeral: cur.ephemeral === true,
+          linkedUniverseId: null,
+        };
+      }
+      // `typeof === 'object'` matches arrays and null — reject both so a
+      // stray `return []` can't slip through unnoticed.
+      if (Array.isArray(patch) || typeof patch !== 'object') {
+        throw makeErr('updateSeries mutator must return a plain object or null', ERR_VALIDATION);
+      }
+    } else {
+      patch = patchOrMutator;
+    }
+
     if (cur.locked?.arc === true && Object.hasOwn(patch, 'arc')
       && (patch.arc === null || Object.hasOwn(patch.arc || {}, 'seriesDesign'))
       && JSON.stringify(sanitizeSeriesDesign(patch.arc?.seriesDesign)) !== JSON.stringify(cur.arc?.seriesDesign ?? null)) {
@@ -1005,6 +1044,7 @@ export async function updateSeries(id, patch = {}) {
     return {
       merged: next,
       nameChanged: next.name !== cur.name,
+      skipped: false,
       // See updateUniverse — surface the transition pair so the post-queue
       // side effects can wire subscribe / unsubscribe.
       prevEphemeral: cur.ephemeral === true,
@@ -1012,6 +1052,7 @@ export async function updateSeries(id, patch = {}) {
       linkedUniverseId: (linkChanged && isPromotingChild(next)) ? next.universeId : null,
     };
   });
+  if (skipped) return merged;
   // Ephemeral lifecycle wiring — see updateUniverse for the rationale. false→true
   // tears down per-record subs; true→false re-auto-subscribes so the now-
   // shareable series reaches every peer with the pipeline category enabled.

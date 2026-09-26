@@ -23,7 +23,7 @@
       }
     },
     "llm": {
-      "provider": "lmstudio",
+      "provider": "ollama",
       "model": "auto",
       "systemPrompt": "You are the PortOS assistant. Your replies are spoken aloud — keep them short and use plain prose (no markdown or lists).",
       "usePersonality": true,

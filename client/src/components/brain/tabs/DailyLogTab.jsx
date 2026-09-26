@@ -328,11 +328,25 @@ export default function DailyLogTab() {
     return () => offs.forEach((off) => off());
   }, [date]);
 
-  // Adopt the server's entry wholesale, textarea included.
-  const applyEntry = (next) => {
+  // Adopt the server's entry wholesale, textarea included — but only when the
+  // caller is still on the day this response belongs to. `handleDraft` and
+  // `handleAppend` await a slow request and the user can switch days before it
+  // resolves; applying a stale response would silently overwrite the newly
+  // loaded day's text with the old day's. `expectedDate` is mandatory (not
+  // defaulted) so a future async caller can't bypass the check by omitting it.
+  // On a mismatch the history summary still adopts the server write — the
+  // original day's entry did change — but `entry`/`content` are left alone,
+  // and the caller is told via the return value so it can toast where the
+  // write actually landed instead of losing it silently.
+  const applyEntry = (next, expectedDate) => {
+    if (loadedDateRef.current !== expectedDate || next.date !== expectedDate) {
+      setHistory((prev) => upsertHistory(prev, next));
+      return false;
+    }
     setEntry(next);
     setContent(next.content || '');
     setHistory((prev) => upsertHistory(prev, next));
+    return true;
   };
 
   // One PUT attempt. Returns `{ entry }`, `{ stale, entry }` on concurrency
@@ -457,15 +471,22 @@ export default function DailyLogTab() {
   const handleAppend = async () => {
     const text = quickAppend.trim();
     if (!text) return;
+    // Capture before the await: `date` can flip to a different day while this
+    // request is in flight (see applyEntry's comment above).
+    const requestDate = date;
     setAppending(true);
     const res = await api.appendDailyLog(date, text, 'text', { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setAppending(false);
     if (!res?.entry) {
       toast.error('Append failed');
       return;
     }
-    applyEntry(res.entry);
-    setQuickAppend('');
+    if (applyEntry(res.entry, requestDate)) {
+      setQuickAppend('');
+    } else {
+      toast(`Appended to ${formatDateFull(requestDate) || requestDate}`, { icon: '📝' });
+    }
   };
 
   const toggleDictation = () => {
@@ -548,16 +569,24 @@ export default function DailyLogTab() {
       toast('Save or discard your edits before drafting.', { icon: '📝' });
       return;
     }
+    // Capture before the await: `date` can flip to a different day while this
+    // request is in flight (see applyEntry's comment above).
+    const requestDate = date;
     setDrafting(true);
     const res = await api.draftActivityDigest(date, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setDrafting(false);
     if (!res) {
       toast.error('Draft failed');
       return;
     }
-    if (res.entry) applyEntry(res.entry);
+    const applied = res.entry ? applyEntry(res.entry, requestDate) : true;
     if (res.drafted) {
-      toast.success(res.usedLlm ? 'Drafted with AI narrative' : 'Drafted from your timeline');
+      if (applied) {
+        toast.success(res.usedLlm ? 'Drafted with AI narrative' : 'Drafted from your timeline');
+      } else {
+        toast.success(`Draft saved to ${formatDateFull(requestDate) || requestDate}`);
+      }
     } else {
       toast('No tracked activity for this day yet.', { icon: '🗓️' });
     }

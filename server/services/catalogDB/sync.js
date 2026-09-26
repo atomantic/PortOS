@@ -6,7 +6,7 @@
  * outbound pulls; the `upsert*FromPeer` writers apply an inbound peer's rows. Mixed-
  * version federation is handled per-table: "tombstone keys absent" is treated
  * as "peer has no opinion" so a pre-tombstone peer can't revive a local delete,
- * and FK-lagged child/parent rows retry parent-less then re-link on a later page.
+ * and FK-lagged children are durably deferred until their parents arrive.
  *
  * The three tuple-unique kinds (refs, relations, media) additionally gate
  * their tombstone/revival apply on an `updated_at` change-clock (#8347): a
@@ -159,12 +159,8 @@ export const getTagChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_tags', rowToTag, since, limit);
 
 export async function upsertTagFromPeer(tag) {
-  // LWW on updated_at for the mutable fields (description/color/parent_id) +
-  // label. `parent_id` may FK to a tag that hasn't arrived yet in this envelope
-  // — the receiver orders tags before ingredients, but a parent can still lag a
-  // child across pages. We retry parent-less first: NULL the parent on FK
-  // violation so the child row still lands, and a later page carrying the
-  // parent re-runs this upsert (LWW) to restore the link.
+  // Never materialize a child with a different parent: an equal-clock replay
+  // cannot repair that under LWW. Persist the complete row on missing-parent FK.
   const apply = async (parentId) => query(
     `INSERT INTO catalog_tags
        (id, label, description, color, parent_id, created_at, updated_at)
@@ -191,9 +187,10 @@ export async function upsertTagFromPeer(tag) {
   try {
     result = await apply(tag.parentId ?? null);
   } catch (err) {
-    // 23503 = foreign_key_violation (parent not present yet). Retry parent-less.
-    if (err?.code === '23503' && (tag.parentId ?? null) !== null) {
-      result = await apply(null);
+    // A durable inbox write must succeed before this row is cursor-safe.
+    if (err?.code === '23503' && err.constraint === 'catalog_tags_parent_id_fkey' && (tag.parentId ?? null) !== null) {
+      await deferParentApply('tags', tag, tag.parentId, tag.updatedAt || tag.createdAt);
+      return { applied: false, isInsert: false, deferred: true };
     } else {
       throw err;
     }
@@ -232,12 +229,7 @@ export const getRefChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_ingredient_refs', rowToRef, since, limit);
 
 export async function upsertScrapFromPeer(scrap) {
-  // A child scrap (parent_scrap_id set) may arrive in the envelope BEFORE its
-  // parent row — the sync apply path sorts parents first within one envelope,
-  // but a parent can still lag a child across pagination pages. Mirror the
-  // catalog_tags parent-less retry: on FK violation, NULL the parent so the
-  // child still lands, and a later page carrying the parent re-runs this upsert
-  // (LWW) to restore the link. chunk_index has no FK, so it always rides.
+  // Cross-page children remain in the durable inbox, not the top-level list.
   const apply = async (parentScrapId) => query(
     `INSERT INTO catalog_scraps
        (id, title, raw_text, source_kind, metadata, embedding, embedding_model,
@@ -280,9 +272,10 @@ export async function upsertScrapFromPeer(scrap) {
   try {
     result = await apply(parentId);
   } catch (err) {
-    // 23503 = foreign_key_violation (parent not present yet). Retry parent-less.
-    if (err?.code === '23503' && parentId !== null) {
-      result = await apply(null);
+    // A durable inbox write must succeed before this row is cursor-safe.
+    if (err?.code === '23503' && err.constraint === 'catalog_scraps_parent_scrap_id_fkey' && parentId !== null) {
+      await deferParentApply('scraps', scrap, parentId, scrap.updatedAt);
+      return { applied: false, isInsert: false, deferred: true };
     } else {
       throw err;
     }
@@ -395,5 +388,56 @@ export async function upsertRefFromPeer(ref) {
        ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO NOTHING`,
       [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
     );
+  }
+}
+
+// The inbox is db-primary, receiver-local, and covered by the normal DB backup.
+// Its key coalesces duplicate delivery; source clocks prevent an older replay
+// from replacing a newer deferred edit. No success is returned before commit.
+async function deferParentApply(kind, row, parentId, updatedAt) {
+  await query(
+    `INSERT INTO catalog_pending_applies (kind, id, parent_id, source_updated_at, payload)
+     VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (kind, id) DO UPDATE SET
+       parent_id = EXCLUDED.parent_id,
+       source_updated_at = EXCLUDED.source_updated_at,
+       payload = EXCLUDED.payload
+     WHERE EXCLUDED.source_updated_at > catalog_pending_applies.source_updated_at`,
+    [kind, row.id, parentId, updatedAt, JSON.stringify(row)],
+  );
+}
+
+export async function drainPendingCatalogApplies() {
+  // No in-memory ownership: every apply (even an empty page after restart)
+  // recovers ready rows. Iterate so a multi-level hierarchy drains completely.
+  for (const [kind, table, upsert] of [
+    ['tags', 'catalog_tags', upsertTagFromPeer],
+    ['scraps', 'catalog_scraps', upsertScrapFromPeer],
+  ]) {
+    let progressed;
+    do {
+      progressed = false;
+      const { rows } = await query(
+        `SELECT p.id, p.payload FROM catalog_pending_applies p
+         WHERE p.kind = $1 AND (
+           EXISTS (SELECT 1 FROM ${table} parent WHERE parent.id = p.parent_id)
+           OR EXISTS (SELECT 1 FROM ${table} current
+                      WHERE current.id = p.id AND current.updated_at >= p.source_updated_at))
+         ORDER BY p.id LIMIT 100`,
+        [kind],
+      );
+      for (const pending of rows) {
+        const result = await upsert(pending.payload);
+        if (result.deferred) continue; // parent deleted since the readiness query
+        // Crash after apply is safe (LWW replay); compare payload so concurrent
+        // delivery of a newer deferred edit cannot be deleted by this drain.
+        const removed = await query(
+          `DELETE FROM catalog_pending_applies
+           WHERE kind = $1 AND id = $2 AND payload = $3::jsonb`,
+          [kind, pending.id, JSON.stringify(pending.payload)],
+        );
+        progressed ||= removed.rowCount > 0;
+      }
+    } while (progressed);
   }
 }

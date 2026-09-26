@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -19,6 +20,7 @@ async function loadAccounts() {
 async function saveAccounts(accounts) {
   await ensureDir(PATHS.calendar);
   await atomicWrite(ACCOUNTS_FILE, accounts);
+  noteReadinessChanged();
 }
 
 export async function listAccounts() {

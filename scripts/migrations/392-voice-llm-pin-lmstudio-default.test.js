@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, copyFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './392-voice-llm-pin-lmstudio-default.js';
+import retireKokoroTts from './376-retire-kokoro-tts.js';
 
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -53,6 +54,15 @@ describe('migration 392 — pin the outgoing voice LLM default', () => {
     writeJson(settingsPath, { theme: 'dark' });
     await migration.up({ rootDir });
     expect(readJson(settingsPath).voice).toBeUndefined();
+  });
+
+  it('keeps the fresh settings seed on the current voice defaults through migrations 376 and 392', async () => {
+    copyFileSync(new URL('../../data.reference/settings.json', import.meta.url), settingsPath);
+    await retireKokoroTts.up({ rootDir });
+    await migration.up({ rootDir });
+    const settings = readJson(settingsPath);
+    expect(settings.voice.llm.provider).toBe('ollama');
+    expect(settings.voice.tts.engine).toBe('piper');
   });
 
   it('is a no-op with no settings file', async () => {

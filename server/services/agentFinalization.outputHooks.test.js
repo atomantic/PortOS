@@ -74,6 +74,10 @@ import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
 const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
+// The orphan sweep and post-restart recovery both retire through the shared
+// `retireDeadAgent` (#8440) now, so its own ordering is the thing to pin — see
+// the source-text tests just below.
+const FINALIZATION_SOURCE = readFileSync(join(__dirname, 'agentFinalization.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
   taskType: 'internal',
@@ -290,19 +294,28 @@ describe('recovery output-hook dispatch (#3182)', () => {
   });
 });
 
-describe('recovery path wiring (#3182)', () => {
-  it('dispatches before orphan cleanup marks the agent complete', () => {
-    const start = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
-    const body = MANAGEMENT_SOURCE.slice(start, start + 12_000);
+describe('recovery path wiring (#3182, #8440)', () => {
+  // Both recovery paths (the orphan sweep in agentManagement.js and post-restart
+  // recovery in agentLifecycle.js) call the shared `retireDeadAgent` (#8440) for
+  // this step list now, so the ordering guard moved to pin ITS body instead of
+  // each caller's inlined copy.
+  it('retireDeadAgent dispatches the output hook before marking the agent complete', () => {
+    const start = FINALIZATION_SOURCE.indexOf('export async function retireDeadAgent');
+    expect(start, 'retireDeadAgent must exist').toBeGreaterThan(-1);
+    const end = FINALIZATION_SOURCE.indexOf('\n}', start);
+    const body = FINALIZATION_SOURCE.slice(start, end);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
     expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agent.id'));
   });
 
-  it('dispatches before post-restart recovery marks the agent complete', () => {
-    const start = LIFECYCLE_SOURCE.indexOf('Completing untracked agent');
-    const body = LIFECYCLE_SOURCE.slice(start, start + 2_000);
-    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeGreaterThan(-1);
-    expect(body.indexOf('dispatchRecoveredTaskOutputHook({')).toBeLessThan(body.indexOf('await completeAgent(agentId'));
+  it('both recovery paths retire through the shared retireDeadAgent', () => {
+    const sweepStart = MANAGEMENT_SOURCE.indexOf('async function runCleanupOrphanedAgents');
+    const sweepBody = MANAGEMENT_SOURCE.slice(sweepStart, sweepStart + 12_000);
+    expect(sweepBody).toMatch(/await retireDeadAgent\(/);
+
+    const recoveryStart = LIFECYCLE_SOURCE.indexOf('Completing untracked agent');
+    const recoveryBody = LIFECYCLE_SOURCE.slice(recoveryStart, recoveryStart + 2_000);
+    expect(recoveryBody).toMatch(/await retireDeadAgent\(/);
   });
 });
 

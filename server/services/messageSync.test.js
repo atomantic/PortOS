@@ -35,8 +35,18 @@ vi.mock('../lib/fileUtils.js', () => ({
 vi.mock('./messageAccounts.js', () => ({
   getAccount: vi.fn(),
   updateSyncStatus: vi.fn(),
-  markSentIngested: vi.fn(() => Promise.resolve())
+  markSentIngested: vi.fn(() => Promise.resolve()),
+  updateSendAsAliases: vi.fn(() => Promise.resolve())
 }));
+
+const gmailApi = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
+vi.mock('@googleapis/gmail', () => ({
+  gmail: () => ({ users: {
+    messages: gmailApi,
+    settings: { sendAs: { list: async () => ({ data: { sendAs: [] } }) } },
+  } }),
+}));
+vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: async () => ({}) }));
 
 vi.mock('./messageGmailSync.js', () => ({
   syncGmail: vi.fn()
@@ -92,7 +102,7 @@ import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
 import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
-import { getAccount, updateSyncStatus } from './messageAccounts.js';
+import { getAccount, updateSyncStatus, markSentIngested } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
 import { syncPlaywright, refreshMessageDetail } from './messagePlaywrightSync.js';
 
@@ -370,6 +380,48 @@ describe('deleteCache', () => {
     unlink.mockResolvedValue();
     await deleteCache(VALID_UUID);
     expect(unlink).toHaveBeenCalledWith(expect.stringContaining(`${VALID_UUID}.json`));
+  });
+
+  it('waits for an in-flight cache writer before erasing its result', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let stored = { messages: [{ id: 'msg-1' }] };
+    readFile.mockImplementation(async () => stored ? JSON.stringify(stored) : null);
+    readdir.mockResolvedValue([`${VALID_UUID}.json`]);
+    atomicWrite.mockImplementationOnce(async (_path, data) => {
+      entered.resolve();
+      await release.promise;
+      stored = data;
+    });
+    unlink.mockImplementationOnce(async () => { stored = null; });
+
+    const writer = updateMessageEvaluations({ 'msg-1': { score: 9 } });
+    await entered.promise;
+    const cleanup = deleteCache(VALID_UUID);
+    expect(stored).not.toBeNull();
+    release.resolve();
+    await Promise.all([writer, cleanup]);
+    expect(stored).toBeNull();
+    expect(await getMessages({ accountId: VALID_UUID })).toEqual({ messages: [], total: 0 });
+  });
+
+  it('rejects a sync with a stale enabled-account read after cleanup', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    getAccount.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { id: VALID_UUID, name: 'Example', type: 'gmail', enabled: true };
+    }).mockResolvedValue(null);
+    unlink.mockResolvedValue();
+    const syncing = syncAccount(VALID_UUID);
+    await entered.promise;
+    await deleteCache(VALID_UUID);
+    release.resolve();
+
+    expect(await syncing).toEqual({ error: 'Account not found' });
+    expect(syncGmail).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
   });
 
   it('should silently skip invalid accountId', async () => {
@@ -847,5 +899,86 @@ describe('logMessageTouchpoints — candidate building (#2033)', () => {
     }]);
     const [candidates] = autoLogTouchpoints.mock.calls[0];
     expect(candidates[0].dedupeKey).toBe(`msg:${VALID_UUID}:thread-tz:2026-06-01`);
+  });
+});
+
+// Real Gmail adapter through persisted syncAccount: detail loss must not erase evaluations.
+describe('full inbox coverage contract', () => {
+  const externalId = id => 'api-gmail-' + createHash('md5').update(id).digest('hex').slice(0, 12);
+  let saved;
+  beforeEach(async () => {
+    saved = { messages: [
+      { id: 'local-a', externalId: externalId('a'), date: '2026-01-02' },
+      { id: 'local-b', externalId: externalId('b'), date: '2026-01-01', evaluation: { priority: 'high' } },
+      { id: 'local-only' },
+    ] };
+    readFile.mockImplementation(async () => JSON.stringify(saved));
+    atomicWrite.mockImplementation(async (_path, data) => { saved = structuredClone(data); });
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Example inbox', email: 'owner@example.com', type: 'gmail', enabled: true });
+    syncGmail.mockImplementation((await vi.importActual('./messageGmailSync.js')).syncGmail);
+    gmailApi.list.mockImplementation(async ({ q }) => ({
+      data: { messages: q === 'in:inbox' ? [{ id: 'a' }, { id: 'b' }] : [] },
+    }));
+    gmailApi.get.mockImplementation(async ({ id }) => ({
+      data: { id, labelIds: ['INBOX'], payload: { headers: [] } },
+    }));
+  });
+
+  it('preserves identity and evaluation through failure and retry, then reconciles complete snapshots', async () => {
+    gmailApi.get.mockImplementationOnce(async () => ({
+      data: { id: 'a', labelIds: ['INBOX', 'UNREAD'], payload: { headers: [] } },
+    })).mockRejectedValueOnce(new Error('temporary detail failure'));
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages).toHaveLength(3);
+    expect(saved.messages[0]).toMatchObject({ id: 'local-a', isUnread: true });
+    expect(saved.messages[1]).toMatchObject({ id: 'local-b', evaluation: { priority: 'high' } });
+    expect(markSentIngested).toHaveBeenLastCalledWith(VALID_UUID, expect.objectContaining({ partial: true }));
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages[1]).toMatchObject({ id: 'local-b', evaluation: { priority: 'high' } });
+    gmailApi.list.mockResolvedValue({ data: { messages: [{ id: 'b' }] } });
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages.map(m => m.id)).toEqual(['local-b', 'local-only']);
+    gmailApi.list.mockResolvedValue({ data: {} });
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages).toEqual([{ id: 'local-only' }]);
+  });
+
+  it('retains unseen mail when the Gmail inbox reaches its cap', async () => {
+    gmailApi.list.mockImplementation(async ({ q, maxResults, pageToken }) => ({
+      data: q === 'in:inbox' ? {
+        messages: Array.from({ length: maxResults }, (_, i) => ({ id: 'new-' + (Number(pageToken || 0) + i) })),
+        nextPageToken: String(Number(pageToken || 0) + maxResults),
+      } : {},
+    }));
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages.find(m => m.id === 'local-b')).toMatchObject({ evaluation: { priority: 'high' } });
+    expect(saved.messages).toHaveLength(203);
+  });
+
+  it.each([
+    ['legacy array', [{ id: 'new', externalId: 'new' }], 'full'],
+    ['unproven browser success', { messages: [], status: 'success', inboxComplete: false }, 'full'],
+    ['unread snapshot', { messages: [], status: 'success', inboxComplete: true }, 'unread'],
+    ['partial status', { messages: [], status: 'partial', inboxComplete: true }, 'full'],
+  ])('does not prune on %s', async (_name, result, mode) => {
+    syncGmail.mockResolvedValue(result);
+    await syncAccount(VALID_UUID, null, { mode });
+    expect(saved.messages.find(m => m.id === 'local-b')).toMatchObject({ evaluation: { priority: 'high' } });
+  });
+
+  it('keeps configured retention independent of incomplete membership', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail', enabled: true, syncConfig: { maxMessages: 1 } });
+    syncGmail.mockResolvedValue({ messages: [], status: 'success', inboxComplete: false });
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages.map(m => m.id)).toEqual(['local-a']);
+  });
+
+  it('does not certify malformed details or listings', async () => {
+    gmailApi.get.mockResolvedValue({ data: {} });
+    await syncAccount(VALID_UUID, null, { mode: 'full' });
+    expect(saved.messages).toHaveLength(3);
+    gmailApi.list.mockResolvedValue({ data: { messages: 'invalid' } });
+    expect(await syncAccount(VALID_UUID, null, { mode: 'full' })).toMatchObject({ status: 502 });
+    expect(saved.messages).toHaveLength(3);
   });
 });

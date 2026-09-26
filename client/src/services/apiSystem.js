@@ -54,7 +54,7 @@ export const undismissHealthWarning = (type, options = {}) => request(`/system/h
 });
 
 // Update
-export const getUpdateStatus = () => request('/update/status');
+export const getUpdateStatus = (options) => request('/update/status', options);
 export const checkForUpdate = () => request('/update/check', { method: 'POST' });
 // Automatic-update config + what the scheduler is currently waiting on. Its own
 // route because it walks git status, which /update/status must not do on the
@@ -456,6 +456,7 @@ export const startTailcatServe = (data) => request('/instances/peers/tailcat/ser
 export const retryTailcatServe = () => request('/instances/peers/tailcat/serve/retry', { method: 'POST' });
 export const stopTailcatServe = () => request('/instances/peers/tailcat/serve', { method: 'DELETE' });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const pairPeerSyncSecret = (id, options) => request(`/instances/peers/${id}/pair-secret`, { method: 'POST', ...options });
 export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'DELETE' });
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });
 export const reciprocatePeer = (id, options) => request(`/instances/peers/${id}/reciprocate`, { method: 'POST', ...options });

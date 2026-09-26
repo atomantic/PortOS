@@ -331,7 +331,7 @@ After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on 
 
 The same walkthrough is always available in **Settings → Setup**. It verifies one runnable AI provider as well as secure remote access, and links directly to every action PortOS cannot perform at the account level. The Dashboard and Instances page surface the same network state; Unix and Windows update scripts retry certificate provisioning and print the guide after every update. See the [complete setup guide](./docs/SETUP.md).
 
-PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start` already saves the process list, but does not install the startup service.
+PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start`, `npm run pm2:start`, and `npm run pm2:restart` save the selected app set, but do not install the startup service.
 
 ### Development Mode
 
@@ -340,9 +340,9 @@ npm run setup          # Install all dependencies (alias: npm run install:all)
 npm run dev            # Starts PostgreSQL, launches full PM2 ecosystem, and tails logs
 ```
 
-`npm run dev` executes `scripts/dev-start.js` to initialize PostgreSQL, stop existing PM2 processes, and launch the complete PM2 process ecosystem defined in `ecosystem.config.cjs` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser`) while tailing logs. The React frontend runs with Vite hot-reload on `:5554` and the API on `:5555`.
+`npm run dev` executes `scripts/dev-start.js` to initialize PostgreSQL, stop existing PM2 processes, and launch the full development process set from `ecosystem.config.cjs` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser`) while tailing logs. The React frontend runs with Vite hot-reload on `:5554` and the API on `:5555`.
 
-`:5554` is the Vite server. In dev it is the active hot-reload frontend; in production (`npm start` / PM2) the React build is served from `:5555` directly, although the PM2 ecosystem still starts Vite on `:5554`.
+`:5554` is the Vite development server. Production startup (`npm start`, `npm run pm2:start`, or either update path) selects the PM2 app set without `portos-ui`; startup and updates also remove an older `portos-ui` process. The production React build is served directly from `:5555`.
 
 ## Network Access
 
@@ -387,7 +387,7 @@ Run these from the repository root after setup. They use the PM2 bundled with Po
 npm start                                      # Build the client and start PortOS
 npm run pm2:status                             # View status
 npm run pm2:logs -- portos-server --lines 100    # View server logs
-npm run pm2:restart                            # Restart the PortOS ecosystem
+npm run pm2:restart                            # Restart production apps (without Vite)
 npm run pm2:stop                               # Stop the PortOS ecosystem
 npm run pm2:save                               # Save the process list for startup
 ```

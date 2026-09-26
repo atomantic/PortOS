@@ -260,9 +260,9 @@ export async function applyIncomingPush(payload, authorization) {
   // every PEER_SUBSCRIBABLE_KINDS entry has a descriptor (the registry guard
   // in recordKinds.test.js enforces it), so `desc` is never null here.
   // `senderSchemaVersions` rides every merge call uniformly: only
-  // mergeUniversesFromSync (gates the moodBoardId omitted-vs-cleared
-  // disambiguation, #4188) and mergeLoomsFromSync read it — every other
-  // merger ignores the extra key. The 12 kinds with no extra per-kind
+  // mergeUniversesFromSync, mergeCommissionsFromSync (both gate the
+  // omitted-vs-cleared disambiguation of additive fields, #4188/#8414) and
+  // mergeLoomsFromSync read it — every other merger ignores the extra key. The 12 kinds with no extra per-kind
   // behavior need nothing further; the three genuinely special kinds below
   // add their bundled-doc handling on top of this single call.
   const mergeResult = await desc.merge([record], { source, senderSchemaVersions });
@@ -384,7 +384,16 @@ export async function applyIncomingPush(payload, authorization) {
   // For local-ephemeral records, skip the diff entirely so we don't even
   // report a non-empty missingAssets back to the sender (which would
   // surface a "still syncing" UI for a record we silently refused).
-  const missingAssets = localEphemeral ? [] : await diffAssetManifestAgainstLocal(assetManifest);
+  const references = !localEphemeral && record.deleted !== true && desc.referencedAssets
+    ? await desc.referencedAssets(record, { issues, linkedCollection, linkedTrack })
+    : [];
+  const referencedKeys = new Set(references.map((entry) => `${entry.kind}:${entry.filename}`));
+  const incomingAssets = Array.isArray(assetManifest) ? assetManifest : [];
+  const ownAssets = incomingAssets.filter((entry) => entry && referencedKeys.has(`${entry.kind}:${entry.filename}`));
+  if (ownAssets.length < incomingAssets.length) {
+    console.warn(`⚠️ peerSync: ignored ${incomingAssets.length - ownAssets.length} unreferenced push assets`);
+  }
+  const missingAssets = await diffAssetManifestAgainstLocal(ownAssets, { includeMismatched: mergeResult?.applied === true });
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the
   // record + its issues + a bundled linkedTrack tombstone (#1858 bundles the
@@ -433,7 +442,7 @@ export async function applyIncomingPush(payload, authorization) {
   // (missingAssets is already [] for localEphemeral above, so the worker
   // can never schedule pulls for opted-out records.)
   if (missingAssets.length > 0) {
-    pullMissingAssetsFromPeer(sourceInstanceId, missingAssets).catch((err) => {
+    pullMissingAssetsFromPeer(sourceInstanceId, missingAssets, { includeMismatched: mergeResult?.applied === true }).catch((err) => {
       console.log(`⚠️ peerSync: asset pull from ${sourceInstanceId} failed: ${err.message}`);
     });
   }

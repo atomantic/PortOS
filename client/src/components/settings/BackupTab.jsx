@@ -344,6 +344,8 @@ export function BackupTab() {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
     } else if (result.reason === 'restore_schema_reconciliation') {
       toast.error('The database dump was applied, but schema recovery is incomplete. It was not rolled back. Restart PortOS to retry recovery; if it still fails, check the server logs and repair the database before continuing.', { duration: Infinity });
+    } else if (result.reason === 'restore_sync_resync') {
+      toast.error('The database dump was applied, but peer sync could not be reset. Memories and Catalog records pulled from peers after this snapshot may stay missing; check the server logs and repeat the restore.', { duration: Infinity });
     } else {
       toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
     }
@@ -770,7 +772,7 @@ export function BackupTab() {
             This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
             {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
             {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
-            {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+            {' '}as a full replacement of the live PostgreSQL database. All current application tables and rows are replaced, including tables added after this snapshot. Newer tables are recreated empty and current migrations run afterward.
           </p>
           <div className="flex justify-end gap-2">
             <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>

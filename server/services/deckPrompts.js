@@ -25,9 +25,9 @@ import {
 } from '../lib/deckTemplates.js';
 import { DECK_CARD_PROMPT_MAX } from '../lib/deckValidation.js';
 
-// Small enough that one bad string can't sink a long response; a 79-card
-// tarot deck is seven calls.
-export const PROMPTS_PER_CALL = 12;
+// Keep each response bounded while amortizing the full-roster context over
+// fewer sequential calls; a 79-card tarot deck is five calls.
+export const PROMPTS_PER_CALL = 16;
 const CANON_KINDS = Object.freeze([
   { field: 'characters', kind: 'character', header: 'CHARACTERS' },
   { field: 'places', kind: 'place', header: 'PLACES' },
@@ -126,8 +126,8 @@ export function buildCardPromptsPrompt({ deck, roster, targets, universe }) {
     ? `${buildUniverseStyleContext(universe, { includePremise: true, includeEmbrace: false, escape: true, headerSuffix: 'the deck illustrates this universe' })}\n# Canon this deck draws on\n${renderCanonRoster(universe) || '(none)'}\n`
     : '';
   const kindRules = deck.kind === DECK_KIND.TAROT
-    ? '- Keep each card recognizable as its tarot archetype (use the traditional motif as the skeleton) while dressing it in the deck\'s world; numbered pips show that many of the suit\'s emblem arranged meaningfully.'
-    : '- Playing-card identity is exact: for each numbered rank 2–10, describe exactly that many distinct pips of the named suit; name the suit shape and color, and never add, omit or substitute pips. Aces show one large suit pip, face cards show the named rank as a full figure, and Jokers are jesters of this world.';
+    ? '- Keep each card recognizable as its tarot archetype (use the traditional motif as the skeleton) while dressing it in the deck\'s world; numbered pips show that many of the suit\'s emblem arranged meaningfully.\n- Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.'
+    : '- Playing-card identity is exact: for each numbered rank 2–10, state exactly that many pips of the named suit in the classic arrangement given on its target line, with the suit shape and color; never add, omit or substitute pips. Pips are flat printed suit symbols on the card face — never disguise them as scene objects (lanterns, pennants, windows, leaves), and never put any other suit-shaped object in the scene, border or background, because every extra suit shape reads as an extra pip. The world or canon scene is a restrained vignette behind or between the pips. Aces show one large suit pip, face cards show the named rank as a full figure, and Jokers are jesters of this world.\n- Cards of one suit share a visual through-line (a recurring setting, color accent or non-suit-shaped emblem) so the suit reads as a family.';
   const targetLines = targets.map((c) => {
     const canon = c.canonRef?.name ? ` → depict ${safe(c.canonRef.name)} (${c.canonRef.kind})` : '';
     const identity = deckCardIdentityPrompt(deck, c);
@@ -148,9 +148,8 @@ Return a SINGLE JSON object: { "prompts": [ { "key": "<card key>", "prompt": "<s
 # Rules
 - "prompt" describes the SUBJECT of the card only — figures, pose, setting, symbols, composition, the suit emblem count — as comma-separated renderable phrases. The deck's style tokens, shared layout and face-orientation instructions are prepended automatically at render time, so do NOT repeat style, medium, palette, border, index/title or orientation instructions.
 ${kindRules}
-- For playing cards, the REQUIRED VISUAL IDENTITY on each target line is authoritative; include its exact pip count and suit description in the subject prompt even when the canon scene or visual motif suggests another arrangement.
+- For playing cards, the REQUIRED VISUAL IDENTITY on each target line is authoritative; open the subject prompt with its exact pip count, arrangement and suit description even when the canon scene or visual motif suggests another arrangement.
 - When a card is cast with a canon entry, depict that entry faithfully to its description; otherwise invent a subject that belongs in this deck's world.
-- Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.
 - No text instructions, no camera jargon. Never use double-quote characters inside a prompt string.
 - Output JUST the JSON object — no markdown, no commentary.`;
 }
@@ -186,14 +185,22 @@ export function salvagePromptPairs(text) {
   return pairs.length ? { prompts: pairs } : null;
 }
 
-const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null }) => {
+const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null, onActivity = null }) => {
   const { runPromptThroughProvider } = await promptRunner();
   let result;
+  let activityReported = false;
   try {
     result = await runPromptThroughProvider({
       provider, model: selectedModel, effort: effort || undefined, prompt, source,
       responseSchema: shapePredicate,
       repair: jsonRepair({ shapePredicate, salvage }),
+      // Progress is observational. Never send provider output text over the
+      // deck progress stream; the caller only learns that output has started.
+      ...(onActivity ? { onData: () => {
+        if (activityReported) return;
+        activityReported = true;
+        onActivity?.();
+      } } : {}),
     });
   } catch (err) {
     if (err?.schemaFailure) throw invalidJson(what, { lastError: err, lastPreview: '' });
@@ -235,14 +242,24 @@ export async function castDeckFromUniverse({ deck, cards, universe, providerId, 
 /**
  * @returns {Promise<{ prompts: [{ cardId, prompt }], llm }>}
  */
-export async function generateDeckCardPrompts({ deck, roster, targets, universe = null, providerId, model, effort, onChunk = null } = {}) {
+export async function generateDeckCardPrompts({
+  deck, roster, targets, universe = null, providerId, model, effort,
+  onBatchStart = null, onActivity = null, onChunk = null,
+} = {}) {
   const { resolveProviderAndModel, assertProvider } = await promptRunner();
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, noProvider());
   const prompts = [];
   let llm = null;
+  const chunks = Math.ceil(targets.length / PROMPTS_PER_CALL);
   for (let i = 0; i < targets.length; i += PROMPTS_PER_CALL) {
     const chunk = targets.slice(i, i + PROMPTS_PER_CALL);
+    const chunkNumber = Math.floor(i / PROMPTS_PER_CALL) + 1;
+    await onBatchStart?.({
+      chunk: chunkNumber,
+      chunks,
+      requested: targets.length,
+    });
     const { value, llm: ran } = await runJson({
       provider, selectedModel, effort,
       prompt: buildCardPromptsPrompt({ deck, roster, targets: chunk, universe }),
@@ -250,6 +267,7 @@ export async function generateDeckCardPrompts({ deck, roster, targets, universe 
       shapePredicate: (o) => o && Array.isArray(o.prompts),
       what: 'card prompts',
       salvage: salvagePromptPairs,
+      onActivity: () => onActivity?.({ chunk: chunkNumber, chunks, requested: targets.length }),
     });
     llm = ran;
     const byKey = new Map(chunk.map((c) => [c.key, c]));
@@ -260,8 +278,13 @@ export async function generateDeckCardPrompts({ deck, roster, targets, universe 
       if (card && prompt) written.push({ cardId: card.id, prompt });
     }
     prompts.push(...written);
-    // Let the caller persist each chunk as it lands.
-    if (onChunk && written.length) await onChunk(written);
+    // Let the caller persist and report each completed provider call, including
+    // a valid response that contained no usable prompts.
+    await onChunk?.(written, {
+      chunk: chunkNumber,
+      chunks,
+      requested: targets.length,
+    });
   }
   console.log(`🃏 deck prompts "${deck.name}": ${prompts.length}/${targets.length} cards written`);
   return { prompts, llm };

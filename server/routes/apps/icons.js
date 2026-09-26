@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { readFile, stat } from 'fs/promises';
 import { extname } from 'path';
+import sharp from 'sharp';
 import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged } from '../../services/apps.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
@@ -16,10 +17,30 @@ import { detectAppIcon, getIconContentType, isUsableSvg } from '../../services/a
 import { loadApp, pathExists } from './shared.js';
 
 const router = Router();
+const rasterIconCache = new Map();
+
+const getRasterIcon = (appId, iconPath, iconStat, size, iconData) => {
+  const variant = 'png';
+  const key = `${iconPath}:${iconStat.mtimeMs}:${size}:${variant}`;
+  for (const [cachedKey, value] of rasterIconCache) {
+    if (value.appId === appId && value.size === size && cachedKey !== key) rasterIconCache.delete(cachedKey);
+  }
+  if (!rasterIconCache.has(key)) {
+    const rendered = sharp(iconData).resize(size, size, { fit: 'cover', withoutEnlargement: true }).png().toBuffer()
+      .catch((error) => {
+        rasterIconCache.delete(key);
+        throw error;
+      });
+    rasterIconCache.set(key, { appId, size, rendered });
+  }
+  return rasterIconCache.get(key).rendered;
+};
 
 // GET /api/apps/:id/icon - Serve the app's detected icon image
 router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+  const { appIconQuerySchema, validateRequest } = await import('../../lib/validation.js');
+  const { size } = validateRequest(appIconQuerySchema, req.query);
 
   // Use stored appIconPath, or detect on-the-fly. Stored SVGs that embed an
   // external <image href="..."> render blank under the route's `default-src
@@ -46,9 +67,11 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const contentType = getIconContentType(iconPath);
   const iconStat = await stat(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (!iconStat) throw new ServerError('No app icon found', { status: 404 });
-  const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}"`;
+  const extension = extname(iconPath).toLowerCase();
+  const isRaster = ['.png', '.jpg', '.jpeg', '.webp'].includes(extension);
+  const etag = `W/"${iconStat.mtimeMs.toString(36)}-${iconStat.size.toString(36)}${isRaster ? `-${size}` : ''}"`;
 
-  res.set('Content-Type', contentType);
+  res.set('Content-Type', isRaster ? 'image/png' : contentType);
   res.set('Cache-Control', 'public, max-age=3600');
   res.set('ETag', etag);
   res.set('X-Content-Type-Options', 'nosniff');
@@ -67,7 +90,7 @@ router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
 
   const iconData = await readFile(iconPath).catch(e => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (!iconData) throw new ServerError('No app icon found', { status: 404 });
-  res.send(iconData);
+  res.send(isRaster ? await getRasterIcon(app.id, iconPath, iconStat, size, iconData) : iconData);
 }));
 
 // POST /api/apps/detect-icons - Detect and persist app icons for all apps

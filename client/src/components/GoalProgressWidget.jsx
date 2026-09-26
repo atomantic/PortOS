@@ -2,10 +2,12 @@ import { memo, useMemo } from 'react';
 import { Link } from 'react-router';
 import { ChevronRight, AlertTriangle, Target } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalListByKeys } from '../lib/compareHelpers';
 import { CATEGORY_CONFIG, GOAL_TYPE_CONFIG } from './goals/GoalDetailPanel';
+
+const RESOURCE_EVENTS = ['goals:changed'];
 
 const HORIZON_LABELS = {
   '1-year': '1Y', '3-year': '3Y', '5-year': '5Y',
@@ -26,13 +28,13 @@ const getDaysSince = (dateStr) => {
 };
 
 const GoalProgressWidget = memo(function GoalProgressWidget() {
-  // Let errors throw — `useAutoRefetch` preserves the last-good goal set on
+  // Let errors throw — `useSocketResource` preserves the last-good goal set on
   // transient failures rather than wiping the widget.
-  const { data: goalsData, loading } = useAutoRefetch(
+  const { data: goalsData, loading } = useSocketResource(
     () => api.getGoals({ silent: true }),
-    300000,
     {
-      // Goals rarely change at 5-minute cadence. Skip the re-render (and the
+      events: RESOURCE_EVENTS,
+      // Goal invalidations can leave the rendered values unchanged. Skip the re-render (and the
       // useMemo recompute that re-derives stalled goals + avg progress) when
       // the goal set and every rendered/derived per-goal field are unchanged.
       // Covers: title, category, horizon, goalType (rendered as labels/icons),
@@ -41,7 +43,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
       // drive `daysSinceUpdate` / `isStalled` (a backfilled or corrected
       // progressHistory entry mutates the latest timestamp without changing
       // array length).
-      compare: (prev, next) => equalListByKeys(prev.goals, next.goals, [
+      compare: (prev, next) => prev != null && equalListByKeys(prev.goals, next.goals, [
         'id', 'title', 'category', 'horizon', 'goalType', 'progress',
         'status', 'parentId', 'urgency', 'createdAt', getLastProgressDate,
       ]),
@@ -75,7 +77,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
     };
     // `tick` is in the dep array on purpose — when the wall-clock hour rolls
     // over the derivation re-runs so a goal can cross the stall threshold
-    // without needing a new poll payload.
+    // without needing a new resource snapshot.
   }, [goalsData, tick]);
 
   if (loading || !goals.length) return null;

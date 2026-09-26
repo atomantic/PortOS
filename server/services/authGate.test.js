@@ -5,6 +5,7 @@ import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { request } from '../lib/testHelper.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -537,7 +538,7 @@ describe('authGate Express path matching', () => {
     expect(status.body).toEqual({ enabled: true });
     const login = await request(app).post('/API/Auth/LOGIN').send({ password: 'correct-horse' });
     expect(login.status).toBe(200);
-    expect(login.headers['set-cookie']).toMatch(/portos_auth=/);
+    expect(login.headers['set-cookie']).toMatch(/portos_auth_\d+=/);
     const health = await request(app).get('/API/SYSTEM/HEALTH');
     expect(health.status).toBe(200);
     expect(health.body).toEqual({ status: 'ok' });
@@ -652,6 +653,23 @@ describe('host-control authority', () => {
     expect(peer.res.statusCode).toBe(403);
     expect(peer.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
   });
+
+  // The socket twin (#8708): locality is recorded at the handshake from the
+  // connection's own address, so a forged loopback dev-proxy marker on a
+  // remote connection grants nothing, and a gate-less socket fails closed.
+  it('records socket host-control locality at the handshake, never from a forged marker', async () => {
+    const { socketAuthGate, socketHasHostControl } = await import('./authGate.js');
+    const handshake = async (address, headers = {}) => {
+      const socket = { handshake: { address, headers } };
+      await new Promise((resolve) => socketAuthGate(socket, resolve));
+      return socketHasHostControl(socket);
+    };
+    expect(await handshake('127.0.0.1')).toBe(true);
+    expect(await handshake('::1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' })).toBe(true);
+    expect(await handshake('::1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' })).toBe(false);
+    expect(await handshake('192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' })).toBe(false);
+    expect(socketHasHostControl({ handshake: { address: '127.0.0.1' } })).toBe(false);
+  });
 });
 
 describe('paired peer credential (#8356)', () => {
@@ -679,6 +697,8 @@ describe('paired peer credential (#8356)', () => {
     app.post('/api/apps/:id/restart', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.put('/api/settings', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/peer-sync/push', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.get('/api/federation/media/v1/status', (req, res) => res.json({ auth: req.portosAuthContext }));
+    app.post('/api/providers/fleet-host/key', (req, res) => res.json({ auth: req.portosAuthContext }));
     app.post('/api/commands/execute', requireHostControl, (_req, res) => res.json({ ran: true }));
     return app;
   };
@@ -700,6 +720,9 @@ describe('paired peer credential (#8356)', () => {
     expect(read.status).toBe(200);
     expect(read.body.auth).toEqual({ enabled: true, authenticated: true, method: 'peer', peerId: 'peer-record' });
     expect((await withHeaders(request(app).post('/api/peer-sync/push').send({}), headers)).body.auth.method).toBe('peer');
+    // A peer's media and LLM services need only the token, not a stored password.
+    expect((await withHeaders(request(app).get('/api/federation/media/v1/status'), headers)).body.auth.method).toBe('peer');
+    expect((await withHeaders(request(app).post('/api/providers/fleet-host/key').send({}), headers)).body.auth.method).toBe('peer');
 
     const exec = await withHeaders(request(app).post('/api/commands/execute').send({}), headers);
     expect(exec.status).toBe(403);
@@ -748,6 +771,19 @@ describe('paired peer credential (#8356)', () => {
     expect(warn.mock.calls.some(([line]) => line.includes('POST /api/cos/tasks'))).toBe(true);
   });
 
+  it('still identifies a paired peer on the federation surface after the instance password is removed', async () => {
+    writePeers([pairedPeer()]);
+    const app = await buildApp();
+    const headers = await peerHeaders();
+
+    const media = await withHeaders(request(app).get('/api/federation/media/v1/status'), headers);
+    expect(media.body.auth).toEqual({ enabled: false, authenticated: true, method: 'peer', peerId: 'peer-record' });
+    // Off the surface, and with a wrong secret, the caller stays anonymous.
+    expect((await withHeaders(request(app).get('/api/example'), headers)).body.auth.method).toBeNull();
+    const forged = await peerHeaders(PEER_ID, 'a-different-pair-secret-0123456789-xyz');
+    expect((await withHeaders(request(app).get('/api/federation/media/v1/status'), forged)).body.auth.method).toBeNull();
+  });
+
   it('rejects a token for another instance, a wrong secret, a disabled peer, or an unpaired peer', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'example-password' });
@@ -793,6 +829,92 @@ describe('paired peer credential (#8356)', () => {
     const headers = Object.fromEntries(Object.entries(await peerHeaders()).map(([k, v]) => [k.toLowerCase(), v]));
     expect(await handshake(headers)).toBeUndefined();
     expect((await handshake({ ...headers, 'x-portos-peer-auth': 'f'.repeat(64) }))?.data).toEqual({ code: 'AUTH_REQUIRED' });
+  });
+});
+
+// #8707: without a password, the browser-relay guard is the only thing between
+// an arbitrary web page and the loopback-trusted host-control routes.
+describe('browser-relay guard in both auth modes', () => {
+  const enableAuth = async () => (await import('./auth.js')).setPassword({ newPassword: 'correct-horse' });
+  const gateWith = async (headers) => {
+    const { authGate } = await import('./authGate.js');
+    return runGate(authGate, { path: '/api/cos', method: 'POST', headers });
+  };
+
+  it.each([false, true])('rejects a foreign Origin and an opaque one (auth enabled: %s)', async (enabled) => {
+    if (enabled) await enableAuth();
+    for (const origin of ['https://attacker.example', 'null']) {
+      const result = await gateWith({ host: '127.0.0.1:5555', origin, 'sec-fetch-site': 'cross-site' });
+      expect(result.called).toBe(false);
+      expect(result.res.statusCode).toBe(403);
+      expect(result.res.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+    }
+  });
+
+  it.each([false, true])('rejects a DNS-rebinding Host whose Origin matches (auth enabled: %s)', async (enabled) => {
+    if (enabled) await enableAuth();
+    for (const headers of [
+      { host: 'rebind.attacker.example:5555', origin: 'http://rebind.attacker.example:5555' },
+      // A same-origin GET carries no Origin, only Sec-Fetch-Site.
+      { host: 'rebind.attacker.example:5555', 'sec-fetch-site': 'same-origin' },
+    ]) {
+      const result = await gateWith(headers);
+      expect(result.called).toBe(false);
+      expect(result.res.statusCode).toBe(403);
+      expect(result.res.body.code).toBe('HOST_NOT_ALLOWED');
+    }
+  });
+
+  it('accepts same-origin browser requests on loopback, tailnet, LAN, and short names', async () => {
+    for (const host of ['localhost:5555', '127.0.0.1:5555', '[::1]:5555', 'portos.tailnet.ts.net', '192.0.2.10:5555', 'portos-box:5555', 'portos-box.local:5555']) {
+      const result = await gateWith({ host, origin: `http://${host}`, 'sec-fetch-site': 'same-origin' });
+      expect(result.called, host).toBe(true);
+    }
+  });
+
+  it('leaves Origin-less native, agent, and peer callers alone', async () => {
+    const result = await gateWith({ host: 'custom-name.example:5555', authorization: 'Bearer example-agent-token' });
+    expect(result.called).toBe(true);
+  });
+
+  it('admits an operator-listed custom hostname through PORTOS_ALLOWED_HOSTS', async () => {
+    const { isAllowedHost } = await import('../../lib/portosAuthCore.js');
+    const env = { PORTOS_ALLOWED_HOSTS: 'portos.example.com, .home.example.net' };
+    expect(isAllowedHost('portos.example.com:5555', { env, machineHostname: 'other' })).toBe(true);
+    expect(isAllowedHost('box.home.example.net', { env, machineHostname: 'other' })).toBe(true);
+    expect(isAllowedHost('evil-portos.example.com', { env, machineHostname: 'other' })).toBe(false);
+    expect(isAllowedHost('portos.example.com', { env: {}, machineHostname: 'portos.example.com' })).toBe(true);
+    expect(isAllowedHost('portos.example.com', { env: {}, machineHostname: 'other' })).toBe(false);
+  });
+
+  it('lets the Vite dev proxy vouch only for a request same-origin to itself', async () => {
+    const { devProxyForwardedOrigin } = await import('../../lib/portosAuthCore.js');
+    const target = 'http://localhost:5555';
+    // What the API sees after changeOrigin rewrites Host to the target.
+    const proxied = (browserHeaders) => {
+      const origin = devProxyForwardedOrigin({ headers: browserHeaders }, target) ?? browserHeaders.origin;
+      return gateWith({ host: 'localhost:5555', origin, 'sec-fetch-site': browserHeaders['sec-fetch-site'] });
+    };
+    const tailnet = await proxied({ host: 'portos.tailnet.ts.net:5554', origin: 'https://portos.tailnet.ts.net:5554', 'sec-fetch-site': 'same-origin' });
+    expect(tailnet.called).toBe(true);
+    const foreign = await proxied({ host: 'portos.tailnet.ts.net:5554', origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' });
+    expect(foreign.called).toBe(false);
+    expect(foreign.res.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+  });
+
+  it('refuses a foreign Socket.IO handshake at the transport and the namespace gate', async () => {
+    const { allowSocketRequest, socketAuthGate } = await import('./authGate.js');
+    const foreign = { host: '127.0.0.1:5555', origin: 'https://attacker.example' };
+    const admitted = (headers) => new Promise((resolve) => allowSocketRequest({ headers }, (_e, ok) => resolve(ok)));
+    expect(await admitted(foreign)).toBe(false);
+    expect(await admitted({ host: 'rebind.attacker.example:5555', origin: 'http://rebind.attacker.example:5555' })).toBe(false);
+    // Same-origin UI, the Vite dev proxy's loopback pairing, and Origin-less peers.
+    expect(await admitted({ host: 'portos.tailnet.ts.net', origin: 'https://portos.tailnet.ts.net' })).toBe(true);
+    expect(await admitted({ host: 'localhost:5555', origin: 'http://localhost:5554' })).toBe(true);
+    expect(await admitted({ host: 'portos.tailnet.ts.net' })).toBe(true);
+    const err = await new Promise((resolve) => socketAuthGate({ handshake: { headers: foreign } }, resolve));
+    expect(err).toBeInstanceOf(Error);
+    expect(err.data).toEqual({ code: 'CROSS_ORIGIN_BLOCKED' });
   });
 });
 

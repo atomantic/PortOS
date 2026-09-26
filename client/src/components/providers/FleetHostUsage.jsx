@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
 import { Activity, AlertTriangle, RefreshCw, Server } from 'lucide-react';
 import { getFleetLlmHostUsage } from '../../services/apiProviders';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
+
+const USAGE_EVENTS = ['fleet-host:usage:changed', 'fleet-host:changed'];
+const readUsage = () => getFleetLlmHostUsage({ silent: true });
 import { formatCount, formatDurationMs, timeAgo } from '../../utils/formatters';
 import Banner from '../ui/Banner';
 
@@ -18,23 +20,11 @@ import Banner from '../ui/Banner';
  * server from the peer list or the tailnet. A caller matching neither is shown
  * as unrecognized rather than hidden, which is the case worth seeing.
  */
-export default function FleetHostUsage({ pollMs = 10000 }) {
-  const [report, setReport] = useState(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    // Silent: this panel polls, and a transient failure belongs in its own
-    // inline banner rather than in a toast every ten seconds.
-    getFleetLlmHostUsage({ silent: true })
-      .then((value) => { setReport(value); setError(''); })
-      .catch(() => setError('Could not read this host\'s usage. It is still serving — only the report is unavailable.'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-  useAutoRefetch(load, pollMs, { pollOnly: true, immediate: false });
+export default function FleetHostUsage() {
+  const { data: report, error: loadError, loading, refetch: load } = useSocketResource(
+    readUsage, { namespace: 'fleet-host', events: USAGE_EVENTS },
+  );
+  const error = loadError ? "Could not read this host's usage. The report is unavailable." : '';
 
   const clients = report?.clients || [];
   const totals = report?.totals;

@@ -65,6 +65,16 @@ describe('useShellSession', () => {
     expect(lastEmit('shell:start')).toBeTruthy();
   });
 
+  // #8708: a remote socket on a password-free install is refused its very
+  // first shell:list, which no pending request correlates with — the refusal
+  // must still surface instead of leaving the page waiting.
+  it('surfaces a host-control refusal of the uncorrelated list request', () => {
+    const { result } = renderHook(() => useShellSession({}), { wrapper });
+    expect(result.current.hostControlForbidden).toBe(false);
+    fire('shell:error', { code: 'HOST_CONTROL_FORBIDDEN', error: 'Set an instance password to use it remotely.' });
+    expect(result.current.hostControlForbidden).toBe(true);
+  });
+
   it('activates a started session and marks it connected', () => {
     const { result } = renderHook(() => useShellSession({}), { wrapper });
     fire('shell:sessions', []);          // → startSession, pending target 'new'

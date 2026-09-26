@@ -1,3 +1,4 @@
+import { messageLogError } from '../lib/messageLogError.js';
 import { getDraft, updateDraft } from './messageDrafts.js';
 import { getAccount } from './messageAccounts.js';
 
@@ -21,7 +22,7 @@ export async function sendDraft(draftId, io) {
   }
 
   await updateDraft(draftId, { status: 'sending' });
-  console.log(`📧 Sending draft "${draft.subject}" via ${draft.sendVia}`);
+  console.log(`📧 Sending draft ${draft.id} via ${draft.sendVia}`);
 
   const dispatch = async () => {
     if (draft.sendVia === 'api') {
@@ -33,7 +34,7 @@ export async function sendDraft(draftId, io) {
   };
 
   const result = await dispatch().catch(async (error) => {
-    console.error(`📧 Draft send threw for "${draft.subject}": ${error.message}`);
+    console.error(`📧 Draft send threw for ${draft.id}: ${messageLogError(error)}`);
     return { success: false, status: 502, code: 'SEND_FAILED', error: error.message };
   });
 
@@ -41,11 +42,11 @@ export async function sendDraft(draftId, io) {
     await updateDraft(draftId, { status: 'sent' });
     io?.emit('messages:draft:sent', { draftId });
     io?.emit('messages:changed', {});
-    console.log(`📧 Draft sent successfully: "${draft.subject}"`);
+    console.log(`📧 Draft sent successfully: ${draft.id}`);
   } else {
-    await updateDraft(draftId, { status: 'failed' }).catch(err => console.warn(`⚠️ Failed to mark draft as failed: ${err.message}`));
+    await updateDraft(draftId, { status: 'failed' }).catch(err => console.warn(`⚠️ Failed to mark draft as failed: ${messageLogError(err)}`));
     const errorMsg = result?.error ?? 'Unknown error sending draft';
-    console.log(`📧 Draft send failed: ${errorMsg}`);
+    console.error(`📧 Draft send failed: ${messageLogError(result)}`);
     return { success: false, status: result?.status ?? 500, code: result?.code ?? 'SEND_FAILED', error: errorMsg };
   }
 

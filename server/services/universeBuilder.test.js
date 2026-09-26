@@ -1376,6 +1376,72 @@ describe("universeBuilder service", () => {
         expect(after.characters[0].voiceCanon).toMatchObject({ description: 'warm low alto', approved: true });
         expect(after.characters[0].identityPack.assets).toEqual([{ role: 'neutral', imageRef: 'neutral.png', approved: true }]);
       });
+
+      // Additive fields a behind sender's sanitizer strips (#8414). Each case
+      // seeds the field locally, then merges a newer remote that lacks it —
+      // from a sender one version behind the field (omission = "no slot",
+      // must preserve) and from a sender AT the field's version (omission =
+      // the author's clear, must apply).
+      const styleReference = {
+        id: 'style-ref-example', title: 'Dust-lit ink wash', prompt: 'Granular ink wash',
+        imageRefs: ['reference.png'], createdAt: '2026-01-01T00:00:00.000Z',
+      };
+      const withoutField = (list, field) => list.map(({ [field]: _omit, ...rest }) => rest);
+      const legacyFieldCases = [
+        {
+          field: 'factual', since: 12,
+          patch: { factual: true },
+          strip: ({ factual: _omit, ...rest }) => rest,
+          read: (u) => u.factual,
+          kept: true, cleared: undefined,
+        },
+        {
+          field: 'styleReferences', since: 8,
+          patch: { styleReferences: [styleReference] },
+          strip: (u) => ({ ...u, styleReferences: [] }),
+          read: (u) => u.styleReferences,
+          kept: [styleReference], cleared: [],
+        },
+        {
+          field: 'character relationshipLinks', since: 6,
+          patch: {
+            characters: [
+              { id: 'chr-1', name: 'A', relationshipLinks: [{ id: 'rel-1', targetCharacterId: 'chr-2', type: 'custom', description: 'rivals' }] },
+              { id: 'chr-2', name: 'B' },
+            ],
+          },
+          strip: (u) => ({ ...u, characters: withoutField(u.characters, 'relationshipLinks') }),
+          read: (u) => u.characters.find((c) => c.id === 'chr-1').relationshipLinks.map((l) => l.id),
+          kept: ['rel-1'], cleared: [],
+        },
+        {
+          field: 'object attachments', since: 7,
+          patch: {
+            characters: [{ id: 'chr-1', name: 'A' }],
+            objects: [{ id: 'obj-1', name: 'Brass Lamp', attachments: [{ id: 'att-1', characterId: 'chr-1', role: 'custom', emotion: 'dread' }] }],
+          },
+          strip: (u) => ({ ...u, objects: withoutField(u.objects, 'attachments') }),
+          read: (u) => u.objects.find((o) => o.id === 'obj-1').attachments.map((a) => a.id),
+          kept: ['att-1'], cleared: [],
+        },
+      ];
+
+      it.each(legacyFieldCases)('preserves $field from a behind sender but honors an at-version clear (#8414)', async ({ since, patch, strip, read, kept, cleared }) => {
+        for (const [senderVersion, expected] of [[since - 1, kept], [since, cleared]]) {
+          const w = await seedWorld();
+          await svc.updateUniverse(w.id, patch);
+          const local = await svc.getUniverse(w.id);
+          expect(read(local)).toEqual(kept);
+          const r = await svc.mergeUniversesFromSync(
+            [{ ...strip(local), name: 'Peer rename', updatedAt: new Date(Date.now() + 60_000).toISOString() }],
+            { senderSchemaVersions: { universes: senderVersion } },
+          );
+          expect(r.applied).toBe(true);
+          const after = await svc.getUniverse(w.id);
+          expect(after.name).toBe('Peer rename');
+          expect(read(after)).toEqual(expected);
+        }
+      });
     });
 
     describe("pruneTombstonedUniverses", () => {

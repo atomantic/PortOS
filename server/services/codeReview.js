@@ -498,6 +498,8 @@ Judge the production behavior before treating a regression test as the behavior 
 
 For an objective that asks to move or reorder an existing UI section, a diff may show the move as a complete added block and a complete deleted block. When the same complete named section, with materially unchanged contents, is added at the requested position and its former placement is removed, judge the pair as one relocation that satisfies the requested order. Do not call the insertion an unrequested addition or the removal a missing section. This rule applies only when the diff establishes that matched move: an added duplicate whose old copy remains, a different section, or independent content changes must still be judged on their own; matching headings alone do not prove a relocation.
 
+For an objective about clearing a federated peer's displayed schema-mismatch warning, a diff that makes the unchanged-checksum shortcut conditional on an already saved peer/category schema gap is a production retry, not a check-only change. The saved gap sends that category through the existing snapshot apply path again, where the receiver checks the newly fetched envelope's \`portosMeta.schemaVersions\`; a successful apply clears the saved warning for that peer/category. \`portosMeta.portosVersion\` is only the friendly label captured for display, while \`schemaVersions\` controls compatibility, so an older displayed label does not make this retry ineffective. Count the bypass as requested behavior only when the diff scopes it to an existing peer/category gap and preserves the ordinary unchanged-checksum return otherwise. An unconditional retry, a display-label-only edit, or a generic checksum change does not receive this interpretation and must be judged against the objective as usual.
+
 Answer these three questions and nothing else: is anything the objective asked for missing from the diff, is anything in the diff outside what the objective asked for, and does the diff carry real evidence that its work was verified (tests, checks, a stated verification step).
 
 Return exactly one JSON object and no markdown:
@@ -608,10 +610,18 @@ async function resolveServedModel(backend, baseUrl) {
   return { model: probe.models[0], reason: null }
 }
 
-/** Resolve the selected provider without conflating code review with public-content screening.
- * Explicit tool-free stages still require a maintained enforcement recipe.
+/**
+ * Resolve the selected provider's review transport. A reviewer is always a
+ * feedback agent, never a writer (#6338): a CLI transport is only granted when
+ * the vendor has a maintained no-tool (read-only) public-review recipe —
+ * `supportsPublicReviewProvider()` — regardless of whether this request came
+ * from the tool-free public-content path or an ordinary trusted-repo review.
+ * A harness with no such recipe (e.g. Antigravity, whose only maintained
+ * posture may apply edits) is refused here rather than falling back to that
+ * vendor's normal unrestricted argv, which for several CLIs is a blanket
+ * `--dangerously-skip-permissions`-class flag.
  */
-export async function resolveProviderReviewTransport(provider, { toolFree = false } = {}) {
+export async function resolveProviderReviewTransport(provider) {
   if (!provider || provider.enabled === false) {
     return { transport: null, code: 'REVIEWER_UNAVAILABLE', error: 'Reviewer provider is missing or disabled.' }
   }
@@ -619,11 +629,11 @@ export async function resolveProviderReviewTransport(provider, { toolFree = fals
   if (provider.type === 'api' || isCodexTextTransportEnabled(provider)) return { transport: 'api' }
   if (!provider.command) return { transport: null, code: 'REVIEWER_UNSUPPORTED', error: 'Reviewer provider has no command configured.' }
   const { supportsPublicReviewProvider } = await import('../lib/providerVendors.js')
-  if (toolFree && !supportsPublicReviewProvider(provider)) {
+  if (!supportsPublicReviewProvider(provider)) {
     return {
       transport: null,
       code: 'REVIEWER_UNSUPPORTED',
-      error: 'This provider has no enforced tool-free review transport. Select its API mode or a supported reviewer harness.',
+      error: 'This provider has no enforced read-only review transport. Select its API mode or a supported reviewer harness.',
     }
   }
   return { transport: 'cli' }
@@ -643,7 +653,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
       const { PATHS } = await import('../lib/paths.js')
       return createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
     })
-  const transport = await resolveProviderReviewTransport(provider, { toolFree })
+  const transport = await resolveProviderReviewTransport(provider)
   // A missing/disabled record is refused here, but an unsupported HARNESS is
   // refused at the branch below instead — a pinned effort the provider's model
   // cannot do is the more specific complaint, and it was already the answer this
@@ -668,9 +678,16 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     const { mkdtemp, rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
-    // Public comment screening stays isolated. Code review may inspect the
-    // caller's checkout using the selected harness's normal capabilities.
-    const safetyProfile = toolFree ? PUBLIC_REVIEW_GATE_EXECUTION_PROFILE : null
+    // A reviewer is a feedback agent, never a writer (#6338): every CLI review
+    // run — tool-free public-content screening AND an ordinary trusted-repo
+    // review — enforces the maintained no-tool posture, so it can never carry a
+    // vendor's normal unrestricted argv (for several CLIs, a blanket
+    // `--dangerously-skip-permissions`-class flag). `resolveProviderReviewTransport`
+    // already refused a harness with no such recipe before this point.
+    // `toolFree` still controls cwd isolation: public content stays off the
+    // caller's real checkout, while an ordinary review may still inspect it —
+    // read-only, since the posture forbids writes regardless.
+    const safetyProfile = PUBLIC_REVIEW_GATE_EXECUTION_PROFILE
     const isolatedCwd = toolFree || !reviewCwd ? await mkdtemp(join(tmpdir(), 'portos-review-')) : null
     const cwd = isolatedCwd || reviewCwd
     result = await Promise.resolve().then(async () => {
@@ -813,6 +830,16 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, ef
  *   the documented 5 min ceiling.
  * @param {string} [opts.baseUrl] - Validated local OpenAI-compatible base URL;
  *   defaults to the backend manager's current URL.
+ * @param {string} [opts.cwd] - Caller's checkout, passed through to a CLI
+ *   reviewer's working directory. A CLI-backed review always runs under the
+ *   maintained no-tool posture (#6338) regardless of `toolFree` — it can never
+ *   write to this checkout, since the CLI advertises no tools at all — so
+ *   passing it is safe even for an untrusted diff.
+ * @param {boolean} [opts.toolFree] - Isolates the CLI reviewer into a scratch
+ *   cwd instead of `opts.cwd`, for untrusted public-content screening where the
+ *   real checkout should not even be the process's working directory. Does NOT
+ *   relax the no-tool posture in the other direction: `false` still runs
+ *   tool-free, just with `opts.cwd` as the working directory.
  */
 export async function runLocalCodeReview({ backend, model, diff, effort = null, timeoutMs = undefined, baseUrl = null, cwd = null, toolFree = false } = {}) {
   if (!isToolFreeReviewer(backend)) {

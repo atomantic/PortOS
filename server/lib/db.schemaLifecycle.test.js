@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   query: vi.fn(), release: vi.fn(), connect: vi.fn(),
 }));
-vi.mock('pg', () => ({ default: { Pool: class {
-  on() {}
-  connect = state.connect;
-} } }));
+vi.mock('pg', () => ({ default: {
+  Pool: class {
+    on() {}
+    connect = state.connect;
+  },
+  types: { setTypeParser: vi.fn() },
+} }));
 vi.mock('./db/schema/index.js', () => ({
   buildUpgradeDdl: () => ['upgrade schema'],
   buildCatalogDdl: () => ['repair catalog'],

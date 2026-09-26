@@ -46,7 +46,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getProductEngagement } from './portosProductMetrics.js';
 import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
-import { todayInTimezone } from '../lib/timezone.js';
+import { anchorLocalMidnightUtc, todayInTimezone } from '../lib/timezone.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
 
@@ -61,6 +61,24 @@ const REVIEW_QUEUE_SOURCE_PROBE_LIMIT = REVIEW_QUEUE_SOURCE_READ_LIMIT + 1;
 const REVIEW_QUEUE_SNAPSHOT_TTL_MS = 30_000;
 const REVIEW_QUEUE_MAX_SNAPSHOTS = 100;
 export const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
+
+// One process-wide deadline replaces browser polling for clock-only changes.
+// It carries no source records, and is armed only after an explicit queue read.
+let clockInvalidation = null;
+let clockInvalidationAt = Infinity;
+function scheduleQueueClockInvalidation(at) {
+  const delay = at - Date.now();
+  if (!Number.isFinite(at) || delay <= 0 || at >= clockInvalidationAt) return;
+  clearTimeout(clockInvalidation);
+  clockInvalidationAt = at;
+  clockInvalidation = setTimeout(() => {
+    clockInvalidation = null;
+    clockInvalidationAt = Infinity;
+    if (Date.now() < at) scheduleQueueClockInvalidation(at);
+    else reviewService.reviewEvents.emit('queue:changed');
+  }, Math.min(delay, 2_147_483_647));
+  clockInvalidation.unref?.();
+}
 
 const ACTION_KINDS = Object.freeze({
   brain: 'brain.classify',
@@ -1054,6 +1072,9 @@ function pruneQueueSnapshots(now = Date.now()) {
 // Test seam: snapshots are intentionally process-local and short-lived.
 export function __resetQueueSnapshots() {
   queueSnapshots.clear();
+  clearTimeout(clockInvalidation);
+  clockInvalidation = null;
+  clockInvalidationAt = Infinity;
 }
 
 /**
@@ -1449,6 +1470,9 @@ async function readQueueTriageForProjection({
   if (!Array.isArray(entries)) return [];
 
   const nowMs = now instanceof Date && Number.isFinite(now.getTime()) ? now.getTime() : Date.now();
+  for (const entry of entries) {
+    if (!entry.dismissed) scheduleQueueClockInvalidation(Date.parse(entry.snoozedUntil));
+  }
   const preservedKinds = new Set(preserveTriageActionKinds);
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
@@ -1493,6 +1517,11 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
     })
     : 'UTC';
   const clock = now instanceof Date && Number.isFinite(now.getTime()) ? now : new Date();
+  if (view === 'today') {
+    const tomorrow = new Date(`${todayInTimezone(timezone, clock)}T12:00:00.000Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    scheduleQueueClockInvalidation(anchorLocalMidnightUtc(tomorrow.toISOString().slice(0, 10), timezone));
+  }
   const ctx = { goalOptions, view, timezone, now: clock };
   const visibleProducers = PRODUCERS.filter((producer) => visibleInLiveViews(producer, view));
 

@@ -31,7 +31,7 @@ output is safe to paste into a bug report as-is.
 
 **Solution**:
 ```bash
-# Find what's using the port
+# Find what's using the port (:5554 is only used by npm run dev)
 lsof -i :5554
 lsof -i :5555
 
@@ -40,7 +40,7 @@ lsof -i :5555
 
 ### PM2 Process Not Starting
 
-**Symptom**: `pm2 start ecosystem.config.cjs` shows process but status is `errored`.
+**Symptom**: `npm run pm2:start` shows a process but status is `errored`.
 
 **Solution**:
 ```bash
@@ -72,7 +72,7 @@ cp -r data.reference/* data/
 **Causes and Solutions**:
 
 1. **Tailscale not connected**: Ensure both devices are on same Tailscale network
-2. **Firewall blocking**: Check local firewall allows ports 5554-5555
+2. **Firewall blocking**: Check local firewall allows port 5555. Port 5554 is needed only while `npm run dev` is running.
 3. **Server bound to localhost**: PortOS should bind to 0.0.0.0 (default)
 
 ```bash
@@ -88,7 +88,7 @@ netstat -an | grep 5555
 **Solution**:
 - Check browser console for WebSocket errors
 - Verify server is running: `pm2 status`
-- Restart server: `pm2 restart ecosystem.config.cjs`
+- Restart server: `npm run pm2:restart`
 
 ## Browser Console Warnings
 
@@ -262,9 +262,11 @@ npm install --prefix client
 pm2 restart portos-cos
 ```
 
-**Prevention**: if a worktree is missing dependencies, symlink them from the
-primary checkout and call the workspace binaries directly
-(`server/node_modules/.bin/vitest run <files>`) — never install.
+**Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
+use the workspace binaries from the primary checkout
+(`server/node_modules/.bin/vitest run <files>`) and never install there. The
+`dependency-updates` scheduled task is the exception: its managed worktree gets
+no dependency symlinks, and any package-manager install stays in that worktree.
 
 ### Tasks Not Being Picked Up
 
@@ -369,11 +371,11 @@ pm2 stop ecosystem.config.cjs
 
 **Solution**:
 ```bash
-# Restart to pick up changes
-pm2 restart ecosystem.config.cjs
+# Development: restart all dev apps, including Vite on :5554
+npm run dev
 
-# For frontend changes, Vite hot-reload should work
-# For server changes, PM2 watch mode can help (if enabled)
+# Production: rebuild the client and restart production apps
+npm start
 ```
 
 ## Database/Data Issues

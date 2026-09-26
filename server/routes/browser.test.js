@@ -22,6 +22,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -32,6 +33,7 @@ vi.mock('dns/promises', () => ({ default: { lookup }, lookup }));
 
 const navigateToUrlPinned = vi.fn(async (url) => ({ id: 'tab-1', url }));
 vi.mock('../services/browserService.js', () => ({
+  browserEvents: new EventEmitter(),
   navigateToUrlPinned: (...a) => navigateToUrlPinned(...a),
   // other exports are referenced by sibling routes but not by these tests
   restartBrowser: vi.fn(),

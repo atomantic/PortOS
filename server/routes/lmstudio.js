@@ -1,3 +1,4 @@
+import { observeModelMutations } from '../services/modelObservation.js';
 /**
  * LM Studio Routes
  *
@@ -19,6 +20,7 @@ import {
 } from '../lib/validation.js'
 
 const router = Router()
+router.use(observeModelMutations('loaded-models', 'provider-readiness'));
 
 /**
  * GET /api/lmstudio/status

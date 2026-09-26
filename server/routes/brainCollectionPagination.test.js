@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync } from 'fs';
+import { mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import express from 'express';
@@ -38,20 +39,34 @@ const TOTAL_INBOX = 1200;
 const TOTAL_MEMORIES = 1500;
 const BASE_TIME = Date.parse('2026-08-01T00:00:00.000Z');
 
-function seedRecord(type, id, record) {
+async function seedRecord(type, id, record) {
   const dir = join(getTempRoot(), 'brain', type, id);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'index.json'), JSON.stringify({ id, ...record }));
+  await mkdir(dir);
+  await writeFile(join(dir, 'index.json'), JSON.stringify({ id, ...record }));
+}
+
+async function seedRecords(type, count, createRecord) {
+  const parent = join(getTempRoot(), 'brain', type);
+  await mkdir(parent, { recursive: true });
+
+  const batchSize = 48;
+  for (let start = 0; start < count; start += batchSize) {
+    const batchEnd = Math.min(start + batchSize, count);
+    await Promise.all(Array.from({ length: batchEnd - start }, (_, offset) => {
+      const i = start + offset;
+      const id = `${type === 'inbox' ? 'inbox' : 'mem'}-${String(i).padStart(5, '0')}`;
+      return seedRecord(type, id, createRecord(i, id));
+    }));
+  }
 }
 
 describe('Brain collection pagination (synthetic thousands-record fixtures)', () => {
   beforeAll(async () => {
     // Seed 1,200 inbox entries
-    for (let i = 0; i < TOTAL_INBOX; i++) {
-      const id = `inbox-${String(i).padStart(5, '0')}`;
+    await seedRecords('inbox', TOTAL_INBOX, (i, id) => {
       const capturedAt = new Date(BASE_TIME + i * 60000).toISOString();
       const isTargetSearch = i === 15 || i === 480 || i === 1120;
-      seedRecord('inbox', id, {
+      return {
         id,
         capturedText: isTargetSearch ? `Urgent needle task ${i}` : `Thought note entry #${i}`,
         title: isTargetSearch ? `Needle Title ${i}` : `Inbox Item ${i}`,
@@ -59,16 +74,15 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
         capturedAt,
         createdAt: capturedAt,
         updatedAt: capturedAt
-      });
-    }
+      };
+    });
 
     // Seed 1,500 memories
-    for (let i = 0; i < TOTAL_MEMORIES; i++) {
-      const id = `mem-${String(i).padStart(5, '0')}`;
+    await seedRecords('memories', TOTAL_MEMORIES, (i, id) => {
       const updatedAt = new Date(BASE_TIME + i * 60000).toISOString();
       const isTargetSearch = i === 22 || i === 655 || i === 1433;
       const longBody = `Memory full content #${i}: ` + 'Detailed reflective thoughts spanning multiple sentences. '.repeat(8);
-      seedRecord('memories', id, {
+      return {
         id,
         title: isTargetSearch ? `Target Query Memory ${i}` : `Daily Memory ${i}`,
         content: longBody,
@@ -76,14 +90,14 @@ describe('Brain collection pagination (synthetic thousands-record fixtures)', ()
         archived: i % 10 === 0, // 150 archived, 1350 unarchived
         createdAt: updatedAt,
         updatedAt
-      });
-    }
+      };
+    });
 
     brainStorage.invalidateAllCaches();
   });
 
   afterAll(() => {
-    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   describe('Inbox pagination & bounds', () => {

@@ -504,19 +504,28 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     expect(body).toMatch(/\[LI_EXECUTION_VERDICT_KEY\]:\s*verdict/);
   });
 
-  it('the post-restart recovery completion path also stamps the LI verdict (#2779, codex P2)', () => {
+  it('the post-restart recovery completion path also stamps the LI verdict on direct success (#2779, codex P2)', () => {
     // A hand-off that finished while the server was down completes via this bypass, not
     // finalizeAgent — it must still stamp so the outcome federates to the originating peer.
     // End-anchored on the statement that follows the branch rather than a fixed
     // char count: a fixed window silently shrinks its coverage every time the
     // branch grows, and a later addition pushed the assertions below out of it.
     const body = recoveryBranchSource();
-    // Success path stamps a clean completion…
-    expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed' \}, task, \{ success \}\)/);
-    // …and the FAILURE path re-reads the task after orphan recovery and stamps the failure
-    // verdict when recovery settled it into terminal `blocked` (codex P2 round 2).
-    expect(body).toMatch(/settled\.status === 'blocked' && settled\.metadata\?\.liProposal/);
-    expect(body).toMatch(/await stampLiExecutionVerdict\(\{\}, settled, \{ success: false \}\)/);
+    // The direct-success completion doesn't route through handleOrphanedTask, so it
+    // stamps its own clean-completion verdict here.
+    expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed' \}, task, \{ success: retiredSuccess \}\)/);
+  });
+
+  // The failure-path re-stamp used to live here too (re-reading the task after
+  // `handleOrphanedTask` settled it `blocked`) — moved INTO `handleOrphanedTask`
+  // itself (#8440), so every terminal settlement it makes is stamped, on every
+  // caller (the orphan sweep, `resetOrphanedTasks`, and this post-restart path),
+  // not just this one. See `agentManagement.test.js`'s
+  // "stamps the LI execution verdict" coverage for the new location.
+  it('no longer re-reads the task after handleOrphanedTask to re-stamp a failure verdict', () => {
+    const body = recoveryBranchSource();
+    expect(body).not.toMatch(/settled\.status === 'blocked'/);
+    expect(body).not.toMatch(/await stampLiExecutionVerdict\(\{\}, settled/);
   });
 
   // This bypass never runs worktree cleanup, so the dead run's tree is still on

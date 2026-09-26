@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Server boot orchestration.
  *
@@ -114,6 +115,8 @@ import { startImageRefsGc } from './imageRefsGc.js';
 import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
 import { startOrphanedPartialGc } from './orphanedPartialGc.js';
 import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
+import { startTribePurge } from './tribePurge.js';
+import { startScreenshotsGc } from './screenshotsGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
@@ -123,6 +126,7 @@ import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
+import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
 import { recoverInterruptedModels as recoverInterruptedThreejsModels } from './threejsModels/index.js';
 import { recoverInterruptedModels as recoverInterruptedImageTo3dModels } from './imageTo3d/models.js';
 import { startPolling } from './instances.js';
@@ -131,7 +135,7 @@ import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue, flushMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -289,6 +293,8 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // the pins that NEWLY went stale (#7328). allSettled, not all: neither
       // consumer may skip or fail the other.
       onProvidersSaved: () => Promise.allSettled([
+        // Covers direct toolkit route writes as well as service-shim callers.
+        noteReadinessChanged(),
         onProvidersSavedForGraph(),
         reportRetiredModelPins(),
       ]),
@@ -416,6 +422,7 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   recoverStuckAnalyses().catch(err => logBootstrapFailure('❌ Writers Room recovery failed', err));
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
+  recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
   // A provider child cannot survive a server restart. Make interrupted
   // Three.js generations retryable; this is state recovery only, never a
   // cold-bootstrap provider call.
@@ -564,6 +571,14 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // bytes, so it is NOT gated on the ingestion toggle: turning scheduled sync
   // off does not make an over-budget mirror stop being over budget.
   startBeeperAttachmentGc();
+  // Erase Tribe people deleted more than 30 days ago — with their touchpoints,
+  // identities, memory links and audit snapshots — and expire older tribe audit
+  // snapshots (#8459). Deleting a contact must eventually erase a third party's data.
+  startTribePurge();
+  // Periodically expire images handed to agents via data/screenshots: shell
+  // image drops after 7 days, other screenshots after 30 unless a live CoS task
+  // still references them (issue #8461). Fails closed on an unreadable task store.
+  startScreenshotsGc();
   // Warm the catalog user-type registry from the user-type store (Postgres as of
   // #1001; the settings.json slice under the escape hatch) before any catalog
   // request can land, so user-defined types validate + mint ids immediately on
@@ -1021,6 +1036,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // new is accepted while the teardown below runs; requests already accepted
     // keep running and are waited on (bounded) just before the HTTP close.
     const requestsDrained = httpDrain.begin(HTTP_DRAIN_WINDOW_MS);
+    // Stop media-job dispatch before the first await too (#8691): a lane freed
+    // during teardown must not promote a waiting job the process is about to
+    // abandon — the next boot fails a running record but restores a queued one.
+    quiesceMediaJobQueue();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
       .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
     await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())

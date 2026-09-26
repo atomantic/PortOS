@@ -73,6 +73,23 @@ describe('SystemHealthWidget', () => {
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 
+  it('hides unavailable app counts and restores the empty inventory after recovery', () => {
+    const apps = { total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, unmanaged: 0, degraded: true, status: 'unavailable' };
+    const warnings = [{ type: 'probe-unavailable', source: 'apps', status: 'unavailable', severity: 'warning', message: 'Apps unavailable', dismissible: false }];
+    const { rerender } = renderWidget({ health: { ...HEALTH, apps, warnings }, refetchHealth: vi.fn() });
+    const card = screen.getByText('Services').parentElement.parentElement;
+    expect(card).toHaveTextContent('Apps unavailable');
+    expect(card).not.toHaveTextContent('No apps');
+    expect(card).not.toHaveTextContent('0');
+    expect(screen.queryByRole('button', { name: /Dismiss warning:/ })).not.toBeInTheDocument();
+
+    rerender(<MemoryRouter><SystemHealthWidget dashboardState={{ health: {
+      ...HEALTH, overallHealth: 'healthy', warnings: [], apps: { ...apps, degraded: false, status: undefined },
+    } }} /></MemoryRouter>);
+    expect(screen.getByText('No apps')).toBeInTheDocument();
+    expect(screen.queryByText('Apps unavailable')).not.toBeInTheDocument();
+  });
+
   it('keeps failed disk and CoS probes visible without offering dismissal', () => {
     const warnings = [
       { type: 'probe-unavailable', source: 'disk', status: 'unavailable', severity: 'warning', message: 'Disk status unavailable', dismissible: false },

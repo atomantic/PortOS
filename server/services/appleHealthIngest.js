@@ -5,8 +5,20 @@
  * metric+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
  */
 
+import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
+
+// === Module State ===
+
+/**
+ * Per-date write queue to serialize read-modify-write cycles.
+ * Keyed by date string (YYYY-MM-DD) so different days fan out in parallel
+ * while writes to the same day serialize. Shared with the XML importer so a
+ * JSON ingest and an XML import can never interleave on the same day file.
+ */
+export const queueDayWrite = createKeyedFileWriteQueue();
 
 // === Pure Functions ===
 
@@ -56,38 +68,82 @@ export async function readDayFile(dateStr) {
  * @param {Object} data - Day file data to write
  * @returns {Promise<void>}
  */
-export async function writeDayFile(dateStr, data) {
+export async function writeDayFile(dateStr, data, changedMetrics = Object.keys(data.metrics || {})) {
   await ensureDir(PATHS.health);
   data.updated = new Date().toISOString();
   const filePath = join(PATHS.health, `${dateStr}.json`);
   await atomicWrite(filePath, data);
+  if (changedMetrics.some(name => ['body_mass', 'body_fat_percentage', 'lean_body_mass'].includes(name))) {
+    invalidateMeatspace(['healthBody']);
+  }
 }
 
 /**
- * Merge new data points into an existing day file, deduplicating by date string.
+ * Upsert data points into a metric array.
+ * For each new point, if an existing point has the same date, replace it.
+ * Otherwise append the new point.
+ *
+ * @param {Array} existing - Existing points for the metric
+ * @param {Array} newPoints - New points to upsert
+ * @returns {Object} { added: number of new points, updated: number of replaced points }
+ */
+export function upsertPoints(existing, newPoints) {
+  if (!existing.length) {
+    return { added: newPoints.length, updated: 0, result: [...newPoints] };
+  }
+
+  // Build a map of existing points by date for O(1) lookup and update
+  const pointsByDate = new Map();
+  for (const point of existing) {
+    pointsByDate.set(point.date, point);
+  }
+
+  let added = 0;
+  let updated = 0;
+
+  // Process new points: update if date exists, otherwise add
+  for (const newPoint of newPoints) {
+    if (pointsByDate.has(newPoint.date)) {
+      // Check if the point actually changed
+      const oldPoint = pointsByDate.get(newPoint.date);
+      if (JSON.stringify(oldPoint) !== JSON.stringify(newPoint)) {
+        pointsByDate.set(newPoint.date, newPoint);
+        updated++;
+      }
+      // If identical, count as a dupe (neither added nor updated)
+    } else {
+      pointsByDate.set(newPoint.date, newPoint);
+      added++;
+    }
+  }
+
+  const result = Array.from(pointsByDate.values());
+  return { added, updated, result };
+}
+
+/**
+ * Merge new data points into an existing day file, using upsert (latest write wins).
+ * Serializes writes per date to prevent concurrent read-modify-write races.
  *
  * @param {string} dateStr - YYYY-MM-DD string
  * @param {string} metricName - Health metric name
  * @param {Array} newPoints - Array of data point objects from the metric
- * @returns {Promise<number>} Count of newly added (unique) points
+ * @returns {Promise<Object>} { added, updated, totalPoints }
  */
 export async function mergeIntoDay(dateStr, metricName, newPoints) {
-  const dayData = await readDayFile(dateStr);
+  return queueDayWrite(dateStr, async () => {
+    const dayData = await readDayFile(dateStr);
+    const existing = dayData.metrics[metricName] || [];
 
-  const existing = dayData.metrics[metricName] || [];
+    const { added, updated, result } = upsertPoints(existing, newPoints);
 
-  // Build a Set of existing full date strings for fast dedup lookup
-  const existingDates = new Set(existing.map(p => p.date));
+    if (added > 0 || updated > 0) {
+      dayData.metrics[metricName] = result;
+      await writeDayFile(dateStr, dayData, [metricName]);
+    }
 
-  // Only keep points not already present
-  const uniquePoints = newPoints.filter(p => !existingDates.has(p.date));
-
-  if (uniquePoints.length > 0) {
-    dayData.metrics[metricName] = existing.concat(uniquePoints);
-    await writeDayFile(dateStr, dayData);
-  }
-
-  return uniquePoints.length;
+    return { added, updated, totalPoints: result.length };
+  });
 }
 
 // Health Auto Export uses short names; normalize to match XML import names
@@ -102,12 +158,13 @@ const METRIC_NAME_ALIASES = {
  * Iterates all metrics, groups data points by day, and merges into day files.
  *
  * @param {Object} payload - Validated health ingest payload
- * @returns {Promise<Object>} Summary: { metricsProcessed, recordsIngested, recordsSkipped, daysAffected }
+ * @returns {Promise<Object>} Summary: { metricsProcessed, recordsIngested, recordsUpdated, recordsSkipped, daysAffected }
  */
 export async function ingestHealthData(payload) {
   const metrics = payload.data.metrics || [];
   let metricsProcessed = 0;
   let recordsIngested = 0;
+  let recordsUpdated = 0;
   let recordsSkipped = 0;
   const affectedDays = new Set();
 
@@ -116,7 +173,11 @@ export async function ingestHealthData(payload) {
     const dataPoints = metric.data ?? [];
     metricsProcessed++;
 
-    // Group data points by extracted day string
+    // Group data points by extracted day string, stamping origin so the
+    // read side can pick a single source of truth per metric-day and avoid
+    // double-counting against XML-imported points for the same day (#8450).
+    // HealthKit has already deduplicated across devices before Health Auto
+    // Export sends this payload.
     const byDay = new Map();
     for (const point of dataPoints) {
       const dateStr = extractDateStr(point.date);
@@ -125,20 +186,22 @@ export async function ingestHealthData(payload) {
         continue;
       }
       if (!byDay.has(dateStr)) byDay.set(dateStr, []);
-      byDay.get(dateStr).push(point);
+      byDay.get(dateStr).push({ ...point, origin: 'hae' });
     }
 
     // Merge each day's points into the corresponding day file
     for (const [dateStr, points] of byDay) {
-      const added = await mergeIntoDay(dateStr, metricName, points);
-      recordsIngested += added;
-      recordsSkipped += (points.length - added);
-      if (added > 0) affectedDays.add(dateStr);
+      const result = await mergeIntoDay(dateStr, metricName, points);
+      recordsIngested += result.added;
+      recordsUpdated += result.updated;
+      recordsSkipped += (points.length - result.added - result.updated);
+      if (result.added > 0 || result.updated > 0) affectedDays.add(dateStr);
     }
   }
 
   const daysAffected = affectedDays.size;
-  console.log(`🍎 Health ingest: ${recordsIngested} records across ${daysAffected} days (${recordsSkipped} dupes skipped)`);
+  const updateMsg = recordsUpdated > 0 ? ` ${recordsUpdated} updated,` : '';
+  console.log(`🍎 Health ingest: ${recordsIngested} added,${updateMsg} ${recordsSkipped} dupes, ${daysAffected} days affected`);
 
-  return { metricsProcessed, recordsIngested, recordsSkipped, daysAffected };
+  return { metricsProcessed, recordsIngested, recordsUpdated, recordsSkipped, daysAffected };
 }

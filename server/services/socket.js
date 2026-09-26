@@ -1,3 +1,13 @@
+import { registerModelObservationSocket } from './modelObservation.js';
+import { registerBrowserStatusSocket } from './browserStatus.js';
+import { registerFleetHostSocket } from './fleetHostNotify.js';
+import { spriteEvents } from './sprites/events.js';
+import { modelLifecycleEvents } from './modelLifecycleEvents.js';
+import { meatspaceEvents } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
+import { settingsEvents } from './settings.js';
+import { recordEvents } from './sharing/recordEvents.js';
+import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
 import { toAgentListItem } from '../lib/cosAgentListProjection.js';
 import { appsEvents } from './apps.js';
@@ -9,7 +19,8 @@ import { platformAccountEvents } from './platformAccounts.js';
 import { updateEvents } from './updateChecker.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
-import { brainEvents } from './brainStorage.js';
+import { digitalTwinEvents } from './digital-twin-meta.js';
+import { brainEvents, BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { queueEvents } from './moltworldQueue.js';
@@ -19,6 +30,7 @@ import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { trainingEvents } from './loraTraining/events.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
@@ -27,22 +39,32 @@ import { musicVideoEvents } from './musicVideo/events.js';
 import { videoGenEvents } from './videoGen/events.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
+import { usageBackfillEvents } from './usageBackfillEvents.js';
+import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
+import { jevEvents } from './jevEvents.js';
+import { layaMlxEvents } from './layaMlxEvents.js';
+import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import { callStateEvents } from './voice/callSession.js';
 import {
   validateSocketData,
   errorRecoverSchema
 } from '../lib/socketValidation.js';
+import { registerEidoverseTravelHandlers } from '../sockets/eidoverseTravel.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
+import { registerProcessHandlers } from '../sockets/processes.js';
+import { registerAgentProcessHandlers } from '../sockets/agentProcesses.js';
 import { registerAppHandlers } from '../sockets/apps.js';
 import { registerFableLoomHostedNamespace } from '../sockets/fableLoomHosted.js';
 import { cleanupSocketStreams, registerLogHandlers } from '../sockets/logs.js';
 import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
-import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
+import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
 import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
+import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -56,10 +78,12 @@ const agentSubscribers = new Set();
 const instanceSubscribers = new Set();
 // Store loop subscribers
 const loopSubscribers = new Set();
+const codeAnimationSubscribers = new Set();
 // Store Beeper realtime subscribers (#33). Invalidation frames and transport
 // liveness ONLY — see setupBeeperEventForwarding for why this may never be a
 // global emit.
 const beeperSubscribers = new Set();
+const fableLoomSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -72,7 +96,11 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, beeperSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers];
+
+export function emitCodeAnimationChanged(id) {
+  broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', { id });
+}
 
 function broadcastToSet(set, event, data) {
   const disconnected = [];
@@ -106,15 +134,43 @@ function registerSubscriber(socket, namespace, set) {
 // mutating or host-affecting event here.
 const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
 
+// Events that execute on the host — an interactive PTY, keystrokes into the
+// user's live iTerm2 sessions, or git/npm/PM2/deploy runs in a managed app's
+// directory. They need the same operator authority as the HTTP
+// requireHostControl routes (#8226): on a password-free install a remote
+// LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
+// is included by prefix; read-only subscriptions stay open to remote sockets.
+// `error:recover` queues a recovery agent that runs shell commands (#8716).
+// The HTTP twin of this set is HOST_CONTROL_ROUTES in lib/hostControlRoutes.js.
+const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'error:recover']);
+const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:'];
+const isHostControlSocketEvent = (event) => typeof event === 'string'
+  && (HOST_CONTROL_SOCKET_EVENTS.has(event) || HOST_CONTROL_SOCKET_PREFIXES.some((prefix) => event.startsWith(prefix)));
+
+// A refusal goes out on the error event the event's own client already
+// listens on, so the waiting UI settles instead of hanging.
+const hostControlRefusal = (event, payload) => {
+  const refusal = { code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE, message: HOST_CONTROL_FORBIDDEN_MESSAGE };
+  if (event.startsWith('shell:')) return ['shell:error', { ...refusal, sessionId: payload?.sessionId }];
+  if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
+  if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
+  return [`${event}:error`, { ...refusal, appId: payload?.appId }];
+};
+
 function registerAuthHandlers(socket, _io) {
   // Per-event auth re-check: the handshake gate only runs once at connection
-  // time, so every inbound event re-verifies an enabled session.
+  // time, so every inbound event re-verifies an enabled session. With auth
+  // off, host-control events still need a local connection.
   if (typeof socket.use === 'function') {
-    socket.use(async ([event, ..._args], next) => {
+    socket.use(async ([event, payload], next) => {
       try {
-        if (!(await isAuthEnabled())) return next();
-        const token = extractToken({ headers: socket.handshake?.headers || {} });
-        if (await verifySession(token)) return next();
+        if (!(await isAuthEnabled())) {
+          if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
+          console.warn(`⛔ Refused host-control socket event ${event} from a non-local connection`);
+          socket.emit(...hostControlRefusal(event, payload));
+          return;
+        }
+        if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();
         const peerAuthMethod = socket.data?.portosAuthMethod;
         if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {
           return next();
@@ -150,7 +206,9 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'agents', agentSubscribers);
   registerSubscriber(socket, 'instances', instanceSubscribers);
   registerSubscriber(socket, 'loops', loopSubscribers);
+  registerSubscriber(socket, 'code-animation', codeAnimationSubscribers);
   registerSubscriber(socket, 'beeper', beeperSubscribers);
+  registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
 }
 
 function registerErrorHandlers(socket, io) {
@@ -192,12 +250,19 @@ function registerLifecycleHandlers(socket, _io) {
 
 const SOCKET_HANDLER_REGISTRARS = [
   registerAuthHandlers,
+  registerReadinessSocket,
+  registerModelObservationSocket,
+  registerBrowserStatusSocket,
+  registerFleetHostSocket,
   registerVoiceHandlers,
   registerBuildHandlers,
   registerImporterHandlers,
   registerAppHandlers,
+  registerProcessHandlers,
+  registerAgentProcessHandlers,
   registerLogHandlers,
   registerSubscriptionHandlers,
+  registerEidoverseTravelHandlers,
   registerErrorHandlers,
   registerShellHandlers,
   registerItermHandlers,
@@ -214,13 +279,28 @@ function registerAuthRevocationHandler(io) {
   });
 }
 
+const forwardMeatspaceChange = payload => ioInstance?.emit('meatspace:changed', payload);
+
 function setupEventForwarding() {
+  modelLifecycleEvents.on('image-to-3d:changed', data => ioInstance?.emit('image-to-3d:changed', data));
+  modelLifecycleEvents.on('threejs-model:changed', data => ioInstance?.emit('threejs-model:changed', data));
+  meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
+  usageBackfillEvents.on('updated', () => ioInstance?.emit('usage-backfill:updated', {}));
+  eidoverseWorldEvents.on('updated', () => ioInstance?.emit('eidoverse:projection', {}));
+  jevEvents.on('status', () => ioInstance?.emit('jev:status', {}));
+  jevEvents.on('stats', () => ioInstance?.emit('jev:stats', {}));
+  jevEvents.on('heads', () => ioInstance?.emit('jev:heads', {}));
+  layaMlxEvents.on('updated', () => ioInstance?.emit('laya:status', {}));
+  providerQuotaEvents.on('updated', () => ioInstance?.emit('provider-quota:updated', {}));
   setupCosEventForwarding();
   setupErrorEventForwarding();
   setupAppsEventForwarding();
   setupNotificationEventForwarding();
   setupAgentEventForwarding();
   setupBrainEventForwarding();
+  setupDigitalTwinEventForwarding();
+  meatspaceEvents.off('changed', forwardMeatspaceChange);
+  meatspaceEvents.on('changed', forwardMeatspaceChange);
   setupMoltworldWsEventForwarding();
   setupMoltworldQueueEventForwarding();
   setupInstanceEventForwarding();
@@ -238,9 +318,28 @@ function setupEventForwarding() {
   setupPersistentMindEventForwarding();
   setupCallStateEventForwarding();
   setupBeeperEventForwarding();
+  setupRecordEventForwarding();
+  setupFableLoomRunForwarding();
 }
 
 let persistentMindEventForwardingSetup = false;
+// Bounded invalidations only: records remain behind their existing HTTP gates.
+let recordEventForwardingSetup = false;
+function setupRecordEventForwarding() {
+  if (recordEventForwardingSetup) return;
+  recordEventForwardingSetup = true;
+  const forward = ({ recordKind, recordId }) => {
+    if (recordKind === 'creativeDirectorProject') {
+      ioInstance?.emit('creative-director:project:changed', { id: recordId });
+    } else if (recordKind === 'creativeCommission') {
+      ioInstance?.emit('commission:changed', { id: recordId });
+    }
+  };
+  recordEvents.on('updated', forward);
+  recordEvents.on('deleted', forward);
+  recordEvents.on('invalidated', forward);
+}
+
 function setupPersistentMindEventForwarding() {
   if (persistentMindEventForwardingSetup) return;
   persistentMindEventForwardingSetup = true;
@@ -277,6 +376,9 @@ export function initSocket(io) {
   // Invalidation only. Clients coalesce the frame into one bounded activity
   // read; a missed frame is repaired by the reconnect read, not by polling.
   bindSystemActivityIo(io);
+  armReadinessWatchers().catch((err) => {
+    console.error(`❌ Readiness watchers failed: ${err.message}`);
+  });
   armSystemActivityWatchers().catch((err) => {
     console.error(`❌ system activity watchers failed: ${err.message}`);
   });
@@ -377,9 +479,53 @@ function broadcastToCos(event, data) {
 // Broadcast to error subscribers only
 function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event, data); }
 
-// Set up CoS event forwarding
+// Environment changes need no Mind turn. Coalesce bursts into one bounded,
+// payload-free invalidation and send it only to existing CoS subscribers.
+let mindVisibilityTimer = null;
+function invalidateMindVisibility() {
+  if (!cosSubscribers.size || mindVisibilityTimer) return;
+  mindVisibilityTimer = setTimeout(() => {
+    mindVisibilityTimer = null;
+    broadcastToCos('cos:mind:visibility', { invalidated: true });
+  }, 250);
+  mindVisibilityTimer.unref?.();
+}
+
+// Process-wide listeners forward through the current IO and subscriber sets.
+let cosForwardingSetup = false;
 function setupCosEventForwarding() {
+  if (cosForwardingSetup) return;
+  cosForwardingSetup = true;
+  // Dashboard invalidations deliberately omit decisions, prompts and settings.
+  for (const event of ['goals:changed', 'backup:changed']) {
+    dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
+  }
+  for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
+    dashboardEvents.on(event, () => broadcastToCos(event, {}));
+  }
+  settingsEvents.on('settings:updated', () => {
+    ioInstance?.emit('backup:changed', {});
+    ioInstance?.emit('jev:policy', {});
+  });
+  // A failed restore also invalidates policy: clients must show the strict
+  // read failure instead of continuing to offer stale safety settings.
+  settingsEvents.on('settings:invalidated', () => ioInstance?.emit('jev:policy', {}));
+  for (const [source, target] of [
+    ['scheduler:scheduled', 'cos:scheduler:changed'],
+    ['scheduler:ran', 'cos:scheduler:changed'],
+    ['scheduler:cancelled', 'cos:scheduler:changed'],
+    ['agents:changed', 'cos:agents:changed'],
+    ['learning:changed', 'cos:learning:changed'],
+  ]) {
+    cosEvents.on(source, data => {
+      broadcastToCos(target, {});
+      if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
+        ioInstance?.emit('backup:changed', {});
+      }
+    });
+  }
   // Status events
+  cosEvents.on('goals:changed', data => broadcastToCos('cos:goals:changed', data));
   cosEvents.on('status', (data) => broadcastToCos('cos:status', data));
   for (const event of ['config:changed', 'status:paused', 'status:resumed']) {
     cosEvents.on(event, data => broadcastToCos(`cos:${event}`, data));
@@ -446,6 +592,10 @@ function setupCosEventForwarding() {
   // Programmatic scheduled handlers report what they actually did — no agent
   // task is created, so there is nothing else for the user to watch.
   cosEvents.on('schedule:on-demand-handled', (data) => broadcastToCos('cos:schedule:on-demand-handled', data));
+  for (const event of ['config:changed', 'status', 'status:paused', 'status:resumed',
+    'agent:spawned', 'agent:updated', 'agent:completed', 'health:check', 'health:critical']) {
+    cosEvents.on(event, invalidateMindVisibility);
+  }
 }
 
 // Set up error event forwarding
@@ -473,6 +623,7 @@ function setupErrorEventForwarding() {
 // Set up apps event forwarding - broadcasts to ALL clients
 function setupAppsEventForwarding() {
   appsEvents.on('changed', (data) => {
+    invalidateMindVisibility();
     if (ioInstance) {
       ioInstance.emit('apps:changed', data);
     }
@@ -511,8 +662,28 @@ function setupAgentEventForwarding() {
   activityEvents.on('activity:updated', (data) => broadcastToAgents('agents:activity:updated', data));
 }
 
+// Forward only invalidations, never private traits, interview text or settings.
+// All status/settings writers save meta; sync also signals after document I/O.
+function setupDigitalTwinEventForwarding() {
+  for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+    digitalTwinEvents.on(event, () => ioInstance?.emit('digital-twin:changed', {}));
+  }
+}
+
 // Set up brain event forwarding - broadcast to all clients
 function setupBrainEventForwarding() {
+  // Invalidation only: record bodies, local paths and settings stay behind HTTP.
+  const changed = (type, id) => {
+    ioInstance?.emit('brain:changed', { type, id });
+    if (type === 'links') ioInstance?.emit('brain:links:changed', { id });
+  };
+  for (const type of BRAIN_ENTITY_TYPES) {
+    brainEvents.on(`${type}:upserted`, ({ id }) => changed(type, id));
+    brainEvents.on(`${type}:deleted`, ({ id }) => changed(type, id));
+  }
+  brainEvents.on('record:changed', ({ type, id }) => changed(type, id));
+  brainEvents.on('meta:changed', () => changed('meta'));
+
   brainEvents.on('classified', (data) => {
     if (ioInstance) {
       ioInstance.emit('brain:classified', data);
@@ -549,6 +720,8 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
+  // Invalidation only: the copyable serve capability stays behind the status API.
+  instanceEvents.on('tailcat:serve:changed', () => ioInstance?.emit('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
@@ -722,6 +895,33 @@ function setupMediaGenEventForwarding() {
         : kind === 'audio' ? 'audio-gen'
           : null;
 
+  spriteEvents.on('changed', ({ recordId }) => {
+    ioInstance?.emit('sprites:changed', { recordId });
+  });
+  // Queue lifecycle events carry the persisted job's routing tags. Generation
+  // transport events can precede the queue's terminal state, so do not use them.
+  for (const event of ['enqueued', 'started', 'completed', 'failed', 'canceled']) {
+    mediaJobEvents.on(event, (job) => {
+      for (const tagKey of ['spriteRef', 'spriteWalk', 'spriteAnimation']) {
+        const recordId = job.params?.[tagKey]?.recordId;
+        if (recordId) ioInstance?.emit('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
+      }
+    });
+  }
+
+  mediaJobEvents.on('reference-sheet:changed', ({ universeId, entryId, jobId, variant, status }) => {
+    ioInstance?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
+  });
+  mediaJobEvents.on('changed', () => {
+    ioInstance?.emit('media-jobs:changed', {});
+  });
+  trainingEvents.on('dataset:changed', ({ datasetId }) => {
+    ioInstance?.emit('training:dataset:changed', { datasetId });
+  });
+  trainingEvents.on('checkpoints:changed', ({ runId }) => {
+    ioInstance?.emit('training:checkpoints:changed', { runId });
+  });
+
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
   // `generationId` (#1791). The internal gen modules emit started/progress/
   // completed/failed but have NO 'canceled' — a job canceled *while queued*
@@ -755,5 +955,17 @@ function setupMediaGenEventForwarding() {
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
     ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
+  });
+}
+
+let fableLoomRunForwardingSetup = false;
+function setupFableLoomRunForwarding() {
+  if (fableLoomRunForwardingSetup) return;
+  fableLoomRunForwardingSetup = true;
+  fableLoomRunEvents.on('editorial', run => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:editorial:run', run);
+  });
+  fableLoomRunEvents.on('production', run => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:production:run', run);
   });
 }

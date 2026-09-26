@@ -5,6 +5,7 @@
  * mirrored columns for list queries and audit triggers.
  */
 
+import { modelLifecycleEvents } from '../modelLifecycleEvents.js';
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -121,11 +122,14 @@ export async function createModel(input) {
     deleted: false,
     deletedAt: null,
   };
-  return persist(query, model);
+  await persist(query, model);
+  modelLifecycleEvents.emit('threejs-model:changed', { id: model.id });
+  return model;
 }
 
 export async function mutateModel(id, mutate, { includeDeleted = false } = {}) {
-  return withTransaction(async (client) => {
+  let changed = false;
+  const model = await withTransaction(async (client) => {
     const result = await client.query('SELECT data FROM threejs_models WHERE id = $1 FOR UPDATE', [id]);
     const current = rowToModel(result.rows[0]);
     if (!current || (!includeDeleted && current.deleted)) {
@@ -135,8 +139,12 @@ export async function mutateModel(id, mutate, { includeDeleted = false } = {}) {
     if (!next) return current;
     next.updatedAt = new Date().toISOString();
     await persist(client.query.bind(client), next);
+    changed = true;
     return next;
   });
+  // Notify only after COMMIT: a listener can immediately read the persisted row.
+  if (changed) modelLifecycleEvents.emit('threejs-model:changed', { id });
+  return model;
 }
 
 export async function deleteModel(id) {

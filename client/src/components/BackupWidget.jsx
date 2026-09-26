@@ -15,10 +15,12 @@ import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 import { useBackupRun } from '../hooks/useBackupRun';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 import { timeAgo, timeUntil } from '../utils/formatters';
+
+const RESOURCE_EVENTS = ['backup:changed'];
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -243,18 +245,18 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
 // ---------------------------------------------------------------------------
 
 function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
-  // Let errors throw — `useAutoRefetch` preserves the last-good data on
+  // Let errors throw — `useSocketResource` preserves the last-good data on
   // transient failures. A `.catch(() => null)` here would wipe the snapshot
   // list on every blip per the hook's documented gotcha.
-  const { data: snapshots, loading } = useAutoRefetch(
+  const { data: snapshots, loading, error, refetch } = useSocketResource(
     () => api.getBackupSnapshots({ silent: true }),
-    120000,
     {
+      events: RESOURCE_EVENTS,
       // Snapshots only change when a new backup lands or the rotation prunes
       // the oldest — walk every rendered tuple (id + fileCount) so a stale
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
-      compare: (prev, next) => equalListByKeys(prev, next, [
+      compare: (prev, next) => prev != null && equalListByKeys(prev, next, [
         'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed',
       ]),
     },
@@ -283,7 +285,17 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
     );
   }
 
+  const inventoryError = error && (
+    <div role="alert" className="mt-3 text-xs text-port-warning">
+      <p>Snapshot inventory unavailable.{snapshots !== null ? ' Previously loaded inventory is stale.' : ''}</p>
+      <button onClick={() => refetch()} className="mt-1 min-h-[32px] text-port-accent">
+        Retry snapshot inventory
+      </button>
+    </div>
+  );
+
   if (!snapshots || snapshots.length === 0) {
+    if (error) return inventoryError;
     return (
       <p className="mt-3 text-xs text-gray-500">No snapshots found.</p>
     );
@@ -291,6 +303,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
 
   return (
     <div className="mt-3 space-y-1">
+      {inventoryError}
       {snapshots.map(snap => (
         <div key={snapshotIdentity(snap)}>
           <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded bg-port-bg/50 hover:bg-port-bg/80 transition-colors">
@@ -348,27 +361,36 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
 // ---------------------------------------------------------------------------
 
 const BackupWidget = memo(function BackupWidget() {
-  // Let errors throw — `useAutoRefetch` preserves the last-good status on
+  // Let errors throw — `useSocketResource` preserves the last-good status on
   // transient failures so a blip doesn't drop the widget to its loading state.
-  const { data: status } = useAutoRefetch(
+  const { data: status, updateData: updateStatus } = useSocketResource(
     () => api.getBackupStatus({ silent: true }),
-    60000,
     {
+      events: RESOURCE_EVENTS,
       // Backup state only flips when a new run starts/finishes — comparing the
       // monotonic timestamps + status + error + destPath captures every
-      // visible change at the widget's resolution. Avoids per-poll re-renders
+      // visible change at the widget's resolution. Avoids redundant re-renders
       // that would re-compute relative-time labels for no visual benefit.
-      compare: (prev, next) => equalByKeys(prev, next, [
+      compare: (prev, next) => prev != null && equalByKeys(prev, next, [
         'status', 'lastRun', 'nextRun', 'error', 'filesChanged', 'destPath',
       ]),
     },
   );
-  const [handleBackupNow, triggering] = useBackupRun();
+  const [handleBackupNow, triggering] = useBackupRun(result => {
+    updateStatus(previous => ({
+      ...previous,
+      status: result.status,
+      lastRun: result.lastRun,
+      filesChanged: result.filesChanged,
+      pgBackup: result.pgBackup,
+      error: result.pgBackup?.status === 'failed' ? `DB dump ${result.pgBackup.reason}` : null,
+    }));
+  });
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [restoringSnapshotId, setRestoringSnapshotId] = useState(null);
   // Tick every minute so the dedup-skipped widget still recomputes
   // `relativeTime(lastRun/nextRun)` labels and the `computeHealth` 25h/49h
-  // thresholds when wall-clock time crosses a boundary even though the poll
+  // thresholds when wall-clock time crosses a boundary even though the resource
   // payload is unchanged.
   useTimeTick(60000);
 

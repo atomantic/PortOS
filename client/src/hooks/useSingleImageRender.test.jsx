@@ -8,6 +8,7 @@ vi.mock('../services/api', () => ({
 // pipelineImageCfgToRenderOpts is exercised for real (pure); pass a minimal cfg.
 
 import useSingleImageRender from './useSingleImageRender.js';
+import { resolveRenderCfg } from '../lib/pipelineImageDefaults.js';
 
 const IMG_CFG = { mode: 'local', modelId: 'm', width: 512, height: 512, steps: '', guidance: '', seed: '', negativePrompt: 'lowres', extraStyle: '' };
 
@@ -31,6 +32,25 @@ describe('useSingleImageRender', () => {
     expect(body.prompt).toBe('a hero');
     expect(body.negativePrompt).toBe('blur');
     expect(generateImage.mock.calls[0][1]).toEqual({ silent: true });
+  });
+
+  it('submits inherited tags without projected pins while preserving explicit render overrides', async () => {
+    generateImage.mockResolvedValue({ jobId: 'example-job' });
+    const cfg = resolveRenderCfg({
+      imageGen: { mode: 'codex', codex: { enabled: true } },
+      renderDefaults: { 'universe-bible': { imageMode: 'codex', imageModel: 'example-target' } },
+    }, { record: { imageMode: 'codex' }, target: 'universe-bible' });
+    expect(cfg.cloudModel).toBe('example-target');
+    const { result } = renderHook(() => useSingleImageRender({ buildPrompt: () => ({ prompt: 'Example image' }) }));
+    const universeRun = { universeId: 'example-universe' };
+    await act(async () => { await result.current.render(cfg, undefined, { universeRun }); });
+    expect(generateImage.mock.calls[0][0]).toEqual({
+      prompt: 'Example image', negativePrompt: undefined, width: 1024, height: 1536, universeRun,
+    });
+    await act(async () => {
+      await result.current.render(cfg, undefined, { universeRun, mode: 'local', modelId: 'example-explicit' });
+    });
+    expect(generateImage.mock.calls[1][0]).toMatchObject({ mode: 'local', modelId: 'example-explicit', universeRun });
   });
 
   it('aborts without POSTing when buildPrompt returns null', async () => {

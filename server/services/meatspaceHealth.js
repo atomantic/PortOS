@@ -6,6 +6,7 @@
  * to the shared MortalLoom.json; otherwise local PortOS data files are used.
  */
 
+import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
@@ -30,6 +31,8 @@ const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 async function writeLocal(file, data) {
   await ensureDir(MEATSPACE_DIR);
   await atomicWrite(file, data);
+  const resource = { [BLOOD_TESTS_FILE]: 'blood', [EPIGENETIC_TESTS_FILE]: 'epigenetic', [EYES_FILE]: 'eyes' }[file];
+  if (resource) invalidateMeatspace([resource]);
 }
 
 // === Blood Tests ===

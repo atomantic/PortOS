@@ -7,7 +7,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
 import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { useQuotaPendingPoll } from '../hooks/useQuotaPendingPoll';
+import { useSocketResource } from '../hooks/useSocketResource';
+import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
@@ -15,6 +16,8 @@ import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
+
+const BACKFILL_EVENTS = ['usage-backfill:updated'];
 
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
@@ -148,9 +151,8 @@ function ProviderQuotaSection() {
     });
   }, []);
 
-  // Cards still being scraped come back `pending`; the shared hook re-asks
-  // until the readings land. See hooks/useQuotaPendingPoll.js.
-  useQuotaPendingPoll(load, quotas);
+  // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
+  useQuotaUpdates(load);
 
   return (
     <div className="space-y-3">
@@ -531,7 +533,10 @@ function InternalUsageMetrics() {
 
   const [usage, setUsage] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [backfill, setBackfill] = useState(null);
+  const { data: backfill, updateData: setBackfill, refetch: refreshBackfill } = useSocketResource(
+    () => api.getUsageBackfillStatus({ silent: true }),
+    { events: BACKFILL_EVENTS },
+  );
 
   // One fetch for every trigger — the range effect, the backfill-complete
   // refetch, and a subscription-price save (which re-derives the savings block
@@ -555,42 +560,17 @@ function InternalUsageMetrics() {
     fetchUsage().finally(() => setLoading(false));
   }, [fetchUsage]);
 
-  useEffect(() => {
-    let cancelled = false;
-    api.getUsageBackfillStatus({ silent: true })
-      .then((status) => { if (!cancelled) setBackfill(status); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
     const status = await api.startUsageBackfill({ silent: true });
     setBackfill(status);
+    // A fast worker can finish before the POST response arrives. Reconcile
+    // once so that response cannot overwrite an already-observed completion.
+    if (status?.status === 'running') await refreshBackfill();
   }, { errorMessage: 'Failed to start historical usage reconciliation' });
 
   useEffect(() => {
-    if (backfill?.status !== 'running') return undefined;
-    let cancelled = false;
-    let timer = null;
-    const poll = () => {
-      api.getUsageBackfillStatus({ silent: true })
-        .then(async (status) => {
-          if (cancelled) return;
-          setBackfill(status);
-          if (status?.status === 'complete') {
-            await fetchUsage();
-          } else if (status?.status === 'running') {
-            timer = setTimeout(poll, 1000);
-          }
-        })
-        .catch(() => {});
-    };
-    timer = setTimeout(poll, 1000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [backfill?.status, fetchUsage]);
+    if (backfill?.status === 'complete') fetchUsage();
+  }, [backfill, fetchUsage]);
 
 
   const setPeriod = (id) => {

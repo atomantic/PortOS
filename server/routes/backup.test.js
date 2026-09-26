@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { PassThrough } from 'stream';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/backup.js', () => ({
   getState: vi.fn(),
@@ -58,6 +58,20 @@ describe('backup routes', () => {
           { path: '/loras/*.safetensors', reason: 'test', overridable: true }
         ]
       });
+    });
+
+    it('serves a process-local persistence failure without hiding the last successful snapshot', async () => {
+      const state = {
+        status: 'error', lastSnapshotId: 'previous-snapshot',
+        lastRun: '2026-01-02T00:00:00.000Z', pgBackup: null,
+        error: 'Backup failed; status persistence failed (EACCES). See server logs.',
+      };
+      backup.getState.mockResolvedValue(state);
+      backup.getNextRunTime.mockReturnValue(null);
+      getSettings.mockResolvedValue({ backup: { destPath: '/backup/target' } });
+      const res = await request(buildApp()).get('/api/backup/status');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject(state);
     });
 
     it('returns null destPath when backup is not configured', async () => {
@@ -138,6 +152,21 @@ describe('backup routes', () => {
   });
 
   describe('GET /api/backup/snapshots', () => {
+    it('returns classified inventory failures through the centralized boundary', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backup/target' } });
+      backup.listSnapshots.mockRejectedValueOnce(new ServerError(
+        'Backup inventory unavailable: read-namespace (EIO)',
+        { code: 'BACKUP_INVENTORY_UNAVAILABLE', context: { operation: 'read-namespace', filesystemCode: 'EIO' } },
+      ));
+      const res = await request(buildApp()).get('/api/backup/snapshots');
+      expect(res.status).toBe(500);
+      expect(res.body).toMatchObject({
+        error: 'Backup inventory unavailable: read-namespace (EIO)',
+        code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      });
+      expect(JSON.stringify(res.body)).not.toContain('/backup/target');
+    });
+
     it('returns the list of snapshots from the configured destPath', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
       backup.listSnapshots.mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
@@ -322,6 +351,18 @@ describe('backup routes', () => {
         '2026-06-05T00-00-00',
         { dryRun: true }
       );
+    });
+
+    it('reports a refused preflight and a concurrent maintenance request without success', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restorePostgres.mockResolvedValueOnce({ status: 'failed', reason: 'restore_preflight' });
+      const refused = await request(buildApp()).post('/api/backup/restore-db').send({ snapshotId: 'snap-1' });
+      expect(refused.body).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+      backup.restorePostgres.mockRejectedValueOnce(Object.assign(new Error('Restore in progress'), {
+        status: 503, code: 'DATABASE_MAINTENANCE',
+      }));
+      const busy = await request(buildApp()).post('/api/backup/restore-db').send({ snapshotId: 'snap-1', dryRun: false });
+      expect(busy.status).toBe(503);
     });
 
     it('forwards source with database restore preview and execution requests', async () => {

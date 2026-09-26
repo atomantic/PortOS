@@ -60,24 +60,60 @@ describe('generateDeckCardPrompts', () => {
   beforeEach(() => { runPromptThroughProvider.mockReset(); });
 
   it('chunks the targets, keeps the full roster in every call, and drops empty or unknown prompts', async () => {
-    const targets = Array.from({ length: PROMPTS_PER_CALL + 1 }, (_, i) => ({ id: `id-${i}`, key: `k-${i}`, name: `Card ${i}` }));
-    runPromptThroughProvider.mockImplementation(async ({ prompt }) => {
+    const targets = Array.from({ length: 79 }, (_, i) => ({ id: `id-${i}`, key: `k-${i}`, name: `Card ${i}` }));
+    const batchStarts = [];
+    const activity = [];
+    const completed = [];
+    const requestedPerBatch = [];
+    runPromptThroughProvider.mockImplementation(async ({ prompt, onData }) => {
+      onData?.('provider output');
       // Only the "write these" section names the chunk — the roster above it lists every card.
       const section = prompt.split('# Write prompts for THESE cards only')[1].split('# Output contract')[0];
       const keys = [...section.matchAll(/^ {2}- (k-\d+): Card/gm)].map((m) => m[1]);
+      requestedPerBatch.push(keys.length);
       // Echo a prompt for every listed target, plus noise the parser must ignore.
       const prompts = keys.map((key) => ({ key, prompt: key === 'k-1' ? '   ' : `subject for ${key}` }));
       prompts.push({ key: 'k-999', prompt: 'stray' });
       return { text: JSON.stringify({ prompts }), model: 'm1', provider: { id: 'p1' } };
     });
-    const { prompts } = await generateDeckCardPrompts({ deck, roster: targets, targets, universe: null });
-    expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
-    expect(prompts).toHaveLength(PROMPTS_PER_CALL); // k-1 blank, k-999 unknown
+    const { prompts } = await generateDeckCardPrompts({
+      deck, roster: targets, targets, universe: null,
+      onBatchStart: (batch) => batchStarts.push(batch),
+      onActivity: (batch) => activity.push(batch),
+      onChunk: (written, batch) => completed.push({ count: written.length, ...batch }),
+    });
+    expect(runPromptThroughProvider).toHaveBeenCalledTimes(5);
+    expect(prompts).toHaveLength(78); // k-1 blank, k-999 unknown
+    expect(requestedPerBatch).toEqual([16, 16, 16, 16, 15]);
+    expect(batchStarts).toEqual(Array.from({ length: 5 }, (_, i) => ({
+      chunk: i + 1, chunks: 5, requested: 79,
+    })));
+    expect(activity).toEqual(batchStarts);
+    expect(completed.map(({ count, chunk, chunks }) => ({ count, chunk, chunks }))).toEqual([
+      { count: 15, chunk: 1, chunks: 5 },
+      { count: 16, chunk: 2, chunks: 5 },
+      { count: 16, chunk: 3, chunks: 5 },
+      { count: 16, chunk: 4, chunks: 5 },
+      { count: 15, chunk: 5, chunks: 5 },
+    ]);
     expect(prompts.find((p) => p.cardId === 'id-0')).toEqual({ cardId: 'id-0', prompt: 'subject for k-0' });
     expect(prompts.some((p) => p.cardId === 'id-1')).toBe(false);
     const secondCall = runPromptThroughProvider.mock.calls[1][0].prompt;
     expect(secondCall).toContain('k-0: Card 0'); // roster stays complete for consistency
     expect(runPromptThroughProvider.mock.calls[1][0].source).toBe('deck-card-prompts');
+  });
+
+  it('reports a completed batch even when the provider returned no usable prompts', async () => {
+    const targets = [{ id: 'id-0', key: 'k-0', name: 'Card 0' }];
+    const onChunk = vi.fn();
+    runPromptThroughProvider.mockResolvedValueOnce({
+      text: '{"prompts":[]}', model: 'm1', provider: { id: 'p1' },
+    });
+
+    const { prompts } = await generateDeckCardPrompts({ deck, roster: targets, targets, onChunk });
+
+    expect(prompts).toEqual([]);
+    expect(onChunk).toHaveBeenCalledWith([], { chunk: 1, chunks: 1, requested: 1 });
   });
 
   it('hands the runner the shape predicate + a repair that appends the strict-JSON reminder and surfaces a schema failure as LLM_INVALID_JSON', async () => {

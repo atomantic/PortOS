@@ -23,6 +23,7 @@
  *     resident — so a second request joins the first rather than starting one.
  */
 
+import { notifyJevChanged } from './jevEvents.js';
 import { promisify } from 'util';
 import { dirname, join } from 'path';
 import { execFile } from '../lib/childProcess.js';
@@ -81,7 +82,8 @@ export function trainScopeAdherenceHead({ repoPath = PATHS.root, architecture = 
   // every later request to the same rejection.
   if (trainingInFlight) return trainingInFlight;
   trainingInFlight = runTraining({ repoPath, architecture })
-    .finally(() => { trainingInFlight = null; });
+    .finally(() => { trainingInFlight = null; notifyJevChanged('heads'); });
+  notifyJevChanged('heads');
   return trainingInFlight;
 }
 

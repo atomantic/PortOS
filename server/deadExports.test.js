@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXPORT = /^export (?:async )?function ([A-Za-z_$][\w$]*)\b/gm;
 const WORD = /\b[A-Za-z_$][\w$]*\b/g;
+// A release promotion diffs hundreds of commits; Node's 1 MB default overflows (ENOBUFS).
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 function excluded(file, name) {
   if (name.startsWith('_')) return true; // Test and integration hooks are intentionally public.
@@ -42,20 +44,32 @@ function deadExports(files, candidateNames = null) {
     ![...(mentionedBy.get(name) || [])].some(other => other !== file));
 }
 
-function addedExportNames() {
-  const base = process.env.CI_BASE_SHA || execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: ROOT, encoding: 'utf8' });
-  const names = new Set();
+// Export names a unified diff introduces. A name the diff also removes is an
+// existing export whose declaration line changed (a new parameter, a move) —
+// not an addition, so a legacy test-only export stays grandfathered.
+function addedExportNamesFromDiff(diff) {
+  const added = new Set();
+  const removed = new Set();
   for (const line of diff.split('\n')) {
-    if (!line.startsWith('+') || line.startsWith('+++')) continue;
-    const match = /^\+export (?:async )?function ([A-Za-z_$][\w$]*)\b/.exec(line);
-    if (match) names.add(match[1]);
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    const match = /^([+-])export (?:async )?function ([A-Za-z_$][\w$]*)\b/.exec(line);
+    if (match) (match[1] === '+' ? added : removed).add(match[2]);
   }
-  return names;
+  return new Set([...added].filter(name => !removed.has(name)));
+}
+
+function addedExportNames() {
+  // Pull-request CI supplies its exact merge-ref base. A workflow_dispatch
+  // full run has no origin/main ref in actions/checkout's depth-2 clone; use
+  // the previous commit there so this guard still examines the new exports.
+  const hasOriginMain = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/main'], { cwd: ROOT, stdio: 'ignore' }).status === 0;
+  const base = process.env.CI_BASE_SHA || execFileSync('git', hasOriginMain ? ['merge-base', 'HEAD', 'origin/main'] : ['rev-parse', 'HEAD^1'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: ROOT, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  return addedExportNamesFromDiff(diff);
 }
 
 function trackedFiles() {
-  return execFileSync('git', ['ls-files', '-z'], { cwd: ROOT })
+  return execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, maxBuffer: GIT_MAX_BUFFER })
     .toString('utf8').split('\0').filter(Boolean)
     .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
     .filter(file => existsSync(join(ROOT, file)))
@@ -69,6 +83,17 @@ describe('server dead exports', () => {
       ['server/routes/example.js', 'used();\n'],
     ]);
     expect(deadExports(files)).toEqual([{ file: 'server/services/example.js', name: 'orphan' }]);
+  });
+
+  it('counts only exports the diff introduces, not re-declared existing ones', () => {
+    const diff = [
+      '--- a/server/services/example.js',
+      '+++ b/server/services/example.js',
+      '-export function reshaped(a) {',
+      '+export function reshaped(a, options = {}) {',
+      '+export async function brandNew() {',
+    ].join('\n');
+    expect([...addedExportNamesFromDiff(diff)]).toEqual(['brandNew']);
   });
 
   it('keeps newly added server function exports reachable', () => {

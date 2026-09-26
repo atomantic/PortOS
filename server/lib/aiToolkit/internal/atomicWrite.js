@@ -20,6 +20,28 @@ import { mkdir, writeFile, rename, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 
+const WIN_RETRY_ATTEMPTS = 5;
+const WIN_RETRY_DELAY_MS = 10;
+const WIN_BACKUP_RETRY_ATTEMPTS = 20;
+const WIN_BACKUP_RETRY_DELAY_MS = 25;
+const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST', 'EBUSY'];
+const isWindows = () => process.platform === 'win32';
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function renameWithWindowsRetries(from, to, {
+  attempts = WIN_RETRY_ATTEMPTS,
+  delayMs = WIN_RETRY_DELAY_MS,
+} = {}) {
+  let err = await rename(from, to).then(() => null, (e) => e);
+  if (isWindows()) {
+    for (let attempt = 1; err && attempt < attempts && WIN_RENAME_LOCK_CODES.includes(err.code); attempt += 1) {
+      await sleep(delayMs);
+      err = await rename(from, to).then(() => null, (e) => e);
+    }
+  }
+  return err;
+}
+
 export async function ensureDir(dir) {
   await mkdir(dir, { recursive: true });
 }
@@ -32,17 +54,19 @@ export async function atomicWrite(filePath, data) {
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);
   const replace = async () => {
-    const err = await rename(tmp, filePath).then(() => null, (e) => e);
+    const err = await renameWithWindowsRetries(tmp, filePath);
     if (!err) return;
-    if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EEXIST'].includes(err.code)) {
+    if (isWindows() && WIN_RENAME_LOCK_CODES.includes(err.code)) {
       const bak = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.bak`;
-      const hadExisting = await rename(filePath, bak).then(() => true, (e) => {
-        if (e.code === 'ENOENT') return false;
-        throw e;
+      const backupError = await renameWithWindowsRetries(filePath, bak, {
+        attempts: WIN_BACKUP_RETRY_ATTEMPTS,
+        delayMs: WIN_BACKUP_RETRY_DELAY_MS,
       });
-      const renameErr = await rename(tmp, filePath).then(() => null, (e) => e);
+      if (backupError && backupError.code !== 'ENOENT') throw backupError;
+      const hadExisting = !backupError;
+      const renameErr = await renameWithWindowsRetries(tmp, filePath);
       if (renameErr) {
-        if (hadExisting) await rename(bak, filePath).catch(() => {});
+        if (hadExisting) await renameWithWindowsRetries(bak, filePath);
         throw renameErr;
       }
       if (hadExisting) await unlink(bak).catch(() => {});

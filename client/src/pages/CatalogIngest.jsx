@@ -5,6 +5,7 @@
  * name + description). Full-width page; owns its own scroll.
  */
 
+import { uuidv4 } from '../lib/uuid.js';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
@@ -183,6 +184,7 @@ export default function CatalogIngest() {
   // current stage list (server fans these to all sockets — single-user trust
   // model still applies, but tab refresh + a slow extract overlap is real).
   const activeRunIdRef = useRef(null);
+  const commitOperationRef = useRef(null);
   useEffect(() => {
     if (babble) return;
     const onProgress = (ev) => {
@@ -210,6 +212,7 @@ export default function CatalogIngest() {
   }, [babble]);
 
   const reset = () => {
+    commitOperationRef.current = null;
     activeRunIdRef.current = null;
     // Abandoning the review (Start Over / Cancel) discards the Brain hand-off —
     // a later commit of unrelated text must NOT mark the original notes consumed.
@@ -243,6 +246,7 @@ export default function CatalogIngest() {
   // through here to populate the review phase.
   const enterReviewFromResult = (result, sourceKind) => {
     if (!result?.draft) { setPhase('paste'); return false; }
+    commitOperationRef.current = null;
     if (result.scrap?.id) setScrapId(result.scrap.id);
     setUniverseRef(defaultUniverseForSource(sourceKind));
     const d = Object.fromEntries(KIND_SECTIONS.map((s) => [
@@ -504,7 +508,7 @@ export default function CatalogIngest() {
   };
 
   const handleCommit = async () => {
-    if (!scrapId) return;
+    if (!scrapId || committing) return;
 
     const totalSelected = KIND_SECTIONS.reduce((sum, s) => sum + (selected[s.key]?.size || 0), 0);
     const activeRelCount = isStructuredDraft
@@ -564,15 +568,24 @@ export default function CatalogIngest() {
         }));
     }
 
-    const result = await commitCatalogScrapDraft(scrapId, accepted, {
+    const commitOptions = {
       universeRef: universeRef === UNASSIGNED_UNIVERSE ? undefined : universeRef,
       relationships: relsToCommit,
+    };
+    const submission = JSON.stringify({ scrapId, accepted, ...commitOptions });
+    if (commitOperationRef.current?.submission !== submission) {
+      commitOperationRef.current = { submission, key: uuidv4() };
+    }
+    const result = await commitCatalogScrapDraft(scrapId, accepted, {
+      ...commitOptions,
+      operationKey: commitOperationRef.current.key,
       silent: true,
     }).catch((err) => {
       toast.error(err?.message || 'Commit failed');
       return null;
     });
     if (!result) { setCommitting(false); return; }
+    commitOperationRef.current = null;
     // Keep `committing` true through the mark request + navigate: re-enabling the
     // Commit button before the awaited follow-up finishes would open a
     // double-submit window that re-commits the same scrap and duplicates

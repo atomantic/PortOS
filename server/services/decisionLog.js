@@ -7,6 +7,7 @@
  */
 
 import { join } from 'path';
+import { dashboardEvents, scheduleDashboardExpiry } from './dashboardEvents.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -70,6 +71,7 @@ async function loadDecisions() {
 async function saveDecisions(data) {
   decisionCache = data;
   await atomicWrite(DECISION_FILE, data);
+  dashboardEvents.emit('cos:decisions:changed');
 }
 
 /**
@@ -162,6 +164,9 @@ export async function getDecisionSummary() {
     const ts = new Date(d.lastTimestamp || d.timestamp).getTime();
     return ts > oneDayAgo;
   });
+
+  scheduleDashboardExpiry('cos:decisions:changed', Math.min(...recentDecisions.map(d =>
+    new Date(d.lastTimestamp || d.timestamp).getTime() + 24 * 60 * 60 * 1000)));
 
   // Group by type, using collapsed count
   const byType = {};

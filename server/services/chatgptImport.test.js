@@ -9,6 +9,9 @@ import { join } from 'path';
 // fresh per-test TMP before chatgptImport.js is (re-)loaded.
 let TMP;
 let createMemoryEntryMock;
+let updateMemoryEntryMock;
+let queryMock;
+let memoryStore;
 
 let parseExport;
 let importConversations;
@@ -29,8 +32,25 @@ describe('chatgptImport service', () => {
       const actual = await vi.importActual('../lib/fileUtils.js');
       return { ...actual, PATHS: { ...actual.PATHS, brain: TMP, brainImportAssets: ASSETS_DIR } };
     });
+    // In-memory `memories` collection backing create/update/query, so
+    // `importConversations`' upsert-by-sourceRef lookup sees prior calls in the
+    // same test the way the real store would.
+    memoryStore = new Map();
     vi.doMock('./brainStorage.js', () => ({
-      createMemoryEntry: vi.fn(async (data) => ({ id: `mem-${Math.random().toString(36).slice(2, 8)}`, ...data }))
+      createMemoryEntry: vi.fn(async (data) => {
+        const id = `mem-${Math.random().toString(36).slice(2, 8)}`;
+        const record = { id, ...data };
+        memoryStore.set(id, record);
+        return record;
+      }),
+      updateMemoryEntry: vi.fn(async (id, data) => {
+        const record = { ...memoryStore.get(id), ...data, id };
+        memoryStore.set(id, record);
+        return record;
+      }),
+      query: vi.fn(async (_type, filters = {}) => [...memoryStore.values()].filter(
+        (record) => Object.entries(filters).every(([key, value]) => record[key] === value)
+      ))
     }));
     const mod = await import('./chatgptImport.js');
     parseExport = mod.parseExport;
@@ -42,6 +62,8 @@ describe('chatgptImport service', () => {
     extractAssetFileNames = mod.__test.extractAssetFileNames;
     const storage = await import('./brainStorage.js');
     createMemoryEntryMock = storage.createMemoryEntry;
+    updateMemoryEntryMock = storage.updateMemoryEntry;
+    queryMock = storage.query;
   });
 
   afterEach(async () => {
@@ -251,6 +273,45 @@ describe('chatgptImport service', () => {
       const content = createMemoryEntryMock.mock.calls[0][0].content;
       expect(content.length).toBeLessThan(10000);
       expect(content).toContain('truncated');
+    });
+
+    it('re-importing the same export upserts instead of duplicating (reports unchanged, no new memory)', async () => {
+      const parsed = parseExport([sampleConversation()]);
+      const first = await importConversations(parsed);
+      expect(first.imported).toBe(1);
+
+      const second = await importConversations(parseExport([sampleConversation()]));
+      expect(second.imported).toBe(0);
+      expect(second.updated).toBe(0);
+      expect(second.unchanged).toBe(1);
+      expect(second.results[0].status).toBe('unchanged');
+      expect(second.results[0].memoryId).toBe(first.results[0].memoryId);
+      // No duplicate memory was created — same id, still exactly one record.
+      expect(createMemoryEntryMock).toHaveBeenCalledTimes(1);
+      expect(queryMock).toHaveBeenCalled();
+    });
+
+    it('re-importing with a newer update_time updates the existing memory in place (same id)', async () => {
+      const first = await importConversations(parseExport([sampleConversation()]));
+      const memoryId = first.results[0].memoryId;
+
+      const newer = sampleConversation({ update_time: 1800000000 });
+      newer.mapping.n2.message.content.parts = ['4, revised'];
+      const second = await importConversations(parseExport([newer]));
+
+      expect(second.imported).toBe(0);
+      expect(second.updated).toBe(1);
+      expect(second.unchanged).toBe(0);
+      expect(second.results[0].status).toBe('updated');
+      expect(second.results[0].memoryId).toBe(memoryId);
+      expect(createMemoryEntryMock).toHaveBeenCalledTimes(1);
+      expect(updateMemoryEntryMock).toHaveBeenCalledTimes(1);
+      const updatedContent = updateMemoryEntryMock.mock.calls[0][1].content;
+      expect(updatedContent).toContain('4, revised');
+
+      // The archive on disk reflects the newer transcript, not the original.
+      const archived = await readArchivedConversation('conv-1.json');
+      expect(archived.transcript).toContain('4, revised');
     });
   });
 

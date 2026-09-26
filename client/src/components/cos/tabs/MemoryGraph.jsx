@@ -8,6 +8,7 @@ import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
 import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
 import TouchDragHint from '../../graph3d/TouchDragHint';
 import BrailleSpinner from '../../BrailleSpinner';
+import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
 
@@ -39,7 +40,7 @@ export default function MemoryGraph() {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [fullMemory, setFullMemory] = useState(null);
+  const fullMemory = useGraphNodeDetail(selectedNode?.id ?? null, api.getMemory, selectedNode?.id);
   const [layoutKey, setLayoutKey] = useState(0);
   // Mobile-only: the legend auto-shows on a roomy viewport (CSS, not this flag).
   const [legendOpen, setLegendOpen] = useState(false);
@@ -80,17 +81,6 @@ export default function MemoryGraph() {
       }).filter(Boolean)
     : [];
 
-  // Fetch full memory details when a node is selected
-  useEffect(() => {
-    if (!selectedNode) { setFullMemory(null); return; }
-    let cancelled = false;
-    api.getMemory(selectedNode.id).then(mem => {
-      if (!cancelled) setFullMemory(mem);
-    }).catch(() => {
-      if (!cancelled) setFullMemory(null);
-    });
-    return () => { cancelled = true; };
-  }, [selectedNode]);
 
   // A null node clears the selection (an empty-space tap, or a touch pick
   // that landed on nothing — see useGraphCanvasInteraction); re-selecting the

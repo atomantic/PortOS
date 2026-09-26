@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
+import { resolveCleanersFromConfig } from '../lib/imageCleanDefaults.js';
 import { request as httpRequest } from 'node:http';
 import { pinPlatform, request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -76,11 +77,7 @@ vi.mock('../services/imageGen/index.js', () => ({
   // resolver uses — keeps test mock and prod in lock-step automatically.
   // Legacy `autoClean: true` no longer carries into denoise (lossy, opt-in only).
   resolveImageCleaners: (body, settings, mode) => {
-    const cfg = settings?.imageGen?.[mode] || {};
-    const saved = {
-      cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : true,
-      denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : false,
-    };
+    const saved = resolveCleanersFromConfig(settings?.imageGen?.[mode], mode);
     return {
       cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
       denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
@@ -1025,6 +1022,24 @@ describe('Image Gen Routes', () => {
         expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ cleanC2PA: true, denoise: false }));
       });
 
+      it.each([
+        ['local', false],
+        ['grok', false],
+        ['agy', false],
+        ['codex', true],
+      ])('%s mode: omitted flags use the mode default without enabling denoise', async (mode, cleanC2PA) => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode, [mode]: { enabled: true, pythonPath: '/p' } },
+        });
+
+        const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        expect(response.status).toBe(200);
+        expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+          params: expect.objectContaining({ cleanC2PA, denoise: false }),
+        }));
+      });
+
       it('local mode: body flags flow through into enqueued params', async () => {
         getSettings.mockResolvedValueOnce({
           imageGen: { mode: 'local', local: { pythonPath: '/p', cleanC2PA: false, denoise: false } },
@@ -1037,14 +1052,15 @@ describe('Image Gen Routes', () => {
         expect(call[0].params.denoise).toBe(true);
       });
 
-      it('codex mode: body denoise=false overrides saved setting=true on enqueued params', async () => {
+      it('codex mode: explicit false overrides enabled cleaner settings', async () => {
         getSettings.mockResolvedValueOnce({
           imageGen: { mode: 'codex', codex: { enabled: true, cleanC2PA: true, denoise: true } },
         });
 
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', denoise: false });
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', cleanC2PA: false, denoise: false });
 
         const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.cleanC2PA).toBe(false);
         expect(call[0].params.denoise).toBe(false);
       });
 

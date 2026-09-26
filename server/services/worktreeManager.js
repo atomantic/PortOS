@@ -10,8 +10,8 @@
  */
 
 import { existsSync, realpathSync } from 'fs';
-import { lstat, readdir, rm, stat, symlink } from 'fs/promises';
-import { join } from 'path';
+import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
@@ -42,10 +42,9 @@ const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.y
 // hundreds of files. Enough to identify the work, short enough to read.
 const DIRT_PATHS_IN_WARNING = 5;
 
-// Dependencies are intentionally linked from the source checkout rather than
-// installed in each ephemeral worktree. npm follows these links and can erase
-// the primary checkout if an agent runs npm install, so agents must use the
-// already-installed workspace binaries instead.
+// Dependencies are linked from the source checkout for ordinary ephemeral
+// worktrees. Dependency-update tasks opt out so package managers cannot mutate
+// the source checkout's installed tree through these links.
 const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'server/node_modules'];
 
 /**
@@ -63,6 +62,26 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
     const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
     if (targetExists) return;
     await symlink(sourcePath, targetPath, 'dir');
+  }));
+}
+
+/**
+ * Remove only dependency symlinks that point back into the source checkout.
+ * Real dependency directories and links managed by another tool stay intact.
+ */
+export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) {
+  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+    const sourcePath = join(sourceWorkspace, relativePath);
+    const targetPath = join(worktreePath, relativePath);
+    const targetStat = await lstat(targetPath).catch((err) => {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    });
+    if (!targetStat?.isSymbolicLink()) return;
+
+    const linkTarget = await readlink(targetPath);
+    const linkedPath = isAbsolute(linkTarget) ? linkTarget : resolve(dirname(targetPath), linkTarget);
+    if (pathsEqual(linkedPath, sourcePath)) await unlink(targetPath);
   }));
 }
 
@@ -477,6 +496,7 @@ async function ensureForkRemote(sourceWorkspace, forkHead, branchName) {
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
  * @param {{remoteUrl: string, ownerLogin: string}} options.forkHead - Where `existingBranch` lives when it is a FORK PR's head, which has no `origin/<branch>`. Consulted only after the local and origin lookups both miss; omitting it preserves today's exact behavior, error message included.
  * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
+ * @param {boolean} options.linkDependencies - Link source dependencies unless explicitly false
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
@@ -554,7 +574,11 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     // both pass untouched — which is required: dropping the fork upstream would
     // aim a config-derived push back at origin.
     await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: false });
-    await linkWorktreeDependencies(sourceWorkspace, worktreePath);
+    if (options.linkDependencies === false) {
+      await unlinkWorktreeDependencies(sourceWorkspace, worktreePath);
+    } else {
+      await linkWorktreeDependencies(sourceWorkspace, worktreePath);
+    }
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
   }
@@ -599,7 +623,11 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   // Backstop the flag above — an older git, or a repo-level `branch.autoSetupMerge`
   // setting, must not be able to hand an agent a branch aimed at the default branch.
   await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: true });
-  await linkWorktreeDependencies(sourceWorkspace, worktreePath);
+  if (options.linkDependencies === false) {
+    await unlinkWorktreeDependencies(sourceWorkspace, worktreePath);
+  } else {
+    await linkWorktreeDependencies(sourceWorkspace, worktreePath);
+  }
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 

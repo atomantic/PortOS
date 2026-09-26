@@ -19,7 +19,9 @@ vi.mock('fs/promises', () => ({
   readdir: vi.fn().mockResolvedValue([]),
   rm: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+  readlink: vi.fn().mockResolvedValue(''),
   symlink: vi.fn().mockResolvedValue(undefined),
+  unlink: vi.fn().mockResolvedValue(undefined),
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
@@ -50,6 +52,7 @@ const {
   createWorktree,
   createPersistentWorktree,
   linkWorktreeDependencies,
+  unlinkWorktreeDependencies,
   listWorktrees,
   WORKTREE_ADD_TIMEOUT_MS,
 } = await import('./worktreeManager.js');
@@ -57,7 +60,7 @@ const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
 const { win32 } = await import('path');
 const { existsSync } = await import('fs');
-const { lstat, symlink } = await import('fs/promises');
+const { lstat, readlink, symlink, unlink } = await import('fs/promises');
 const { PATHS } = await import('../lib/fileUtils.js');
 
 /**
@@ -117,7 +120,9 @@ describe('Worktree Path Construction', () => {
 describe('Worktree dependency preparation', () => {
   beforeEach(() => {
     lstat.mockReset();
+    readlink.mockReset();
     symlink.mockClear();
+    unlink.mockClear();
   });
 
   it('links installed root, client, and server dependencies when targets are absent', async () => {
@@ -153,6 +158,23 @@ describe('Worktree dependency preparation', () => {
 
     await expect(linkWorktreeDependencies('/generic-repo', '/generic-worktree')).resolves.toBeUndefined();
     expect(symlink).not.toHaveBeenCalled();
+  });
+
+  it('removes only symlinks that point to the source checkout', async () => {
+    const sourceDependencyPath = join('/repo', 'node_modules');
+    const worktreeDependencyPath = join('/worktree', 'node_modules');
+    lstat.mockImplementation((path) => {
+      const normalized = path.replaceAll('\\', '/');
+      if (normalized === '/worktree/node_modules') return Promise.resolve({ isSymbolicLink: () => true });
+      if (normalized === '/worktree/client/node_modules') return Promise.resolve({ isSymbolicLink: () => false });
+      return Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    });
+    readlink.mockResolvedValue(sourceDependencyPath);
+
+    await unlinkWorktreeDependencies('/repo', '/worktree');
+
+    expect(unlink).toHaveBeenCalledTimes(1);
+    expect(unlink).toHaveBeenCalledWith(worktreeDependencyPath);
   });
 });
 
@@ -1284,6 +1306,17 @@ describe('createWorktree upstream safety (#4172)', () => {
     expect(add).toContain('--no-track');
     // The flag has to precede -b: it configures the branch being created.
     expect(add.indexOf('--no-track')).toBeLessThan(add.indexOf('-b'));
+  });
+
+  it('keeps dependency-update worktrees detached from source dependencies', async () => {
+    const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
+    lstat.mockReset();
+    lstat.mockRejectedValue(missing);
+    symlink.mockClear();
+
+    await createWorktree('agent-deps', '/repo', 'task-deps', { linkDependencies: false });
+
+    expect(symlink).not.toHaveBeenCalled();
   });
 
   it('drops an upstream that still points at the default branch', async () => {

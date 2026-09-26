@@ -19,6 +19,10 @@ export function loraDisplayName(filename) {
 // consumed by <MediaCard>. Lets the same card render in any history grid.
 export function normalizeImage(i) {
   const loraNames = (pickLoraFilenames(i) || []).filter(Boolean);
+  const originalUrl = i.path || `/data/images/${i.filename}`;
+  const thumbnailUrl = /^\/data\/images\/[^/]+\.png(?:\?.*)?$/i.test(originalUrl)
+    ? `/data/image-thumbnails/${originalUrl.split('/').pop().replace(/\.png(?=\?|$)/i, '.webp')}`
+    : originalUrl;
   // modelId display falls back through several sidecar shapes:
   //   1. modelId — local-runner sidecars (mflux/flux2/z-image/ernie)
   //   2. model   — codex sidecars (older path), and future Gemini etc.
@@ -30,8 +34,9 @@ export function normalizeImage(i) {
     kind: 'image',
     key: `image:${i.filename}`,
     filename: i.filename,
-    previewUrl: i.path || `/data/images/${i.filename}`,
-    downloadUrl: i.path || `/data/images/${i.filename}`,
+    previewUrl: originalUrl,
+    thumbnailUrl,
+    downloadUrl: originalUrl,
     prompt: i.prompt || i.metadata?.prompt || '(no prompt)',
     negativePrompt: i.negativePrompt || i.negative_prompt || null,
     modelId,
@@ -118,6 +123,7 @@ export function normalizeVideo(v) {
   return {
     kind: 'video',
     key: `video:${v.id}`,
+    posterSec: v.posterSec ?? null,
     id: v.id,
     filename: v.filename,
     previewUrl: v.thumbnail ? `/data/video-thumbnails/${v.thumbnail}` : null,

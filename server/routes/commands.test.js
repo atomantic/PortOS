@@ -7,6 +7,10 @@ import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { ALLOWED_COMMANDS } from '../lib/commandSecurity.js';
 
+vi.mock('../services/apps.js', () => ({ getAppById: vi.fn() }));
+import { getAppById } from '../services/apps.js';
+import * as pm2Service from '../services/pm2.js';
+
 const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({
@@ -20,6 +24,10 @@ vi.mock('../services/history.js', () => ({
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([]),
+  listProcessesStrict: vi.fn().mockResolvedValue([]),
+  stopApp: vi.fn().mockResolvedValue({ success: true }),
+  restartApp: vi.fn().mockResolvedValue({ success: true }),
+  clearJlistCache: vi.fn(),
 }));
 
 vi.mock('../lib/workspaceRoots.js', () => ({
@@ -38,11 +46,16 @@ vi.mock('fs', async (importOriginal) => {
 });
 
 vi.mock('../services/auth.js', async () => {
-  const { extractToken } = await import('../../lib/portosAuthCore.js');
+  const { extractToken, extractTokens } = await import('../../lib/portosAuthCore.js');
+  const verifySession = vi.fn(async token => token === 'example-operator-session');
   return {
     extractToken,
     isAuthEnabled: vi.fn().mockResolvedValue(false),
-    verifySession: vi.fn(async token => token === 'example-operator-session'),
+    verifySession,
+    verifyRequestSession: async (req) => {
+      for (const token of extractTokens(req)) if (await verifySession(token)) return token;
+      return null;
+    },
     verifyPassword: vi.fn(async password => password === 'example-peer-password'),
   };
 });
@@ -73,6 +86,9 @@ function createApp(io = { emit: vi.fn() }, { remoteAddress, withAuthGate = true 
   const app = express();
   app.set('io', io);
   app.use(express.json());
+  // Production parses form bodies globally (server/index.js), which is what
+  // makes a cross-site <form method=POST> a no-preflight attack path.
+  app.use(express.urlencoded({ extended: true }));
   if (remoteAddress !== undefined) app.use((req, _res, next) => {
     // Model the server's socket observation, never an HTTP header.
     Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
@@ -111,6 +127,29 @@ describe('commands routes', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('reads the selected PM2 home, preserves unavailable status, and applies scoped actions', async () => {
+    getAppById.mockResolvedValue({ id: 'app-a', pm2Home: '/example/pm2' });
+    pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'example-api', status: 'online' }]);
+    const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+    const list = await request(app).get('/api/commands/processes?appId=app-a');
+    expect(list.status).toBe(200);
+    expect(pm2Service.listProcessesStrict).toHaveBeenLastCalledWith('/example/pm2');
+    const result = await request(app).post('/api/commands/processes/example-api/action').send({ action: 'stop', appId: 'app-a' });
+    expect(result.status).toBe(200);
+    expect(pm2Service.stopApp).toHaveBeenCalledWith('example-api', '/example/pm2');
+    expect(result.body.processes).toEqual(list.body);
+    pm2Service.listProcessesStrict.mockResolvedValue(null);
+    expect((await request(app).get('/api/commands/processes?appId=app-a')).status).toBe(503);
+  });
+
+  it('preserves host-control and command-policy gates on process actions', async () => {
+    const remote = createApp(undefined, { remoteAddress: '192.0.2.10' }).app;
+    expect((await request(remote).post('/api/commands/processes/example-api/action').send({ action: 'stop' })).status).toBe(403);
+    const local = createApp(undefined, { remoteAddress: '127.0.0.1' }).app;
+    expect((await request(local).post('/api/commands/processes/all/action').send({ action: 'stop' })).status).toBe(403);
+    expect(pm2Service.stopApp).not.toHaveBeenCalled();
   });
 
   describe('host-control authorization through the real auth gate', () => {
@@ -166,6 +205,35 @@ describe('commands routes', () => {
         child.emit('close', 0);
       },
     );
+
+    // #8707: the user's own browser relays a hidden form from any web page onto
+    // loopback, where password-free host control trusts the socket peer.
+    it.each([false, true])('refuses a cross-site form POST from the loopback browser (auth enabled: %s)', async enabled => {
+      isAuthEnabled.mockResolvedValue(enabled);
+      spawnMock.mockReturnValue(createChildProcess());
+      const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+      const response = await request(app).post('/api/commands/execute')
+        .set('Content-Type', 'application/x-www-form-urlencoded')
+        .set('Origin', 'https://attacker.example')
+        .set('Sec-Fetch-Site', 'cross-site')
+        .send('command=npx+--yes+example-package');
+      expect(response.status).toBe(403);
+      expect(response.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps a same-origin browser POST working on a password-free install', async () => {
+      spawnMock.mockReturnValue(createChildProcess());
+      const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+      const probe = await request(app).get('/api/commands/allowed');
+      expect(probe.status).toBe(200);
+      const started = await request(app).post('/api/commands/execute')
+        .set('Origin', 'http://localhost:5554')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .send({ command: 'pwd' });
+      expect(started.status).toBe(202);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
 
     it('keeps local UI command control through the dev proxy', async () => {
       const child = createChildProcess();

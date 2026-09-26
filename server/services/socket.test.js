@@ -1,9 +1,22 @@
+import { jevEvents } from './jevEvents.js';
+import { spriteEvents } from './sprites/events.js';
+import { modelLifecycleEvents } from './modelLifecycleEvents.js';
+import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
+import { settingsEvents } from './settings.js';
+import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
+import { fableLoomRunEvents } from './fableLoom/runEvents.js';
+import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
+import { usageBackfillEvents } from './usageBackfillEvents.js';
+import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
+import { layaMlxEvents } from './layaMlxEvents.js';
+import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
 // clearing, just as the process-wide event buses retain their subscriptions.
-const queueListeners = vi.hoisted(() => ({ cos: [], review: [] }));
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [], twin: [] }));
 
 /**
  * Tests for socket.js initSocket behavior.
@@ -35,7 +48,8 @@ vi.mock('./updateChecker.js', () => ({ updateEvents: { on: vi.fn() } }));
 vi.mock('../lib/buildId.js', () => ({ getBuildId: vi.fn(() => 'test-build-id') }));
 vi.mock('./automationScheduler.js', () => ({ scheduleEvents: { on: vi.fn() } }));
 vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
-vi.mock('./brainStorage.js', () => ({ brainEvents: { on: vi.fn() } }));
+vi.mock('./digital-twin-meta.js', () => ({ digitalTwinEvents: { on: vi.fn((...args) => queueListeners.twin.push(args)) } }));
+vi.mock('./brainStorage.js', () => ({ BRAIN_ENTITY_TYPES: ['links', 'inbox', 'memories'], brainEvents: { on: vi.fn((...args) => queueListeners.brain.push(args)) } }));
 vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
 // The Beeper realtime bus is a real EventEmitter here — the relay boundary test
@@ -44,7 +58,8 @@ vi.mock('./beeperSocketEvents.js', async () => {
   const { EventEmitter } = await import('events');
   return { beeperSocketEvents: new EventEmitter() };
 });
-vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
+vi.mock('./instanceEvents.js', async () => ({ instanceEvents: new (await import('node:events')).EventEmitter() }));
+import { instanceEvents } from './instanceEvents.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
 vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
@@ -90,7 +105,6 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged } from './apps.js';
 import { resolvePm2HomeForProcess } from './appProcessStatus.js';
 import { logAction } from './history.js';
-import { cosEvents } from './cosEvents.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -143,6 +157,202 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
+    meatspaceEvents.removeAllListeners();
+    modelLifecycleEvents.removeAllListeners();
+    eidoverseWorldEvents.removeAllListeners();
+    layaMlxEvents.removeAllListeners();
+    jevEvents.removeAllListeners();
+    providerQuotaEvents.removeAllListeners();
+    usageBackfillEvents.removeAllListeners();
+    instanceEvents.removeAllListeners();
+  });
+
+  it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
+    vi.useFakeTimers();
+    const subscriber = makeSocket('mind-subscriber');
+    const outsider = makeSocket('mind-outsider');
+    createdSockets.push(subscriber, outsider);
+    io.connect(subscriber);
+    io.connect(outsider);
+    subscriber.handlers['cos:subscribe']();
+    try {
+      for (const name of ['config:changed', 'agent:spawned', 'agent:completed', 'health:check']) {
+        queueListeners.cos.filter(([event]) => event === name).forEach(([, handler]) => handler({ privateContent: 'example private record' }));
+      }
+      vi.advanceTimersByTime(249);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([
+        ['cos:mind:visibility', { invalidated: true }],
+      ]);
+      expect(outsider.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([]);
+      subscriber.handlers['cos:unsubscribe']();
+      queueListeners.cos.filter(([event]) => event === 'health:check').forEach(([, handler]) => handler({}));
+      vi.advanceTimersByTime(60_000);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards model identity invalidations through the existing socket transport', () => {
+    io.emitted.length = 0;
+    modelLifecycleEvents.emit('image-to-3d:changed', { id: 'example-image-model' });
+    modelLifecycleEvents.emit('threejs-model:changed', { id: 'example-procedural-model' });
+    expect(io.emitted).toEqual([
+      ['image-to-3d:changed', { id: 'example-image-model' }],
+      ['threejs-model:changed', { id: 'example-procedural-model' }],
+    ]);
+  });
+
+  it('forwards Tailcat status invalidation without its serve capability', () => {
+    io.emitted.length = 0;
+    instanceEvents.emit('tailcat:serve:changed', { tcAddress: 'tcEXAMPLE-private', lastError: 'Example diagnostic' });
+    expect(io.emitted).toEqual([['tailcat:serve:changed', {}]]);
+  });
+
+  it('forwards historical usage progress without worker details', () => {
+    io.emitted.length = 0;
+    usageBackfillEvents.emit('updated', { metadataPath: '/example/private-run.json' });
+    expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
+  });
+
+  it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['jev:policy', {}]]);
+  });
+
+  it('invalidates Eidoverse projection progress without world content', () => {
+    io.emitted.length = 0;
+    eidoverseWorldEvents.emit('updated', { world: 'Example private world' });
+    expect(io.emitted).toEqual([['eidoverse:projection', {}]]);
+  });
+
+  it('forwards JEV resource invalidations without private scorer data', () => {
+    io.emitted.length = 0;
+    for (const resource of ['status', 'stats', 'heads']) {
+      jevEvents.emit(resource, { premise: 'Example private input', corpus: ['Example row'] });
+    }
+    expect(io.emitted).toEqual([['jev:status', {}], ['jev:stats', {}], ['jev:heads', {}]]);
+  });
+
+  it('forwards Laya status without experiment content', () => {
+    io.emitted.length = 0;
+    layaMlxEvents.emit('updated', { premise: 'Example private experiment' });
+    expect(io.emitted).toEqual([['laya:status', {}]]);
+  });
+
+  it('forwards quota completion without leaking source data', () => {
+    io.emitted.length = 0;
+    providerQuotaEvents.emit('updated', { privateContent: 'example account detail' });
+    expect(io.emitted).toEqual([['provider-quota:updated', {}]]);
+  });
+
+  it('forwards death-clock invalidations without personal data', () => {
+    io.emitted.length = 0;
+    meatspaceEvents.emit('death-clock:changed', {});
+    expect(io.emitted).toEqual([['meatspace:death-clock:changed', {}]]);
+  });
+
+  it('forwards dashboard invalidations without source records and gates CoS events on subscription', () => {
+    const subscriber = makeSocket('dashboard-subscriber');
+    const other = makeSocket('dashboard-other');
+    io.connect(subscriber);
+    io.connect(other);
+    createdSockets.push(subscriber, other);
+    subscriber.handlers['cos:subscribe']();
+    for (const [source, target] of [
+      ['scheduler:scheduled', 'cos:scheduler:changed'],
+      ['scheduler:ran', 'cos:scheduler:changed'], ['scheduler:cancelled', 'cos:scheduler:changed'],
+      ['agents:changed', 'cos:agents:changed'], ['learning:changed', 'cos:learning:changed'],
+    ]) {
+      queueListeners.cos.find(([event]) => event === source)[1]({ privateContent: 'Example private record' });
+      expect(subscriber.emitted).toContainEqual([target, {}]);
+      expect(other.emitted.some(([event]) => event === target)).toBe(false);
+    }
+    dashboardEvents.emit('cos:day:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:day:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:day:changed')).toBe(false);
+    dashboardEvents.emit('cos:decisions:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:decisions:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:decisions:changed')).toBe(false);
+    dashboardEvents.emit('cos:schedule:changed');
+    expect(subscriber.emitted).toContainEqual(['cos:schedule:changed', {}]);
+    expect(other.emitted.some(([event]) => event === 'cos:schedule:changed')).toBe(false);
+    io.emitted.length = 0;
+    dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
+    dashboardEvents.emit('backup:changed', { destPath: '/private/example' });
+    expect(io.emitted).toEqual([['goals:changed', {}], ['backup:changed', {}]]);
+  });
+
+  it('retains one CoS/dashboard/settings subscription and forwards through the latest IO after reinitialization', () => {
+    const previousIo = io;
+    const settingsCount = settingsEvents.listenerCount('settings:updated');
+    const dashboardCounts = dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)]);
+    const cosCount = queueListeners.cos.length;
+    io = makeIo();
+    initSocket(io);
+    initSocket(io);
+    expect(settingsEvents.listenerCount('settings:updated')).toBe(settingsCount);
+    expect(dashboardEvents.eventNames().map(event => [event, dashboardEvents.listenerCount(event)])).toEqual(dashboardCounts);
+    expect(queueListeners.cos).toHaveLength(cosCount);
+
+    const subscriber = makeSocket('reinitialized-cos');
+    createdSockets.push(subscriber);
+    io.connect(subscriber);
+    subscriber.handlers['cos:subscribe']();
+    subscriber.emitted.length = 0;
+    previousIo.emitted.length = 0;
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}]]);
+    dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
+    dashboardEvents.emit('cos:day:changed', { privateContent: 'Example day' });
+    const taskChange = { action: 'updated', task: { id: 'example-task', status: 'pending' } };
+    queueListeners.cos.filter(([event]) => event === 'tasks:changed').forEach(([, handler]) => handler(taskChange));
+    expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}], ['goals:changed', {}], ['review:queue:changed']]);
+    expect(previousIo.emitted).toEqual([]);
+    expect(subscriber.emitted).toEqual([
+      ['cos:day:changed', {}],
+      ['cos:tasks:changed', taskChange],
+    ]);
+  });
+
+  it('forwards Digital Twin changes without leaking source records', () => {
+    io.emitted.length = 0;
+    for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+      const handler = queueListeners.twin.find(([name]) => name === event)?.[1];
+      expect(handler).toBeTypeOf('function');
+      handler({ privateContent: 'example private record' });
+    }
+    expect(io.emitted).toEqual(Array.from({ length: 5 }, () => ['digital-twin:changed', {}]));
+  });
+
+  it('forwards bounded MeatSpace invalidations once after repeated initialization', () => {
+    initSocket(io);
+    io.emitted.length = 0;
+    invalidateMeatspace(['body', 'blood']);
+    expect(io.emitted).toEqual([['meatspace:changed', { resources: ['body', 'blood'] }]]);
+  });
+
+  it('forwards persisted Brain changes as bounded invalidations', () => {
+    const dispatch = (event, payload) => {
+      const listener = queueListeners.brain.find(([name]) => name === event)?.[1];
+      expect(listener).toBeTypeOf('function');
+      listener(payload);
+    };
+    io.emitted.length = 0;
+    dispatch('links:upserted', { id: 'example-link', record: { localPath: '/private/example', malwareScan: { status: 'completed' } } });
+    expect(io.emitted).toEqual([
+      ['brain:changed', { type: 'links', id: 'example-link' }],
+      ['brain:links:changed', { id: 'example-link' }]
+    ]);
+    io.emitted.length = 0;
+    dispatch('record:changed', { type: 'links', id: 'remote-link' });
+    dispatch('meta:changed', { defaultProvider: 'example' });
+    expect(io.emitted).toContainEqual(['brain:links:changed', { id: 'remote-link' }]);
+    expect(io.emitted).toContainEqual(['brain:changed', { type: 'meta', id: undefined }]);
   });
 
   beforeEach(() => {
@@ -150,6 +360,39 @@ describe('socket.js — initSocket', () => {
     vi.mocked(registerVoiceHandlers).mockClear();
     io = makeIo();
     initSocket(io);
+  });
+
+  it('forwards bounded project and commission invalidations from structural and local-only writes', () => {
+    emitRecordUpdated('creativeDirectorProject', 'cd-example');
+    emitRecordDeleted('creativeDirectorProject', 'cd-example');
+    emitRecordInvalidated('creativeDirectorProject', 'cd-example');
+    emitRecordInvalidated('creativeCommission', 'cc-example');
+    emitRecordUpdated('unrelated', 'example');
+    expect(io.emitted.filter(([name]) => name === 'creative-director:project:changed')).toEqual(
+      Array.from({ length: 3 }, () => ['creative-director:project:changed', { id: 'cd-example' }]),
+    );
+    expect(io.emitted.filter(([name]) => name === 'commission:changed')).toEqual([
+      ['commission:changed', { id: 'cc-example' }],
+    ]);
+  });
+
+  it('delivers FableLoom snapshots only to subscribed operator views', () => {
+    const viewer = makeSocket('loom-viewer');
+    const peer = makeSocket('peer-relay');
+    createdSockets.push(viewer, peer);
+    io.connect(viewer); io.connect(peer);
+    viewer.handlers['fableloom:subscribe']();
+    const run = { id: 'run-example', loomId: 'loom-example', revision: 1 };
+    fableLoomRunEvents.emit('editorial', run);
+    fableLoomRunEvents.emit('production', run);
+    expect(viewer.emitted).toContainEqual(['fableloom:editorial:run', run]);
+    expect(viewer.emitted).toContainEqual(['fableloom:production:run', run]);
+    expect(peer.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
+    expect(io.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
+    viewer.handlers['fableloom:unsubscribe']();
+    const count = viewer.emitted.length;
+    fableLoomRunEvents.emit('editorial', run);
+    expect(viewer.emitted).toHaveLength(count);
   });
 
   it('sends compact task invalidations to opted-in pages while preserving legacy subscribers', () => {
@@ -295,7 +538,7 @@ describe('socket.js — initSocket', () => {
     io.connect(socket);
     socket.handlers['cos:subscribe']();
 
-    const listener = cosEvents.on.mock.calls.find(([event]) => event === 'tasks:changed')?.[1];
+    const listener = queueListeners.cos.find(([event]) => event === 'tasks:changed')?.[1];
     const payload = {
       type: 'user',
       action: 'updated',
@@ -330,7 +573,7 @@ describe('socket.js — initSocket', () => {
       socket.handlers['cos:subscribe']();
 
       const long = 'Refactor the queue. '.repeat(5000);
-      const listener = cosEvents.on.mock.calls.find(([name]) => name === event)?.[1];
+      const listener = queueListeners.cos.find(([name]) => name === event)?.[1];
       listener({
         id: 'agent-001',
         taskId: 'task-1',
@@ -358,6 +601,31 @@ describe('socket.js — initSocket', () => {
   // media-job cancellation bridge (#1791): mediaJobEvents 'canceled' → a
   // generationId-keyed *-gen:canceled broadcast so stuck render spinners clear.
   // ===========================================================================
+  it('broadcasts record-scoped sprite persistence and queue invalidations without record content', () => {
+    spriteEvents.emit('changed', { recordId: 'example-sprite', privateRecord: 'excluded' });
+    expect(io.emitted).toContainEqual(['sprites:changed', { recordId: 'example-sprite' }]);
+    for (const event of ['enqueued', 'started', 'completed', 'failed', 'canceled']) {
+      mediaJobEvents.emit(event, {
+        id: 'example-job', kind: 'image',
+        params: { spriteRef: { recordId: 'example-sprite', target: 'main', prompt: 'excluded' } },
+      });
+    }
+    expect(io.emitted.filter(([event]) => event === 'sprites:jobs-changed')).toEqual(
+      Array.from({ length: 5 }, () => ['sprites:jobs-changed', {
+        recordId: 'example-sprite', kind: 'image', tagKey: 'spriteRef',
+      }]),
+    );
+  });
+
+  it('broadcasts bounded queue and checkpoint invalidations', () => {
+    trainingEvents.emit('dataset:changed', { datasetId: 'example-dataset', privateRecord: 'must not be forwarded' });
+    expect(io.emitted).toContainEqual(['training:dataset:changed', { datasetId: 'example-dataset' }]);
+    mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
+    trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
+    expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
+    expect(io.emitted).toContainEqual(['training:checkpoints:changed', { runId: 'example-run' }]);
+  });
+
   it('bridges a canceled image job to image-gen:canceled keyed by generationId', () => {
     mediaJobEvents.emit('canceled', { id: 'job-xyz', kind: 'image' });
     expect(io.emitted).toContainEqual(['image-gen:canceled', { generationId: 'job-xyz' }]);
@@ -457,7 +725,7 @@ describe('socket.js — initSocket', () => {
     expect(shellService.detachSocketSessions).toHaveBeenCalledWith(s1);
 
     // Verify broadcast no longer reaches s1 — emit a cos:status event via the captured listener
-    const statusListener = cosEvents.on.mock.calls.find(([ev]) => ev === 'status')?.[1];
+    const statusListener = queueListeners.cos.find(([ev]) => ev === 'status')?.[1];
     const s1EmitsBefore = s1.emitted.length;
     if (statusListener) statusListener({ running: true });
 

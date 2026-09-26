@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deps = vi.hoisted(() => ({
+  watch: vi.fn(),
+  git: vi.fn(),
   settings: vi.fn(),
+  settingsWithStatus: vi.fn(),
   processing: vi.fn(),
   selfUpdate: vi.fn(),
   appUpdate: vi.fn(),
@@ -15,9 +18,13 @@ const deps = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 
+vi.mock('chokidar', () => ({ watch: deps.watch }));
+vi.mock('../lib/execGit.js', () => ({ execGit: deps.git }));
+
 vi.mock('./eventScheduler.js', () => ({ schedule: deps.schedule, cancel: deps.cancel }));
 vi.mock('./settings.js', () => ({
   getSettings: deps.settings,
+  getSettingsWithStatus: deps.settingsWithStatus,
   settingsEvents: { on: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('./activeProcessing.js', () => ({ getSystemActivity: deps.processing }));
@@ -34,7 +41,7 @@ vi.mock('./updateChecker.js', () => ({
   recordAutoUpdateRuntime: deps.recordRuntime,
 }));
 
-const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
+const { startAutoUpdateScheduler, runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
   await import('./autoUpdateScheduler.js');
 
 const HOUR = 60 * 60 * 1000;
@@ -47,6 +54,9 @@ beforeEach(() => {
   Object.values(deps).forEach((mock) => mock.mockReset());
   __resetAutoUpdateSchedulerForTests();
   deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'release', minIntervalHours: 6 } });
+  // getSettingsWithStatus defaults to wrapping getSettings as a clean read
+  // (`corrupt: false`) — corrupt-read tests override it directly.
+  deps.settingsWithStatus.mockImplementation(async () => ({ corrupt: false, settings: await deps.settings() }));
   deps.gateState.mockResolvedValue({
     runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
     lastUpdateResult: null,
@@ -421,6 +431,56 @@ describe('poll registration', () => {
   });
 });
 
+/**
+ * #8428: a boot-time read of settings.json that is unreadable/malformed must
+ * not be treated as "auto-update off". Before this, `getSettings()` collapsed
+ * that failure to `{}`, so `resolveAutoUpdateConfig({})` resolved `disabled`
+ * and the scheduler cached that as a confirmed signature — permanently, since
+ * nothing re-triggers a sync until the next successful settings save.
+ */
+describe('poll registration: corrupt settings read at boot (#8428)', () => {
+  let consoleErrorSpy;
+
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs an error and registers nothing on a corrupt boot read, without logging "off"', async () => {
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(false);
+
+    expect(deps.schedule).not.toHaveBeenCalled();
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('❌ Automatic updates: settings unreadable'));
+  });
+
+  it('does not cancel an already-registered poll when a later read is corrupt', async () => {
+    await expect(syncAutoUpdateSchedule({ autoUpdate: { enabled: true } })).resolves.toBe(true);
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(true);
+
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers once a later clean read succeeds, without a settings:updated save', async () => {
+    deps.settingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(false);
+    expect(deps.schedule).not.toHaveBeenCalled();
+
+    // Simulate the boot retry / settings:invalidated re-sync firing after a
+    // later clean read — the default mockImplementation resolves cleanly now.
+    await expect(syncAutoUpdateSchedule()).resolves.toBe(true);
+    expect(deps.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('interval baseline', () => {
   it('prefers the most recent of the scheduler run, the manual update, and the arming point', () => {
     const now = Date.parse('2026-01-02T00:00:00Z');
@@ -476,5 +536,57 @@ describe('repair-dispatch cooldown', () => {
 
   it('allows the first dispatch when nothing has ever been queued', () => {
     expect(repairDispatchDue({}, MIN_INTERVAL_MS, Date.now())).toBe(true);
+  });
+});
+
+
+describe('updater status invalidation', () => {
+  afterEach(() => {
+    __resetAutoUpdateSchedulerForTests();
+    vi.useRealTimers();
+  });
+
+  it('coalesces persisted runtime/config changes and external refs without polling status', async () => {
+    vi.useFakeTimers();
+    const listeners = new Map();
+    const watcher = { on: vi.fn((event, handler) => { listeners.set(event, handler); return watcher; }), close: vi.fn() };
+    deps.watch.mockReturnValue(watcher);
+    deps.git.mockResolvedValue({ stdout: '.git' });
+    const io = { emit: vi.fn() };
+    await startAutoUpdateScheduler(io);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledWith('portos:auto-update:changed', {});
+    io.emit.mockClear();
+
+    // A channel/interval edit must invalidate even though registration still
+    // has enabled:true. An unrelated save must remain silent.
+    const changed = { autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 12 } };
+    await syncAutoUpdateSchedule(changed);
+    await syncAutoUpdateSchedule(changed);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    await syncAutoUpdateSchedule(changed);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    io.emit.mockClear();
+
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now()) }, lastUpdateResult: null, updateInProgress: false,
+    });
+    await runAutoUpdateTick();
+    await runAutoUpdateTick();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.readRepo).not.toHaveBeenCalled();
+    io.emit.mockClear();
+
+    listeners.get('all')('change', 'HEAD');
+    listeners.get('all')('change', 'refs/heads/main');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    expect(deps.watch.mock.calls[0][0].every(path => !path.endsWith('index'))).toBe(true);
+    __resetAutoUpdateSchedulerForTests();
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 });

@@ -17,9 +17,13 @@
 
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import express from 'express';
+import pg from 'pg';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
@@ -65,9 +69,11 @@ const NONCE = Date.now();
 
 const createdIngredientIds = new Set();
 const createdScrapIds = new Set();
+const receiptKeys = new Set();
 
 afterAll(async () => {
   if (!dbReady) return;
+  await query('DELETE FROM catalog_commit_receipts WHERE operation_key = ANY($1::uuid[])', [[...receiptKeys]]);
   for (const id of createdIngredientIds) {
     await catalogDB.deleteIngredient(id, { hard: true }).catch(() => {});
   }
@@ -207,6 +213,124 @@ describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref rec
   });
 });
 
+// Inject a real SQL error at the pg transport, retaining its promise/callback
+// interface. All other statements (including rollback) still reach portos_test.
+async function withRevisionFailure(statement, operation, matchesParams = () => true) {
+  const original = pg.Client.prototype.query;
+  const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (sql, ...args) {
+    if (typeof sql === 'string' && statement.test(sql.trim()) && matchesParams(args[0])) {
+      const callback = typeof args.at(-1) === 'function' ? args.at(-1) : undefined;
+      return original.call(this, 'SELECT 1 / 0', [], callback);
+    }
+    return original.call(this, sql, ...args);
+  });
+  try {
+    return await operation();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe.skipIf(!runDb)('ingredient content and history commit together', () => {
+  it('rolls back standalone creation and new tags when the seed revision fails', async () => {
+    const id = `cat-idea-rollback-${NONCE}`;
+    const tag = `rollback-create-${NONCE}`;
+    createdIngredientIds.add(id);
+    await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      catalogDB.createIngredient({ id, type: 'idea', name: 'Example rollback', tags: [tag] }),
+    )).rejects.toThrow('division by zero');
+    expect(await catalogDB.getIngredient(id)).toBeNull();
+    expect((await catalogDB.listIngredientRevisions(id)).items).toEqual([]);
+    expect((await query('SELECT id FROM catalog_tags WHERE label = $1', [tag])).rows).toEqual([]);
+  });
+
+  it.each(['insert', 'prune'])('rolls back public PATCH when revision %s fails', async (stage) => {
+    const ing = await catalogDB.createIngredient({ type: 'idea', name: `Before ${NONCE}` });
+    createdIngredientIds.add(ing.id);
+    const revisions = (await catalogDB.listIngredientRevisions(ing.id)).items;
+    const tag = `rollback-patch-${stage}-${NONCE}`;
+    const statement = stage === 'insert'
+      ? /^INSERT INTO catalog_ingredient_revisions/i
+      : /^DELETE FROM catalog_ingredient_revisions/i;
+    const response = await withRevisionFailure(statement, () =>
+      request(makeApp()).patch(`/api/catalog/ingredients/${ing.id}`)
+        .send({ name: 'After', payload: { summary: 'changed' }, tags: [tag] }),
+    );
+    expect(response.status).toBe(500);
+    expect(await catalogDB.getIngredient(ing.id)).toEqual(ing);
+    expect((await catalogDB.listIngredientRevisions(ing.id)).items).toEqual(revisions);
+    expect((await query('SELECT id FROM catalog_tags WHERE label = $1', [tag])).rows).toEqual([]);
+  });
+
+  it('rolls back a public restore when its new revision fails', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'concept', name: `Restore rollback ${NONCE}` });
+    createdIngredientIds.add(ing.id);
+    const original = (await catalogDB.listIngredientRevisions(ing.id)).items[0];
+    const edited = await catalogDB.updateIngredient(ing.id, { payload: { schemaVersion: 99, summary: 'keep' } });
+    const revisions = (await catalogDB.listIngredientRevisions(ing.id)).items;
+    const response = await withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      request(makeApp()).post(`/api/catalog/ingredients/${ing.id}/revisions/${original.id}/restore`).send({}),
+    );
+    expect(response.status).toBe(500);
+    expect(await catalogDB.getIngredient(ing.id)).toEqual(edited);
+    expect((await catalogDB.listIngredientRevisions(ing.id)).items).toEqual(revisions);
+  });
+
+  it('commits public create and PATCH snapshots with their content and attribution', async () => {
+    const created = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'idea', name: `Atomic create ${NONCE}`, payload: { summary: 'initial' } });
+    expect(created.status).toBe(201);
+    createdIngredientIds.add(created.body.id);
+    const seed = (await catalogDB.listIngredientRevisions(created.body.id)).items[0];
+    expect(seed).toMatchObject({
+      name: created.body.name, payload: created.body.payload, tags: created.body.tags, source: 'user', actor: null,
+    });
+    const edited = await request(makeApp()).patch(`/api/catalog/ingredients/${created.body.id}`)
+      .send({ payload: { schemaVersion: 7, summary: 'edited' }, source: 'refine', actor: 'example-agent' });
+    expect(edited.status).toBe(200);
+    const revisions = (await catalogDB.listIngredientRevisions(created.body.id)).items;
+    expect(revisions).toHaveLength(2);
+    expect(revisions.find((rev) => rev.id !== seed.id)).toMatchObject({
+      name: edited.body.name, payload: edited.body.payload, tags: edited.body.tags,
+      source: 'refine', actor: 'example-agent',
+    });
+  });
+
+  it('keeps create and update inside a supplied transaction, including reads of uncommitted rows', async () => {
+    const id = `cat-chr-owned-${NONCE}`;
+    createdIngredientIds.add(id);
+    await expect(withTransaction(async (client) => {
+      await catalogDB.createIngredient({ id, type: 'character', name: 'Example character' }, { client });
+      const edited = await catalogDB.updateIngredient(id, {
+        payload: { aliases: [' Example alias ', ''] }, tags: ['example-owned'],
+      }, { client });
+      expect(edited.payload.aliases).toEqual(['Example alias']);
+      expect((await client.query('SELECT id FROM catalog_ingredient_revisions WHERE ingredient_id = $1', [id])).rows).toHaveLength(2);
+      throw new Error('cancel outer transaction');
+    })).rejects.toThrow('cancel outer transaction');
+    expect(await catalogDB.getIngredient(id)).toBeNull();
+    expect((await catalogDB.listIngredientRevisions(id)).items).toEqual([]);
+  });
+
+  it('rolls back the scrap graph when a later ingredient revision fails', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example source' });
+    createdScrapIds.add(scrap.id);
+    const firstName = `Example first ${NONCE}`;
+    const secondName = `Example second ${NONCE}`;
+    const refId = `example-universe-${NONCE}`;
+    await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      catalogDB.commitScrap({
+        scrapId: scrap.id, universeRef: refId,
+        accepted: [{ type: 'idea', name: firstName }, { type: 'idea', name: secondName }],
+      }), (params) => params?.[2] === secondName,
+    )).rejects.toThrow('division by zero');
+    expect((await query('SELECT ingredient_id FROM catalog_ingredient_refs WHERE ref_id = $1', [refId])).rows).toEqual([]);
+    expect((await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
+    expect((await query('SELECT ingredient_id FROM catalog_ingredient_sources WHERE scrap_id = $1', [scrap.id])).rows).toEqual([]);
+    expect((await query('SELECT id FROM catalog_ingredient_revisions WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
+  });
+});
+
 describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId/restore', () => {
   it('restores the revision payload verbatim, preserving its schemaVersion, and records a new revision', async () => {
     // Seed an ingredient, then write an "old shape" payload (schemaVersion 0) so
@@ -224,7 +348,7 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId
 
     const r = await request(makeApp())
       .post(`/api/catalog/ingredients/${ing.id}/revisions/${oldRev.id}/restore`)
-      .send({});
+      .send({ source: 'user', actor: 'example-restore' });
 
     expect(r.status).toBe(200);
     expect(r.body.payload.description).toBe('old-shape');
@@ -233,6 +357,9 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId
     // The restore is itself recorded as a new revision (auditable/reversible).
     const { items: after } = await catalogDB.listIngredientRevisions(ing.id);
     expect(after.length).toBe(revisions.length + 1);
+    expect(after.find((rev) => !revisions.some((before) => before.id === rev.id))).toMatchObject({
+      name: r.body.name, payload: r.body.payload, tags: r.body.tags, source: 'user', actor: 'example-restore',
+    });
   });
 
   it('404s when the revision belongs to a different ingredient', async () => {
@@ -330,6 +457,73 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   afterAll(async () => {
     await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [UNI]).catch(() => {});
     await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
+  });
+
+  it('replays a lost response and concurrent commits without duplicating the batch, and rejects changed input', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example receipt source' });
+    createdScrapIds.add(scrap.id);
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING', [UNI, 'Example Universe']);
+    const operationKey = randomUUID();
+    receiptKeys.add(operationKey);
+    const body = {
+      operationKey, universeRef: UNI,
+      accepted: [
+        { type: 'idea', name: 'Example receipt A', payload: { a: 1, b: 2 } },
+        { type: 'idea', name: 'Example receipt B' },
+      ],
+    };
+    const post = (input) => request(makeApp()).post(`/api/catalog/scraps/${scrap.id}/commit`).send(input);
+    const [first, concurrent] = await Promise.all([post(body), post(body)]);
+    expect(first.status).toBe(201);
+    expect(concurrent.status).toBe(201);
+    expect(concurrent.body.ingredients).toEqual(first.body.ingredients);
+    const ids = first.body.ingredients.map(row => row.id);
+    ids.forEach(id => createdIngredientIds.add(id));
+    const counts = async () => {
+      const { rows: [row] } = await query(`SELECT
+        (SELECT count(*) FROM catalog_ingredient_sources WHERE scrap_id = $1) AS sources,
+        (SELECT count(*) FROM catalog_ingredients WHERE id = ANY($2::text[])) AS ingredients,
+        (SELECT count(*) FROM catalog_ingredient_revisions WHERE ingredient_id = ANY($2::text[])) AS revisions,
+        (SELECT count(*) FROM catalog_ingredient_refs WHERE ingredient_id = ANY($2::text[])) AS refs,
+        (SELECT count(*) FROM catalog_ingredient_relations WHERE from_id = ANY($2::text[])) AS edges`, [scrap.id, ids]);
+      return row;
+    };
+    const originalCounts = await counts();
+    expect(originalCounts).toEqual({ sources: '2', ingredients: '2', revisions: '2', refs: '2', edges: '1' });
+    // A fresh process has no request cache: it must replay the durable receipt.
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+      import { commitScrap } from './services/catalogDB/commit.js';
+      import { catalogScrapCommitSchema } from './lib/catalogValidation.js';
+      import { close } from './lib/db.js';
+      const input = JSON.parse(process.argv[1]);
+      const result = await commitScrap({ scrapId: input.scrapId, ...catalogScrapCommitSchema.parse(input.body) });
+      await close();
+      console.log('RECEIPT:' + JSON.stringify(result));
+    `, JSON.stringify({ scrapId: scrap.id, body })], {
+      cwd: new URL('../', import.meta.url),
+      env: { ...process.env, NODE_ENV: 'test', PGDATABASE: 'portos_test' },
+    });
+    const restartedResult = JSON.parse(stdout.split('\n').find(line => line.startsWith('RECEIPT:')).slice(8));
+    expect(restartedResult).toEqual(first.body.ingredients);
+    const { embedBatch } = await import('../services/embeddings.js');
+    const embedCalls = embedBatch.mock.calls.length;
+    const replay = await post({ ...body, accepted: [
+      { ...body.accepted[0], payload: { b: 2, a: 1 } }, body.accepted[1],
+    ] });
+    expect(replay.status).toBe(201);
+    expect(replay.body.ingredients).toEqual(first.body.ingredients);
+    expect(await counts()).toEqual(originalCounts);
+    expect((await post({ ...body, accepted: [{ type: 'idea', name: 'Changed' }] })).status).toBe(409);
+    expect(await counts()).toEqual(originalCounts);
+    expect(embedBatch.mock.calls.length).toBe(embedCalls);
+    const nextKey = randomUUID();
+    receiptKeys.add(nextKey);
+    const intentional = await post({ ...body, operationKey: nextKey });
+    expect(intentional.status).toBe(201);
+    intentional.body.ingredients.forEach(row => {
+      createdIngredientIds.add(row.id);
+      expect(ids).not.toContain(row.id);
+    });
   });
 
   it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
@@ -448,6 +642,8 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
   it('rolls back source links, universe refs, ingredients and earlier edges on a relation failure', async () => {
     const scrap = await catalogDB.createScrap({ rawText: 'Example relation rollback source' });
     createdScrapIds.add(scrap.id);
+    const operationKey = randomUUID();
+    receiptKeys.add(operationKey);
     const refs = await import('../services/catalogDB/refs.js');
     const realLink = refs.linkIngredientRelation;
     const linkedIds = new Set();
@@ -460,7 +656,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     });
     try {
       await expect(catalogDB.commitScrap({
-        scrapId: scrap.id, universeRef: UNI,
+        scrapId: scrap.id, universeRef: UNI, operationKey,
         accepted: ['a', 'b', 'c'].map(draftId => ({ draftId, type: 'idea', name: 'Example ' + draftId })),
         relationships: [
           { fromDraftId: 'a', toDraftId: 'b', kind: 'references', evidence: 'A references B.' },
@@ -471,6 +667,13 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
       spy.mockRestore();
     }
     expect(calls).toBe(2);
+    expect((await query('SELECT * FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey])).rows).toEqual([]);
+    const retry = await catalogDB.commitScrap({
+      scrapId: scrap.id, operationKey,
+      accepted: [{ type: 'idea', name: 'Example successful retry after rollback' }],
+    });
+    retry.forEach(row => createdIngredientIds.add(row.id));
+    expect(retry).toHaveLength(1);
     for (const id of linkedIds) {
       expect(await catalogDB.getIngredient(id)).toBeNull();
       expect(await catalogDB.listSourcesForIngredient(id)).toEqual([]);

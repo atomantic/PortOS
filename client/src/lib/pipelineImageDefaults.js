@@ -7,8 +7,8 @@
 
 import {
   installLocalModelId, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL,
-  pickUsableMode, renderPinLadder, renderTargetPin, supportsCloudModelOverride,
-} from './imageGenBackends';
+  resolveRenderTargetPins, supportsCloudModelOverride,
+} from './imageGenModes.js';
 
 // The geometry + prompt knobs of a render config, with no backend or model —
 // the half that is NOT install-wide state. `settings.pipeline.imageGen` is the
@@ -43,42 +43,32 @@ export const UNRESOLVED_RENDER_CFG = Object.freeze({
   mode: IMAGE_GEN_MODE.LOCAL,
   modelId: LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudModel: null,
+  inheritedBackend: true,
 });
 
 /**
- * Resolve "what will a render on this surface actually run on" — the client
- * mirror of the server's own ladder, and the ONE place a non-Pipeline surface
- * derives a render config.
- *
- * The backend walks `renderPinLadder` (the record's own `imageMode`, then the
- * target's `renderDefaults` pin, both gated on backends this install actually
- * has) and falls through to the install-wide `imageGen.mode` via the shared
- * `pickUsableMode`. The model then follows the backend it belongs to: local
- * takes the pin, else `imageGen.local.modelId`, else the shipped default; an
- * override-capable cloud CLI takes the pin as `cloudModel` and nothing else, so
- * a cloud mode can never be advertised beside a local model.
- *
- * Nothing here reads `settings.pipeline.imageGen`. That slice is the Pipeline
- * visual FORM's sticky buffer, and using it as a general base is what made a
- * deck claim it would render on the model a comic page was last rendered with
- * while the server used the install pin the whole time.
- *
- * @param {object|null} settings - The settings blob, or null when unresolved.
- * @param {object}   [opts]
- * @param {object|null} [opts.record]  - Record whose `imageMode`/`imageModelId` pin wins.
- * @param {string|null} [opts.target]  - RENDER_TARGET id whose `renderDefaults` pin is next.
- * @param {Array<{id:string}>|null} [opts.backends] - Enabled backends a pin is gated on;
- *   `null` while the list isn't loaded (`[]` means "loaded, nothing enabled").
+ * Display-only projection of record → target → install preferences. The shared
+ * pure ladder can preview backend/cloud pins; local catalog and hardware
+ * validation stay on the server: modelId is a preference, not an admitted model.
+ * The provenance marker lets tagged submissions omit these inherited choices.
+ * Pipeline forms use readPipelineImageSettings and remain explicit overrides.
  */
-export function resolveRenderCfg(settings, { record = null, target = null, backends = null } = {}) {
+export function resolveRenderCfg(settings, { record = null, target = null } = {}) {
   if (!settings) return UNRESOLVED_RENDER_CFG;
-  const pin = renderPinLadder([record, renderTargetPin(settings, target)], backends);
-  const mode = pin.mode || pickUsableMode(settings, [settings.imageGen?.mode]);
+  const pin = resolveRenderTargetPins(settings, target, {
+    recordMode: record?.imageMode,
+    recordModel: record?.imageModelId,
+    fallbackMode: IMAGE_GEN_MODE.LOCAL,
+    usableInstallFallback: true,
+  });
+  const mode = pin.mode;
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
   return {
     ...IMAGE_RENDER_KNOB_DEFAULTS,
     mode,
+    // Retained for legacy form/runtime consumers, never an admitted model.
     modelId: isLocal ? (pin.modelId || installLocalModelId(settings)) : null,
+    inheritedBackend: true,
     cloudModel: !isLocal && supportsCloudModelOverride(mode) ? pin.modelId : null,
   };
 }
@@ -121,13 +111,16 @@ const numericOrNaN = (v) => (String(v ?? '').trim() === '' ? NaN : Number(v));
 // Strip empty strings + coerce numerics so the request body only carries
 // fields the server should act on. Empty strings would otherwise serialize
 // to "" and trip the zod number coercion.
-export function pipelineImageCfgToRenderOpts(cfg) {
-  const opts = { mode: cfg.mode };
-  if (cfg.mode === IMAGE_GEN_MODE.LOCAL && cfg.modelId) opts.modelId = cfg.modelId;
+export function pipelineImageCfgToRenderOpts(cfg, tags = {}) {
+  // Only a tagged inherited projection can be re-resolved against its owner.
+  // Editable Pipeline configs have no marker and retain explicit API semantics.
+  const inherited = cfg.inheritedBackend && (tags.universeRun?.universeId || tags.musicVideo?.projectId);
+  const opts = inherited ? {} : { mode: cfg.mode };
+  if (!inherited && cfg.mode === IMAGE_GEN_MODE.LOCAL && cfg.modelId) opts.modelId = cfg.modelId;
   // A record render pin can name the cloud CLI's model too (`applyRecordRenderPin`
   // routes it here); the dispatcher folds `cloudModel` into the provider's own
   // model for that one job. Local reads `modelId` above instead.
-  if (isCloudCliMode(cfg.mode) && cfg.cloudModel) opts.cloudModel = cfg.cloudModel;
+  if (!inherited && isCloudCliMode(cfg.mode) && cfg.cloudModel) opts.cloudModel = cfg.cloudModel;
   if (Number.isFinite(cfg.width)) opts.width = cfg.width;
   if (Number.isFinite(cfg.height)) opts.height = cfg.height;
   if (!isCloudCliMode(cfg.mode)) {

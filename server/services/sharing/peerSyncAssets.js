@@ -9,7 +9,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { join } from 'path';
+import { extname, join } from 'path';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
@@ -39,11 +39,30 @@ import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
 import { isStr } from '../../lib/textUtils.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
-// In-flight gallery-image hashes while building one deck's manifest. Sized to
-// libuv's default 4-thread fs pool with a little headroom, so a deck push can't
-// starve unrelated fs work in the process.
-const DECK_HASH_CONCURRENCY = 8;
+// Bound file hashing to avoid starving unrelated filesystem work when a
+// large record (especially a deck) advertises hundreds of images.
+const ASSET_HASH_CONCURRENCY = 8;
 
+
+// Filename-only references are shared by the sender builders and receiver
+// admission. Never hash local files to decide whether a missing asset is owed.
+function assetReference(filename, kind) {
+  const safeName = sanitizeAssetFilename(filename);
+  return safeName ? { filename: safeName, kind } : null;
+}
+
+function imageAssetReference(filename) {
+  return assetReference(filename, 'image');
+}
+
+async function hashAssetReferences(references) {
+  const entries = await mapWithConcurrency(references, ASSET_HASH_CONCURRENCY, (entry) => (
+    entry.kind === 'image'
+      ? hashImageForManifest(entry.filename)
+      : hashSimpleAsset(entry.filename, entry.kind, directoryForAssetKind(entry.kind))
+  ));
+  return entries.filter(Boolean);
+}
 
 // --- Asset manifest -----------------------------------------------------
 
@@ -63,23 +82,22 @@ const DECK_HASH_CONCURRENCY = 8;
  * diff report the asset as missing even though the sender can't fulfill.
  */
 export async function buildAssetManifest(record) {
+  return hashAssetReferences(referenceAssetManifest(record));
+}
+
+function referenceAssetManifest(record) {
   const refs = collectAssetReferences(record);
   const out = [];
-  // Each kind maps to a different on-disk directory. We compute SHA only
-  // for images via the sidecar cache (the canonical content-addressed path);
-  // image-refs + videos use `sha256File` on demand and DON'T persist a
-  // sidecar — they don't carry the gen-params provenance images do, and
-  // adding cache writes here would surprise the broader system.
   for (const filename of refs.directImageFilenames) {
-    const entry = await hashImageForManifest(filename);
+    const entry = imageAssetReference(filename);
     if (entry) out.push(entry);
   }
   for (const filename of refs.directImageRefFilenames) {
-    const entry = await hashSimpleAsset(filename, 'image-ref', PATHS.imageRefs);
+    const entry = assetReference(filename, 'image-ref');
     if (entry) out.push(entry);
   }
   for (const filename of refs.directVideoFilenames) {
-    const entry = await hashSimpleAsset(filename, 'video', PATHS.videos);
+    const entry = assetReference(filename, 'video');
     if (entry) out.push(entry);
   }
   return out;
@@ -116,14 +134,18 @@ export function collectionVideoRefToFilename(ref) {
 }
 
 export async function buildCollectionAssetManifest(collection) {
+  return hashAssetReferences(referenceCollectionAssetManifest(collection));
+}
+
+export function referenceCollectionAssetManifest(collection) {
   const refs = collectCollectionAssetReferences(collection);
   const out = [];
   for (const filename of refs.directImageFilenames) {
-    const entry = await hashImageForManifest(filename);
+    const entry = imageAssetReference(filename);
     if (entry) out.push(entry);
   }
   for (const ref of refs.directVideoFilenames) {
-    const entry = await hashSimpleAsset(collectionVideoRefToFilename(ref), 'video', PATHS.videos);
+    const entry = assetReference(collectionVideoRefToFilename(ref), 'video');
     if (entry) out.push(entry);
   }
   return out;
@@ -176,10 +198,13 @@ export async function hashSimpleAsset(filename, kind, sourceDir) {
  * does NOT have on disk OR whose local hash differs (peer has a newer
  * render under the same UUID — rare but possible during concurrent edits).
  *
+ * `includeMismatched: false` admits only absent files, preserving existing
+ * image bytes AND sidecars after a rejected record merge.
+ *
  * The receiver will background-fetch each missing asset from the sender's
  * `/data/{images,image-refs,videos}/<filename>` static mount.
  */
-export async function diffAssetManifestAgainstLocal(manifest) {
+export async function diffAssetManifestAgainstLocal(manifest, { includeMismatched = true } = {}) {
   if (!Array.isArray(manifest)) return [];
   const missing = [];
   for (const entry of manifest) {
@@ -192,6 +217,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
     if (!safeName) continue;
+    if (!hasAllowedAssetExtension(entry.kind, safeName)) continue;
     // Build a sanitized projection: only the known fields the receiver needs
     // to pull. Echoing the raw peer-supplied entry would amplify any
     // junk fields it shipped (large strings, extra kinds, prototype-pollution
@@ -208,6 +234,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       missing.push(sanitizedEntry);
       continue;
     }
+    if (!includeMismatched) continue;
     // For images, compute the hash result once up front: it carries both the
     // sha256 AND the parsed sidecar JSON, so the sidecarSha256 comparison below
     // reuses it instead of re-reading the same file (one sidecar read per image
@@ -254,6 +281,24 @@ export async function diffAssetManifestAgainstLocal(manifest) {
   return missing;
 }
 
+// The receiving peer must never persist navigable HTML or SVG into an asset
+// mount on the PortOS origin. Keep these in step with the writers into each
+// directory, including catalog voice memos (.webm) and video uploads (.ogv).
+const ASSET_KIND_EXTENSIONS = {
+  image: new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
+  'image-ref': new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']),
+  video: new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']),
+  music: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus']),
+  audio: new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.opus', '.webm']),
+};
+
+function hasAllowedAssetExtension(kind, filename) {
+  if (ASSET_KIND_EXTENSIONS[kind]?.has(extname(filename).toLowerCase())) return true;
+  // Do not echo a peer-controlled filename into the log (it can contain CR/LF).
+  console.warn(`peerSync: skipped unsupported ${kind} asset extension`);
+  return false;
+}
+
 export function directoryForAssetKind(kind) {
   if (kind === 'image') return PATHS.images;
   if (kind === 'image-ref') return PATHS.imageRefs;
@@ -271,27 +316,43 @@ export function directoryForAssetKind(kind) {
  * `hashImageForManifest` — can't ship bytes we don't have.
  */
 export async function buildAuthorAssetManifest(author) {
+  return hashAssetReferences(referenceAuthorAssetManifest(author));
+}
+
+export function referenceAuthorAssetManifest(author) {
   const filename = headshotImageFilename(author?.headshotImageUrl);
   if (!filename) return [];
-  const entry = await hashImageForManifest(filename);
+  const entry = imageAssetReference(filename);
   return entry ? [entry] : [];
 }
 
 export async function buildArtistAssetManifest(artist) {
+  return hashAssetReferences(referenceArtistAssetManifest(artist));
+}
+
+export function referenceArtistAssetManifest(artist) {
   const filename = portraitImageFilename(artist?.portraitImageUrl);
   if (!filename) return [];
-  const entry = await hashImageForManifest(filename);
+  const entry = imageAssetReference(filename);
   return entry ? [entry] : [];
 }
 
 export async function buildAlbumAssetManifest(album) {
+  return hashAssetReferences(referenceAlbumAssetManifest(album));
+}
+
+export function referenceAlbumAssetManifest(album) {
   const filename = coverImageFilename(album?.coverImageUrl);
   if (!filename) return [];
-  const entry = await hashImageForManifest(filename);
+  const entry = imageAssetReference(filename);
   return entry ? [entry] : [];
 }
 
 export async function buildTrackAssetManifest(track) {
+  return hashAssetReferences(referenceTrackAssetManifest(track));
+}
+
+export function referenceTrackAssetManifest(track) {
   // A track now carries a render history — every render's audio must ride the
   // manifest, not just the active pointer, so a peer can play any received card.
   // Union the active filename with each render's; de-dup (the active render's
@@ -303,9 +364,7 @@ export async function buildTrackAssetManifest(track) {
     const f = trackAudioFilename(r?.audioFilename);
     if (f) filenames.add(f);
   }
-  const entries = await Promise.all(
-    [...filenames].map((filename) => hashSimpleAsset(filename, 'music', PATHS.music)),
-  );
+  const entries = [...filenames].map((filename) => assetReference(filename, 'music'));
   return entries.filter(Boolean);
 }
 
@@ -326,31 +385,35 @@ export async function buildTrackAssetManifest(track) {
  * asset is missing-local-file skipped silently (mirrors buildAuthorAssetManifest).
  */
 export async function buildProjectAssetManifest(project) {
+  return hashAssetReferences(referenceProjectAssetManifest(project));
+}
+
+export function referenceProjectAssetManifest(project) {
   const entries = [];
   const imageFilename = startingImageFilename(project?.startingImageFile);
   if (imageFilename) {
-    const imageEntry = await hashImageForManifest(imageFilename);
+    const imageEntry = imageAssetReference(imageFilename);
     if (imageEntry) entries.push(imageEntry);
   }
   const musicBedFilename = project?.musicBed?.filename;
   if (isStr(musicBedFilename)) {
-    const musicEntry = await hashSimpleAsset(musicBedFilename, 'music', PATHS.music);
+    const musicEntry = assetReference(musicBedFilename, 'music');
     if (musicEntry) entries.push(musicEntry);
   }
   const planSteps = Array.isArray(project?.plan?.steps) ? project.plan.steps : [];
-  const renderEntries = await Promise.all(planSteps.map((step) => {
+  const renderEntries = planSteps.map((step) => {
     const jobId = step?.status === 'done' && isStr(step?.result?.jobId) && step.result.jobId.trim()
       ? step.result.jobId.trim()
       : null;
     if (!jobId) return null;
     if (step.toolName === 'media_enqueueImageJob') {
-      return hashImageForManifest(`${jobId}.png`);
+      return imageAssetReference(`${jobId}.png`);
     }
     if (step.toolName === 'media_enqueueVideoJob') {
-      return hashSimpleAsset(`${jobId}.mp4`, 'video', PATHS.videos);
+      return assetReference(`${jobId}.mp4`, 'video');
     }
     return null;
-  }));
+  });
   const seen = new Set(entries.map((entry) => `${entry.kind}:${entry.filename}`));
   for (const entry of renderEntries) {
     const key = entry && `${entry.kind}:${entry.filename}`;
@@ -461,6 +524,10 @@ async function reconcileVideoThumbnail(filename, videoPath, peerId) {
  * dedup by `<kind>:<filename>` so two scenes pointing at the same render ship once.
  */
 export async function buildMusicVideoAssetManifest(project) {
+  return hashAssetReferences(await referenceMusicVideoAssetManifest(project));
+}
+
+export async function referenceMusicVideoAssetManifest(project, { linkedTrack } = {}) {
   const dedup = new Map();
   // Master audio: the uploaded basename and/or the linked track's audioFilename
   // (the create-UI path stores trackId with uploadedAudioFilename: null, so a
@@ -468,7 +535,9 @@ export async function buildMusicVideoAssetManifest(project) {
   const audioNames = [];
   if (isStr(project?.uploadedAudioFilename)) audioNames.push(project.uploadedAudioFilename);
   if (isStr(project?.trackId)) {
-    const track = await getTrack(project.trackId).catch(() => null);
+    const track = linkedTrack?.id === project.trackId
+      ? linkedTrack
+      : await getTrack(project.trackId).catch(() => null);
     if (isStr(track?.audioFilename)) audioNames.push(track.audioFilename);
   }
   // MuScriptor MIDI transcription of the master audio — lands under PATHS.music
@@ -476,7 +545,7 @@ export async function buildMusicVideoAssetManifest(project) {
   // a `midiTranscription.filename` pointer whose bytes never arrive.
   if (isStr(project?.midiTranscription?.filename)) audioNames.push(project.midiTranscription.filename);
   for (const name of [...new Set(audioNames)]) {
-    const audio = await hashSimpleAsset(name, 'music', PATHS.music);
+    const audio = assetReference(name, 'music');
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);
   }
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
@@ -485,9 +554,9 @@ export async function buildMusicVideoAssetManifest(project) {
   )];
   if (videoIds.length) {
     const byId = await videoHistoryFilenamesById();
-    const entries = await Promise.all(videoIds.map((id) =>
-      hashSimpleAsset(byId.get(id) || collectionVideoRefToFilename(id), 'video', PATHS.videos),
-    ));
+    const entries = videoIds.map((id) =>
+      assetReference(byId.get(id) || collectionVideoRefToFilename(id), 'video'));
+
     for (const entry of entries) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }
@@ -496,7 +565,7 @@ export async function buildMusicVideoAssetManifest(project) {
     scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
   )];
   if (imageNames.length) {
-    const entries = await Promise.all(imageNames.map((name) => hashImageForManifest(name)));
+    const entries = imageNames.map(imageAssetReference);
     for (const entry of entries) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }
@@ -510,13 +579,17 @@ export async function buildMusicVideoAssetManifest(project) {
  * player resolves them directly as managed `<id>.mp4` files.
  */
 export async function buildFableLoomAssetManifest(loom) {
+  return hashAssetReferences(referenceFableLoomAssetManifest(loom));
+}
+
+export function referenceFableLoomAssetManifest(loom) {
   const nodes = (Array.isArray(loom?.episodes) ? loom.episodes : [])
     .flatMap((episode) => (Array.isArray(episode?.nodes) ? episode.nodes : []));
   const dedup = new Map();
   const imageNames = [...new Set(
-    nodes.flatMap((node) => [node?.image, ...(node?.visualCanon?.characterAppearances || []).map((appearance) => appearance.referenceImage)]).filter(isStr),
+    nodes.flatMap((node) => [node?.image, ...(Array.isArray(node?.visualCanon?.characterAppearances) ? node.visualCanon.characterAppearances : []).map((appearance) => appearance.referenceImage)]).filter(isStr),
   )];
-  for (const entry of await Promise.all(imageNames.map((name) => hashImageForManifest(name)))) {
+  for (const entry of imageNames.map(imageAssetReference)) {
     if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
   }
   // Typed playback assets (hold loops, transition exit clips, and an explicit
@@ -537,8 +610,8 @@ export async function buildFableLoomAssetManifest(loom) {
     }),
   )];
   if (videoIds.length > 0) {
-    const entries = await Promise.all(videoIds.map((id) =>
-      hashSimpleAsset(collectionVideoRefToFilename(id), 'video', PATHS.videos)));
+    const entries = videoIds.map((id) =>
+      assetReference(collectionVideoRefToFilename(id), 'video'));
     for (const entry of entries) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }
@@ -561,8 +634,12 @@ export async function buildFableLoomAssetManifest(loom) {
  * file ship once. Text items carry no bytes.
  */
 export async function buildBoardAssetManifest(board) {
+  return hashAssetReferences(referenceBoardAssetManifest(board));
+}
+
+export function referenceBoardAssetManifest(board) {
   const dedup = new Map();
-  for (const it of board?.items || []) {
+  for (const it of Array.isArray(board?.items) ? board.items : []) {
     // `video` items (#4188) carry a `video:<filename>` mediaKey (the ref IS
     // the on-disk filename, so collectionVideoRefToFilename passes it through
     // untouched) plus an optional poster-thumbnail imageUrl. Thumbnails under
@@ -576,8 +653,8 @@ export async function buildBoardAssetManifest(board) {
         const safeName = sanitizeAssetFilename(parsed.ref);
         if (safeName) {
           pending.push(parsed.kind === 'video'
-            ? hashSimpleAsset(collectionVideoRefToFilename(safeName), 'video', PATHS.videos)
-            : hashImageForManifest(safeName));
+            ? assetReference(collectionVideoRefToFilename(safeName), 'video')
+            : imageAssetReference(safeName));
         }
       }
     }
@@ -589,11 +666,11 @@ export async function buildBoardAssetManifest(board) {
         // universe-canon manifest uses); gallery `image` bytes go through the
         // sidecar-aware hashImageForManifest.
         pending.push(asset.kind === 'image-ref'
-          ? hashSimpleAsset(safeName, 'image-ref', PATHS.imageRefs)
-          : hashImageForManifest(safeName));
+          ? assetReference(safeName, 'image-ref')
+          : imageAssetReference(safeName));
       }
     }
-    for (const entry of await Promise.all(pending)) {
+    for (const entry of pending) {
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }
   }
@@ -620,6 +697,10 @@ export async function buildBoardAssetManifest(board) {
  * per mood-board item).
  */
 export async function buildDeckAssetManifest(deck) {
+  return hashAssetReferences(referenceDeckAssetManifest(deck));
+}
+
+export function referenceDeckAssetManifest(deck) {
   const filenames = new Set();
   for (const card of Array.isArray(deck?.cards) ? deck.cards : []) {
     for (const ref of Array.isArray(card?.imageRefs) ? card.imageRefs : []) {
@@ -633,21 +714,25 @@ export async function buildDeckAssetManifest(deck) {
     const safe = sanitizeAssetFilename(sample?.imageRef);
     if (safe) filenames.add(safe);
   }
-  const entries = await mapWithConcurrency([...filenames], DECK_HASH_CONCURRENCY, hashImageForManifest);
+  const entries = [...filenames].map(imageAssetReference);
   return entries.filter(Boolean);
 }
 
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
-  const seriesAssets = await buildAssetManifest(series);
+  return hashAssetReferences(referenceAssetManifestForSeries(series, issues, linkedCollection));
+}
+
+export function referenceAssetManifestForSeries(series, issues, linkedCollection = null) {
+  const seriesAssets = referenceAssetManifest(series);
   const dedup = new Map(seriesAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   for (const issue of issues) {
-    const issueAssets = await buildAssetManifest(issue);
+    const issueAssets = referenceAssetManifest(issue);
     for (const a of issueAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
   }
   if (linkedCollection) {
-    const collectionAssets = await buildAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
@@ -662,10 +747,14 @@ export async function buildAssetManifestForSeries(series, issues, linkedCollecti
  * `items[]` only ships once.
  */
 export async function buildAssetManifestWithCollection(record, linkedCollection) {
-  const recordAssets = await buildAssetManifest(record);
+  return hashAssetReferences(referenceAssetManifestWithCollection(record, linkedCollection));
+}
+
+export function referenceAssetManifestWithCollection(record, linkedCollection) {
+  const recordAssets = referenceAssetManifest(record);
   const dedup = new Map(recordAssets.map((a) => [`${a.kind}:${a.filename}`, a]));
   if (linkedCollection) {
-    const collectionAssets = await buildAssetManifestForCollection(linkedCollection);
+    const collectionAssets = referenceAssetManifestForCollection(linkedCollection);
     for (const a of collectionAssets) {
       dedup.set(`${a.kind}:${a.filename}`, a);
     }
@@ -686,8 +775,12 @@ export async function buildAssetManifestWithCollection(record, linkedCollection)
  * `collectAssetReferences` and the `directoryForAssetKind` map.
  */
 export async function buildAssetManifestForCollection(collection) {
+  return hashAssetReferences(referenceAssetManifestForCollection(collection));
+}
+
+function referenceAssetManifestForCollection(collection) {
   const out = [];
-  for (const it of collection?.items || []) {
+  for (const it of Array.isArray(collection?.items) ? collection.items : []) {
     if (!it || typeof it.ref !== 'string') continue;
     // Path-traversal guard: collection items can arrive from a peer (via
     // `linkedCollection` push or the snapshot-sync mediaCollections
@@ -703,14 +796,14 @@ export async function buildAssetManifestForCollection(collection) {
       // Bare videoId → `<id>.mp4` via the shared helper (see
       // collectionVideoRefToFilename). `sanitizeAssetFilename` already ran on
       // `it.ref` above; the extension append is purely the on-disk naming rule.
-      const entry = await hashSimpleAsset(collectionVideoRefToFilename(safeName), 'video', PATHS.videos);
+      const entry = assetReference(collectionVideoRefToFilename(safeName), 'video');
       if (entry) out.push(entry);
     } else {
       // Treat 'image' (and any unknown kind that isn't 'video') as a gallery
       // image — the receiver's diff path will only accept entries whose kind
       // maps to a known directory in `directoryForAssetKind`, so a junk kind
       // gets filtered there without polluting disk.
-      const entry = await hashImageForManifest(safeName);
+      const entry = imageAssetReference(safeName);
       if (entry) out.push(entry);
     }
   }
@@ -777,7 +870,7 @@ export function assetDestinationKey(kind, filename) {
  * cap. A future enhancement could pool 2-4 concurrent fetches if individual
  * universes routinely ship hundreds of assets.
  */
-export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
+export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets, { includeMismatched = true } = {}) {
   if (!isStr(senderInstanceId) || !Array.isArray(missingAssets) || missingAssets.length === 0) return;
   // Trust posture: `senderInstanceId` arrives in the push payload (the route
   // is Tailnet-only per the project's documented threat model — see
@@ -799,7 +892,7 @@ export async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets)
   }
   const base = peerBaseUrl(peer);
   for (const entry of missingAssets) {
-    await pullOneAsset(peer, base, entry).catch((err) => {
+    await pullOneAsset(peer, base, entry, includeMismatched).catch((err) => {
       console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
     });
   }
@@ -925,7 +1018,7 @@ async function pullOneWorkBody(peer, base, entry) {
   }
 }
 
-async function pullOneAsset(peer, base, entry) {
+async function pullOneAsset(peer, base, entry, includeMismatched) {
   const urlPrefix = ASSET_KIND_TO_URL_PREFIX[entry.kind];
   const localDir = directoryForAssetKind(entry.kind);
   // Re-validate the filename here even though the receiver already
@@ -933,6 +1026,7 @@ async function pullOneAsset(peer, base, entry) {
   // against any future refactor that bypasses the diff path.
   const safeName = sanitizeAssetFilename(entry.filename);
   if (!urlPrefix || !localDir || !safeName) return;
+  if (!hasAllowedAssetExtension(entry.kind, safeName)) return;
   // Dedup in-flight pulls — if the same (peer, kind, filename) is already
   // being downloaded, skip rather than starting a second concurrent pull.
   // The first pull's `asset-arrived` event will resolve the UI for both
@@ -947,14 +1041,18 @@ async function pullOneAsset(peer, base, entry) {
     // (#3929). See assetWriteQueue.
     await assetWriteQueue(
       assetDestinationKey(entry.kind, safeName),
-      () => doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName),
+      () => doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched),
     );
   } finally {
     inflightPulls.delete(key);
   }
 }
 
-async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) {
+async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName, includeMismatched) {
+  // A missing asset can arrive while this stale push waits on the write queue.
+  // Preserve its bytes and sidecar once another writer has filled the gap.
+  const fullPath = join(localDir, safeName);
+  if (!includeMismatched && existsSync(fullPath)) return;
   // Re-check disk against the advertised hash before spending a download. Two
   // distinct cases land here with the bytes already correct:
   //   - sidecar-only divergence: the image bytes hash-match and
@@ -987,8 +1085,12 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
   const buffer = await fetchCappedAssetBuffer(peer, url, safeName, ASSET_PULL_MAX_BYTES);
   if (!buffer) return;
+  if (isStr(entry.sha256) && createHash('sha256').update(buffer).digest('hex') !== entry.sha256) {
+    console.warn('⚠️ peerSync: discarded asset with mismatched sha256');
+    return;
+  }
   await ensureDir(localDir);
-  const fullPath = join(localDir, safeName);
+  if (!includeMismatched && existsSync(fullPath)) return;
   // atomicWrite (temp + rename) so a crash mid-write doesn't leave a
   // half-written file that subsequent `diffAssetManifestAgainstLocal`
   // calls would see as "present" and stop re-requesting.

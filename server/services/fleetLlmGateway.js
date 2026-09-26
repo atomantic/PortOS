@@ -33,7 +33,7 @@ function requestedModel(body) {
 // where their GPU went needs to see. Discovery calls (`GET /v1/models`) are NOT
 // recorded as generations: every connected client polls that on a timer, and
 // counting them would bury the real traffic.
-export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecorded = () => {}, maxQueued = 16, maxBodyBytes = 2 * 1024 ** 2, waitMs = 120000, runMs = 600000 }) {
+export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecorded = () => {}, onChanged = () => {}, maxQueued = 16, maxBodyBytes = 2 * 1024 ** 2, waitMs = 120000, runMs = 600000 }) {
   const pending = [];
   let active = null;
   let closing = false;
@@ -75,6 +75,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     const job = pending.shift();
     if (!job) return;
     active = job;
+    onChanged();
     clearTimeout(job.waitTimer);
     job.runTimer = setTimeout(() => job.controller.abort(), runMs);
     execute(job).catch(() => reply(job.res, 502, 'Model connection failed or exceeded its time limit.'))
@@ -82,6 +83,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
         clearTimeout(job.runTimer);
         settle(job, job.status ?? 502);
         active = null;
+        onChanged();
         pump();
       });
   };
@@ -132,6 +134,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     }
     // Reserve before reading the body, so concurrent uploads cannot bypass the cap.
     pending.push(job);
+    onChanged();
     const remove = () => {
       const index = pending.indexOf(job);
       if (index >= 0) pending.splice(index, 1);
@@ -140,7 +143,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
       // A job still QUEUED never reaches `pump`'s finally, so close its ledger
       // entry here. One already running (or already finished) is settled there
       // instead, and `settle`'s own once-guard makes a second call a no-op.
-      if (index >= 0) settle(job, job.status ?? 499);
+      if (index >= 0) { settle(job, job.status ?? 499); onChanged(); }
       pump();
     };
     res.on('close', remove);
@@ -175,6 +178,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
         settle(job, 503);
       }
       pending.length = 0;
+      onChanged();
       server.closeAllConnections();
       if (server.listening) await new Promise((resolve) => server.close(resolve));
     },

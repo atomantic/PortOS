@@ -41,7 +41,8 @@ export default function useImageRenderSettings({ record = null, target = null } 
     const backends = settings ? deriveAvailableBackends(settings, { excludeExternal: true }) : [];
     return {
       backends,
-      imageCfg: resolveRenderCfg(settings, { record, target, backends: settings ? backends : null }),
+      // Display projection only; tagged submissions retain server inheritance.
+      imageCfg: resolveRenderCfg(settings, { record, target }),
     };
   }, [settings, target, record?.imageMode, record?.imageModelId]);
 }

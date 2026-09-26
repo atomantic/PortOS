@@ -5,7 +5,8 @@ import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+
 import { useHealthWarningDismiss } from '../hooks/useHealthWarningDismiss.jsx';
 import { useSystemResourceReport } from '../hooks/useSystemResourceReport.js';
 import StoragePanel from '../components/system-resources/StoragePanel.jsx';
@@ -16,6 +17,8 @@ import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import { HEALTH_STYLE, pctTone, barTone, resolveHealthThresholds } from '../lib/healthStyle.js';
+
+const READINESS_EVENTS = ['system:health:changed'];
 
 // Every alert names its own next step. The server tags each warning with a
 // `type` (server/routes/systemHealth.js), so the banner can carry the link that
@@ -113,9 +116,9 @@ function SystemHealthOverview() {
   // successful save so the next refetch re-seeds with the persisted thresholds.
   const draftSeededRef = useRef(false);
 
-  const { data: health, loading, refetch } = useAutoRefetch(
+  const { data: health, loading, error, refetch } = useSocketResource(
     () => api.getSystemHealth({ silent: true }),
-    15_000,
+    { namespace: 'readiness', events: READINESS_EVENTS },
   );
   const { dismissingType, handleDismissWarning } = useHealthWarningDismiss(refetch);
 
@@ -288,6 +291,8 @@ function SystemHealthOverview() {
           ) : null}
         </section>
 
+        {error && <p role="status" className="text-port-warning">Health refresh failed. Showing the last available reading.</p>}
+
         <MediaCapacityPanel media={health.media} />
 
         <BuildStampPanel uptimeFormatted={health.system.uptimeFormatted} />
@@ -297,7 +302,11 @@ function SystemHealthOverview() {
             <Activity size={16} />
             Top processes by memory
           </h3>
-          {health.topProcesses && health.topProcesses.length > 0 ? (
+          {health.topProcesses === null ? (
+            <p role="status" className="text-gray-400 text-sm">
+              Process manager (PM2) status unavailable.
+            </p>
+          ) : health.topProcesses && health.topProcesses.length > 0 ? (
             <div className="space-y-1">
               {health.topProcesses.map((p) => (
                 <div key={p.name} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-port-bg/40 hover:bg-port-bg/60 text-sm">

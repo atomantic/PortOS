@@ -6,6 +6,7 @@
  * Integrates with eventScheduler for daily cron scheduling.
  */
 
+import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { access, lstat, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
@@ -16,8 +17,9 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth, ensureSchema, getServerMajorVersion } from '../lib/db.js';
+import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
@@ -27,6 +29,7 @@ import { noteSystemActivity } from './systemActivityNotify.js';
 
 // Module-level state
 let isRunning = false;
+let failedStateProjection = null;
 
 // The in-process lock is the activity signal the updater reads. Note the edge
 // in the same assignment so a client cannot keep a stale "backup running"
@@ -151,6 +154,7 @@ const queueStateWrite = createFileWriteQueue();
 // matches any `loras/` directory anywhere under data/ (e.g. a user's
 // brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
+  { path: '/image-thumbnails/', reason: 'Regenerable image grid previews', overridable: false },
   { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
@@ -541,7 +545,13 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     if (failureRecorded) await clearInProgressMarkers();
     releaseActiveSnapshot();
     setBackupRunning(false, 'failure');
-    await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
+    const failureState = { lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null };
+    await saveState(failureState, (cause) => {
+      const code = ['EACCES', 'EPERM', 'EIO', 'ENOSPC', 'EROFS', 'ENOENT', 'EMFILE', 'ENFILE'].includes(cause.code) ? cause.code : 'UNKNOWN';
+      failedStateProjection = { ...failureState, error: `Backup failed; status persistence failed (${code}). See server logs.` };
+      console.error(`❌ Backup status persistence failed: transition=error snapshot=${snapshotId ?? 'none'} code=${code}`);
+    });
+    dashboardEvents.emit('backup:changed');
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;
   };
@@ -572,6 +582,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     await ensureDir(dataDestDir);
     activeSnapshotId = snapshotId;
     await writeFile(markerPath(snapshotDir), '');
+    dashboardEvents.emit('backup:changed');
 
     const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
     changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags);
@@ -622,11 +633,17 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // before this point takes the `fail()` path below and never reaches
     // here, so a failed or in-progress snapshot is never a prune candidate.
     // Retention failures must not fail an otherwise-successful backup.
-    const pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
-      console.error(`❌ Backup retention prune failed: ${err.message}`);
-      return { pruned: 0 };
-    });
+    let pruned = { pruned: 0 };
+    if (pgResult.status === 'failed') {
+      console.warn(`⚠️ Backup retention skipped: DB dump ${pgResult.reason} — keeping older snapshots`);
+    } else {
+      pruned = await pruneOldSnapshots(destPath, retentionCount).catch(err => {
+        console.error(`❌ Backup retention prune failed: ${err.message}`);
+        return { pruned: 0 };
+      });
+    }
 
+    dashboardEvents.emit('backup:changed');
     return { ...result, prunedSnapshots: pruned.pruned };
   } catch (err) {
     return fail(err);
@@ -831,6 +848,16 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
   return manifest;
 }
 
+// Keep filesystem diagnostics bounded: native errors include private paths.
+function inventoryReadError(cause, operation) {
+  const code = ['ENOENT', 'EACCES', 'EPERM', 'EIO', 'ENOTDIR', 'EMFILE', 'ENFILE', 'ESTALE']
+    .includes(cause?.code) ? cause.code : 'UNKNOWN';
+  return new ServerError(`Backup inventory unavailable: ${operation} (${code})`, {
+    code: 'BACKUP_INVENTORY_UNAVAILABLE',
+    context: { operation, filesystemCode: code },
+  });
+}
+
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
@@ -845,11 +872,19 @@ export async function listSnapshots(destPath) {
   // every directory. Treating it as a snapshot id and reading
   // `<.DS_Store>/manifest.json` throws ENOTDIR. Also skip dotfile-named dirs so
   // nothing hidden can masquerade as a snapshot (real ids are timestamps).
-  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(() => []);
+  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(async cause => {
+    if (cause?.code !== 'ENOENT') throw inventoryReadError(cause, 'read-snapshots-root');
+    // Absence is empty only when the configured destination itself is readable.
+    await readdir(destPath).catch(error => { throw inventoryReadError(error, 'read-destination'); });
+    return [];
+  });
   const directories = rootEntries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'));
   const descriptors = (await Promise.all(directories.map(async (entry) => {
     const rootEntryPath = join(snapshotsRoot, entry.name);
-    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(() => []);
+    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(cause => {
+      if (cause?.code === 'ENOENT') return [];
+      throw inventoryReadError(cause, 'read-namespace');
+    });
     const isLegacySnapshot = SNAPSHOT_ID_PATTERN.test(entry.name) && contents.some(child =>
       (child.name === 'data' && child.isDirectory())
       || child.name === 'manifest.json'
@@ -1057,6 +1092,7 @@ export async function deleteSnapshot(destPath, snapshotId, { source } = {}) {
     });
   }
   await rm(snapshotDir, { recursive: true, force: true });
+  dashboardEvents.emit('backup:changed');
   console.log(`💾 Backup snapshot deleted: ${resolvedSource}/${snapshotId}`);
   return { deleted: true, snapshotId, source: resolvedSource };
 }
@@ -1412,26 +1448,34 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
-  const reconciliationError = !dryRun
-    ? await reconcileLiveFileRestore(subdirFilter).then(
-      () => null,
-      error => error,
-    )
-    : null;
+  const restoreFiles = async () => {
+    const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
+    const reconciliationError = !dryRun
+      ? await reconcileLiveFileRestore(subdirFilter).then(
+        () => null,
+        error => error,
+      )
+      : null;
 
-  if (transfer.status === 'rejected') {
-    if (dryRun) throw transfer.reason;
-    const partialRestoreError = new Error(
-      `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
-      { cause: transfer.reason },
-    );
-    if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
-    throw partialRestoreError;
+    if (transfer.status === 'rejected') {
+      if (dryRun) throw transfer.reason;
+      const partialRestoreError = new Error(
+        `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
+        { cause: transfer.reason },
+      );
+      if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
+      throw partialRestoreError;
+    }
+    if (reconciliationError) throw reconciliationError;
+
+    return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
+  };
+  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
+  if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+    const { withLiveCosRestore } = await import('./cosState.js');
+    return withLiveCosRestore(restoreFiles);
   }
-  if (reconciliationError) throw reconciliationError;
-
-  return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
+  return restoreFiles();
 }
 
 /**
@@ -1442,7 +1486,9 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_error'|'timeout'|'restore_schema_reconciliation', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation'|'restore_sync_resync', error? }
+ * A successful real restore also carries `syncCursorsRewound` (peer count);
+ * see resyncFederationAfterRestore.
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -1490,107 +1536,180 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   const sql = await readFile(sqlPath, 'utf-8').catch(() => '');
   const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
 
-  if (dryRun) {
-    return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
-  }
-
-  // Never half-restore: require a reachable DB before replaying.
+  // Preview remains read-only. Recheck inside the replay transaction as well,
+  // so a changed catalog cannot turn a previously safe preview into a cascade.
   const health = await checkHealth();
-  if (!health.connected) {
-    return { status: 'skipped', reason: 'not_configured' };
+  if (!health.connected) return { status: 'skipped', reason: 'not_configured' };
+  const { getDatabaseResetPlan } = await import('./backupDatabaseReset.js');
+  const { preflight, reset } = await getDatabaseResetPlan();
+  const preflightError = await query(preflight).then(() => null, error => error);
+  if (preflightError) {
+    return { status: 'failed', reason: 'restore_preflight', error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.' };
   }
+  if (dryRun) return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
 
-  const pgHost = process.env.PGHOST || 'localhost';
-  const pgPort = process.env.PGPORT || '5432';
-  const pgDb = process.env.PGDATABASE || 'portos';
-  const pgUser = process.env.PGUSER || 'portos';
+  return withDatabaseMaintenance(async () => {
+    // Read before the replay rewinds them to the dump's values.
+    const feedPositions = await captureSyncFeedPositions();
+    const pgHost = process.env.PGHOST || 'localhost';
+    const pgPort = process.env.PGPORT || '5432';
+    const pgDb = process.env.PGDATABASE || 'portos';
+    const pgUser = process.env.PGUSER || 'portos';
 
-  const replay = await new Promise((resolveP) => {
-    // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
-    // wraps the whole replay in one transaction so that abort ROLLs BACK every
-    // prior statement. Together they make the restore atomic: it either fully
-    // applies or leaves the live DB untouched — never a mixed snapshot/current
-    // state. (The dump is written with --clean --if-exists, so the DROPs and
-    // recreates all commit or roll back as one unit.)
-    const proc = spawn('psql', [
-      '-v', 'ON_ERROR_STOP=1',
-      '--single-transaction',
-      '--echo-all',
-      '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
-    ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+    const replay = await new Promise((resolveP) => {
+      // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
+      // wraps the whole replay in one transaction so that abort ROLLs BACK every
+      // prior statement. Together they make the restore atomic: it either fully
+      // applies or leaves the live DB untouched — never a mixed snapshot/current
+      // state. (The dump is written with --clean --if-exists, so the DROPs and
+      // recreates all commit or roll back as one unit.)
+      const proc = spawn('psql', [
+        '-X', '-v', 'ON_ERROR_STOP=1',
+        '--single-transaction',
+        '--echo-all',
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', sqlPath
+      ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
-    let stderr = '';
-    const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
-    // `--echo-all` echoes input as psql consumes it, including rows within a
-    // long COPY. The output is never retained, but it must be drained: unread
-    // piped output can backpressure and deadlock a verbose restore. Each chunk
-    // is also the progress signal that keeps an active long restore alive.
-    proc.stdout.on('data', watchdog.markActivity);
-    proc.stderr.on('data', (chunk) => {
-      watchdog.markActivity();
-      stderr += chunk.toString();
+      let stderr = '';
+      const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
+      // `--echo-all` echoes input as psql consumes it, including rows within a
+      // long COPY. The output is never retained, but it must be drained: unread
+      // piped output can backpressure and deadlock a verbose restore. Each chunk
+      // is also the progress signal that keeps an active long restore alive.
+      proc.stdout.on('data', watchdog.markActivity);
+      proc.stderr.on('data', (chunk) => {
+        watchdog.markActivity();
+        stderr += chunk.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (!watchdog.finish()) return;
+        const timeoutError = watchdog.getTimeoutError();
+        if (timeoutError) {
+          resolveP({ status: 'failed', reason: 'timeout', error: timeoutError.message });
+          return;
+        }
+        if (code === 0) {
+          console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
+          resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
+        } else {
+          console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
+          resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });
+        }
+      });
+      proc.on('error', (err) => {
+        if (watchdog.getTimeoutError() || !watchdog.finish()) return;
+        console.warn(`⚠️ psql not available: ${err.message}`);
+        resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
+      });
     });
+    if (replay.status !== 'ok') return replay;
 
-    proc.on('close', (code) => {
-      if (!watchdog.finish()) return;
-      const timeoutError = watchdog.getTimeoutError();
-      if (timeoutError) {
-        resolveP({ status: 'failed', reason: 'timeout', error: timeoutError.message });
-        return;
-      }
-      if (code === 0) {
-        console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
-        resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
-      } else {
-        console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
-        resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });
-      }
-    });
-    proc.on('error', (err) => {
-      if (watchdog.getTimeoutError() || !watchdog.finish()) return;
-      console.warn(`⚠️ psql not available: ${err.message}`);
-      resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
-    });
+    // Replay has committed. Reapply this version's upgrades even when readiness
+    // was cached before the restore, then honor the restored migration ledger.
+    const reconciliationError = await (async () => {
+      await ensureSchema({ force: true });
+      const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
+      await runDbMigrations();
+    })().then(() => null, (err) => err);
+    if (reconciliationError) {
+      console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
+      return {
+        status: 'failed',
+        reason: 'restore_schema_reconciliation',
+        error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
+      };
+    }
+    // Still inside maintenance, so no sync apply or feed write can interleave
+    // between the restored rows and the federation repair.
+    const resync = await resyncFederationAfterRestore(feedPositions).then(
+      (syncCursorsRewound) => ({ syncCursorsRewound }),
+      (err) => ({ err }),
+    );
+    if (resync.err) {
+      console.error(`❌ DB restore federation resync failed: ${resync.err.message}`);
+      return {
+        status: 'failed',
+        reason: 'restore_sync_resync',
+        error: 'The database dump was applied, but peer sync could not be reset. Federated memories and Catalog records pulled after this snapshot may stay missing until the restore is repeated.',
+      };
+    }
+    return { ...replay, syncCursorsRewound: resync.syncCursorsRewound };
   });
-  if (replay.status !== 'ok') return replay;
+}
 
-  // Replay has committed. Reapply this version's upgrades even when readiness
-  // was cached before the restore, then honor the restored migration ledger.
-  const reconciliationError = await (async () => {
-    await ensureSchema({ force: true });
-    const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
-    await runDbMigrations();
-  })().then(() => null, (err) => err);
-  if (reconciliationError) {
-    console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
-    return {
-      status: 'failed',
-      reason: 'restore_schema_reconciliation',
-      error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
-    };
-  }
-  return replay;
+// Feed sequences present before the replay (a pre-#8315 install has none).
+// pg_sequences reports a NULL last_value for a never-drawn sequence, which
+// holds no position worth preserving.
+async function captureSyncFeedPositions() {
+  const { rows } = await query(
+    `SELECT sequencename, last_value::text AS last_value FROM pg_sequences
+      WHERE schemaname = current_schema() AND sequencename = ANY($1::text[]) AND last_value IS NOT NULL`,
+    [syncFeedTables.map(syncFeedSequenceName)],
+  );
+  return rows;
 }
 
 /**
- * Get current backup state from disk.
+ * Repair both directions of peer sync after a dump replay (#8710).
+ *
+ * Outbound: the dump `setval`s each feed sequence back to the dump's maximum,
+ * so new rows would reuse positions peers already passed and never be pulled.
+ * Floor every sequence at its pre-restore value so post-restore positions land
+ * above any cursor a peer holds.
+ *
+ * Inbound: our per-peer memory/Catalog cursors still point past rows the
+ * restore discarded. Rewind them so the next sync replays each peer's streams
+ * through the idempotent LWW / ON CONFLICT apply paths.
+ * @param {Array<{sequencename: string, last_value: string}>} feedPositions
+ * @returns {Promise<number>} peers whose cursors were rewound
+ */
+async function resyncFederationAfterRestore(feedPositions) {
+  if (feedPositions.length) {
+    // GREATEST ignores the NULL of a sequence the dump left undrawn.
+    await query(
+      `SELECT setval(format('%I', s.sequencename)::regclass, GREATEST(c.captured::bigint, s.last_value))
+        FROM pg_sequences s
+        JOIN unnest($1::text[], $2::text[]) AS c(name, captured) ON c.name = s.sequencename
+        WHERE s.schemaname = current_schema()`,
+      [feedPositions.map((p) => p.sequencename), feedPositions.map((p) => p.last_value)],
+    );
+  }
+  const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+  const peers = await rewindPostgresSyncCursors();
+  console.log(`🔄 DB restore: floored ${feedPositions.length} sync feed sequences, rewound memory/Catalog cursors for ${peers} peers`);
+  return peers;
+}
+
+/**
+ * Get backup state with process-local failure and running projections.
  */
 export async function getState() {
-  return readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
+  const state = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
+  const projected = failedStateProjection ? { ...state, ...failedStateProjection } : state;
+  return isRunning ? { ...projected, status: 'running' } : projected;
 }
 
 /**
  * Merge patch into current backup state and persist.
  * @param {object} patch - Fields to merge into state
+ * @param {Function} [onFailure] - Handle a rejected write inside the serialized queue
  */
-export async function saveState(patch) {
-  return queueStateWrite(async () => {
+export async function saveState(patch, onFailure) {
+  return queueStateWrite(() => (async () => {
     await ensureDir(join(PATHS.data, 'backup'));
-    const current = await getState();
+    // Status projections are read-only and must never become durable state.
+    const current = await readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
     const updated = { ...current, ...patch };
     await atomicWrite(STATE_PATH, updated);
+    failedStateProjection = null;
     return updated;
-  });
+  })().catch((error) => {
+    // Handle the failed transition inside the queue: a later successful write
+    // must clear it, never race with an out-of-queue failure handler.
+    if (onFailure) return onFailure(error);
+    throw error;
+  }));
 }
 
 /**

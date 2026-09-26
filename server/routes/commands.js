@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { validateCommand } from '../lib/commandSecurity.js';
 import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import * as commands from '../services/commands.js';
@@ -90,8 +91,35 @@ router.get('/allowed', asyncHandler(async (req, res) => {
 
 // GET /api/commands/processes - Get PM2 process list with details
 router.get('/processes', asyncHandler(async (req, res) => {
-  const processes = await pm2Service.listProcesses();
+  const { processListQuerySchema, validateRequest } = await import('../lib/validation.js');
+  const { appId } = validateRequest(processListQuerySchema, req.query);
+  const app = appId ? await (await import('../services/apps.js')).getAppById(appId) : null;
+  if (appId && !app) throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  const processes = await pm2Service.listProcessesStrict(app?.pm2Home || null);
+  if (processes === null) throw new ServerError('PM2 status unavailable', { status: 503, code: 'PM2_UNAVAILABLE' });
   res.json(processes);
+}));
+
+// Apply a scoped process action and return its resulting snapshot.
+router.post('/processes/:name/action', requireHostControl, asyncHandler(async (req, res) => {
+  const { processActionSchema, validateRequest } = await import('../lib/validation.js');
+  const { action, appId } = validateRequest(processActionSchema, req.body);
+  const name = req.params.name;
+  const command = validateCommand(`pm2 ${action} ${name}`);
+  if (!command.valid || !/^[a-zA-Z0-9_.-]+$/.test(name) || name.startsWith('-')) {
+    throw new ServerError('Process command not allowed', { status: 403, code: 'FORBIDDEN' });
+  }
+  const app = appId ? await (await import('../services/apps.js')).getAppById(appId) : null;
+  if (appId && !app) throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  const home = app?.pm2Home || null;
+  const before = await pm2Service.listProcessesStrict(home);
+  if (!before) throw new ServerError('PM2 status unavailable', { status: 503, code: 'PM2_UNAVAILABLE' });
+  if (!before.some(proc => proc.name === name)) throw new ServerError('Process not found', { status: 404, code: 'NOT_FOUND' });
+  // Restart also starts an existing stopped process without inventing a script.
+  if (action === 'stop') await pm2Service.stopApp(name, home);
+  else await pm2Service.restartApp(name, home);
+  pm2Service.clearJlistCache(home);
+  res.json({ processes: await pm2Service.listProcessesStrict(home) });
 }));
 
 // GET /api/commands/processes/:name/monit - Get PM2 monit data for a process

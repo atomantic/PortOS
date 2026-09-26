@@ -3,19 +3,23 @@ import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Globe, ImagePlus,
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import AlbumTrackPicker from '../components/music/AlbumTrackPicker';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
+import UniverseMoodBoardPicker, { BOARD_FOLLOW_UNIVERSE, BOARD_NONE, useStyleSourceLists } from '../components/media/UniverseMoodBoardPicker';
+import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 import useProviderModels from '../hooks/useProviderModels';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { usePagedCollection } from '../hooks/usePagedCollection';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
+import { useSocketResource } from '../hooks/useSocketResource';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
-  listCodeAnimationJobs,
-  listMoodBoardNames,
-  listUniverseNames,
-  listUniverseStyles,
+  listCodeAnimationJobPage,
+  listTracks,
   startCodeAnimationGeneration,
   uploadFile,
 } from '../services/api';
@@ -25,11 +29,7 @@ import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../uti
 import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
-const JOB_POLL_MS = 3_000;
-const GALLERY_POLL_MS = 10_000;
-// Mood-board choice sentinels: follow the universe's linked board, or none.
-const BOARD_FOLLOW_UNIVERSE = 'universe';
-const BOARD_NONE = 'none';
+const JOB_EVENTS = ['code-animation:changed'];
 
 const DEFAULT_DRAFT = {
   title: '',
@@ -69,17 +69,28 @@ const loadDraft = () => {
         url: `/api/uploads/${encodeURIComponent(image.filename)}`,
       }))
     : [];
-  const audio = isRecord(stored.audio)
-    && typeof stored.audio.filename === 'string'
-    && stored.audio.filename.trim()
-    ? {
-      filename: stored.audio.filename,
-      label: typeof stored.audio.label === 'string' ? stored.audio.label : stored.audio.filename,
-      durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
-      notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
-      url: `/api/uploads/${encodeURIComponent(stored.audio.filename)}`,
+  let audio = null;
+  if (isRecord(stored.audio)) {
+    if (stored.audio.source === 'track' && typeof stored.audio.trackId === 'string' && stored.audio.trackId.trim()) {
+      audio = {
+        source: 'track',
+        trackId: stored.audio.trackId.trim(),
+        label: typeof stored.audio.label === 'string' ? stored.audio.label : 'Music track',
+        durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
+        notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
+        url: typeof stored.audio.url === 'string' ? stored.audio.url : '',
+      };
+    } else if (typeof stored.audio.filename === 'string' && stored.audio.filename.trim()) {
+      audio = {
+        source: 'upload',
+        filename: stored.audio.filename.trim(),
+        label: typeof stored.audio.label === 'string' ? stored.audio.label : stored.audio.filename,
+        durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
+        notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
+        url: `/api/uploads/${encodeURIComponent(stored.audio.filename)}`,
+      };
     }
-    : null;
+  }
   const stringField = (key) => typeof stored[key] === 'string' ? stored[key] : DEFAULT_DRAFT[key];
   return {
     ...DEFAULT_DRAFT,
@@ -130,7 +141,20 @@ function toBrief(draft) {
     includeMoodBoardImages: draft.includeMoodBoardImages,
     referenceImages: draft.referenceImages.map(({ filename, label, note }) => ({ filename, label, note })),
     audio: draft.audio
-      ? { filename: draft.audio.filename, label: draft.audio.label, durationSeconds: draft.audio.durationSeconds ?? null, notes: draft.audio.notes }
+      ? draft.audio.source === 'track'
+        ? {
+          source: 'track',
+          trackId: draft.audio.trackId,
+          ...(draft.audio.label ? { label: draft.audio.label } : {}),
+          ...(draft.audio.durationSeconds != null ? { durationSeconds: draft.audio.durationSeconds } : {}),
+          notes: draft.audio.notes || '',
+        }
+        : {
+          filename: draft.audio.filename,
+          label: draft.audio.label,
+          durationSeconds: draft.audio.durationSeconds ?? null,
+          notes: draft.audio.notes,
+        }
       : null,
     ...moodBoardSelection(draft),
   };
@@ -178,7 +202,20 @@ function draftFromJob(job) {
       url: `/api/uploads/${encodeURIComponent(image.filename)}`,
     })),
     audio: input.audio
-      ? { ...input.audio, url: `/api/uploads/${encodeURIComponent(input.audio.filename)}` }
+      ? input.audio.source === 'track'
+        ? {
+          source: 'track',
+          trackId: input.audio.trackId,
+          label: input.audio.label || 'Music track',
+          durationSeconds: input.audio.durationSeconds ?? null,
+          notes: input.audio.notes || '',
+          url: job.audioUrl || '',
+        }
+        : {
+          source: 'upload',
+          ...input.audio,
+          url: `/api/uploads/${encodeURIComponent(input.audio.filename)}`,
+        }
       : null,
     soundtrack: input.soundtrack || 'none',
     format: { ...DEFAULT_DRAFT.format, ...(input.format || {}) },
@@ -192,7 +229,6 @@ function galleryJob(job) {
     id: job.id,
     status: job.status,
     title: job.title,
-    concept: job.concept || job.input?.concept || '',
     providerId: job.providerId,
     model: job.model,
     error: job.error,
@@ -237,9 +273,10 @@ export default function CodeAnimation() {
   const navigate = useNavigate();
   const jobId = routeParams.jobId || searchParams.get('job') || '';
   const [options, setOptions] = useState(null);
-  const [universes, setUniverses] = useState([]);
-  const [universeStyles, setUniverseStyles] = useState({});
-  const [boards, setBoards] = useState([]);
+  const styleLists = useStyleSourceLists();
+  const { boards } = styleLists;
+  const [libraryTracks, setLibraryTracks] = useState([]);
+  const [trackPickerOpen, setTrackPickerOpen] = useState(false);
   const [draft, setDraft] = useState(loadDraft);
   const [uploading, setUploading] = useState(false);
   const [building, setBuilding] = useState(false);
@@ -248,17 +285,13 @@ export default function CodeAnimation() {
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState(null);
-  const [savedJobs, setSavedJobs] = useState([]);
-  const [galleryLoaded, setGalleryLoaded] = useState(false);
-  const [galleryError, setGalleryError] = useState('');
+  const [galleryCounts, setGalleryCounts] = useState({ running: 0, completed: 0 });
   const [effort, setEffort] = useState('');
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
   const [preview, setPreview] = useState(null);
-  const jobIdRef = useRef(jobId);
   const hydratedJobIdRef = useRef('');
   const locallyStartedJobIdRef = useRef('');
-  const galleryRequestRef = useRef(0);
   const {
     providers,
     selectedProviderId,
@@ -281,37 +314,33 @@ export default function CodeAnimation() {
   const update = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
 
-  const refreshGallery = useCallback(async () => {
-    const requestId = ++galleryRequestRef.current;
-    const rows = await listCodeAnimationJobs({ silent: true }).catch((error) => {
-      if (requestId !== galleryRequestRef.current) return null;
-      setGalleryError(error.message || 'Failed to load animation gallery');
-      setGalleryLoaded(true);
-      return null;
-    });
-    if (requestId !== galleryRequestRef.current) return;
-    if (!Array.isArray(rows)) return;
-    setSavedJobs(rows);
-    setGalleryError('');
-    setGalleryLoaded(true);
+  const fetchGalleryPage = useCallback(async ({ cursor, signal }) => {
+    const page = await listCodeAnimationJobPage({ cursor, signal });
+    if (!signal.aborted) setGalleryCounts(page.counts);
+    return page;
   }, []);
-  useAutoRefetch(refreshGallery, GALLERY_POLL_MS, { enabled: true, pollOnly: true });
+  const gallery = usePagedCollection(fetchGalleryPage);
+  const savedJobs = gallery.items;
+  const setSavedJobs = gallery.setItems;
+  useSocketSubscription('code-animation', { onResubscribe: gallery.refreshFirst });
+  useEffect(() => {
+    const refresh = () => gallery.refreshFirst();
+    socket.on('code-animation:changed', refresh);
+    return () => socket.off('code-animation:changed', refresh);
+  }, [gallery.refreshFirst]);
 
   useEffect(() => { safeWriteJsonStorage(DRAFT_KEY, draft); }, [draft]);
 
   useEffect(() => {
     getCodeAnimationOptions({ silent: true }).then(setOptions).catch(() => toast.error('Failed to load Code Animation options'));
-    listUniverseNames({ silent: true }).then((rows) => setUniverses(Array.isArray(rows) ? rows : [])).catch(() => {});
-    listUniverseStyles({ silent: true })
-      .then((rows) => setUniverseStyles(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.id, row]))))
+    listTracks({ silent: true })
+      .then((rows) => setLibraryTracks(Array.isArray(rows) ? rows : rows?.tracks || []))
       .catch(() => {});
-    listMoodBoardNames({ silent: true }).then((rows) => setBoards(Array.isArray(rows) ? rows : [])).catch(() => {});
   }, []);
 
   const brief = useMemo(() => toBrief(draft), [draft]);
   const briefKey = useMemo(() => JSON.stringify(brief), [brief]);
   const promptStale = !!built && built.briefKey !== briefKey;
-  const activeStyle = draft.universeId ? universeStyles[draft.universeId] : null;
   const limits = options?.limits;
   const maxRefs = limits?.referenceImagesMax ?? 8;
   const audioAccept = (options?.audioExtensions || ['mp3', 'wav', 'ogg', 'm4a']).map((ext) => `.${ext}`).join(',');
@@ -321,33 +350,39 @@ export default function CodeAnimation() {
   // blank-slate idea generator.
   const briefSeeds = !!(draft.universeId || draft.seedIdea.trim() || draft.concept.trim() || draft.title.trim());
   const canWriteBrief = briefSeeds && !writingBrief;
-  const inProgressCount = savedJobs.filter((item) => item.status === 'running').length;
-  const completedCount = savedJobs.filter((item) => item.status === 'completed').length;
+  const inProgressCount = galleryCounts.running;
+  const completedCount = galleryCounts.completed;
 
-  // Poll the generation job named in the URL until it settles. The ref drops a
-  // response for a job the user has since replaced.
+  // Clear route-specific output before applying the newly selected resource.
   useEffect(() => {
-    jobIdRef.current = jobId;
     hydratedJobIdRef.current = '';
     setJob(null);
     setPreview(null);
     setBuilt(null);
   }, [jobId]);
-  const jobSettled = job?.id === jobId && job.status !== 'running';
-  const pollJob = useCallback(async () => {
-    const requested = jobId;
-    // Only a 404 means the job is gone; any other failure rethrows so the
-    // poller keeps trying on its next tick.
-    const next = await getCodeAnimationJob(requested, { silent: true }).catch((error) => {
-      if (error.status === 404) return { id: requested, status: 'missing', error: error.message };
+  const jobResource = useSocketResource(async () => {
+    if (!jobId) return null;
+    // Only a 404 means the job is gone. Transient failures retain the current
+    // output and offer retry, with recovery on events, reconnect or tab re-show.
+    return getCodeAnimationJob(jobId, { silent: true }).catch((error) => {
+      if (error.status === 404) return { id: jobId, status: 'missing', error: error.message };
       throw error;
     });
-    if (jobIdRef.current !== requested) return;
+  }, {
+    namespace: 'code-animation',
+    events: JOB_EVENTS,
+    resourceKey: jobId,
+    matchesEvent: (payload) => !!jobId && payload?.id === jobId,
+  });
+
+  useEffect(() => {
+    const next = jobResource.data;
+    if (!next) return;
+    const requested = jobId;
     setJob(next);
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
     else setPreview(null);
     if (next.status !== 'missing') {
-      galleryRequestRef.current += 1;
       setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
         .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
     }
@@ -369,8 +404,7 @@ export default function CodeAnimation() {
         briefKey: JSON.stringify(toBrief(restoredDraft)),
       } : null);
     }
-  }, [jobId]);
-  useAutoRefetch(pollJob, JOB_POLL_MS, { enabled: !!jobId && !jobSettled, pollOnly: true });
+  }, [jobId, jobResource.data]);
 
   const handleImages = async (event) => {
     const files = [...(event.target.files || [])];
@@ -398,6 +432,22 @@ export default function CodeAnimation() {
     referenceImages: prev.referenceImages.map((ref) => (ref.filename === filename ? { ...ref, ...patch } : ref)),
   }));
 
+  const playableTracks = useMemo(() => libraryTracks.filter((t) => Boolean(t.audioFilename)), [libraryTracks]);
+
+  const handlePickTrack = (track) => {
+    if (!track) return;
+    update({
+      audio: {
+        source: 'track',
+        trackId: track.id,
+        label: track.title || 'Untitled track',
+        durationSeconds: track.durationSec ?? null,
+        notes: '',
+        url: track.audioFilename ? `/data/music/${encodeURIComponent(track.audioFilename)}` : '',
+      },
+    });
+  };
+
   const handleAudio = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -405,7 +455,7 @@ export default function CodeAnimation() {
     setUploading(true);
     const [durationSeconds, saved] = await Promise.all([readAudioDuration(file), uploadOrToast(file)]);
     setUploading(false);
-    if (saved) update({ audio: { filename: saved.filename, label: file.name, durationSeconds, notes: '', url: saved.path } });
+    if (saved) update({ audio: { source: 'upload', filename: saved.filename, label: file.name, durationSeconds, notes: '', url: saved.path } });
   };
 
   // Ask a model to write the brief from the universe's bible and canon cast,
@@ -474,7 +524,6 @@ export default function CodeAnimation() {
     setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);
-    galleryRequestRef.current += 1;
     setSavedJobs((previous) => [galleryJob(started), ...previous.filter((item) => item.id !== started.id)]);
     navigate(`/code-animation/${encodeURIComponent(started.id)}`);
   };
@@ -507,9 +556,8 @@ export default function CodeAnimation() {
             <Sparkles className="h-4 w-4" /> New animation
           </Link>
         </div>
-        {galleryError && <p role="status" className="text-xs text-port-error">{galleryError}</p>}
-        {!galleryLoaded && <p className="text-xs text-gray-500">Loading animations…</p>}
-        {galleryLoaded && savedJobs.length === 0 && !galleryError && (
+        {!gallery.loaded && <p className="text-xs text-gray-500">Loading animations…</p>}
+        {gallery.loaded && savedJobs.length === 0 && !gallery.error && (
           <p className="text-xs text-gray-500">Generated animations will appear here so you can reopen them later.</p>
         )}
         {savedJobs.length > 0 && (
@@ -534,7 +582,7 @@ export default function CodeAnimation() {
                 >
                   <div className="flex items-center gap-2">
                     <StatusIcon className={`h-4 w-4 shrink-0 ${item.status === 'failed' ? 'text-port-error' : item.status === 'completed' ? 'text-port-success' : 'text-port-accent'}`} />
-                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || item.concept || 'Untitled animation'}</p>
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || 'Untitled animation'}</p>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-2 text-xs text-gray-500">
                     <span>{statusLabel}{item.model ? ` · ${item.model}` : ''}</span>
@@ -545,44 +593,25 @@ export default function CodeAnimation() {
             })}
           </div>
         )}
+        <InfiniteScrollFooter hasMore={gallery.hasMore} loading={gallery.loading} error={gallery.error}
+          onLoadMore={gallery.loadMore} autoLoad={false} label="Load older animations" />
       </section>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-style-heading">
             <h2 id="ca-style-heading" className="flex items-center gap-2 text-sm font-semibold text-white"><Globe className="h-4 w-4 text-port-accent" /> Style</h2>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label htmlFor="ca-universe" className={labelClass}>Universe (sets the art style)</label>
-                <select id="ca-universe" value={draft.universeId} onChange={(event) => update({ universeId: event.target.value })} className={inputClass}>
-                  <option value="">No universe</option>
-                  {universes.map((universe) => <option key={universe.id} value={universe.id}>{universe.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ca-board" className={labelClass}>Mood board</label>
-                <select id="ca-board" value={draft.moodBoardChoice} onChange={(event) => update({ moodBoardChoice: event.target.value })} className={inputClass}>
-                  <option value={BOARD_FOLLOW_UNIVERSE}>Universe&apos;s linked board</option>
-                  <option value={BOARD_NONE}>No mood board</option>
-                  {boards.map((board) => <option key={board.id} value={board.id}>{board.name}</option>)}
-                </select>
-              </div>
-            </div>
-            {activeStyle && (activeStyle.influences?.embrace?.length > 0 || activeStyle.influences?.avoid?.length > 0) && (
-              <div className="flex flex-wrap gap-1 text-[11px]">
-                {(activeStyle.influences.embrace || []).slice(0, 12).map((token) => (
-                  <span key={`e-${token}`} className="rounded bg-port-accent/15 px-1.5 py-0.5 text-port-accent">{token}</span>
-                ))}
-                {(activeStyle.influences.avoid || []).slice(0, 6).map((token) => (
-                  <span key={`a-${token}`} className="rounded bg-port-error/15 px-1.5 py-0.5 text-port-error line-through">{token}</span>
-                ))}
-              </div>
-            )}
-            {draft.universeId && !activeStyle && (
-              <p className="text-xs text-gray-500">
-                This universe has no style tokens yet, so only its notes and style references will be used. <Link to={`/universes/${encodeURIComponent(draft.universeId)}`} className="text-port-accent hover:underline">Edit its style guide</Link>
-              </p>
-            )}
+            <UniverseMoodBoardPicker
+              lists={styleLists}
+              idPrefix="ca"
+              universeLabel="Universe (sets the art style)"
+              labelClass={labelClass}
+              inputClass={inputClass}
+              universeId={draft.universeId}
+              moodBoardChoice={draft.moodBoardChoice}
+              onUniverseChange={(universeId) => update({ universeId })}
+              onBoardChoiceChange={(moodBoardChoice) => update({ moodBoardChoice })}
+            />
             <div>
               <label htmlFor="ca-style-notes" className={labelClass}>Style refinements <span className="text-gray-600">(optional, applied on top of the universe style)</span></label>
               <textarea id="ca-style-notes" rows={2} value={draft.styleNotes} maxLength={limits?.styleNotesMax} onChange={(event) => update({ styleNotes: event.target.value })} placeholder="Heavier film grain, slower camera, dusk palette" className={`${inputClass} resize-y`} />
@@ -706,13 +735,25 @@ export default function CodeAnimation() {
                   <div className="flex items-center gap-2 text-sm text-gray-200">
                     <span className="min-w-0 truncate">{draft.audio.label}</span>
                     {draft.audio.durationSeconds ? <span className="text-xs text-gray-500">{draft.audio.durationSeconds.toFixed(1)}s</span> : null}
+                    <span className="rounded bg-port-card-hover px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-gray-400">
+                      {draft.audio.source === 'track' ? 'Library track' : 'Upload'}
+                    </span>
                     <button type="button" aria-label="Remove audio track" onClick={() => update({ audio: null })} className="ml-auto text-gray-500 hover:text-port-error"><X className="h-4 w-4" /></button>
                   </div>
                   <textarea aria-label="Audio notes" rows={2} value={draft.audio.notes} maxLength={limits?.audioNotesMax} onChange={(event) => update({ audio: { ...draft.audio, notes: event.target.value } })} placeholder="120 BPM; soft intro, drop at 0:16, fade at 0:40" className={`${inputClass} resize-y`} />
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <input id="ca-audio" type="file" accept={audioAccept} onChange={handleAudio} disabled={uploading} className={fileInputClass} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input id="ca-audio" type="file" accept={audioAccept} onChange={handleAudio} disabled={uploading} className={`${fileInputClass} flex-1 min-w-[200px]`} />
+                    <button
+                      type="button"
+                      onClick={() => setTrackPickerOpen(true)}
+                      className={buttonSecondary}
+                    >
+                      <Music2 className="h-3.5 w-3.5" /> Pick from music library
+                    </button>
+                  </div>
                   <label className="flex items-center gap-2 text-xs text-gray-300">
                     <input type="checkbox" checked={draft.soundtrack === 'procedural'} onChange={(event) => update({ soundtrack: event.target.checked ? 'procedural' : 'none' })} />
                     No track? Have the code compose a procedural soundtrack
@@ -788,6 +829,12 @@ export default function CodeAnimation() {
               {job?.status === 'failed' && <span className="text-xs text-port-error">Generation failed: {job.error}</span>}
               {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available.</span>}
             </div>
+            {jobResource.error && (
+              <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-error">
+                <span>Could not refresh this generation. Its displayed status may be out of date.</span>
+                <button type="button" onClick={jobResource.refetch} className={buttonSecondary}>Retry job status</button>
+              </div>
+            )}
             <details className="text-xs text-gray-400">
               <summary className="cursor-pointer select-none">Preview HTML from another LLM</summary>
               <div className="mt-2 space-y-2">
@@ -808,6 +855,16 @@ export default function CodeAnimation() {
           </section>
         </div>
       </div>
+      <AlbumTrackPicker
+        open={trackPickerOpen}
+        tracks={playableTracks}
+        onClose={() => setTrackPickerOpen(false)}
+        onAdd={([selected]) => {
+          if (selected) handlePickTrack(selected);
+        }}
+        single
+        title="Pick soundtrack track"
+      />
     </div>
   );
 }

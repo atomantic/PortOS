@@ -7,8 +7,12 @@ import userEvent from '@testing-library/user-event';
 // The stub deliberately drops `children`: rendering the scene would mount
 // <bufferGeometry>/<mesh> as unknown DOM elements, and the r3f refs they hand
 // back are HTMLElements without the three.js geometry API.
+let sceneElement = null;
 vi.mock('@react-three/fiber', () => ({
-  Canvas: ({ frameloop }) => <div data-testid="graph-canvas" data-frameloop={frameloop} />,
+  Canvas: ({ children, frameloop }) => {
+    sceneElement = children;
+    return <div data-testid="graph-canvas" data-frameloop={frameloop} />;
+  },
   // GraphScene reads the live camera through this; it is never rendered here,
   // but the named import has to resolve.
   useThree: () => ({ camera: null, size: { width: 0, height: 0 } }),
@@ -279,5 +283,57 @@ describe('recordBody (SongBook nodes, #4105)', () => {
     expect(recordBody({ description: 'goal blurb', notes: 'aside' })).toBe('goal blurb');
     expect(recordBody(null)).toBe('');
     expect(recordBody({})).toBe('');
+  });
+});
+
+
+describe('selection detail identity', () => {
+  it('removes previous body, tags and dates while another record loads or fails', async () => {
+    let rejectNext;
+    api.getBrainIdea.mockResolvedValue({ content: 'Alpha private body', tags: ['alpha-tag'], createdAt: '2026-01-02' });
+    api.getBrainGoal.mockImplementation(() => new Promise((_resolve, reject) => { rejectNext = reject; }));
+    await renderGraph();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
+    expect(screen.getByText('Alpha private body')).toBeInTheDocument();
+    expect(screen.getByText('alpha-tag')).toBeInTheDocument();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[1]); });
+    expect(screen.queryByText('Alpha private body')).not.toBeInTheDocument();
+    expect(screen.queryByText('alpha-tag')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Created:/)).not.toBeInTheDocument();
+    expect(screen.getByText('second')).toBeInTheDocument();
+    await act(async () => { rejectNext(new Error('request failed')); });
+    expect(screen.getByText('second')).toBeInTheDocument();
+  });
+
+  it('invalidates detail when the same id resolves to a different Brain type', async () => {
+    const user = userEvent.setup();
+    api.getBrainGraph.mockResolvedValueOnce(GRAPH).mockResolvedValue({
+      ...GRAPH, nodes: [{ ...GRAPH.nodes[0], brainType: 'goals', summary: 'Goal summary' }], edges: [],
+    });
+    api.getBrainGraphSearchIndex.mockResolvedValue({ nodes: [GRAPH.nodes[0]] });
+    api.getBrainIdea.mockResolvedValue({ content: 'Original idea body' });
+    api.getBrainGoal.mockImplementation(() => new Promise(() => {}));
+    await renderGraph();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
+    expect(screen.getByText('Original idea body')).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText(/search memories/i), 'Alpha');
+    await user.click(await screen.findByRole('option', { name: /Alpha/i }));
+    expect(screen.queryByText('Original idea body')).not.toBeInTheDocument();
+    expect(screen.getByText('Goal summary')).toBeInTheDocument();
+  });
+
+  it('discards a superseded late response after selection changes', async () => {
+    let resolveIdea;
+    api.getBrainIdea.mockImplementation(() => new Promise(resolve => { resolveIdea = resolve; }));
+    api.getBrainGoal.mockResolvedValue({ content: 'Goal detail' });
+    await renderGraph();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[1]); });
+    expect(screen.getByText('Goal detail')).toBeInTheDocument();
+    await act(async () => { resolveIdea({ content: 'Late idea detail' }); });
+    expect(screen.queryByText('Late idea detail')).not.toBeInTheDocument();
+    expect(screen.getByText('Goal detail')).toBeInTheDocument();
+    await act(async () => { sceneElement.props.onSelect(null); });
+    expect(screen.queryByText('Goal detail')).not.toBeInTheDocument();
   });
 });

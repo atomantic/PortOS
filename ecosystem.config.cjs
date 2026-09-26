@@ -13,18 +13,42 @@ const BASE_ENV = {
 
 // Read a couple of machine-local settings from .env (pm2 doesn't auto-load it
 // here): PGMODE → PostgreSQL port; PORTOS_SERVER_MAX_MEMORY → the server restart
-// ceiling below. An explicit process.env wins over the .env file so a one-off
-// shell override still works.
+// ceiling below; PGPASSWORD/PGUSER/PGDATABASE/PGHOST/PGPORT/PGPORT_DOCKER → the
+// same DB connection settings scripts/setup-db.js already reads from .env, so a
+// value set only in .env (not exported into the shell) still reaches the
+// running server instead of silently falling back to the `portos` defaults
+// while setup provisioned something else (#8447). An explicit process.env wins
+// over the .env file so a one-off shell override still works.
 const fs = require('fs');
 const envFile = path.join(__dirname, '.env');
 const readEnvValue = (content, key) => content.match(new RegExp(`^${key}=(\\S+)`, 'm'))?.[1] ?? null;
 let pgMode = 'docker';
 let envServerMaxMemory = null;
+let envPgPassword = null;
+let envPgUser = null;
+let envPgDatabase = null;
+let envPgHost = null;
+let envPgPort = null;
+let envPgPortDocker = null;
 try {
   const envContent = fs.readFileSync(envFile, 'utf8');
   pgMode = readEnvValue(envContent, 'PGMODE') || pgMode;
   envServerMaxMemory = readEnvValue(envContent, 'PORTOS_SERVER_MAX_MEMORY');
+  envPgPassword = readEnvValue(envContent, 'PGPASSWORD');
+  envPgUser = readEnvValue(envContent, 'PGUSER');
+  envPgDatabase = readEnvValue(envContent, 'PGDATABASE');
+  envPgHost = readEnvValue(envContent, 'PGHOST');
+  envPgPort = readEnvValue(envContent, 'PGPORT');
+  envPgPortDocker = readEnvValue(envContent, 'PGPORT_DOCKER');
 } catch { /* no .env file — default to docker */ }
+
+// Same precedence as scripts/setup-db.js: process.env → .env → default. Keep the
+// 'portos' password fallback (AGENTS.md: intentional backward-compatible
+// default) — this only changes WHERE a user-set value can come from.
+const PG_USER = process.env.PGUSER || envPgUser || 'portos';
+const PG_DATABASE = process.env.PGDATABASE || envPgDatabase || 'portos';
+const PG_PASSWORD = process.env.PGPASSWORD || envPgPassword || 'portos';
+const PG_HOST = process.env.PGHOST || envPgHost || 'localhost';
 
 // pm2 restarts portos-server when its RSS crosses this — originally a memory-leak
 // safety valve. The committed default stays modest so the guard still fires on a
@@ -136,6 +160,14 @@ const PORTS = {
   POSTGRES: pgMode === 'native' ? 5432 : 5561 // Active PostgreSQL port (unused in file mode)
 };
 
+// The override var differs per mode (native dials PGPORT, Docker dials the host
+// mapping PGPORT_DOCKER — see docker-compose.yml), so resolve whichever one
+// applies to the active pgMode; PORTS.POSTGRES (above) is already the correct
+// per-mode default when neither is set.
+const PG_PORT = Number(
+  (pgMode === 'native' ? (process.env.PGPORT || envPgPort) : (process.env.PGPORT_DOCKER || envPgPortDocker)) || PORTS.POSTGRES
+);
+
 module.exports = {
   PORTS, // Export for other configs to reference
 
@@ -169,8 +201,11 @@ module.exports = {
         PORT: PORTS.API,
         PORTOS_HTTP_PORT: PORTS.API_LOCAL, // Loopback HTTP mirror when HTTPS is active
         HOST: '0.0.0.0',
-        PGPORT: PORTS.POSTGRES,
-        PGPASSWORD: process.env.PGPASSWORD || 'portos',
+        PGHOST: PG_HOST,
+        PGPORT: PG_PORT,
+        PGUSER: PG_USER,
+        PGDATABASE: PG_DATABASE,
+        PGPASSWORD: PG_PASSWORD,
         ...(pgMode === 'file' ? { MEMORY_BACKEND: 'file' } : {}),
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
@@ -184,10 +219,9 @@ module.exports = {
       // wild is "SIGINT received" 5–30s after an image render completes,
       // killing in-flight jobs.
       //
-      // Code edits are picked up by a manual `pm2 restart ecosystem.config.cjs`
-      // — that's the documented workflow anyway (pm2 restart doesn't rebuild
-      // the client; you need npm run build / npm start). So losing the
-      // auto-restart-on-save behavior costs nothing in practice.
+      // Code edits are picked up by `npm run pm2:restart` in production or
+      // `npm run dev` during development. Restarting does not rebuild the
+      // client; use `npm run build` / `npm start` for production assets.
       //
       // To re-enable for ad-hoc dev work: flip this to `watch: ['server']`
       // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
@@ -206,7 +240,14 @@ module.exports = {
       // force-exit so the app always controls its own exit. (The graceful path now
       // completes in ~1s — the double-close hang it used to stall on is fixed in
       // server/index.js's shutdown() — so this ceiling is a backstop, not the norm.)
-      kill_timeout: 12000
+      kill_timeout: 12000,
+      // Exponential backoff restart delay when the server exits repeatedly (e.g.
+      // when Postgres is slow to start on boot). PM2 starts at 1s, doubles after
+      // each restart, and resets on a stable run (stays up longer than min_uptime,
+      // default 1s). This prevents a crash loop that monopolizes the CPU and starves
+      // slow database startup. The DB gate (gateOnDatabase) retries for ~120s before
+      // exiting, so this delay kicks in only after that window is exhausted.
+      exp_backoff_restart_delay: 1000
       // NOTE: do NOT set `treekill: false` here to protect long media jobs from
       // restart-SIGINT. Tried 2026-06-14: pm2 then fails to reap the old node
       // process on restart, so it lingers holding :5555 and the new instance
@@ -229,7 +270,15 @@ module.exports = {
       env: {
         ...BASE_ENV,
         PORT: PORTS.COS,
-        HOST: '127.0.0.1'
+        HOST: '127.0.0.1',
+        // CoS agents shell out to db.sh / backup.js for DB admin and backup
+        // work — give them the same connection settings as portos-server so
+        // they agree with what setup actually provisioned (#8447).
+        PGHOST: PG_HOST,
+        PGPORT: PG_PORT,
+        PGUSER: PG_USER,
+        PGDATABASE: PG_DATABASE,
+        PGPASSWORD: PG_PASSWORD
       },
       watch: false,
       autorestart: true,
@@ -242,6 +291,7 @@ module.exports = {
       kill_timeout: 30000
     },
     {
+      // Selected by `npm run dev`; production startup explicitly excludes Vite.
       name: 'portos-ui',
       script: path.join(__dirname, 'client', 'node_modules', 'vite', 'bin', 'vite.js'),
       cwd: path.join(__dirname, 'client'),

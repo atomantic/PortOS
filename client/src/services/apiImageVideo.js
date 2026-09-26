@@ -630,3 +630,7 @@ export const setMediaModelEnabled = (id, enabled, options = {}) => request(`/ima
 export const requestMediaModelSupport = (input, options = {}) => request('/image-video/models/support-request', {
   ...options, method: 'POST', body: JSON.stringify(input),
 });
+
+export const updateVideoPoster = (id, atSec, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/poster`, {
+  method: 'PATCH', body: JSON.stringify({ atSec }), ...options,
+});

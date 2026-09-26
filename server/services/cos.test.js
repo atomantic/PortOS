@@ -767,17 +767,18 @@ describe('localEndpointOfProvider (#4834)', () => {
 describe('cloudSwarmThreadCapacity', () => {
   it('reserves one root thread in addition to every configured cloud worker', () => {
     expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 6)).toBe(7);
-    expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, '6')).toBe(7);
+    expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 12)).toBe(13);
+    expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, '12')).toBe(13);
   });
 
   it('does not lift the harness cap for a local inference endpoint', () => {
-    expect(cloudSwarmThreadCapacity(LOCAL_TUI_PROVIDER, 6)).toBeNull();
+    expect(cloudSwarmThreadCapacity(LOCAL_TUI_PROVIDER, 12)).toBeNull();
   });
 
   it('does not override the harness outside a valid multi-worker swarm', () => {
     expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 1)).toBeNull();
     expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 2.5)).toBeNull();
-    expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 7)).toBeNull();
+    expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, 13)).toBeNull();
     expect(cloudSwarmThreadCapacity(CLOUD_PROVIDER, null)).toBeNull();
   });
 });

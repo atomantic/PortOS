@@ -283,6 +283,31 @@ describe('decisionLog.js', () => {
   });
 
   describe('getDecisionSummary', () => {
+    it('invalidates once when the next collapsed decision leaves the rolling window', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-02T12:00:00Z'));
+      const { dashboardEvents, scheduleDashboardExpiry } = await import('./dashboardEvents.js');
+      const changed = vi.fn();
+      dashboardEvents.on('cos:decisions:changed', changed);
+      try {
+        readJSONFile.mockResolvedValue(makeDecisionData({ decisions: [{
+          id: 'example', type: DECISION_TYPES.TASK_SKIPPED, reason: 'Example', count: 2,
+          timestamp: '2026-01-01T11:00:00Z', lastTimestamp: '2026-01-01T12:00:30Z',
+        }] }));
+        expect((await getDecisionSummary()).last24Hours.total).toBe(2);
+        await getDecisionSummary(); // another browser shares the same expiry
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(changed).toHaveBeenCalledTimes(1);
+        expect((await getDecisionSummary()).last24Hours.total).toBe(0);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(changed).toHaveBeenCalledTimes(1);
+      } finally {
+        scheduleDashboardExpiry('cos:decisions:changed', null);
+        dashboardEvents.off('cos:decisions:changed', changed);
+        vi.useRealTimers();
+      }
+    });
+
     it('should return summary for last 24 hours', async () => {
       const now = new Date();
       const recentTimestamp = new Date(now.getTime() - 1000 * 60 * 60).toISOString(); // 1 hour ago

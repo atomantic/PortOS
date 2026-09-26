@@ -2,7 +2,7 @@
  * Unit tests for the catalog tag-taxonomy DB helpers (`normalizeTags`,
  * `upsertTagFromPeer`). Postgres is mocked with an in-memory `catalog_tags`
  * map so the suite runs without a live database — we assert on the canonical
- * dedup behavior + first-write-wins casing + the peer parent-less retry.
+ * dedup behavior + first-write-wins casing + durable peer deferral.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -38,6 +38,7 @@ vi.mock('../lib/db.js', () => ({
         failParentFkOnce = false;
         const err = new Error('insert or update violates foreign key constraint');
         err.code = '23503';
+        err.constraint = 'catalog_tags_parent_id_fkey';
         throw err;
       }
       const isInsert = !tagStore.has(id);
@@ -127,14 +128,28 @@ describe('upsertTagFromPeer', () => {
     expect(tagStore.get('cat-tag-noir').label).toBe('Noir');
   });
 
-  it('retries parent-less on an FK violation so the child row still lands', async () => {
+  it('durably defers a missing-parent row without materializing a flattened child', async () => {
     failParentFkOnce = true; // first attempt (with parent) throws 23503
     const res = await upsertTagFromPeer({
       id: 'cat-tag-child', label: 'Child', parentId: 'cat-tag-missing',
       createdAt: 't', updatedAt: 't',
     });
-    expect(res.applied).toBe(true);
-    // Row landed with a null parent (the parent can re-link on a later page).
-    expect(tagStore.get('cat-tag-child').parentId).toBeNull();
+    expect(res).toEqual({ applied: false, isInsert: false, deferred: true });
+    expect(tagStore.has('cat-tag-child')).toBe(false);
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining('INSERT INTO catalog_pending_applies'),
+      ['tags', 'cat-tag-child', 'cat-tag-missing', 't', expect.stringContaining('"parentId":"cat-tag-missing"')],
+    );
   });
+  it('rejects the child when the durable inbox write fails', async () => {
+    failParentFkOnce = true;
+    const original = query.getMockImplementation();
+    query.mockImplementationOnce(original).mockRejectedValueOnce(new Error('inbox unavailable'));
+    await expect(upsertTagFromPeer({
+      id: 'cat-tag-child', label: 'Child', parentId: 'cat-tag-missing',
+      createdAt: 't', updatedAt: 't',
+    })).rejects.toThrow('inbox unavailable');
+    expect(tagStore.has('cat-tag-child')).toBe(false);
+  });
+
 });

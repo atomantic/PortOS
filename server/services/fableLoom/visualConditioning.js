@@ -18,7 +18,7 @@ import {
 import { resolveFableLoomProtagonistPresence } from '../../lib/fableLoomPlayback.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../../lib/reactorVideoClip.js';
 import {
-  mergeNegativePromptTokens, stripStyleClause, universeVisualStyleTokens,
+  mergeNegativePromptTokens, stripStyleClause, universeStylePreset, universeVisualStyleTokens,
 } from '../../lib/universeVisualStyle.js';
 import { getUniverse } from '../universeBuilder.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
@@ -222,7 +222,7 @@ export async function compileFableLoomVisualRequest({
   const episode = loom?.episodes?.find((item) => item.id === tag.episodeId);
   const node = episode?.nodes?.find((item) => item.id === tag.nodeId);
   if (!loom || !episode || !node) throw new ServerError('FableLoom scene not found', { status: 404, code: 'NOT_FOUND' });
-  const series = !loom.universeId && loom.seriesId ? await loadSeries(loom.seriesId).catch(() => null) : null;
+  const series = loom.seriesId ? await loadSeries(loom.seriesId).catch(() => null) : null;
   const universeId = loom.universeId || series?.universeId || null;
   const universe = universeId ? await loadUniverse(universeId) : null;
   // Legacy/unlinked scenes keep their pre-compiler prompt-only behavior. A
@@ -356,10 +356,17 @@ export async function compileFableLoomVisualRequest({
   ]).join('. '));
   // Curated visual tokens only — `universe.styleNotes` is writing-stage
   // direction (see lib/universeVisualStyle.js). The browser composes this same
-  // preset onto the scene prompt before POSTing, so strip ITS copy and keep
-  // ours: the clause below leads the prompt, and only a leading copy gets the
-  // early-token weighting a diffusion model gives style.
-  const universeStyle = universeVisualStyleTokens(universe).embrace.join(', ');
+  // preset (universe embrace tokens PLUS the series style override, in
+  // whichever mode the series is set to) onto the scene prompt before
+  // POSTing, so build the identical clause here and strip ITS copy rather
+  // than emitting the tokens again: the clause below leads the prompt, and
+  // only a leading copy gets the early-token weighting a diffusion model
+  // gives style. Using the shared `universeStylePreset` (not just the raw
+  // embrace tokens) is what keeps a series override — prepend, append, or
+  // override — in sync between the FableLoom preview and the actual render
+  // (#8442); the plain embrace-only clause never matched an authored prompt
+  // that led with an override.
+  const universeStyle = universeStylePreset(universe, series)?.prompt || '';
   const authoredBody = stripStyleClause(authoredPrompt, universeStyle);
   const protagonistName = (universe.characters || []).find((character) => character.id === bindings.protagonistId)?.name || 'the canonical protagonist';
   const visibleCast = bindings.boundCharacters.map(({ character }) => character.name).filter(Boolean);

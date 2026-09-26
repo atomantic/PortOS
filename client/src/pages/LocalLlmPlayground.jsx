@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAutoRefetch } from '../hooks/useAutoRefetch.js';
+import { useSocketResource } from '../hooks/useSocketResource.js';
 import useMounted from '../hooks/useMounted';
 import { Link, useSearchParams } from 'react-router';
 import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Cpu, Gauge, MessageSquare, Play, RefreshCw, Send, TriangleAlert, X } from 'lucide-react';
@@ -14,6 +14,8 @@ import { formatBytes, recommendedRamGb, timeUntil } from '../utils/formatters';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities';
 import { compareLocalLlmModels, getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
+
+const LOADED_EVENTS = ['loaded-models:changed'];
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
@@ -238,9 +240,9 @@ export default function LocalLlmPlayground() {
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [modelLoadError, setModelLoadError] = useState('');
   // Ollama models currently resident in VRAM/unified memory (from `/api/ps`),
-  // polled so the sidebar can flag which models are warm — and which one is
+  // observed so the sidebar can flag which models are warm — and which one is
   // actively serving the in-flight run.
-  const [loadedModels, setLoadedModels] = useState([]);
+
   const [selectedTargets, setSelectedTargets] = useState(() => parseTargetsParam(searchParams));
   const [activeMode, setActiveMode] = useState(() => searchParams.get('mode') === 'compare' ? 'compare' : 'chat');
   const [runMode, setRunMode] = useState('round-robin');
@@ -313,15 +315,12 @@ export default function LocalLlmPlayground() {
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const refreshLoaded = useCallback(() => {
-    return getLoadedLlmModels({ silent: true })
-      .then((res) => { if (mountedRef.current) setLoadedModels(res?.ollama || []); })
-      .catch(() => { if (mountedRef.current) setLoadedModels([]); });
-  }, []);
-
-  // Poll which models are warm in memory. A faster cadence while a run is busy
-  // so the "serving" flag and freed-slot countdown stay live; relaxed when idle.
-  useAutoRefetch(refreshLoaded, busy ? 2000 : 6000, { pollOnly: true });
+  const loadedResource = useSocketResource(
+    () => getLoadedLlmModels({ silent: true }),
+    { namespace: 'loaded-models', events: LOADED_EVENTS },
+  );
+  const loadedModels = loadedResource.data?.ollama || [];
+  const loadedUnknown = loadedResource.error || loadedResource.data?.sourceErrors?.includes('ollama');
 
   const installedTargets = useMemo(() => {
     const models = [];
@@ -349,12 +348,12 @@ export default function LocalLlmPlayground() {
   // shared `normalizeCatalogId` reconciles `:latest` and casing on both sides.
   const loadedByKey = useMemo(() => {
     const map = new Map();
-    for (const m of loadedModels) {
+    for (const m of loadedUnknown ? [] : loadedModels) {
       const key = normalizeCatalogId('ollama', m.id || m.name);
       if (key) map.set(key, m);
     }
     return map;
-  }, [loadedModels]);
+  }, [loadedModels, loadedUnknown]);
 
   useEffect(() => {
     if (loadingStatus || status == null) return;
@@ -519,13 +518,14 @@ export default function LocalLlmPlayground() {
             <h1 className="text-lg md:text-2xl font-bold text-white truncate">Local LLM Playground</h1>
             <p className="text-xs md:text-sm text-gray-500 truncate">
               {selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'} selected
-              {loadedModels.length > 0 && (
+              {loadedUnknown && <span className="text-port-warning"> · Memory status unavailable</span>}
+              {!loadedUnknown && loadedModels.length > 0 && (
                 <span className="text-port-success"> · {loadedModels.length} in memory</span>
               )}
             </p>
           </div>
         </div>
-        <button onClick={() => { loadStatus(); refreshLoaded(); }} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
+        <button onClick={() => { loadStatus(); loadedResource.refetch(); }} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
           <RefreshCw size={16} className={loadingStatus ? 'animate-spin' : ''} />
         </button>
       </div>

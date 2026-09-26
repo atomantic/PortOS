@@ -96,17 +96,20 @@ After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore 
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish; dry-run performs neither replay nor schema changes.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
-| `{ status: 'ok', dryRun, sizeBytes, tableCount }` | Dry-run report, or a successful real restore |
+| `{ status: 'ok', dryRun, sizeBytes, tableCount }` | Dry-run report, or a successful real restore (which adds `syncCursorsRewound`, the number of peers rewound) |
 | `{ status: 'skipped', reason: 'no_dump' }` | No `portos-db.sql` in the snapshot (or 0 bytes) |
 | `{ status: 'skipped', reason: 'not_configured' }` | Real restore requested but Postgres is unreachable — refuses to half-restore |
 | `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
+| `{ status: 'failed', reason: 'restore_sync_resync', error }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) |
+
+**Peer sync repair (#8710).** Memories and the seven Catalog tables federate through per-stream feed positions. A restore breaks both directions: this install's per-peer pull cursors (`data/instances_sync_cursors.json`) still point past rows the restore discarded, and the dump rewinds each `<table>_sync_feed_seq`, so new rows would reuse positions peers have already passed. Inside the maintenance window, the restore records each feed sequence before replay. After reconciliation, it sets each sequence back to at least that value and rewinds every peer's `memorySeq` and `catalogSeqs` to `0`. Brain cursors and snapshot checksums are left alone. The next sync replays each peer's streams through the idempotent last-writer-wins apply paths. A sync already in flight during the restore does not save its pre-restore cursor positions. Dry-run and failed restores change neither cursors nor sequences.
 
 On schema-reconciliation failure, restart PortOS to retry its schema upgrades and pending migrations. If recovery still fails, inspect the server logs and repair the database before continuing to use affected features. Reconciliation can partially apply upgrades; it is separate from the completed replay transaction.
 
@@ -118,11 +121,11 @@ Separate from snapshot restore: `server/routes/database.js` can copy data **betw
 
 ## Retention & deletion
 
-Left unbounded, `snapshots/<hostname>/` grows forever — every prior full DB dump stays reachable, so a record deleted from the live database (including `privacy_vault_records`, `privacy_consents`, and `privacy_broker_cases`) remains restorable from an old snapshot indefinitely. `server/lib/backupConfig.js` resolves a per-source `retentionCount`, and `runBackup()` prunes with it after every successful run (`pruneOldSnapshots()` in `backup.js`).
+Left unbounded, `snapshots/<hostname>/` grows forever — every prior full DB dump stays reachable, so a record deleted from the live database (including `privacy_vault_records`, `privacy_consents`, and `privacy_broker_cases`) remains restorable from an old snapshot indefinitely. `server/lib/backupConfig.js` resolves a per-source `retentionCount`, and `runBackup()` prunes with it after a successful database dump, or when the explicit file-backend escape hatch skips the dump (`pruneOldSnapshots()` in `backup.js`). A degraded run whose database dump failed skips pruning and logs a warning, preserving older snapshots until a later dump succeeds.
 
 - **New installs default to 30 completed snapshots per source.** The default ships as `backup.retentionCount: 30` in `data.reference/settings.json`, copied only into an install that has no `data/settings.json` yet — see the comment on `resolveRetentionCount()` for why this, not a migration, is what keeps an existing install from silently losing its archive. Operators choose 1–365, or Unlimited, from the Backup settings tab.
 - **`retentionCount` absent or explicitly `null` both mean unlimited** — no pruning runs. This is why an install that predates this setting keeps every snapshot until the operator saves a choice: it has no stored value, and absence resolves to unlimited, not to the new-install default.
-- **Pruning runs only after a run reaches a completed snapshot** (rsync finished and a `pg_dump` was attempted, even if it degraded) — a run that fails before that point takes `runBackup()`'s `fail()` path and never prunes. A prune failure is logged and does not fail an otherwise-successful backup.
+- **Pruning runs only after a run reaches a completed snapshot with a usable database dump** (`pg_dump` succeeded, or was explicitly skipped by the file-backend escape hatch). A degraded run whose database dump failed keeps older snapshots and reports zero pruned snapshots; retention resumes after a later successful dump. A run that fails before completion never prunes, and a prune failure is logged without failing an otherwise-successful backup.
 - **Pruning is scoped to the CURRENT machine's namespace** (`snapshots/<hostname>/`) and only ever deletes snapshots whose `snapshotState()` reports neither `incomplete` nor `failed`. It never touches another machine's namespace in a shared destination, the legacy pre-namespace root, or an in-progress/failed snapshot — those stay until the operator deletes them explicitly.
 - **`DELETE /api/backup/snapshots/:snapshotId?source=<source>`** (`backup.deleteSnapshot()`) permanently removes exactly the selected source/ID pair, immediately — there is no undo and it is never automatic. It shares `resolveSnapshotPath()`'s path-traversal and symlink guards with restore/download, and refuses a snapshot that is still being written (`SNAPSHOT_INCOMPLETE`); unlike restore, a `.failed` snapshot **is** deletable. The Backup settings tab's snapshot history exposes this as a per-row delete action behind a confirmation dialog.
 
@@ -151,3 +154,35 @@ This is **read-time resolution only**: nothing on disk changes, sparse configura
 
 - [Storage Classification Contract](./STORAGE.md) — which data lives in Postgres vs files (and therefore which half of a snapshot captures it).
 - [`docs/superpowers/specs/2026-06-05-verified-pg-backup-design.md`](./superpowers/specs/2026-06-05-verified-pg-backup-design.md) — design rationale for verified, restorable DB backups.
+
+### Restoring an older database snapshot
+
+Database restore is a **full replacement**, not a merge. It removes current
+PortOS tables, functions and sequence state before replaying the snapshot,
+including tables introduced after the backup. Current schema upgrades and
+ordered migrations then recreate newer tables consistently without retaining
+post-snapshot records. The public namespace's owner and permissions are retained.
+
+Preview performs read-only ownership/object/dependency checks. Unknown objects
+or external dependencies refuse the restore; the reset uses `RESTRICT`, never
+an unrestricted cascade. Reset and dump replay share one PostgreSQL transaction
+with `ON_ERROR_STOP`: a replay failure restores the previous rows and constraints.
+Schema reconciliation follows the commit; a reconciliation failure explicitly
+reports that replay committed and recovery still needs attention. Application
+database operations drain before reset; new operations receive a temporary
+maintenance error until replay and reconciliation finish (including failures).
+
+### Restoring CoS files in a running server
+
+A full live file restore or selective `cos` restore requires the CoS daemon and
+Persistent Mind to be stopped and active agents to be finished or stopped. The
+server rejects unsafe or unreadable ownership state before rsync starts, with
+`COS_RESTORE_BUSY`. Pausing the daemon alone is insufficient.
+
+The restore drains configuration writes, then runtime-state writes, and holds
+both queues through the transfer and cache reload. Both CoS caches are reloaded
+and the normal configuration-change event is emitted even after a partial rsync
+failure. Subsequent partial settings saves preserve restored fields. Transfer
+errors still report that files may have been overwritten; a cache-reload failure
+requires restarting PortOS before using CoS. Dry runs and selective restores
+outside the CoS state/config scope do not acquire this boundary.

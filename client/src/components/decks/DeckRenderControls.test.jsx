@@ -189,10 +189,10 @@ describe('DeckRenderControls prompt progress', () => {
   it('shows the live written/requested counts and batch while a run is in flight', async () => {
     await renderControls({
       generating: true,
-      generatingStatus: 'Writing prompts… 24 of 79 · batch 2 of 7',
+      generatingStatus: 'Writing prompts… 24 of 79 · batch 2 of 5',
     });
     const status = screen.getByRole('status');
-    expect(status).toHaveTextContent('Writing prompts… 24 of 79 · batch 2 of 7');
+    expect(status).toHaveTextContent('Writing prompts… 24 of 79 · batch 2 of 5');
     expect(status).toHaveAttribute('aria-live', 'polite');
   });
 

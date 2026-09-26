@@ -29,9 +29,12 @@ export const beeperDdl = [
     status TEXT NOT NULL DEFAULT '',
     bridge_id TEXT NOT NULL DEFAULT '',
     last_seen_at TIMESTAMPTZ,
+    chat_cursor TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+
+  `ALTER TABLE beeper_accounts ADD COLUMN IF NOT EXISTS chat_cursor TEXT`,
 
   // The ONE Beeper credential this install holds (#31). AES-256-GCM ciphertext
   // via `server/lib/vaultCrypto.js` — never `settings.json`, never a plaintext
@@ -143,6 +146,7 @@ export const beeperDdl = [
     unsent_at TIMESTAMPTZ,
     sort_key TEXT NOT NULL DEFAULT '',
     is_sender BOOLEAN NOT NULL DEFAULT FALSE,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
@@ -153,6 +157,7 @@ export const beeperDdl = [
   // rather than NULL: an unbackfilled row renders as inbound, which is the
   // right way round for a mirror that is mostly other people's messages.
   `ALTER TABLE beeper_messages ADD COLUMN IF NOT EXISTS is_sender BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE beeper_messages ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch'`,
   // `idx_beeper_messages_conversation_sort (conversation_id, sort_key)` served
   // no query — `sort_key` is written on ingest and never read back. A thread
   // page (listMessages) and the "latest message" LATERAL each conversation
@@ -270,6 +275,15 @@ export const beeperDdl = [
     last_swept_at TIMESTAMPTZ,
     PRIMARY KEY (account_id, chat_id)
   )`,
+
+  // Machine-local rotating archive checkpoint, independent of forward ingestion.
+  `CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
+    account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    upper_bound TEXT
+  )`,
+
+  `ALTER TABLE beeper_reconcile_cursors ADD COLUMN IF NOT EXISTS upper_bound TEXT`,
 
   // The outbound OUTBOX (#36, decided on #8). A row is written BEFORE the
   // `POST /v1/chats/{chatID}/messages` that sends it, so intent survives a

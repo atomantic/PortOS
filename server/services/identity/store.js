@@ -1,3 +1,5 @@
+import { meatspaceEvents } from '../meatspaceEvents.js';
+import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
@@ -147,8 +149,10 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
 export async function saveJSON(filePath, data) {
   await ensureIdentityDir();
   await atomicWrite(filePath, data);
+  if (filePath === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   // Mirror goals array into MortalLoom.json so iOS/macOS app sees the change.
   if (filePath === GOALS_FILE && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
     await mlReplace('goals', data.goals);
   }
+  if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
 }

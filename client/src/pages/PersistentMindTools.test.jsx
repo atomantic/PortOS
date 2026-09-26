@@ -262,12 +262,10 @@ describe('PersistentMindTools', () => {
     const retentionInput = await screen.findByLabelText('Retention window (extra turns)');
     expect(retentionInput).toHaveValue(3);
     await user.clear(retentionInput);
-    // Pin the typed value before blurring. Blur saves whatever the field holds
-    // AT THAT MOMENT, so an unsettled partial value is sent once and the waitFor
-    // below can never see a second, correct call — it flaked on CI under worker
-    // contention while passing locally. Not retypeSettled: this input is
-    // controlled and re-renders the cleared field as 0, not empty, so pinning
-    // the intermediate state would assert a value it never shows.
+    // Clearing this controlled number field renders 0. Settle that transition
+    // before typing: otherwise user.type can append 5 to the old 3 and the
+    // component clamps 35 to 20. The generic empty-field helper expects null.
+    await waitFor(() => expect(retentionInput).toHaveValue(0));
     await typeSettled(user, retentionInput, '5');
     await user.tab();
 

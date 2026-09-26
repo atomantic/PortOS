@@ -74,6 +74,7 @@ import {
   generateSeriesPlan,
   getFalVideoAutomation,
   getEpisodeProductionBatch,
+  getLatestEpisodeProductionBatch,
   getHostedSession,
   getLoom,
   listLoomSummaries,
@@ -275,7 +276,7 @@ router.post('/:id/episodes/:episodeId/nodes/:nodeId/fal-video', asyncHandler(asy
     req.params.id,
     req.params.episodeId,
     req.params.nodeId,
-    input,
+    { ...input, io: req.app.get('io') },
   ));
 }));
 
@@ -417,6 +418,10 @@ router.post('/:id/episodes/:episodeId/production/plan', asyncHandler(async (req,
 router.post('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req, res) => {
   const input = validateRequest(productionBatchCreateSchema, req.body ?? {});
   res.status(201).json(await startEpisodeProductionBatch(req.params.id, req.params.episodeId, input));
+}));
+
+router.get('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req, res) => {
+  res.json({ run: getLatestEpisodeProductionBatch(req.params.id, req.params.episodeId) });
 }));
 
 router.get('/:id/episodes/:episodeId/production/batch/:runId', asyncHandler(async (req, res) => {

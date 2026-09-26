@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
+import { useSocketResource } from '../../../hooks/useSocketResource.js';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import ConfigRow from './ConfigRow';
@@ -153,6 +153,8 @@ function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange
   );
 }
 
+const MIND_STATUS_EVENTS = ['cos:mind:event', 'cos:mind:status', 'cos:config:changed'];
+
 function PersistentMindStatus({ mind, loaded, error }) {
   const state = mind?.state;
   const model = mind?.profile?.model;
@@ -214,7 +216,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   const [saveStatus, setSaveStatus] = useState('idle');
   const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
-  const [mindStatus, setMindStatus] = useState({ data: null, loaded: false, error: null });
   const configSaveQueueRef = useRef(Promise.resolve());
   const pendingSaveCountRef = useRef(0);
   const failedSaveKeysRef = useRef(new Set());
@@ -326,18 +327,13 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       .catch(() => {})
   ), []);
 
-  const refreshMindStatus = useCallback(() => (
-    api.getPersistentMind({ limit: 1 }, { silent: true })
-      .then((data) => setMindStatus({ data, loaded: true, error: null }))
-      .catch((error) => setMindStatus((current) => ({
-        ...current,
-        loaded: true,
-        error: error?.message || 'Persistent mind status is unavailable',
-      })))
-  ), []);
+  const { data: mindData, loading: mindLoading, error: mindError, refetch: refreshMindStatus } = useSocketResource(
+    () => api.getPersistentMind({ limit: 1 }, { silent: true }),
+    { namespace: 'cos', events: MIND_STATUS_EVENTS },
+  );
+  const mindStatus = { data: mindData, loaded: !mindLoading, error: mindError ? mindError.message || 'Persistent mind status is unavailable' : null };
 
   useEffect(() => { void refreshBudgetUsage(); }, [refreshBudgetUsage]);
-  useAutoRefetch(refreshMindStatus, 15_000, { pollOnly: true });
 
   // Built-in styles plus the install's verified animated records (#5894). A
   // record entry carries its state coverage in the label, so what the

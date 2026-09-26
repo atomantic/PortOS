@@ -8,7 +8,7 @@
  * detach is a soft-delete so peers receive the tombstone.
  */
 
-import { query } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { rowToMedia, groupRowsByIngredient } from './shared.js';
 
@@ -17,6 +17,13 @@ const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
   && !Array.isArray(value) && Object.keys(value).length > 0;
 
 export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
+  // Every local portrait entry point shares the replacement transaction,
+  // including the generic media API and file uploads.
+  if (kind === 'portrait') return setPortraitMedia(ingredientId, mediaKey, options);
+  return insertMedia(query, ingredientId, mediaKey, kind, options);
+}
+
+async function insertMedia(runQuery, ingredientId, mediaKey, kind, options) {
   const { role = null, caption = null } = options;
   // Metadata is additive on the wire and optional at the call boundary. When
   // absent, leave an existing prompt untouched; a legacy attach/re-attach must
@@ -25,7 +32,7 @@ export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
   const metadataColumn = hasMetadata ? ', metadata' : '';
   const metadataPlaceholder = hasMetadata ? ', $6' : '';
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
-  const result = await query(
+  const result = await runQuery(
     `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn})
      VALUES ($1, $2, $3, $4, $5${metadataPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
@@ -53,22 +60,21 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
   );
 }
 
-// Set THE portrait for an ingredient: attach `mediaKey` as kind 'portrait' and
-// demote any other live portrait. One active portrait per ingredient — the UI
-// renders it as the ingredient's avatar. Serialized as two statements; the
-// single-user trust model means no competing writer can interleave.
+// Lock the owning row even when there is no media yet. Both demotion and
+// attachment commit together, so overlapping HTTP/generation writes serialize
+// and a failed replacement leaves the previous portrait intact.
 export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
-  const { role = null, caption = null } = options;
-  await query(
-    `UPDATE catalog_ingredient_media
-        SET deleted = true, deleted_at = NOW()
-      WHERE ingredient_id = $1 AND kind = 'portrait'
-        AND media_key <> $2 AND deleted = false`,
-    [ingredientId, mediaKey],
-  );
-  const attachOptions = { role, caption };
-  if (hasOwn(options, 'metadata')) attachOptions.metadata = options.metadata;
-  return attachMedia(ingredientId, mediaKey, 'portrait', attachOptions);
+  return withTransaction(async (client) => {
+    await client.query('SELECT id FROM catalog_ingredients WHERE id = $1 FOR UPDATE', [ingredientId]);
+    await client.query(
+      `UPDATE catalog_ingredient_media
+          SET deleted = true, deleted_at = NOW()
+        WHERE ingredient_id = $1 AND kind = 'portrait'
+          AND media_key <> $2 AND deleted = false`,
+      [ingredientId, mediaKey],
+    );
+    return insertMedia(client.query.bind(client), ingredientId, mediaKey, 'portrait', options);
+  });
 }
 
 // Live (non-tombstoned) media rows for an ingredient's detail "Media" panel,

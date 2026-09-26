@@ -1,27 +1,10 @@
-// Compose user prompt + negative with optional style preset(s).
-// Preset prompts prefix the user prompt — diffusion models weight earlier
-// tokens heaviest, so the broad aesthetic carries over the user's content.
-// Preset negatives append to the user negative so user-specified avoids stay
-// first-class. An array is accepted when a caller combines independent style
-// sources, such as a universe style and a built-in preset.
-
+// `composeStyledPrompt` (single preset or an array of presets) is a pure leaf
+// re-exported from server/lib/composeStyledPrompt.js so the browser and the
+// server compose style presets with identical logic (#8442).
+import { composeStyledPrompt } from '../../../server/lib/composeStyledPrompt.js';
 import { universeStylePreset } from './universeStylePreset';
 
-export function composeStyledPrompt(userPrompt, userNegative, preset) {
-  const prompt = (userPrompt || '').trim();
-  const negative = (userNegative || '').trim();
-  const presets = Array.isArray(preset) ? preset : [preset];
-  const stylePart = presets.map((item) => (item?.prompt || '').trim()).filter(Boolean).join('. ');
-  const styleNeg = presets.map((item) => (item?.negativePrompt || '').trim()).filter(Boolean).join(', ');
-  // Avoid trailing ". " when only one of the two parts is non-empty so the
-  // composed prompt is clean and deterministic regardless of which input
-  // is missing.
-  const composedPrompt = stylePart && prompt ? `${stylePart}. ${prompt}` : (stylePart || prompt);
-  return {
-    prompt: composedPrompt,
-    negativePrompt: [negative, styleNeg].filter(Boolean).join(', '),
-  };
-}
+export { composeStyledPrompt };
 
 // Build the styled `{ prompt, negativePrompt }` for a single named canon subject
 // (character / place / object) layered on the universe's style preset. This is

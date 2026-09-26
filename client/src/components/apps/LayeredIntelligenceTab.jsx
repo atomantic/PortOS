@@ -13,8 +13,9 @@ import { cronFromIntervalMs } from '../../utils/cronHelpers';
 // and the effective-config accessor (server/services/layeredIntelligence.js).
 // Off by default — the loop is a user-enabled scheduled automation.
 
-// The Layer-1 telemetry toggles the loop can gather. Keep in sync with the
-// server `sources` object (custom[] file sources are handled separately below).
+// The Layer-1 telemetry toggles the loop can gather — one per key in
+// LAYERED_INTELLIGENCE_SOURCE_KEYS (a test enforces it); custom[] file sources
+// are handled separately below.
 export const LI_SOURCE_FIELDS = [
   { key: 'goals', label: 'Goals (GOALS.md)', hint: 'The app\'s inferred/authored product goals' },
   { key: 'appMetrics', label: 'App metrics (METRICS.md)', hint: 'The app\'s own success metrics — user-success / KPIs / production telemetry it tracks about itself' },

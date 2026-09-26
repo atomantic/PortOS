@@ -1,13 +1,19 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { extractToken, isAuthEnabled, verifyPassword, verifySession } from './auth.js';
+import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
+import { browserRequestRefusal, DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
-import { GATED_NON_API_PREFIXES, isAlwaysPublicApiPath, isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
+import {
+  GATED_NON_API_PREFIXES,
+  isAlwaysPublicApiPath,
+  isPeerApiRequestAllowed,
+  isPeerBasicBootstrapRequest,
+} from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
+import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
@@ -71,7 +77,7 @@ const warnIfPairedPeerUsedBasic = async (headers) => {
   const peer = await pairedPeerFor(instanceId);
   if (!peer) return;
   warnedBasicPeers.add(instanceId);
-  console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — update it, re-pair with the same sync secret, then remove the stored password on that machine`);
+  console.warn(`⚠️ Paired peer ${peer.name || peer.id} authenticated with the instance password instead of its pair credential — pair it again, then remove the stored password on that machine`);
 };
 
 // Logged once per peer + method + path per process (bounded): an older or
@@ -97,6 +103,13 @@ const refusePeerScope = (req, res, path, peer) => {
 
 export const __testing = { verifyBasicPassword };
 
+const BROWSER_REFUSAL_MESSAGES = {
+  CROSS_ORIGIN_BLOCKED: 'Cross-origin request rejected',
+  HOST_NOT_ALLOWED: 'Browser requests must address PortOS by an IP, a local or tailnet name, or a host listed in PORTOS_ALLOWED_HOSTS',
+};
+
+const browserRefusalError = (code) => new ServerError(BROWSER_REFUSAL_MESSAGES[code], { status: 403, code });
+
 const isPublicPath = (path) => {
   if (isAlwaysPublicApiPath(path)) return true;
   // /api/* and /data/* are always gated. /sdapi/* (and any future non-/api
@@ -111,9 +124,10 @@ const isPublicPath = (path) => {
   return true;
 };
 
-// Express middleware. Bypasses everything when auth is off. When it's on,
-// allows the small public set above; gates the rest behind a valid token in
-// the cookie or Authorization: Bearer header.
+// Express middleware. The browser-relay guard (cross-origin + DNS-rebinding
+// Host check) runs in both modes. With auth off everything else passes; with
+// it on, allows the small public set above and gates the rest behind a valid
+// token in the cookie or Authorization: Bearer header.
 export const authGate = async (req, res, next) => {
   const enabled = await isAuthEnabled();
   // Downstream peer-provider routes need to distinguish a verified peer Basic
@@ -128,16 +142,25 @@ export const authGate = async (req, res, next) => {
     req.managedVisitorAuth = await authenticateManagedVisitorRequest(req);
     return next();
   }
-  if (!enabled) return next();
-  // CSRF guard runs FIRST, before isPublicPath — public endpoints like
-  // /api/auth/logout still mutate state (clear the cookie + revoke the
-  // session), so a same-tailnet attacker could force-logout a user
-  // cross-origin if the guard sat behind the public-path bypass.
-  if (isCrossOrigin(req)) {
-    sendErrorResponse(res, new ServerError('Cross-origin request rejected', {
-      status: 403, code: 'CROSS_ORIGIN_BLOCKED',
-    }));
+  // Runs FIRST, before the auth-off bypass and isPublicPath: without a password
+  // any web page the user opens could otherwise relay a hidden form POST onto
+  // loopback (where requireHostControl trusts the socket peer), and public
+  // endpoints like /api/auth/logout still mutate state.
+  const refusal = browserRequestRefusal(req);
+  if (refusal) {
+    sendErrorResponse(res, browserRefusalError(refusal));
     return;
+  }
+  if (!enabled) {
+    // The pair token is independent of the instance password, so a paired peer
+    // stays identified after the password is removed: peer-provider routes
+    // (federated media) require a verified peer and never take the auth-off
+    // bypass. Only the federation surface is annotated; elsewhere the caller is
+    // as anonymous as any other request to a password-free install.
+    const peer = isPeerApiRequestAllowed(req.method, req.path.toLowerCase())
+      ? await verifyPeerToken(req.headers) : null;
+    if (peer) req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: peer.id };
+    return next();
   }
   // Express mounts match case-insensitively. Use the same casing for every
   // authorization check, including public exceptions, without rewriting the
@@ -154,8 +177,7 @@ export const authGate = async (req, res, next) => {
   // introduced here so a Settings toggle takes effect on the very next request.
   const settings = await getSettings();
   if (isRegistryPublic(settings, path)) return next();
-  const token = extractToken(req);
-  if (await verifySession(token)) {
+  if (await verifyRequestSession(req)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
     return next();
   }
@@ -183,7 +205,9 @@ export const authGate = async (req, res, next) => {
   const basicPassword = extractBasicPassword(req);
   if (basicPassword && await verifyBasicPassword(basicPassword)) {
     req.portosAuthContext = { enabled: true, authenticated: true, method: 'basic' };
-    await warnIfPairedPeerUsedBasic(req.headers);
+    // Pair-secret setup intentionally uses the saved instance password once to
+    // provision the scoped credential; this is not a fallback federation call.
+    if (!isPeerBasicBootstrapRequest(req.method, path)) await warnIfPairedPeerUsedBasic(req.headers);
     return next();
   }
   // /data/* is hit directly by <img>/<audio>/<video> tags which don't show a
@@ -204,29 +228,54 @@ const isLoopbackAddress = (value) => {
   return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
 };
 
-// Host execution needs operator authority: a peer's credential — the scoped
-// peer token or the legacy Basic password — never qualifies.
-// Mount after authGate: missing context fails closed. Password-free installs
-// require loopback socket peers, including the dev proxy caller. Neither req.ip
-// nor the machine-local warning acknowledgement can grant authority.
-export const requireHostControl = (req, res, next) => {
-  const auth = req.portosAuthContext;
-  const proxyClient = req.headers[DEV_PROXY_CLIENT_ADDRESS_HEADER];
-  // Only restrict an actual loopback connection with the dev proxy's marker.
-  // A direct remote caller cannot gain authority by forging a loopback header.
-  const loopback = isLoopbackAddress(req.socket?.remoteAddress)
+// A loopback connection, restricted further when it carries the dev proxy's
+// client-address marker: Vite proxies every browser from its own loopback
+// socket, so the marker's address is the real caller. A direct remote caller
+// cannot gain authority by forging a loopback marker — its connection address
+// is not loopback to begin with.
+const isLocalConnection = (remoteAddress, headers) => {
+  const proxyClient = headers?.[DEV_PROXY_CLIENT_ADDRESS_HEADER];
+  return isLoopbackAddress(remoteAddress)
     && (proxyClient === undefined || isLoopbackAddress(proxyClient));
-  if ((auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
-    || (auth?.enabled === false && loopback)) return next();
-  sendErrorResponse(res, new ServerError('Host commands require an operator session, or a local connection when no password is set.', {
+};
+
+// Host execution needs operator authority: a peer's credential — the scoped
+// peer token or the legacy Basic password — never qualifies. Password-free
+// installs require a local connection (see isLocalConnection). Neither req.ip
+// nor the machine-local warning acknowledgement can grant authority.
+const hasHostControl = (auth, localConnection) =>
+  (auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
+  || (auth?.enabled === false && localConnection === true);
+
+export const HOST_CONTROL_FORBIDDEN_MESSAGE = 'Host control requires an operator session, or a local connection when no password is set. Set an instance password to use it remotely.';
+
+// Mount after authGate: missing context fails closed.
+export const requireHostControl = (req, res, next) => {
+  if (hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));
 };
 
+// Applies requireHostControl to every route in the audited
+// HOST_CONTROL_ROUTES list (lib/hostControlRoutes.js). Mounted once, right
+// after authGate, so the list — not each route file — is the one place that
+// says which HTTP routes execute on the host.
+export const hostControlRouteGate = (req, res, next) => (
+  isHostControlRoute(req.method, req.path) ? requireHostControl(req, res, next) : next()
+);
+
+// The socket twin of requireHostControl on a password-free install, for the
+// per-event re-check in socket.js (with a password set, that re-check already
+// admits only a verified session to host-control events). Locality is
+// recorded at the handshake by socketAuthGate; a socket that never passed the
+// gate carries none and fails closed.
+export const socketHasHostControl = (socket) => hasHostControl({ enabled: false }, socket.data?.portosLocalConnection);
+
 // Socket.IO middleware. Run after a successful HTTP-side handshake — same
 // `req.headers.cookie` is available on `socket.handshake.headers`. When auth
 // is off, every connection is allowed; when on, the handshake must carry a
-// valid cookie/header.
+// valid cookie/header. The browser-relay guard applies in both modes.
 //
 // NOTE: there is intentionally NO `isRegistryPublic` check here. The public
 // API surface (apiRegistry) is HTTP-only — external callers hit REST endpoints,
@@ -242,17 +291,27 @@ const markAuthMethod = (socket, method) => {
   socket.data.portosAuthMethod = method;
 };
 
+// engine.io `allowRequest` for the Socket.IO server: refuses the transport
+// handshake itself (polling and websocket) for a foreign or rebindable browser
+// request, before socketAuthGate ever runs.
+export const allowSocketRequest = (req, callback) => callback(null, browserRequestRefusal(req) === null);
+
 export const socketAuthGate = async (socket, next) => {
-  const enabled = await isAuthEnabled();
-  if (!enabled) return next();
+  if (!socket.data) socket.data = {};
+  socket.data.portosLocalConnection = isLocalConnection(socket.handshake?.address, socket.handshake?.headers);
   const fakeReq = { headers: socket.handshake?.headers || {} };
-  if (isCrossOrigin(fakeReq)) {
-    const err = new Error('Cross-origin request rejected');
-    err.data = { code: 'CROSS_ORIGIN_BLOCKED' };
+  // Before the auth-off bypass: a foreign page must not drive shell:start /
+  // iterm:input on a password-free install. server/index.js also refuses the
+  // engine.io handshake itself with the same predicate.
+  const refusal = browserRequestRefusal(fakeReq);
+  if (refusal) {
+    const err = new Error(BROWSER_REFUSAL_MESSAGES[refusal]);
+    err.data = { code: refusal };
     return next(err);
   }
-  const token = extractToken(fakeReq);
-  if (await verifySession(token)) {
+  const enabled = await isAuthEnabled();
+  if (!enabled) return next();
+  if (await verifyRequestSession(fakeReq)) {
     markAuthMethod(socket, 'session');
     return next();
   }

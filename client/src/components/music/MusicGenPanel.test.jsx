@@ -4,6 +4,21 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import MusicGenPanel from './MusicGenPanel';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+const socketHandlers = new Map();
+vi.mock('../../services/socket', () => ({
+  default: {
+    on: (event, fn) => {
+      if (!socketHandlers.has(event)) socketHandlers.set(event, new Set());
+      socketHandlers.get(event).add(fn);
+    },
+    off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+    emit: vi.fn(),
+  },
+}));
+const emitSocket = async (event, payload = {}) => act(async () => {
+  for (const handler of socketHandlers.get(event) || []) handler(payload);
+});
+
 
 vi.mock('../../services/api', () => ({
   listMusicEngines: vi.fn(),
@@ -81,6 +96,7 @@ describe('MusicGenPanel', () => {
   // for every test after it, turning one failure into a cascade.
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('does not show a missing-runtime warning immediately for an empty saved track', async () => {
@@ -653,6 +669,65 @@ describe('MusicGenPanel', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/elapsed/);
     expect(screen.getByRole('checkbox', { name: /instrumental only/i })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /instrumental only/i })).toBeDisabled();
+  });
+
+  it('discovers jobs by event, recovers missed completion on tab show, and never polls', async () => {
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.getMediaJob.mockResolvedValue({ status: 'running' });
+    const onGenerated = vi.fn();
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" onGenerated={onGenerated} />);
+    await screen.findByRole('button', { name: /^generate$/i });
+    const job = { id: 'job-live', kind: 'audio', status: 'running',
+      params: { musicStudio: { trackId: 'track-1' } } };
+    api.getActiveProcessing.mockResolvedValue({ jobs: [job] });
+    await emitSocket('media-jobs:changed');
+    expect(screen.getByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    const discoveryReads = api.getActiveProcessing.mock.calls.length;
+    const jobReads = api.getMediaJob.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(api.getActiveProcessing).toHaveBeenCalledTimes(discoveryReads);
+    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReads);
+    await emitSocket('connect');
+    expect(api.getActiveProcessing).toHaveBeenCalledTimes(discoveryReads + 1);
+    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReads + 1);
+
+    // The active queue empties before the progress hook recovers a missed
+    // completion; discovery must not detach the tracked job.
+    api.getActiveProcessing.mockResolvedValue({ jobs: [] });
+    await emitSocket('media-jobs:changed');
+    api.getMediaJob.mockResolvedValue({ status: 'completed', result: { trackId: 'track-1' } });
+    api.getTrack.mockResolvedValue({ id: 'track-1', title: 'Finished track' });
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    const beforeShow = api.getActiveProcessing.mock.calls.length;
+    const jobReadsBeforeShow = api.getMediaJob.mock.calls.length;
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getActiveProcessing).toHaveBeenCalledTimes(beforeShow + 1);
+    expect(api.getMediaJob).toHaveBeenCalledTimes(jobReadsBeforeShow + 1);
+    expect(onGenerated).toHaveBeenCalledWith({ id: 'track-1', title: 'Finished track' });
+    expect(screen.getByRole('button', { name: /^generate$/i })).toBeEnabled();
+  });
+
+  it('settles a failed render from its socket event without waiting for a poll', async () => {
+    api.listMusicEngines.mockResolvedValue({ defaultEngine: 'musicgen', engines: [engine({ ready: true })] });
+    api.getActiveProcessing.mockResolvedValue({ jobs: [{
+      id: 'job-failed', kind: 'audio', status: 'running', params: { musicStudio: { trackId: 'track-1' } },
+    }] });
+    api.getMediaJob.mockResolvedValue({ status: 'running' });
+    render(<MusicGenPanel track={{ id: 'track-1' }} prompt="warm folk" lyrics="" />);
+    await screen.findByText(/processing on the gpu|rendering audio/i);
+    api.cancelMediaJob.mockRejectedValueOnce(new Error('Cancel unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    await act(async () => {});
+    expect(screen.getByText(/processing on the gpu|rendering audio/i)).toBeInTheDocument();
+    api.getMediaJob.mockResolvedValue({ status: 'failed', error: 'Render failed' });
+    await emitSocket('audio-gen:failed', { generationId: 'job-failed', error: 'Render failed' });
+    expect(screen.getByRole('button', { name: /^generate$/i })).toBeEnabled();
+    expect(toast.error).toHaveBeenCalledWith('Render failed');
   });
 
   it('suggests a lyric-aware MiniMax ceiling and sends Auto mode', async () => {

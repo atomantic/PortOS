@@ -1,3 +1,4 @@
+import { emitSpriteChanged } from './events.js';
 /**
  * Sprites — walk-animation workflow orchestration (issue #2897, phase 3).
  *
@@ -218,6 +219,7 @@ async function saveRunRecordAt(recordId, run, runDirRel) {
   const dir = join(spriteDir(recordId), runDirRel);
   await ensureDir(dir);
   await atomicWrite(join(dir, RUN_RECORD_NAME), run);
+  emitSpriteChanged(recordId);
 }
 
 const saveRunRecord = (recordId, run) => saveRunRecordAt(recordId, run, runRelPath(run.id));

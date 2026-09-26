@@ -873,6 +873,62 @@ describe('codeReview helpers', () => {
       expect(request.messages[0].content).toContain('test-only change')
     })
 
+    it('ships a same-checksum retry scoped to a saved federated schema gap, not an unconditional retry', async () => {
+      const objective = 'On our federated instances page, I see a schema version mismatch.'
+      const scopedRetryDiff = [
+        'diff --git a/server/services/syncOrchestrator.js b/server/services/syncOrchestrator.js',
+        '@@ -524,7 +524,11 @@',
+        '  const lastChecksum = cachedChecksums?.[category] ?? null;',
+        '- if (lastChecksum && lastChecksum === checksumRes.checksum) {',
+        '+ // A saved schema gap is compatibility state, independent of payload changes.',
+        '+ const hasSchemaGap = Boolean(peer?.schemaGaps?.[category]);',
+        '+ if (lastChecksum && lastChecksum === checksumRes.checksum && !hasSchemaGap) {',
+        '    return { totalApplied: 0, checksum: checksumRes.checksum };',
+        '  }',
+      ].join('\n')
+      const unconditionalRetryDiff = scopedRetryDiff
+        .replace('+ // A saved schema gap is compatibility state, independent of payload changes.\n', '')
+        .replace('+ const hasSchemaGap = Boolean(peer?.schemaGaps?.[category]);\n', '')
+        .replace('+ if (lastChecksum && lastChecksum === checksumRes.checksum && !hasSchemaGap) {', '+ if (false) {')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const evidence = request.messages[1].content
+        const recognizesScopedRetry = rubric.includes('conditional on an already saved peer/category schema gap')
+          && rubric.includes('newly fetched envelope\'s `portosMeta.schemaVersions`')
+          && rubric.includes('older displayed label does not make this retry ineffective')
+        const diffShowsScopedRetry = evidence.includes('peer?.schemaGaps?.[category]')
+          && evidence.includes('&& !hasSchemaGap')
+          && evidence.includes('lastChecksum === checksumRes.checksum')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(recognizesScopedRetry && diffShowsScopedRetry
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'the saved category gap retries the unchanged snapshot through the current schemaVersions gate and clears on successful apply' }
+            : { verdict: 'rethink', missing: ['a scoped retry for the saved schema gap'], unrequested: ['an unconditional checksum bypass'], evidence: 'this diff retries unchanged categories without limiting the retry to a saved gap' }) } }],
+        })
+      })
+
+      const scoped = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: scopedRetryDiff })
+      const unconditional = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: unconditionalRetryDiff })
+
+      expect(scoped).toMatchObject({
+        ok: true,
+        verdict: 'ship',
+        missing: [],
+        unrequested: [],
+      })
+      expect(unconditional).toMatchObject({
+        ok: true,
+        verdict: 'rethink',
+        missing: ['a scoped retry for the saved schema gap'],
+        unrequested: ['an unconditional checksum bypass'],
+      })
+      const prompt = JSON.parse(global.fetch.mock.calls[0][1].body).messages[0].content
+      expect(prompt).toContain('a production retry, not a check-only change')
+      expect(prompt).toContain('An unconditional retry')
+      expect(prompt).toContain('schemaVersions` controls compatibility')
+    })
+
     it('ships a complete section relocation without exempting a duplicate insertion', async () => {
       const objective = 'On the code animation page, I think the format should be ordered before the brief.'
       const formatSection = [

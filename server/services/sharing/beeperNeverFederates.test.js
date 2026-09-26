@@ -82,11 +82,9 @@ describe('beeper conversation mirror never federates (#27)', () => {
 
   it('gives no beeper table a sync cursor column', () => {
     // Sanity: if the filter ever matches nothing the assertion below is
-    // vacuous, so pin the table count we expect to be guarding. Eight since
-    // #36 added `beeper_outbox` — an outbound message body is exactly as
-    // machine-local as an inbound one, and the row also records that THIS
-    // install sent it, which is nobody else's business either.
-    expect(beeperCreateTableStatements).toHaveLength(8);
+    // vacuous, so pin all nine tables, including the machine-local rotating
+    // reconciliation checkpoint added in #8682.
+    expect(beeperCreateTableStatements).toHaveLength(9);
     for (const stmt of beeperCreateTableStatements) {
       const table = stmt.match(/beeper_[a-z_]+/i)?.[0];
       for (const column of FEDERATION_COLUMNS) {

@@ -1,3 +1,4 @@
+import { cosEvents } from '../cosEvents.js';
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -694,7 +695,10 @@ describe('taskLearning store strict reads (#4115)', () => {
   });
 
   it('round-trips a readable file (the strict flag does not break the happy path)', async () => {
+    const changed = vi.fn();
+    cosEvents.once('goals:changed', changed);
     await saveLearningData({ byTaskType: { docs: { completed: 3 } } });
+    expect(changed).toHaveBeenCalledWith({});
     clearLearningCache();
     expect((await loadLearningData()).byTaskType.docs.completed).toBe(3);
 

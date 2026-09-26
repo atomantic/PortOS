@@ -266,3 +266,94 @@ describe('config recovery', () => {
     expect(quarantined('config.json')).toHaveLength(1);
   });
 });
+
+// Warm-process regression: queued writes must use the restored pre-images.
+describe('live CoS restore boundary', () => {
+  it('drains older writes and merges queued mutations over restored files', async () => {
+    writeConfig({ persistentMindPrompt: { instructions: 'Before restore' } });
+    writeState({ agents: {}, stats: { tasksCompleted: 2 } });
+    const store = await freshModule();
+    const staleState = { ...(await store.loadState()) };
+    const staleConfig = { ...(await store.loadConfig()) };
+    const changed = vi.fn();
+    (await import('./cosEvents.js')).cosEvents.once('config:changed', changed);
+    let finishOldWrite;
+    const oldWriteGate = new Promise(resolve => { finishOldWrite = resolve; });
+    const oldWrite = store.withStateLock(async () => {
+      const state = await store.loadState();
+      await oldWriteGate;
+      state.stats.tasksCompleted = 3;
+      await store.saveState(state);
+    });
+    let finishTransfer;
+    let transferStarted;
+    const started = new Promise(resolve => { transferStarted = resolve; });
+    const transferGate = new Promise(resolve => { finishTransfer = resolve; });
+    const restore = store.withLiveCosRestore(async () => {
+      expect(readJson(STATE_PATH).stats.tasksCompleted).toBe(3);
+      writeConfig({ persistentMindPrompt: { instructions: 'Restored instructions' } });
+      writeState({ agents: {}, stats: { tasksCompleted: 42 } });
+      transferStarted();
+      await transferGate;
+      return 'restored';
+    });
+    finishOldWrite();
+    await oldWrite;
+    await started;
+    const configWrite = store.withConfigLock(async () => {
+      await store.saveConfig({ ...(await store.loadConfig()), maxConcurrentAgents: 7 });
+    });
+    const stateWrite = store.withStateLock(async () => {
+      const state = await store.loadState();
+      state.stats.tasksFailed = 1;
+      await store.saveState(state);
+    });
+    finishTransfer();
+    await expect(restore).resolves.toBe('restored');
+    await Promise.all([configWrite, stateWrite]);
+    expect((await store.getConfig()).persistentMindPrompt.instructions).toBe('Restored instructions');
+    expect(readJson(CONFIG_PATH)).toMatchObject({ maxConcurrentAgents: 7, persistentMindPrompt: { instructions: 'Restored instructions' } });
+    expect(readJson(STATE_PATH).stats).toMatchObject({ tasksCompleted: 42, tasksFailed: 1 });
+    await expect(store.withStateLock(() => store.saveState(staleState))).rejects.toMatchObject({ code: 'COS_RESTORE_STALE_WRITE' });
+    await expect(store.withConfigLock(() => store.saveConfig(staleConfig))).rejects.toMatchObject({ code: 'COS_RESTORE_STALE_WRITE' });
+    expect(changed).toHaveBeenCalledWith(expect.objectContaining({ persistentMindPrompt: expect.objectContaining({ instructions: 'Restored instructions' }) }));
+  });
+
+  it('reloads partial transfer results while preserving the transfer failure', async () => {
+    writeConfig({ persistentMindPrompt: { instructions: 'Old' } });
+    writeState({ agents: {} });
+    const store = await freshModule();
+    await store.loadState();
+    const failure = new Error('rsync failed');
+    await expect(store.withLiveCosRestore(async () => {
+      writeConfig({ persistentMindPrompt: { instructions: 'Partial restore' } });
+      throw failure;
+    })).rejects.toBe(failure);
+    await store.withConfigLock(async () => store.saveConfig({ ...(await store.loadConfig()), maxConcurrentAgents: 8 }));
+    expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Partial restore');
+  });
+
+  it.each([
+    { running: true, agents: {} },
+    { agents: { example: { status: 'running' } } },
+    { agents: { example: { status: 'paused' } } },
+    { agents: {}, persistentMind: { started: true } },
+    { agents: {}, persistentMind: { activeTurn: { id: 'example-turn' } } },
+  ])('refuses unsafe ownership before transferring: %j', async state => {
+    writeState(state);
+    const store = await freshModule();
+    const transfer = vi.fn();
+    await expect(store.withLiveCosRestore(transfer)).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+    expect(transfer).not.toHaveBeenCalled();
+    expect(readJson(STATE_PATH)).toEqual(state);
+  });
+
+  it('refuses unreadable runtime records without overwriting them', async () => {
+    writeFileSync(STATE_PATH, '{broken');
+    const store = await freshModule();
+    const transfer = vi.fn();
+    await expect(store.withLiveCosRestore(transfer)).rejects.toMatchObject({ code: 'COS_RESTORE_BUSY' });
+    expect(transfer).not.toHaveBeenCalled();
+    expect(readFileSync(STATE_PATH, 'utf8')).toBe('{broken');
+  });
+});

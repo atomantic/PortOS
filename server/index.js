@@ -9,6 +9,7 @@ import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 import { getBuildIdentity } from './lib/buildIdentity.js';
+import { httpCompression } from './lib/httpCompression.js';
 import { PORTS } from './lib/ports.js';
 import { isSmokeBoot } from './lib/runtimeEnv.js';
 
@@ -115,7 +116,7 @@ import reviewRoutes from './routes/review.js';
 import githubRoutes from './routes/github.js';
 import settingsRoutes from './routes/settings.js';
 import authRoutes from './routes/auth.js';
-import { authGate, socketAuthGate } from './services/authGate.js';
+import { allowSocketRequest, authGate, hostControlRouteGate, socketAuthGate } from './services/authGate.js';
 import telegramRoutes from './routes/telegram.js';
 import updateRoutes from './routes/update.js';
 import loopsRoutes from './routes/loops.js';
@@ -126,6 +127,7 @@ import videoGenRoutes from './routes/videoGen.js';
 import continuousVideoEpisodeRoutes from './routes/continuousVideoEpisode.js';
 import videoDownloadRoutes from './routes/videoDownload.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
+import htmlCompositionRoutes from './routes/htmlComposition.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import federatedMediaRoutes from './routes/federatedMedia.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
@@ -201,10 +203,16 @@ setHttpsEnabledAtBoot(httpsEnabled);
 
 // Socket.IO with relative path support for Tailscale
 const io = new Server(httpServer, {
+  // CORS headers are reflected only for handshakes allowRequest admits: the
+  // same browser-relay guard as the HTTP gate refuses a foreign Origin or a
+  // rebindable Host on both the polling and websocket transports, in both
+  // auth modes (a password-free install would otherwise take shell:start from
+  // any web page). Origin-less native/peer clients pass through.
   cors: {
-    origin: true, // Allow any origin (local network only)
+    origin: true,
     credentials: true
   },
+  allowRequest: allowSocketRequest,
   path: '/socket.io'
 });
 
@@ -254,6 +262,7 @@ app.use((req, res, next) => {
   next();
 });
 // Make io available to routes
+app.use(httpCompression);
 app.set('io', io);
 
 // Auth gate runs BEFORE the body parsers so unauthenticated requests to
@@ -265,6 +274,9 @@ app.set('io', io);
 // except the small public set in services/authGate.js (auth status/whoami/login/
 // logout + /api/system/health). No-op when auth is off.
 app.use(authGate);
+// Host-executing routes (lib/hostControlRoutes.js) additionally need operator
+// authority: a session, or a local connection on a password-free install.
+app.use(hostControlRouteGate);
 
 // Body limit is set slightly above the 50MB combined base64 cap enforced by sendMessageSchema
 // so the Zod validation (not the body parser) is the binding constraint for attachment payloads.
@@ -408,6 +420,7 @@ app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/continuous-video', continuousVideoEpisodeRoutes);
 app.use('/api/devtools/video-download', videoDownloadRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
+app.use('/api/html-composition', htmlCompositionRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/federation/media/v1', federatedMediaRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
@@ -517,6 +530,14 @@ app.use(errorMiddleware);
 // its own catch; nothing downstream depends on when it lands.
 getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed: ${err.message}`));
 
+// Install shutdown handlers before advertising readiness to the smoke parent.
+registerShutdownHandlers({ io, httpServer, localHttpServer });
+if (isSmokeBoot() && process.send) {
+  httpServer.once('listening', () => {
+    process.send({ type: 'portos:smoke-ready' });
+  });
+}
+
 // Post-route boot: background service inits + schedulers, then the ordered
 // instance/sync/media-queue/DB chain that ends in httpServer.listen(). Not
 // awaited — boot proceeds in the background and any fatal step exits the
@@ -529,4 +550,3 @@ if (!isSmokeBoot()) {
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
 }
-registerShutdownHandlers({ io, httpServer, localHttpServer });

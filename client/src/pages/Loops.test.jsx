@@ -16,23 +16,44 @@ vi.mock('../services/socket', () => ({
   default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
-// Mirror the real hook's on-mount fetch (the page clears `loading` only from
-// that callback) while dropping the interval, which jsdom has no use for.
-vi.mock('../hooks/useAutoRefetch', async () => {
-  const { useEffect, useRef } = await import('react');
-  return {
-    useAutoRefetch: (fetchFn) => {
-      const fetchRef = useRef(fetchFn);
-      fetchRef.current = fetchFn;
-      useEffect(() => { fetchRef.current(); }, []);
-      return { refetch: () => fetchRef.current() };
-    },
-  };
-});
+vi.mock('../components/ui/Toast', () => ({
+  default: { success: vi.fn() },
+}));
 
 import Loops from './Loops';
 import socket from '../services/socket';
 import * as api from '../services/api';
+import toast from '../components/ui/Toast';
+
+describe('Loops action feedback (#8621)', () => {
+  const runningLoop = {
+    id: 'loop-1', name: 'Example loop', isRunning: true, intervalMs: 60_000,
+    currentIteration: 0, lastRun: null,
+  };
+
+  it('does not report success when a rendered action request fails', async () => {
+    api.getLoops.mockResolvedValueOnce([runningLoop]);
+    api.stopLoop.mockRejectedValueOnce(new Error('Request failed'));
+    toast.success.mockClear();
+    render(<Loops />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => expect(api.stopLoop).toHaveBeenCalledWith('loop-1'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('reports success after a rendered action request resolves', async () => {
+    api.getLoops.mockResolvedValueOnce([runningLoop]);
+    api.stopLoop.mockResolvedValueOnce({});
+    toast.success.mockClear();
+    render(<Loops />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Loop stopped'));
+  });
+});
 
 describe('Loops reconnect resubscribe (#8110)', () => {
   // The server rebuilds an empty per-socket subscriber Set on every reconnect

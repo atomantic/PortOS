@@ -1,3 +1,5 @@
+import { meatspaceEvents } from '../meatspaceEvents.js';
+import { dashboardEvents } from '../dashboardEvents.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -31,7 +33,7 @@ vi.mock('../taste-questionnaire.js', () => ({
   getTasteProfile: vi.fn(async () => ({ completedCount: 0, totalSections: 0, lastSessionAt: null })),
 }));
 
-const { loadJSON, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
+const { saveJSON, loadJSON, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
 const { getIdentityStatus } = await import('./status.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -41,6 +43,17 @@ beforeEach(() => {
   rmSync(IDENTITY_DIR, { recursive: true, force: true });
   mkdirSync(IDENTITY_DIR, { recursive: true });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+it('invalidates the death clock after saving longevity but not unrelated identity records', async () => {
+  const changed = vi.fn();
+  meatspaceEvents.on('death-clock:changed', changed);
+  await saveJSON(LONGEVITY_FILE, { lifeExpectancy: { adjusted: 85 } });
+  expect(changed).toHaveBeenCalledExactlyOnceWith({});
+  expect(await loadJSON(LONGEVITY_FILE, null)).toEqual({ lifeExpectancy: { adjusted: 85 } });
+  await saveJSON(GOALS_FILE, { goals: [] });
+  expect(changed).toHaveBeenCalledTimes(1);
+  meatspaceEvents.off('death-clock:changed', changed);
 });
 
 describe('loadJSON — swallowing (default) behavior is unchanged (#2726)', () => {
@@ -185,4 +198,19 @@ describe('loadJSON — status-less MortalLoom goals reach strict active-goal con
     const status = await getIdentityStatus();
     expect(status.sections.goals.status).toBe('unavailable');
   });
+});
+
+// Regression: persisted goal edits invalidate dashboards, unrelated identity writes do not.
+it('announces goal persistence only after the readable store has changed', async () => {
+  const listener = vi.fn();
+  dashboardEvents.on('goals:changed', listener);
+  try {
+    await saveJSON(GOALS_FILE, { goals: [{ id: 'example', title: 'Updated goal' }] });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(await loadJSON(GOALS_FILE, DEFAULT_GOALS)).toMatchObject({ goals: [{ title: 'Updated goal' }] });
+    await saveJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    dashboardEvents.off('goals:changed', listener);
+  }
 });

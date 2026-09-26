@@ -868,20 +868,20 @@ describe('cosTaskStore.addTask', () => {
 
   it('persists a manual claim swarm count through the task markdown round-trip', async () => {
     const created = await addTask({
-      description: 'Claim six independent GitHub issues for Example App',
+      description: 'Claim twelve independent GitHub issues for Example App',
       app: 'example-app',
-      swarmCount: 6,
+      swarmCount: 12,
     }, 'user');
 
-    expect(created.metadata.swarmCount).toBe(6);
+    expect(created.metadata.swarmCount).toBe(12);
     const { tasks } = await getUserTasks();
     // Scalar task metadata parses from markdown as text; the lifecycle resolver
     // normalizes it with Number() before applying the bounded thread override.
-    expect(Number(tasks.find(t => t.id === created.id).metadata.swarmCount)).toBe(6);
+    expect(Number(tasks.find(t => t.id === created.id).metadata.swarmCount)).toBe(12);
   });
 
   it('drops an out-of-range manual claim swarm count', async () => {
-    const created = await addTask({ description: 'Invalid claim swarm', swarmCount: 7 }, 'user');
+    const created = await addTask({ description: 'Invalid claim swarm', swarmCount: 13 }, 'user');
     expect(created.metadata.swarmCount).toBeUndefined();
   });
 
@@ -2360,6 +2360,15 @@ describe('shared development work admission', () => {
     expect((await getCosTasks()).tasks).toHaveLength(0);
     await updateTask(manual.id, { status: 'completed' }, 'user');
     expect((await addTask({ description: 'New evidence', metadata }, 'internal')).duplicate).not.toBe(true);
+  });
+  it('persists a perpetual refill while targeted claims are running, without admitting a second drain', async () => {
+    const targeted = await addTask({ description: 'Claim example issue', app: 'example', claimFlow: true, claimTarget: '42' }, 'user');
+    await updateTask(targeted.id, { status: 'in_progress' }, 'user');
+    const refill = await addTask({ description: 'Continue backlog', app: 'example', claimFlow: true }, 'internal');
+    expect(refill.duplicate).not.toBe(true);
+    expect((await getCosTasks()).tasks).toEqual(expect.arrayContaining([expect.objectContaining({ id: refill.id, status: 'pending' })]));
+    expect(await addTask({ description: 'Another backlog continuation', app: 'example', claimFlow: true }, 'internal'))
+      .toMatchObject({ id: refill.id, duplicate: true });
   });
   it('lets a manual pinned claim proceed alongside a running untargeted drain, but still blocks true duplicates', async () => {
     const claim = await addTask({ description: 'Claim next', app: 'example', claimFlow: true }, 'internal');

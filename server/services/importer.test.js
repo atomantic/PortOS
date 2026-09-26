@@ -998,6 +998,79 @@ describe('commitImport', () => {
     expect(issue.stages.prose.output).toBe('The vault loomed in the dark.');
   });
 
+  // Race-safety regression coverage for issue #8453: commitImport reads the
+  // universe/series once, then (with cleanupFormatting on) can spend minutes
+  // in per-issue LLM calls before writing the merged canon/seasons. These
+  // tests simulate a concurrent edit landing DURING that window via the mock
+  // `runStagedLLM` — the one async gap the real reformat pass creates — and
+  // assert the concurrent edit survives the eventual merge instead of being
+  // silently overwritten by a merge against the stale up-front snapshot.
+  it('a universe canon edit made during cleanupFormatting survives the import merge (issue #8453)', async () => {
+    const { uni, ser } = await setupForCommit();
+    mockRunStagedLLM.mockImplementation(async () => {
+      // Simulates a user adding a character in another tab (or an Autopilot/
+      // Series job editing canon) while the AI cleanup pass is in flight.
+      await universeSvc.updateUniverse(uni.id, {
+        characters: [{ name: 'Concurrent Editor', role: 'supporting' }],
+      });
+      return { content: 'The vault loomed in the dark.', runId: 'r1' };
+    });
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'short-story',
+      cleanupFormatting: true,
+      canonSelections: { characters: [{ name: 'Aria', role: 'protagonist' }] },
+      issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault  loomed in the\ndark.' }],
+    });
+    const names = result.universe.characters.map((c) => c.name);
+    expect(names).toContain('Aria');
+    expect(names).toContain('Concurrent Editor');
+  });
+
+  it('a season edit made during cleanupFormatting survives the import merge (issue #8453)', async () => {
+    const { uni, ser } = await setupForCommit();
+    mockRunStagedLLM.mockImplementation(async () => {
+      // Simulates a season edited on the series in another tab while the AI
+      // cleanup pass is in flight.
+      await seriesSvc.updateSeries(ser.id, {
+        seasons: [{ number: 5, title: 'Concurrent Season' }],
+      });
+      return { content: 'The vault loomed in the dark.', runId: 'r1' };
+    });
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      contentType: 'short-story',
+      cleanupFormatting: true,
+      seasons: [{ number: 1, title: 'Foundry' }],
+      issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault  loomed in the\ndark.' }],
+    });
+    const numbers = result.series.seasons.map((s) => s.number);
+    expect(numbers).toContain(1);
+    expect(numbers).toContain(5);
+  });
+
+  it('an arc-only import (no canon selections) makes no universe write', async () => {
+    // importDraft:false so commitImport's own post-commit promotion (gated
+    // strictly on importDraft === true) doesn't also call updateUniverse —
+    // isolating the assertion to the canon-merge write this test targets.
+    const uni = await universeSvc.createUniverse({ name: 'Commit U', ephemeral: true, importDraft: false });
+    const ser = await seriesSvc.createSeries({
+      name: 'Commit S', universeId: uni.id, ephemeral: true, importDraft: false,
+    });
+    const updateUniverseSpy = vi.spyOn(universeSvc, 'updateUniverse');
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      arc: { logline: 'A reluctant heir.', summary: 'Big story.' },
+      issues: [{ title: 'Cold Iron', arcPosition: 1, proseExcerpt: 'The vault loomed in the dark.' }],
+    });
+    expect(updateUniverseSpy).not.toHaveBeenCalled();
+    expect(result.universe.characters ?? []).toHaveLength(0);
+    updateUniverseSpy.mockRestore();
+  });
+
   it('seeds stages.comicScript (not prose) for a comic-script import', async () => {
     // A comic-script source is already script-form, so its verbatim excerpt
     // must land in comicScript (ready) — seeding prose would make the

@@ -55,6 +55,7 @@
  * account id (#3532) — see mergeSocialAccounts.
  */
 
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { join, basename } from 'path';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -797,6 +798,7 @@ async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   if (!changed) return 0;
   if (dir) await ensureDir(dir);
   await atomicWrite(path, merged);
+  if (path === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   return 1;
 }
 
@@ -952,6 +954,12 @@ export async function applyDigitalTwinRemote(remoteData) {
 
   count += await applySocialAccounts(remoteData.socialAccounts);
 
+  // Meta is saved before document files land. Reconcile again only after the
+  // complete sync so status cannot remain at the pre-document count.
+  if (count > 0) {
+    const { digitalTwinEvents } = await import('./digital-twin-meta.js');
+    digitalTwinEvents.emit('sync:completed');
+  }
   if (count > 0) console.log(`🔄 Digital twin sync: updated ${count} items`);
   return { applied: count > 0, count };
 }

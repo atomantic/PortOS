@@ -1,8 +1,8 @@
 import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
-import { join, isAbsolute, delimiter } from 'path';
-import { execFile, spawn } from 'child_process';
+import { join } from 'path';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { assertSecretEndpoint, evaluateSecretEndpoint } from '../endpointGuard.js';
 import { composeBootstrapSpawn } from './credentialBootstrap.js';
@@ -13,40 +13,6 @@ import { providerModeGroups } from './providerModes.js';
 import { ollamaRefreshGroupKey, resolveModelFetcher } from './modelFetchers.js';
 import { modelCatalogUpdate, parseModelCatalog, toModelCatalog } from './modelCatalog.js';
 import { CLAUDE_CATALOG_SUBPATH, catalogAge, claudeConfigDir, selectCatalogModels } from './claudeCodeCatalog.js';
-
-const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
-
-function resolveWindowsExecutable(command, isWin32 = process.platform === 'win32', searchEnv = process.env) {
-  if (!isWin32 || !command || isAbsolute(command) || /[\\/]/.test(command)) return null;
-  const pathDirs = (searchEnv.PATH || searchEnv.Path || '').split(delimiter).filter(Boolean);
-  for (const dir of pathDirs) {
-    for (const ext of WIN_EXECUTABLE_EXTS) {
-      const candidate = join(dir, `${command}${ext}`);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
-}
-
-const WIN_BATCH_EXT_RE = /\.(cmd|bat)$/i;
-const CMD_METACHAR_RE = /[&|<>^()]/g;
-const NEEDS_NODE_QUOTING_RE = /[\s"]/;
-
-function prepareWindowsSafeSpawn(command, args, isWin32 = process.platform === 'win32') {
-  if (isWin32 && WIN_BATCH_EXT_RE.test(command)) {
-    return {
-      command: 'cmd.exe',
-      args: ['/c', escapeCmdMetacharsIfUnquoted(command), ...args.map(escapeCmdMetacharsIfUnquoted)],
-    };
-  }
-  return { command, args };
-}
-
-function escapeCmdMetacharsIfUnquoted(value) {
-  const str = String(value);
-  if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
-  return str.replace(CMD_METACHAR_RE, '^$&');
-}
 
 function resolveProbeSpawn(provider, defaultBin, args) {
   const spawned = composeBootstrapSpawn(provider, provider?.command || defaultBin, args);
@@ -106,6 +72,7 @@ export function createProviderCatalogService({
         if (!commandPath) return { success: false, error: `Command '${probeCommand}' not found in PATH` };
 
         const searchEnv = { ...process.env, ...provider.envVars };
+        const { prepareWindowsSafeSpawn, resolveWindowsExecutable } = await import('./windowsSafeSpawn.js');
         const invokePath = (isWin32 && resolveWindowsExecutable(provider.command, isWin32, searchEnv)) || commandPath;
         let everSpawned = false;
         const tryVersion = async (flag) => {
@@ -360,6 +327,7 @@ export function createProviderCatalogService({
     async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
       const spawned = resolveProbeSpawn(provider, defaultBin, listArgs);
       const probe = spawned.label;
+      const { prepareWindowsSafeSpawn } = await import('./windowsSafeSpawn.js');
       const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
@@ -389,80 +357,20 @@ export function createProviderCatalogService({
     },
 
     async _fetchCodexModels(provider) {
+      const [{ prepareWindowsSafeSpawn, resolveWindowsExecutable }, { probeCodexModelsViaAppServer }] = await Promise.all([
+        import('./windowsSafeSpawn.js'),
+        import('./codexModelListProbe.js'),
+      ]);
       const spawned = resolveProbeSpawn(provider, 'codex', ['app-server']);
-      const probe = spawned.label;
+      // Only needed here for the Windows shim search — `probeCodexModelsViaAppServer`
+      // rebuilds the same merge itself from `provider.envVars` before spawning.
       const childEnv = { ...process.env, ...provider?.envVars };
       const resolvedBin = resolveWindowsExecutable(spawned.command, process.platform === 'win32', childEnv) || spawned.command;
       const { command, args } = prepareWindowsSafeSpawn(resolvedBin, spawned.args);
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        let child;
-        const settle = (err, result) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          try { child?.kill('SIGTERM'); } catch {}
-          if (err) reject(err);
-          else resolve(result);
-        };
-        const timer = setTimeout(() => {
-          settle(new Error(`${probe} timed out waiting for model catalog`));
-        }, 15000);
-        timer.unref?.();
-        try {
-          child = spawn(command, args, {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            env: childEnv,
-            windowsHide: true,
-          });
-        } catch (err) {
-          settle(new Error(`${probe} failed to spawn: ${err?.message || err}`));
-          return;
-        }
-        child.on('error', (err) => settle(new Error(`${probe} failed: ${err?.message || err}`)));
-        child.stdin?.on('error', () => {});
-        child.on('exit', (code, signal) => settle(new Error(`${probe} exited prematurely with code ${code ?? signal}`)));
-
-        let buffer = '';
-        child.stdout?.on('data', (chunk) => {
-          buffer += chunk.toString();
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            try {
-              const msg = JSON.parse(trimmed);
-              if (msg.id === 1) {
-                child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }) + '\n');
-                child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'model/list', params: {} }) + '\n');
-              } else if (msg.id === 2) {
-                if (msg.error) {
-                  settle(new Error(`${probe} model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
-                  return;
-                }
-                const rawModels = msg.result?.data || msg.result?.models || [];
-                const ids = rawModels
-                  .filter(m => !m.hidden)
-                  .map(m => (typeof m === 'string' ? m : m?.id || m?.model))
-                  .filter(Boolean);
-                if (ids.length === 0) {
-                  settle(new Error(`${probe} returned no model ids`));
-                  return;
-                }
-                settle(null, [...new Set(ids)]);
-                return;
-              }
-            } catch {}
-          }
-        });
-        child.stdin?.write(JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'initialize',
-          params: { clientInfo: { name: 'portos', version: '1.0.0' } },
-        }) + '\n');
-      });
+      // `probeCodexModelsViaAppServer` is the shared leaf (`codexModelListProbe.js`)
+      // — the Harnesses page refresh (`services/harnesses.js`) drives the same
+      // probe from a resolved command/args with no toolkit `provider` shape (#8497).
+      return probeCodexModelsViaAppServer(command, args, provider, { label: spawned.label });
     },
 
     async _fetchOllamaToolCapableModels(provider) {
@@ -520,6 +428,7 @@ export function createProviderCatalogService({
 
     async _claudeCliVersion(provider) {
       const spawned = resolveProbeSpawn(provider, 'claude', ['--version']);
+      const { prepareWindowsSafeSpawn } = await import('./windowsSafeSpawn.js');
       const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 10000,

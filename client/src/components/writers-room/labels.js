@@ -1,6 +1,5 @@
-// Display labels for Writers Room enums. Keys mirror the canonical enum
-// values in server/lib/writersRoomPresets.js — keep in sync when adding kinds
-// or statuses there.
+// Display labels for Writers Room enums, keyed by the server WORK_KINDS and
+// WORK_STATUSES (server/lib/writersRoomPresets.js); labels.test.js enforces parity.
 
 export const KIND_LABELS = {
   novel: 'Novel',

@@ -219,6 +219,7 @@ log ""
 # crash-looping app the user can see beats a silently headless machine — and the
 # recovery only ever runs on a path that was already leaving PortOS down.
 PM2_APPS_DOWN=0
+PRODUCTION_PM2_APPS='portos-server,portos-cos,portos-autofixer,portos-autofixer-ui,portos-browser'
 
 # Which pm2 the recovery can actually reach. It CANNOT assume this checkout's
 # own copy: `safe_install .` wipes root node_modules whenever the pulled update
@@ -263,7 +264,7 @@ restore_pm2_apps_on_exit() {
     # verify step below exists) — and this path starts a HALF-INSTALLED tree, so
     # a start that exits 0 and then crash-loops is the likely case here, not the
     # edge case. Never claim a recovery the health probe doesn't confirm.
-    if run "${PM2_CMD[@]}" start ecosystem.config.cjs && run node scripts/verify-server-health.js; then
+    if run "${PM2_CMD[@]}" start ecosystem.config.cjs --only "$PRODUCTION_PM2_APPS" && run node scripts/verify-server-health.js; then
       run "${PM2_CMD[@]}" save || true
       step "restart" "warning" "Update failed, but PortOS was restarted"
       log "✅ PortOS is answering /api/system/health again after the failed update."
@@ -272,7 +273,7 @@ restore_pm2_apps_on_exit() {
       log "❌ PortOS is not answering /api/system/health."
       # Name the pm2 that actually exists — the checkout's copy may be the thing
       # a failed install just deleted, so printing it would be a dead-end hint.
-      log "    Recover with: ${PM2_CMD[*]} start ecosystem.config.cjs"
+      log "    Recover with: ${PM2_CMD[*]} start ecosystem.config.cjs --only $PRODUCTION_PM2_APPS"
     fi
     # Recovery must never turn a failed update into a reported success.
     if [ "$status" -eq 0 ]; then status=1; fi
@@ -298,6 +299,7 @@ step "pm2-stop" "running" "Stopping PortOS apps..."
 # that were never deleted is a harmless no-op restart on an already-failing path.
 PM2_APPS_DOWN=1
 run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
+run node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
 
@@ -469,7 +471,8 @@ if run node scripts/pm2-daemon-refresh.js; then
   run node ./node_modules/pm2/bin/pm2 update || true
 fi
 run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
-if ! run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs; then
+run node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || true
+if ! run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only "$PRODUCTION_PM2_APPS"; then
   rm -f "$ROOT_DIR/data/update-complete.json"
   exit 1
 fi
@@ -490,7 +493,7 @@ if run node scripts/verify-server-health.js; then
   step "verify" "done" "PortOS is answering /api/system/health"
 else
   log "⚠️  PortOS did not answer /api/system/health after the restart — re-running pm2 start"
-  run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs || true
+  run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only "$PRODUCTION_PM2_APPS" || true
   if run node scripts/verify-server-health.js; then
     step "verify" "done" "PortOS recovered after a second pm2 start"
     log "✅ PortOS recovered after a second pm2 start"
@@ -498,7 +501,7 @@ else
     verify_failed=1
     step "verify" "warning" "PortOS is not answering /api/system/health"
     log "❌ PortOS is STILL not answering /api/system/health."
-    log "    Recover with: node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs"
+    log "    Recover with: node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs --only $PRODUCTION_PM2_APPS"
   fi
 fi
 log ""

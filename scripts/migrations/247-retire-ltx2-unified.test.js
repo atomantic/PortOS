@@ -3,10 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { repoRoot } from './_testHelpers.js';
-import { RETIRED_VIDEO_MODELS } from '../../server/lib/mediaModels.js';
+import { RETIRED_VIDEO_MODELS, getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import migration, { RETIRED_ID, SHIPPED_REPO, REPLACEMENT_ID } from './247-retire-ltx2-unified.js';
 
-const REFERENCE_PATH = join(repoRoot, 'data.reference', 'media-models.json');
 
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
@@ -64,8 +63,8 @@ describe('migration 247 — retire LTX-2 Unified', () => {
   // The migration exists to bring persisted registries in line with the seed a
   // fresh install gets. If the seed ever re-gained the entry the two paths would
   // silently diverge, so assert the seed agrees the model is gone.
-  it('matches data.reference, which no longer ships the entry', () => {
-    const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'));
+  it('matches the shipped registry, which no longer ships the entry', () => {
+    const seeded = getShippedMediaRegistry();
     expect(seeded.video.mlx.some((entry) => entry.id === RETIRED_ID)).toBe(false);
     expect(seeded.video.mlx.some((entry) => entry.id === REPLACEMENT_ID)).toBe(true);
   });
@@ -137,7 +136,7 @@ describe('migration 247 — retire LTX-2 Unified', () => {
     expect(readJson(path)).toEqual(before);
   });
 
-  it('skips a missing registry file (fresh install seeds from data.reference)', async () => {
+  it('skips a missing registry file (fresh install seeds from DEFAULT_REGISTRY)', async () => {
     await expect(migration.up({ rootDir })).resolves.toBeUndefined();
   });
 

@@ -904,57 +904,13 @@ async function processPendingApprovals(app, ctx) {
       changed = true;
       continue;
     }
-    if (approval.rebaseRequired) {
-      const behindBy = await readBehindBy(ctx, pr);
-      if (behindBy === null) {
-        await keepPendingApproval(app, approval, remaining, 'its base relationship could not be read', { ctx, pr, tracker: handbacks });
-        changed = true;
-        continue;
-      }
-      if (behindBy > 0) {
-        if (await assessment.stillCurrent() && await updatePullRequestBranch(ctx, pr.number, pr.headRefOid)) changed = true;
-        else {
-          await keepPendingApproval(app, approval, remaining, 'its required rebase could not be applied', { ctx, pr, tracker: handbacks });
-          changed = true;
-        }
-        continue;
-      }
-    }
-    const checkRollup = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
-    const checks = classifyChecks(checkRollup);
-    if (checks === 'failed') {
-      await notifyPendingApproval(app, approval, 'CI reported a failing status, so PortOS stopped automatic merge polling.');
-      changed = true;
-      // Dropped from the poll list, so this is the PR's last owner-less moment.
-      await applyPullRequestHandback({
-        app, ctx, pr, tracker: handbacks,
-        authorLogin: approval.authorLogin,
-        reason: CI_FAILING_HANDBACK_REASON,
-        notMergeReady: true,
-      });
-      continue;
-    }
-    // A run GitHub is still holding for approval also shows up as no checks;
-    // this PR already carries the coordinator's APPROVE, so release it.
-    if (checkRollup.length === 0) await approveHeldWorkflowRuns(ctx, pr);
-    // An empty rollup is ambiguous immediately after review: CI may simply not
-    // have attached yet. A low-risk PR may skip CI only after two consecutive
-    // scheduled observations see no checks. Active checks are never waived.
-    const maySkipEmptyChecks = approval.ciPolicy === 'skippable'
-      && checkRollup.length === 0
-      && approval.noChecksObserved === true;
-    const mayMerge = checks === 'green' || maySkipEmptyChecks;
-    if (mayMerge && pr.mergeable === 'MERGEABLE' && await assessment.stillCurrent()) {
-      const merged = await mergePR(app.repoPath, approval.number, { expectedHeadSha: approval.headSha, forgeAccount: app.forgeAccount || null }).catch(() => ({ success: false }));
-      if (merged.success) {
-        changed = true;
-        continue;
-      }
-    }
-    await keepPendingApproval(app, approval, remaining, 'CI or mergeability did not settle', {
-      patch: { noChecksObserved: approval.noChecksObserved === true || checkRollup.length === 0 },
-      ctx, pr, tracker: handbacks,
+    const outcome = await advanceApprovedPullRequest({
+      app, ctx, pr, approval, handbacks, source: 'queued',
+      recheck: () => assessment.stillCurrent(),
     });
+    if (outcome.kind === 'hold') {
+      await keepPendingApproval(app, outcome.approval, remaining, outcome.reason, { ctx, pr, tracker: handbacks });
+    }
     changed = true;
   }
   const handbackPatch = handbackStatePatch(handbacks);
@@ -1308,8 +1264,191 @@ async function updatePullRequestBranch(ctx, number, headSha) {
     });
 }
 
+const withoutApproval = (approvals, number) => approvals.filter((entry) => entry.number !== number);
+
 function mergeApproval(existing, approval) {
-  return [...existing.filter((entry) => entry.number !== approval.number), approval];
+  return [...withoutApproval(existing, approval.number), approval];
+}
+
+/** The ledger entry a fresh APPROVE hands to `advanceApprovedPullRequest`. */
+function approvalRecordFor(pr, target, decision) {
+  return {
+    number: pr.number,
+    headSha: pr.headRefOid,
+    contentFingerprint: target.contentFingerprint,
+    authorLogin: target.authorLogin,
+    eligibilityFacts: target.eligibilityFacts,
+    url: pr.url,
+    ciPolicy: decision.ciPolicy,
+    rebaseRequired: decision.rebaseRequired,
+    reviewedAt: new Date().toISOString(),
+    ticks: 0,
+  };
+}
+
+/**
+ * Where the two landing paths genuinely differ, carried as data so the ladder
+ * in `advanceApprovedPullRequest` exists once. `fresh` is an APPROVE posted in
+ * this pass, `queued` one polled from the persisted ledger. Unifying any row is
+ * a policy change, not a refactor.
+ *
+ * - `releaseHeldRuns`: a fresh approval releases held fork CI right after its
+ *   own APPROVE; a queued one only while its rollup is still empty.
+ * - `dropStale`: a fresh approval that fails its pre-mutation recheck is
+ *   abandoned (and rechecked again before it may enter the ledger at all); a
+ *   queued one waits another tick, which re-verifies it from scratch.
+ * - `ciHoldPatch`: fields a fresh approval settles when it is first queued.
+ */
+const APPROVAL_LANDING = {
+  fresh: {
+    releaseHeldRuns: 'after-approve',
+    dropStale: true,
+    ciHoldPatch: { autoMergeEnabled: false, rebaseRequired: false },
+    ciFailedNotice: 'CI reported a failing status, so PortOS did not merge this approved PR.',
+  },
+  queued: {
+    releaseHeldRuns: 'on-empty-rollup',
+    dropStale: false,
+    ciHoldPatch: {},
+    ciFailedNotice: 'CI reported a failing status, so PortOS stopped automatic merge polling.',
+  },
+};
+
+const DROPPED = Object.freeze({ kind: 'dropped' });
+
+/**
+ * Advance one approved PR through rebase → CI → merge, or park it.
+ *
+ * Every forge mutation on the untrusted PR (update-branch, merge) is preceded
+ * by the caller's `recheck` — its current eligibility and security-assessment
+ * guard — at exactly one call site each. Returns a disposition:
+ * `merged` | `rebased` (a fresh review must follow) | `handed-back` (CI
+ * failed; `handedBack` says whether anyone took it) | `dropped` | `hold`
+ * (`approval` is the entry to keep polling, `reason` why it is waiting).
+ */
+async function advanceApprovedPullRequest({ app, ctx, pr, approval, handbacks, recheck, source }) {
+  const policy = APPROVAL_LANDING[source];
+  // `held` parks the approval as-is; `hold` first re-guards it when a stale
+  // approval must drop; `refused` answers a failed pre-mutation recheck.
+  const held =(reason, patch = {}) => ({ kind: 'hold', reason, approval: { ...approval, ...patch } });
+  const hold = async (reason, patch) => (policy.dropStale && !await recheck() ? DROPPED : held(reason, patch));
+  const refused = (reason, patch) => (policy.dropStale ? DROPPED : held(reason, patch));
+
+  if (policy.releaseHeldRuns === 'after-approve') await approveHeldWorkflowRuns(ctx, pr);
+  if (approval.rebaseRequired) {
+    const behindBy = await readBehindBy(ctx, pr);
+    if (behindBy === null) return hold('its base relationship could not be read');
+    if (behindBy > 0) {
+      if (!await recheck()) return refused('its required rebase could not be applied');
+      if (await updatePullRequestBranch(ctx, pr.number, pr.headRefOid)) return { kind: 'rebased' };
+      return held('its required rebase could not be applied');
+    }
+  }
+
+  const checkRollup = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+  const checks = classifyChecks(checkRollup);
+  if (checks === 'failed') {
+    await notifyPendingApproval(app, approval, policy.ciFailedNotice);
+    // Dropped from the poll list, so this is the PR's last owner-less moment.
+    const handback = await applyPullRequestHandback({
+      app, ctx, pr, tracker: handbacks,
+      authorLogin: approval.authorLogin,
+      reason: CI_FAILING_HANDBACK_REASON,
+      notMergeReady: true,
+    });
+    return { kind: 'handed-back', handedBack: handback !== PR_HANDBACK.NONE };
+  }
+  // A run GitHub is still holding for approval also shows up as no checks;
+  // this PR already carries the coordinator's APPROVE, so release it.
+  if (policy.releaseHeldRuns === 'on-empty-rollup' && checkRollup.length === 0) await approveHeldWorkflowRuns(ctx, pr);
+  // An empty rollup is ambiguous immediately after review: CI may simply not
+  // have attached yet. A low-risk PR may skip CI only after two consecutive
+  // scheduled observations see no checks. Active checks are never waived.
+  const maySkipEmptyChecks = approval.ciPolicy === 'skippable'
+    && checkRollup.length === 0
+    && approval.noChecksObserved === true;
+  const ciHold = { ...policy.ciHoldPatch, noChecksObserved: approval.noChecksObserved === true || checkRollup.length === 0 };
+  if ((checks === 'green' || maySkipEmptyChecks) && pr.mergeable === 'MERGEABLE') {
+    if (!await recheck()) return refused('CI or mergeability did not settle', ciHold);
+    const merged = await mergePR(app.repoPath, approval.number, { expectedHeadSha: approval.headSha, forgeAccount: app.forgeAccount || null }).catch(() => ({ success: false }));
+    if (merged.success) return { kind: 'merged' };
+  }
+  // PortOS owns the wait so a later merge must pass fresh security checks.
+  return hold('CI or mergeability did not settle', ciHold);
+}
+
+/** How a fresh landing outcome changes this pass's approval ledger. */
+function ledgerAfterLanding(approvals, number, outcome) {
+  if (outcome.kind === 'hold') return mergeApproval(approvals, outcome.approval);
+  // Landed, or handed off because CI failed: nothing is left to poll.
+  if (outcome.kind === 'merged' || outcome.kind === 'handed-back') return withoutApproval(approvals, number);
+  return approvals;
+}
+
+/**
+ * Anchor the reviewer's findings to the diff and decide whether its verdict
+ * can become a GitHub APPROVE.
+ */
+function reviewPlanFor(decision, diff, target) {
+  const anchors = parseAddedDiffLines(diff);
+  const normalizedFindings = decision.findings.map((finding) => normalizeFinding(finding, anchors)).filter(Boolean);
+  const blockingFindings = normalizedFindings.filter(({ blocking }) => blocking);
+  const hasInvalidFinding = normalizedFindings.length !== decision.findings.length;
+  const diffInsufficient = target.diffTruncated || diff.length > MAX_DIFF_CHARS;
+  return {
+    normalizedFindings,
+    findings: normalizedFindings.map(({ comment }) => comment),
+    blockingFindings,
+    hasInvalidFinding,
+    // An approval with only explicitly non-blocking findings is still a real
+    // GitHub code review: the comments travel with the APPROVE event, while
+    // the findings stay as follow-up work instead of blocking this PR. Every
+    // other ambiguous/negative case remains a non-merging review.
+    canApprove: decision.verdict === 'approve'
+      && !hasInvalidFinding
+      && !diffInsufficient
+      && blockingFindings.length === 0,
+  };
+}
+
+/**
+ * Post the review for a PR the coordinator will not approve, then hand the PR
+ * to whoever can act on it. `{ reviewed, handedBack }` report what happened.
+ */
+async function postNonApprovingReview({ app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck }) {
+  const { normalizedFindings, findings, blockingFindings, hasInvalidFinding } = review;
+  if (!await recheck()) return { reviewed: false, handedBack: false };
+  const downgraded = hasInvalidFinding && decision.verdict !== 'request_changes';
+  const shouldRequestChanges = decision.verdict === 'request_changes'
+    || hasInvalidFinding
+    || blockingFindings.length > 0;
+  const summary = renderReviewBody({
+    report: raw,
+    verdict: shouldRequestChanges ? 'request_changes' : 'defer',
+    blockingFindings,
+    nonBlockingFindings: normalizedFindings.filter((entry) => !entry.blocking),
+    downgraded,
+  });
+  const posted = shouldRequestChanges
+    ? await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'REQUEST_CHANGES', comments: findings })
+      || await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
+    : await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
+      || await postReviewFallback(ctx, pr.number, summary);
+  if (!posted) {
+    drops.record(pr.number, 'GitHub rejected the review comment');
+    return { reviewed: false, handedBack: false };
+  }
+  // The review is posted and the PR is going nowhere on its own. Hand it to
+  // whoever can act on it — a remediation agent when the head branch is
+  // writable and the findings are concrete, the opener otherwise.
+  const handback = await applyPullRequestHandback({
+    app, ctx, pr, tracker: handbacks,
+    authorLogin: target.authorLogin,
+    reason: 'the review reported blocking findings',
+    reviewOutcome: shouldRequestChanges ? PR_REVIEW_OUTCOME.REQUEST_CHANGES : PR_REVIEW_OUTCOME.DEFER,
+    downgraded,
+  });
+  return { reviewed: true, handedBack: handback !== PR_HANDBACK.NONE };
 }
 
 /**
@@ -1451,9 +1590,9 @@ export async function processTaskOutput({ appId, success, payload, task, require
   let approvals = Array.isArray(readState(app).approvedPullRequests) ? readState(app).approvedPullRequests : [];
   const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
+  // One disposition per approved PR; the result counts are tallied from them.
+  const landings = [];
   let reviewed = 0;
-  let merged = 0;
-  let rebased = 0;
   let handedBack = 0;
   for (const raw of payload.pullRequests) {
     const verified = await verifyScreenedPullRequest(ctx, raw, expectedPullRequests);
@@ -1476,73 +1615,32 @@ export async function processTaskOutput({ appId, success, payload, task, require
       if (!eligibilityRequired) return true;
       const current = await eligibilityFactsStillCurrent(ctx, pr, target);
       if (!current) {
-        approvals = approvals.filter((entry) => entry.number !== pr.number);
+        approvals = withoutApproval(approvals, pr.number);
         drops.record(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
       }
       return current;
     };
-    const anchors = parseAddedDiffLines(diff);
-    const normalizedFindings = decision.findings.map((finding) => normalizeFinding(finding, anchors)).filter(Boolean);
-    const findings = normalizedFindings.map(({ comment }) => comment);
-    const blockingFindings = normalizedFindings.filter(({ blocking }) => blocking);
-    const hasInvalidFinding = normalizedFindings.length !== decision.findings.length;
-    const diffInsufficient = target.diffTruncated || diff.length > MAX_DIFF_CHARS;
-
-    // An approval with only explicitly non-blocking findings is still a real
-    // GitHub code review: the comments travel with the APPROVE event, while
-    // the findings stay as follow-up work instead of blocking this PR. Every
-    // other ambiguous/negative case remains a non-merging review.
-    const canApprove = decision.verdict === 'approve'
-      && !hasInvalidFinding
-      && !diffInsufficient
-      && blockingFindings.length === 0;
-    if (!canApprove) {
-      if (!await eligibilityStillCurrent()) continue;
-      const downgraded = hasInvalidFinding && decision.verdict !== 'request_changes';
-      const shouldRequestChanges = decision.verdict === 'request_changes'
-        || hasInvalidFinding
-        || blockingFindings.length > 0;
-      const summary = renderReviewBody({
-        report: raw,
-        verdict: shouldRequestChanges ? 'request_changes' : 'defer',
-        blockingFindings,
-        nonBlockingFindings: normalizedFindings.filter((entry) => !entry.blocking),
-        downgraded,
+    const review = reviewPlanFor(decision, diff, target);
+    if (!review.canApprove) {
+      const outcome = await postNonApprovingReview({
+        app, ctx, pr, raw, decision, review, target, handbacks, drops, recheck: eligibilityStillCurrent,
       });
-      const posted = shouldRequestChanges
-        ? await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'REQUEST_CHANGES', comments: findings })
-          || await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
-        : await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
-          || await postReviewFallback(ctx, pr.number, summary);
-      if (!posted) {
-        drops.record(decision.number, 'GitHub rejected the review comment');
-        continue;
-      }
-      reviewed += 1;
-      // The review is posted and the PR is going nowhere on its own. Hand it to
-      // whoever can act on it — a remediation agent when the head branch is
-      // writable and the findings are concrete, the opener otherwise.
-      if (await applyPullRequestHandback({
-        app, ctx, pr, tracker: handbacks,
-        authorLogin: target.authorLogin,
-        reason: 'the review reported blocking findings',
-        reviewOutcome: shouldRequestChanges ? PR_REVIEW_OUTCOME.REQUEST_CHANGES : PR_REVIEW_OUTCOME.DEFER,
-        downgraded,
-      }) !== PR_HANDBACK.NONE) handedBack += 1;
+      if (outcome.reviewed) reviewed += 1;
+      if (outcome.handedBack) handedBack += 1;
       continue;
     }
 
     const approveBody = renderReviewBody({
       report: raw,
       verdict: 'approve',
-      nonBlockingFindings: normalizedFindings,
+      nonBlockingFindings: review.normalizedFindings,
     });
     if (!await eligibilityStillCurrent()) continue;
     const approved = await submitReview(ctx, pr.number, pr.headRefOid, {
       body: approveBody,
       event: 'APPROVE',
-      comments: findings,
-    }) || (findings.length > 0 && await submitReview(ctx, pr.number, pr.headRefOid, {
+      comments: review.findings,
+    }) || (review.findings.length > 0 && await submitReview(ctx, pr.number, pr.headRefOid, {
       body: approveBody,
       event: 'APPROVE',
     }));
@@ -1551,72 +1649,13 @@ export async function processTaskOutput({ appId, success, payload, task, require
       continue;
     }
     reviewed += 1;
-    await approveHeldWorkflowRuns(ctx, pr);
-
-    const behindBy = await readBehindBy(ctx, pr);
-    if (decision.rebaseRequired && (behindBy === null || behindBy > 0)) {
-      if (!await eligibilityStillCurrent()) continue;
-      const updated = behindBy > 0 && await updatePullRequestBranch(ctx, pr.number, pr.headRefOid);
-      if (updated) rebased += 1;
-      else approvals = mergeApproval(approvals, {
-        number: pr.number,
-        headSha: pr.headRefOid,
-        contentFingerprint: target.contentFingerprint,
-        authorLogin: target.authorLogin,
-        eligibilityFacts: target.eligibilityFacts,
-        url: pr.url,
-        ciPolicy: decision.ciPolicy,
-        rebaseRequired: true,
-        reviewedAt: new Date().toISOString(),
-        ticks: 0,
-      });
-      continue;
-    }
-
-    const checkRollup = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
-    const checks = classifyChecks(checkRollup);
-    const mayMerge = pr.mergeable === 'MERGEABLE' && checks === 'green';
-    if (mayMerge) {
-      if (!await eligibilityStillCurrent()) continue;
-      const result = await mergePR(app.repoPath, pr.number, { expectedHeadSha: pr.headRefOid, forgeAccount: app.forgeAccount || null }).catch(() => ({ success: false }));
-      if (result.success) {
-        approvals = approvals.filter((entry) => entry.number !== pr.number);
-        merged += 1;
-        continue;
-      }
-    }
-    if (checks === 'failed') {
-      await notifyPendingApproval(app, {
-        number: pr.number,
-        url: pr.url,
-      }, 'CI reported a failing status, so PortOS did not merge this approved PR.');
-      approvals = approvals.filter((entry) => entry.number !== pr.number);
-      // Approved on its content but not landable. Polling is over (the approval
-      // was just dropped), so without a hand-back this PR would have nobody.
-      if (await applyPullRequestHandback({
-        app, ctx, pr, tracker: handbacks,
-        authorLogin: target.authorLogin,
-        reason: CI_FAILING_HANDBACK_REASON,
-        notMergeReady: true,
-      }) !== PR_HANDBACK.NONE) handedBack += 1;
-      continue;
-    }
-    if (!await eligibilityStillCurrent()) continue;
-    // PortOS owns the wait so a later merge must pass fresh security checks.
-    approvals = mergeApproval(approvals, {
-      number: pr.number,
-      headSha: pr.headRefOid,
-      contentFingerprint: target.contentFingerprint,
-      authorLogin: target.authorLogin,
-      eligibilityFacts: target.eligibilityFacts,
-      url: pr.url,
-      ciPolicy: decision.ciPolicy,
-      autoMergeEnabled: false,
-      rebaseRequired: false,
-      noChecksObserved: checkRollup.length === 0,
-      reviewedAt: new Date().toISOString(),
-      ticks: 0,
+    const outcome = await advanceApprovedPullRequest({
+      app, ctx, pr, handbacks, source: 'fresh',
+      approval: approvalRecordFor(pr, target, decision),
+      recheck: eligibilityStillCurrent,
     });
+    approvals = ledgerAfterLanding(approvals, pr.number, outcome);
+    landings.push(outcome);
   }
 
   const latestState = readState(await getAppById(appId) || app);
@@ -1659,5 +1698,15 @@ export async function processTaskOutput({ appId, success, payload, task, require
     lastError: commentsHandled ? null : 'issue-response-incomplete',
     ...(typeof handbackPatch === 'function' ? handbackPatch(state) : handbackPatch),
   }));
-  return { action: 'processed', replies, reviewed, rebased, merged, handedBack, commentsHandled, dropped: drops.dropped };
+  const landed = (kind) => landings.filter((outcome) => outcome.kind === kind).length;
+  return {
+    action: 'processed',
+    replies,
+    reviewed,
+    rebased: landed('rebased'),
+    merged: landed('merged'),
+    handedBack: handedBack + landings.filter((outcome) => outcome.handedBack).length,
+    commentsHandled,
+    dropped: drops.dropped,
+  };
 }

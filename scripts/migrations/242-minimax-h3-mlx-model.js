@@ -1,6 +1,6 @@
 /**
  * Add the never-before-shipped MiniMax H3 MLX profile to existing macOS
- * registries. Fresh installs receive it from data.reference/media-models.json.
+ * registries. Fresh installs seed it from DEFAULT_REGISTRY on first load.
  *
  * Registries that predate `_shippedDefaults` need a migration: their normal
  * bootstrap deliberately treats every current default id as already shipped
@@ -10,9 +10,9 @@
  */
 
 import { readFile } from 'fs/promises';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
+import { getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 import {
   VIDEO_BUCKET_CUDA,
   VIDEO_BUCKET_MLX,
@@ -21,10 +21,6 @@ import {
 
 const REL_PATH = 'data/media-models.json';
 const H3_ID = 'minimax_h3_8bit';
-const REFERENCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..', '..', 'data.reference', 'media-models.json',
-);
 
 // The built-in video model ids as of the release that introduced this
 // migration (commit ffac284f9), used for the `_shippedDefaults` bootstrap union
@@ -74,7 +70,7 @@ export default {
     const mlxEntries = readVideoBucket(config?.video, VIDEO_BUCKET_MLX);
     if (!Array.isArray(mlxEntries)) return;
 
-    const reference = parseJson(await readFile(REFERENCE_PATH, 'utf-8'), 'data.reference/media-models.json');
+    const reference = getShippedMediaRegistry();
     const referenceMlx = readVideoBucket(reference?.video, VIDEO_BUCKET_MLX);
     const h3 = (Array.isArray(referenceMlx) ? referenceMlx : []).find((entry) => entry?.id === H3_ID);
     if (!h3) throw new Error(`Cannot migrate ${REL_PATH}: shipped ${H3_ID} reference is missing`);

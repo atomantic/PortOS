@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { remoteRequestHandler } from '../lib/requestOrigin.js';
 import { verifySession } from '../services/auth.js';
-vi.mock('../services/auth.js', () => ({
-  extractToken: req => req.headers.authorization,
-  verifySession: vi.fn().mockResolvedValue(true),
-  isAuthEnabled: vi.fn().mockResolvedValue(false),
-}));
+vi.mock('../services/auth.js', () => {
+  const verifySession = vi.fn().mockResolvedValue(true);
+  return {
+    extractToken: req => req.headers.authorization,
+    verifySession,
+    verifyRequestSession: async req => ((await verifySession(req.headers.authorization)) ? 'mock-session' : null),
+    isAuthEnabled: vi.fn().mockResolvedValue(false),
+  };
+});
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -19,6 +23,8 @@ vi.mock('../services/syncOrchestrator.js', () => ({
 vi.mock('../services/instances.js', async (importOriginal) => ({
   DEFAULT_SYNC_CATEGORIES: (await importOriginal()).DEFAULT_SYNC_CATEGORIES,
   applyReciprocalSync: vi.fn(),
+  pairPeerSyncSecret: vi.fn(),
+  acceptPeerSyncSecretFromPeer: vi.fn(),
   updatePeer: vi.fn(),
   addPeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
@@ -427,6 +433,49 @@ describe('GET /api/instances/peers/:id/full-sync-coverage', () => {
 
 describe('local peer admission configuration', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(verifySession).mockResolvedValue(false); });
+  it('starts automatic pairing from an authenticated local session', async () => {
+    vi.mocked(verifySession).mockResolvedValue(true);
+    instances.pairPeerSyncSecret.mockResolvedValue({ id: 'peer-a', hasSyncSecret: true });
+    const res = await request(buildApp()).post('/api/instances/peers/peer-a/pair-secret');
+    expect(res.status).toBe(200);
+    expect(instances.pairPeerSyncSecret).toHaveBeenCalledWith('peer-a');
+  });
+
+  it('accepts the one-time bootstrap only from Basic auth and a registered peer identity', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.portosAuthContext = { enabled: true, authenticated: true, method: 'basic' };
+      next();
+    });
+    app.use('/api/instances', instancesRoutes);
+    app.use(errorMiddleware);
+    const instanceId = '191aaece-a492-41ee-a66d-d4661eadc132';
+    instances.acceptPeerSyncSecretFromPeer.mockResolvedValue({ id: 'peer-a' });
+    const res = await request(remoteRequestHandler(app)).post('/api/instances/peers/pair-secret')
+      .set('X-PortOS-Instance-Id', instanceId)
+      .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ paired: true });
+    expect(instances.acceptPeerSyncSecretFromPeer).toHaveBeenCalledWith(instanceId, 'synthetic-pair-secret-32-characters-long');
+  });
+
+  it('does not let a scoped peer credential use the setup endpoint', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.portosAuthContext = { enabled: true, authenticated: true, method: 'peer' };
+      next();
+    });
+    app.use('/api/instances', instancesRoutes);
+    app.use(errorMiddleware);
+    const res = await request(remoteRequestHandler(app)).post('/api/instances/peers/pair-secret')
+      .set('X-PortOS-Instance-Id', '191aaece-a492-41ee-a66d-d4661eadc132')
+      .send({ syncSecret: 'synthetic-pair-secret-32-characters-long' });
+    expect(res.status).toBe(403);
+    expect(instances.acceptPeerSyncSecretFromPeer).not.toHaveBeenCalled();
+  });
+
   it('rejects an anonymous remote transport even when it forwards localhost headers', async () => {
     const res = await request(remoteRequestHandler(buildApp())).put('/api/instances/peers/peer-a')
       .set('Host', 'localhost').set('Origin', 'http://localhost').set('X-Forwarded-For', '127.0.0.1')

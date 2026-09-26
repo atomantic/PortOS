@@ -18,15 +18,62 @@ const jlistCache = new Map();
 const jlistInflight = new Map();
 const cacheKey = (pm2Home) => pm2Home || '_default';
 
+// Track PM2 read failures per home so we log only on state change or reason change
+const jlistFailureState = new Map(); // home -> { lastError: string }
+let readinessChangedLoader;
+
+function notifyReadinessChanged(kind) {
+  readinessChangedLoader ??= import('./readinessNotify.js').then(({ noteReadinessChanged }) => noteReadinessChanged);
+  void readinessChangedLoader
+    .then(noteReadinessChanged => noteReadinessChanged(kind))
+    .catch(error => console.error(`❌ Readiness invalidation failed: ${error.message}`));
+}
+
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
  * @param {string|null} [pm2Home=null]
  */
 export function clearJlistCache(pm2Home = null) {
+  notifyReadinessChanged('health');
+  notifyReadinessChanged('capabilities');
   if (pm2Home !== undefined && pm2Home !== null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {
     jlistCache.clear();
+  }
+}
+
+/**
+ * Record a PM2 read failure and log it only on state change or reason change.
+ * @param {string|null} pm2Home The PM2 home being read
+ * @param {string} errorReason Formatted error description
+ * @private
+ */
+function logJlistFailure(pm2Home, errorReason) {
+  const key = cacheKey(pm2Home);
+  const state = jlistFailureState.get(key);
+  const homeDesc = pm2Home ? 'custom' : 'default';
+
+  // Log only if no prior state, or if the reason changed
+  if (!state || state.lastError !== errorReason) {
+    console.error(`❌ PM2 read failed (home=${homeDesc}): ${errorReason}`);
+    jlistFailureState.set(key, { lastError: errorReason });
+  }
+}
+
+/**
+ * Record recovery from a PM2 read failure.
+ * @param {string|null} pm2Home The PM2 home that recovered
+ * @private
+ */
+function logJlistRecovery(pm2Home) {
+  const key = cacheKey(pm2Home);
+  const state = jlistFailureState.get(key);
+
+  if (state) {
+    const homeDesc = pm2Home ? 'custom' : 'default';
+    console.log(`✅ PM2 read recovered (home=${homeDesc})`);
+    jlistFailureState.delete(key);
   }
 }
 
@@ -175,6 +222,7 @@ function spawnPm2Cli(action, name, pm2Home) {
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {
       if (code !== 0) return reject(new Error(stderr || `pm2 ${action} exited with code ${code}`));
+      clearJlistCache();
       resolve({ success: true });
     });
     child.on('error', reject);
@@ -235,6 +283,7 @@ export async function startApp(name, options = {}) {
 
       pm2.start(startOptions, (err, proc) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true, process: proc });
       });
     });
@@ -256,6 +305,7 @@ export async function stopApp(name, pm2Home = null) {
     return new Promise((resolve, reject) => {
       pm2.stop(name, (err) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true });
       });
     });
@@ -294,6 +344,7 @@ export async function deleteApp(name, pm2Home = null) {
     return new Promise((resolve, reject) => {
       pm2.delete(name, (err) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true });
       });
     });
@@ -391,16 +442,24 @@ function fetchJlist(pm2Home = null) {
       pm2.connect((err) => {
         if (err) {
           jlistInflight.delete(key);
+          logJlistFailure(pm2Home, err.message || String(err));
           resolve(null);
           return;
         }
         pm2.list((err, list) => {
           pm2.disconnect();
           jlistInflight.delete(key);
-          if (err || !Array.isArray(list)) {
+          if (err) {
+            logJlistFailure(pm2Home, err.message || String(err));
             resolve(null);
             return;
           }
+          if (!Array.isArray(list)) {
+            logJlistFailure(pm2Home, 'Invalid response from pm2.list (not an array)');
+            resolve(null);
+            return;
+          }
+          logJlistRecovery(pm2Home);
           jlistCache.set(key, { data: list, ts: Date.now() });
           resolve(list);
         });
@@ -413,28 +472,39 @@ function fetchJlist(pm2Home = null) {
         env: buildEnv(pm2Home)
       });
       let stdout = '';
+      let stderr = '';
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
       });
 
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
       child.on('close', (code) => {
         jlistInflight.delete(key);
         if (code !== 0) {
+          const stderrTail = stderr.length > 200 ? stderr.slice(-200) : stderr;
+          const errMsg = stderrTail.trim() || `exit ${code}`;
+          logJlistFailure(pm2Home, errMsg);
           resolve(null);
           return;
         }
         const list = parseJlistStdout(stdout);
         if (list === null) {
+          logJlistFailure(pm2Home, 'Failed to parse pm2 jlist output (invalid JSON)');
           resolve(null);
           return;
         }
+        logJlistRecovery(pm2Home);
         jlistCache.set(key, { data: list, ts: Date.now() });
         resolve(list);
       });
 
-      child.on('error', () => {
+      child.on('error', (err) => {
         jlistInflight.delete(key);
+        logJlistFailure(pm2Home, err.message || String(err));
         resolve(null);
       });
     });
@@ -596,6 +666,7 @@ export async function startWithCommand(name, cwd, command, options = {}) {
 
       pm2.start(opts, (err, proc) => {
         if (err) return reject(err);
+        clearJlistCache();
         resolve({ success: true, process: proc });
       });
     });
@@ -629,6 +700,7 @@ function spawnPm2StartCommand(name, cwd, script, args, { autorestart, maxRestart
     child.stderr.on('data', (data) => { stderr += data.toString(); });
     child.on('close', (code) => {
       if (code !== 0) return reject(new Error(stderr || `pm2 start exited with code ${code}`));
+      clearJlistCache();
       resolve({ success: true });
     });
     child.on('error', reject);
@@ -668,6 +740,7 @@ function spawnPm2StartEcosystem(cwd, ecosystemFile, processNames, pm2Home) {
       if (code !== 0) {
         return reject(new Error(stderr || `pm2 start exited with code ${code}`));
       }
+      clearJlistCache();
       resolve({ success: true, output: stdout });
     });
 

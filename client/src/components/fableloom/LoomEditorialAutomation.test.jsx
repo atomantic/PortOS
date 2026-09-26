@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({
   cancelLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
-  getLoomEditorialAutopilotRun: vi.fn(),
   getLoomEditorialAutopilotStatus: vi.fn(),
   getProviders: vi.fn(),
   remediateLoomEditorial: vi.fn(),
@@ -14,10 +13,11 @@ vi.mock('../../services/api', () => ({
   startLoomEditorialAutopilot: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
-  default: { on: vi.fn(), off: vi.fn() },
+  default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
 import * as api from '../../services/api';
+import socket from '../../services/socket';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 
 const loom = {
@@ -148,7 +148,7 @@ describe('LoomEditorialAutomation', () => {
 
   it('restores the active run configuration when reopening the editor', async () => {
     api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: {
-      id: 'active-planning-run', status: 'running', mode: 'planning', maxRounds: 2, round: 1,
+      id: 'active-planning-run', loomId: 'loom-1', status: 'running', mode: 'planning', maxRounds: 2, round: 1,
       route: { providerId: 'codex', model: 'gpt-5', effort: 'low' }, selfImproveEnabled: false,
     } });
     renderPanel();
@@ -244,4 +244,67 @@ describe('LoomEditorialAutomation', () => {
     expect(screen.getByRole('button', { name: 'Start editor autopilot' })).toBeDisabled();
     expect(screen.getByText(/Save the current series-plan edits/)).toBeInTheDocument();
   });
+});
+
+const editorialEvent = payload => socket.on.mock.calls.filter(([name]) => name === 'fableloom:editorial:run').at(-1)[1](payload);
+const reconnect = () => socket.on.mock.calls.filter(([name]) => name === 'connect').at(-1)[1]();
+const editorialRun = (patch = {}) => ({
+  id: 'run-1', loomId: 'loom-1', createdAt: '2026-01-01T00:00:00Z',
+  revision: 1, status: 'running', round: 1, maxRounds: 3, rounds: [], residualFindings: [],
+  message: 'Editor running', ...patch,
+});
+
+it('renders snapshots without timer reads and reconciles reconnect/reshow once', async () => {
+  const onLoomUpdate = vi.fn();
+  api.getLoom.mockResolvedValue(loom);
+  api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: editorialRun() });
+  renderPanel({ onLoomUpdate });
+  await screen.findAllByText('Editor running');
+  vi.useFakeTimers();
+  await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+  vi.useRealTimers();
+  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(1);
+  await act(async () => editorialEvent(editorialRun({ revision: 2, message: 'Reviewer running' })));
+  expect(screen.getAllByText('Reviewer running')[0]).toBeInTheDocument();
+  await act(async () => editorialEvent(editorialRun({ loomId: 'other', revision: 3, message: 'Wrong loom' })));
+  expect(screen.queryByText('Wrong loom')).not.toBeInTheDocument();
+  const completed = editorialRun({ status: 'completed', revision: 3, message: 'Review finished' });
+  api.getLoomEditorialAutopilotStatus.mockResolvedValue({ run: completed });
+  await act(async () => { editorialEvent(completed); editorialEvent({ ...completed, revision: 4 }); });
+  expect(onLoomUpdate).toHaveBeenCalledTimes(1);
+  await act(async () => reconnect());
+  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(2);
+  const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  if (original) Object.defineProperty(document, 'visibilityState', original);
+  else delete document.visibilityState;
+  expect(api.getLoomEditorialAutopilotStatus).toHaveBeenCalledTimes(3);
+  expect(onLoomUpdate).toHaveBeenCalledTimes(1);
+});
+
+it('drops late initial reads, retired-run events and old-loom terminal refreshes', async () => {
+  let resolveRead;
+  let resolveLoom;
+  api.getLoomEditorialAutopilotStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+  api.getLoom.mockReturnValueOnce(new Promise(resolve => { resolveLoom = resolve; }));
+  const onLoomUpdate = vi.fn();
+  const panel = renderPanel({ onLoomUpdate });
+  await waitFor(() => expect(resolveRead).toBeTypeOf('function'));
+  await act(async () => editorialEvent(editorialRun({ revision: 2, message: 'New progress' })));
+  await act(async () => resolveRead({ run: editorialRun({ message: 'Stale read' }) }));
+  expect(screen.getAllByText('New progress')[0]).toBeInTheDocument();
+  await act(async () => editorialEvent(editorialRun({ id: 'run-2', createdAt: '2026-01-02T00:00:00Z', message: 'New run' })));
+  await act(async () => editorialEvent(editorialRun({ revision: 9, status: 'failed', message: 'Retired run' })));
+  expect(screen.getAllByText('New run')[0]).toBeInTheDocument();
+  await act(async () => editorialEvent(editorialRun({ id: 'run-2', createdAt: '2026-01-02T00:00:00Z', revision: 2, status: 'completed' })));
+  panel.rerender(<MemoryRouter><LoomEditorialAutomation loom={{ ...loom, id: 'loom-2' }} dirty={false} onLoomUpdate={onLoomUpdate} /></MemoryRouter>);
+  await act(async () => resolveLoom(loom));
+  expect(onLoomUpdate).not.toHaveBeenCalled();
+  expect(screen.queryByText('New run')).not.toBeInTheDocument();
 });

@@ -7,6 +7,7 @@
  */
 
 import { Router } from 'express';
+import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
 import { basename } from 'path';
 import os from 'os';
 import { z } from 'zod';
@@ -1142,6 +1143,29 @@ router.post('/history/:id/visibility', asyncHandler(async (req, res) => {
   const body = visibilitySchema.safeParse(req.body ?? {});
   if (!body.success) failValidation(body);
   res.json(await setHistoryItemHidden(parsedId.data, body.data.hidden));
+}));
+
+const posterSchema = z.object({ atSec: z.number().finite().nullable() });
+router.patch('/history/:id/poster', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(posterSchema, req.body);
+  res.json(await updateVideoPoster(parsed.data, body.atSec));
+}));
+
+router.get('/history/:id/sharing-download', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  res.once('close', abort);
+  const copy = await createSharingCopy(parsed.data, { signal: controller.signal });
+  if (res.destroyed) { await copy.cleanup(); return; }
+  res.download(copy.path, copy.filename, error => {
+    res.off('close', abort);
+    copy.cleanup().catch(err => console.error(`❌ Sharing download cleanup failed: ${err.message}`));
+    if (error && !res.destroyed) res.destroy(error);
+  });
 }));
 
 router.patch('/history/:id/prompt', asyncHandler(async (req, res) => {

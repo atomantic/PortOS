@@ -16,6 +16,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import sharp from 'sharp';
 import { request } from '../lib/testHelper.js';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -27,7 +28,10 @@ const tempRoot = createTempDataRoot('portos-asset-mounts-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => (
   makePathsProxy(await importOriginal(), { dataRoot: tempRoot })
 ));
-afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
+afterAll(() => {
+  sharp.cache({ files: 0 });
+  rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 
 // Dynamic, not a static import: the `vi.mock` factory above closes over
 // `tempRoot`, and a static import would be hoisted above that binding.
@@ -43,11 +47,14 @@ const spaFallback = (req, res, next) => {
 
 let app;
 
-beforeAll(() => {
+beforeAll(async () => {
   // Real files under real mounts, so "the asset mounts still work" is proved by
   // bytes coming back rather than by the absence of a 404.
   mkdirSync(join(tempRoot, 'images'), { recursive: true });
   writeFileSync(join(tempRoot, 'images', 'probe.png'), 'PNGBYTES');
+  writeFileSync(join(tempRoot, 'images', 'tile.png'), await sharp({
+    create: { width: 1024, height: 1024, channels: 3, background: '#123456' },
+  }).png().toBuffer());
   const voiceProfiles = join(tempRoot, 'voice-profiles', 'voice-profile-1', 'benchmarks', 'v1');
   mkdirSync(voiceProfiles, { recursive: true });
   writeFileSync(join(voiceProfiles, '01-identity.wav'), 'WAVBYTES');
@@ -134,6 +141,31 @@ describe('the server-owned namespace terminators', () => {
     const res = await request(app).get('/data/images/probe.png');
     expect(res.status).toBe(200);
     expect(res.text).toBe('PNGBYTES');
+  });
+
+  it('generates a cached thumbnail only for a flat image source', async () => {
+    const res = await request(app).get('/data/image-thumbnails/tile.webp');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/webp');
+    expect(res.headers['cache-control']).toContain('max-age=86400');
+    expect(res.headers.etag).toBeTruthy();
+    expect(await sharp(join(tempRoot, 'image-thumbnails/tile.webp')).metadata())
+      .toMatchObject({ format: 'webp', width: 512, height: 512 });
+    for (const path of ['missing.webp', 'tile.png', 'nested/tile.webp', '..%2Ftile.webp']) {
+      expect((await request(app).get(`/data/image-thumbnails/${path}`)).status).toBe(404);
+    }
+  });
+
+  it('sandboxes directly opened peer asset files on every media mount', async () => {
+    for (const dir of ['images', 'image-refs', 'videos', 'music', 'audio']) {
+      mkdirSync(join(tempRoot, dir), { recursive: true });
+      writeFileSync(join(tempRoot, dir, 'peer.html'), '<script>window.exploited = true</script>');
+      const res = await request(app).get(`/data/${dir}/peer.html`);
+      expect(res.status, dir).toBe(200);
+      expect(res.headers['x-content-type-options'], dir).toBe('nosniff');
+      expect(res.headers['content-security-policy'], dir).toContain('sandbox');
+      expect(res.headers['content-security-policy'], dir).toContain("default-src 'none'");
+    }
   });
 
   it('serves a local voice-profile benchmark from its dedicated mount', async () => {

@@ -264,6 +264,8 @@ import {
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
+  TRUNCATION_NUDGE_MAX_ATTEMPTS,
+  TRUNCATION_NUDGE_TEXT,
   STALL_NUDGE_IDLE_MS,
   STALL_NUDGE_MAX_ATTEMPTS,
   STALL_NUDGE_TEXT,
@@ -1885,6 +1887,95 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         completionReason: 'fallback-signal',
         error: expect.stringContaining('GPU memory'),
+      })
+    );
+  });
+
+  // ── Truncated response: a nudge, not a verdict ─────────────────────────────
+  // pi's TUI halts the whole session on `Response was truncated before
+  // completion.` — the turn is dead, the session holds the whole conversation,
+  // and the only resume is somebody typing `continue` and pressing Enter.
+  // Unattended, nothing ever does. Same shape as the OOM gate above, so the
+  // same three behaviors are pinned: nudge without re-sending the prompt,
+  // leave a session that carried on alone, fail over once the truncations
+  // outlast every nudge.
+  const TRUNCATION_BANNER = 'Response was truncated before completion.';
+
+  it('nudges a session a truncated response halted, without re-sending the prompt', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
+    await flushMicrotasks();
+    // The banner is still repainting — nudging into that lands on chrome,
+    // not on an idle composer.
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledWith(
+      SESSION_ID,
+      TRUNCATION_NUDGE_TEXT,
+      expect.objectContaining({ label: expect.stringContaining('truncated-response') }),
+    );
+    // Exactly one nudge, and the run is left alone to carry on.
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a session that kept working after the truncation alone', async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
+    await flushMicrotasks();
+    // The TUI never goes quiet — it recovered on its own — so the arm has to
+    // expire rather than wait around to fire into the next quiet stretch.
+    for (let elapsed = 0; elapsed <= OOM_NUDGE_ARM_WINDOW_MS; elapsed += 5000) {
+      await capturedOnData(Buffer.from('still working\n'));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(5000);
+      await flushMicrotasks();
+    }
+    await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
+    await flushMicrotasks();
+
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+  });
+
+  it('falls back once the truncations outlast every nudge', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    for (let i = 0; i < TRUNCATION_NUDGE_MAX_ATTEMPTS; i += 1) {
+      await capturedOnData(Buffer.from(TRUNCATION_BANNER));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(PAST_SETTLE_MS);
+      await flushMicrotasks();
+      // Clear the dedupe cooldown so the next banner reads as a NEW truncation
+      // rather than a repaint of the one just nudged.
+      await vi.advanceTimersByTimeAsync(OOM_NUDGE_COOLDOWN_MS);
+      await flushMicrotasks();
+    }
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(TRUNCATION_NUDGE_MAX_ATTEMPTS);
+
+    // The budget is spent and it truncated again: this provider is not going
+    // to finish the response, so the task goes to a fallback provider.
+    await capturedOnData(Buffer.from(TRUNCATION_BANNER));
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        completionReason: 'fallback-signal',
+        error: expect.stringContaining('cut the response off'),
       })
     );
   });

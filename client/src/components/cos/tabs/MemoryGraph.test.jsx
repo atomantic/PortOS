@@ -213,3 +213,24 @@ describe('edge appearance (graph3d extraction)', () => {
     expect(memoryEdgeIntensity({ type: 'linked', weight: 1 }, true)).toBe(0.06);
   });
 });
+
+
+describe('selection detail identity', () => {
+  it('shows the new summary while detail is pending and ignores cleared late responses', async () => {
+    let resolveNext;
+    api.getMemory.mockResolvedValueOnce({ content: 'Alpha memory body', tags: ['alpha-tag'], createdAt: '2026-01-02' })
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNext = resolve; }));
+    await renderGraph();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
+    expect(screen.getByText('Alpha memory body')).toBeInTheDocument();
+    expect(screen.getByText('alpha-tag')).toBeInTheDocument();
+    await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[1]); });
+    expect(screen.queryByText('Alpha memory body')).not.toBeInTheDocument();
+    expect(screen.queryByText('alpha-tag')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Created:/)).not.toBeInTheDocument();
+    expect(screen.getByText('second')).toBeInTheDocument();
+    await act(async () => { sceneElement.props.onSelect(null); });
+    await act(async () => { resolveNext({ content: 'Late memory body' }); });
+    expect(screen.queryByText('Late memory body')).not.toBeInTheDocument();
+  });
+});

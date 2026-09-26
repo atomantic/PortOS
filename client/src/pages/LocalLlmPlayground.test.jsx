@@ -1,3 +1,6 @@
+import socket from '../services/socket';
+vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
+const socketEvent = event => { for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({}); };
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -273,4 +276,34 @@ describe('LocalLlmPlayground', () => {
     // state — flush it inside act() so that update is wrapped.
     await act(async () => { releaseRun(); });
   });
+});
+
+
+it('reconciles loaded models on events, reconnect and tab show without polling', async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  try {
+    const view = renderPlayground();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
+    getLoadedLlmModels.mockResolvedValue({ ollama: [{ id: 'command-r-plus:104b' }] });
+    await act(async () => { socketEvent('loaded-models:changed'); });
+    expect(screen.getByText(/1 in memory/)).toBeInTheDocument();
+    getLoadedLlmModels.mockRejectedValueOnce(new Error('unavailable'));
+    await act(async () => { socketEvent('connect'); });
+    expect(screen.getByText(/Memory status unavailable/)).toBeInTheDocument();
+    visibility.mockReturnValue('hidden');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    visibility.mockReturnValue('visible');
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(screen.queryByText(/Memory status unavailable/)).not.toBeInTheDocument();
+    expect(getLoadedLlmModels).toHaveBeenCalledTimes(4);
+    view.unmount();
+    expect(socket.emit).toHaveBeenCalledWith('loaded-models:unsubscribe');
+  } finally {
+    visibility.mockRestore();
+    vi.useRealTimers();
+  }
 });

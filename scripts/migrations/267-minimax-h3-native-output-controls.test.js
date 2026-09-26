@@ -4,11 +4,9 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import migration from './267-minimax-h3-native-output-controls.js';
+import { getShippedMediaRegistry } from '../../server/lib/mediaModels.js';
 
 const H3_ID = 'minimax_h3_8bit';
-const REFERENCE_PATH = join(
-  dirname(fileURLToPath(import.meta.url)), '..', '..', 'data.reference', 'media-models.json',
-);
 const OLD_FRAMES = [124, 141, 158, 175, 192, 209, 226, 243, 260, 277, 294, 311, 328, 345, 362];
 const h3 = () => ({
   id: H3_ID,
@@ -55,7 +53,7 @@ describe('migration 267 — MiniMax H3 native output controls', () => {
       { label: '768x1024 (3:4 H3 native)', w: 768, h: 1024 },
       { label: '768x1344 (9:16 H3 native)', w: 768, h: 1344 },
     ]);
-    const seeded = JSON.parse(readFileSync(REFERENCE_PATH, 'utf-8'))
+    const seeded = getShippedMediaRegistry()
       .video.mlx.find((entry) => entry.id === H3_ID);
     expect({
       defaultFrames: migrated.defaultFrames,

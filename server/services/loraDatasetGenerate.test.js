@@ -4,6 +4,13 @@ const renderMocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
   getImageModels: vi.fn(),
+  getJob: vi.fn(() => null),
+  copy: vi.fn(async () => {}),
+}));
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...(await importOriginal()), ensureDir: vi.fn(async () => {}),
+  copyFileGuarded: (...args) => renderMocks.copy(...args),
 }));
 
 // Mock the data deps so getDatasetVariationAxes can be exercised without a
@@ -41,7 +48,8 @@ vi.mock('./mediaJobQueue/index.js', async () => ({
   assertMediaQueueRoom: vi.fn(),
   partialBatchAdmissionError: (await import('./mediaJobQueue/admission.js')).partialBatchAdmissionError,
   enqueueJob: (...args) => renderMocks.enqueueJob(...args),
-  mediaJobEvents: { on: vi.fn(), off: vi.fn() },
+  getJob: (...args) => renderMocks.getJob(...args),
+  mediaJobEvents: new (await import('node:events')).EventEmitter(),
 }));
 vi.mock('./imageGen/index.js', () => ({
   IMAGE_GEN_MODE: { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' },
@@ -59,6 +67,7 @@ import {
 import { extractSubjectSignaturePhrases } from './loraDatasetSubject.js';
 import { getDataset, updateDataset } from './loraDatasets.js';
 import { getUniverse } from './universeBuilder.js';
+import { mediaJobEvents } from './mediaJobQueue/index.js';
 
 const renderModels = [
   { id: 'dev', hardwareCompatibility: { state: 'available' } },
@@ -261,12 +270,39 @@ describe('generateDatasetImages local model selection', () => {
       artStyle: 'ink-and-wash',
       characters: [{ id: 'c1', name: 'Example Character', physicalDescription: 'A traveler.' }],
     });
-    updateDataset.mockResolvedValue({});
+    updateDataset.mockClear().mockResolvedValue({});
+    renderMocks.getJob.mockReturnValue(null);
     renderMocks.getSettings.mockResolvedValue({
       imageGen: { mode: 'local', local: { pythonPath: '/python', modelId: 'pinned-model' } },
     });
     renderMocks.enqueueJob.mockResolvedValue({ jobId: 'job-1' });
     renderMocks.getImageModels.mockReturnValue(renderModels);
+  });
+
+  it('persists a late completion only after its copy, beyond the former detach deadline', async () => {
+    vi.useFakeTimers();
+    let finishCopy;
+    renderMocks.copy.mockImplementationOnce(() => new Promise(resolve => { finishCopy = resolve; }));
+    try {
+      await generateDatasetImages('ds1', { count: 1 });
+      const entry = updateDataset.mock.calls[0][1]({ images: [] }).images[0];
+      await vi.advanceTimersByTimeAsync(5 * 60 * 60 * 1000);
+      mediaJobEvents.emit('completed', { id: 'job-1', result: { filename: 'example.png' } });
+      await Promise.resolve();
+      expect(updateDataset).toHaveBeenCalledTimes(1);
+      finishCopy();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updateDataset.mock.calls[1][1]({ images: [entry] }).images[0].status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('persists a terminal job that finished before subscription', async () => {
+    renderMocks.getJob.mockReturnValue({ id: 'job-1', status: 'failed' });
+    await generateDatasetImages('ds1', { count: 1 });
+    const entry = updateDataset.mock.calls[0][1]({ images: [] }).images[0];
+    expect(updateDataset.mock.calls[1][1]({ images: [entry] }).images[0].status).toBe('failed');
   });
 
   it('queues the install-pinned model explicitly', async () => {

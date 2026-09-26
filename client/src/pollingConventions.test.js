@@ -56,9 +56,10 @@ const TIMER_CALL = /\bsetInterval\s*\(/;
 
 /**
  * Files allowed to schedule an interval directly, each with the reason it is
- * not a data-fetch poll. Adding a row is the point at which to ask whether
- * `useAutoRefetch` fits instead — a poll that talks to the server does not
- * belong here.
+ * not a data-fetch poll. Adding a row is the point at which to ask whether a
+ * socket event fits instead — a poll that talks to the server does not belong
+ * here, and polling is an anti-pattern even through `useAutoRefetch` (see
+ * "Realtime updates, not polling" in docs/UX_DESIGN_GUIDE.md).
  */
 const ALLOWED = {
   'src/components/BrailleSpinner.jsx': 'advances the spinner glyph; no I/O',
@@ -67,16 +68,14 @@ const ALLOWED = {
   'src/components/meatspace/post/PostDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/PostLlmDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/WordplayDrillUI.jsx': 'elapsed-time clock tick; no I/O',
-  'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (the job itself polls via useAutoRefetch)',
+  'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (job state arrives through socket events)',
   'src/components/music/strudelFrame.js': 'source text for the sandboxed player frame: its recording-progress tick runs inside the iframe, not in PortOS; no I/O',
   'src/components/sprites/LoopTrimmer.jsx': 'advances the sprite playback frame; no I/O',
-  'src/components/sprites/WalkWorkflow.jsx': 'counts ticks to self-cancel a stale-queued attach after ~60s — useAutoRefetch does not model a bounded poll',
   'src/components/universeBuilder/graph/GraphTimeline.jsx': 'advances the universe-graph playback position one issue per tick; no I/O',
   'src/components/voice/VoiceWidget.jsx': 'samples the in-memory VAD RMS level every 100ms; no I/O',
   'src/components/writers-room/ExercisePanel.jsx': 'elapsed-time clock tick; no I/O',
   'src/components/writers-room/WorkEditor.jsx': 'elapsed-time clock for the analysis-run banner; no I/O',
   'src/pages/Ambient.jsx': 'wall clock; no I/O',
-  'src/pages/ThreejsModelDetail.jsx': 'bounded in-flight poll pool with a per-tick AbortController — useAutoRefetch does not model either',
 };
 
 const scannedFiles = () => trackedSourceFiles(CLIENT_ROOT)

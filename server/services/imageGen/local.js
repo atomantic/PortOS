@@ -1228,6 +1228,7 @@ export async function listGallery() {
 
 export async function deleteImage(filename) {
   assertGalleryFilename(filename);
+  await unlinkGuarded(join(PATHS.imageThumbnails, filename.replace(/\.png$/i, '.webp'))).catch(() => {});
   await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
   await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});

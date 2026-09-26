@@ -48,6 +48,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   startEpisodeProductionBatch: vi.fn(),
   startFalVideoAutomation: vi.fn(),
   getEpisodeProductionBatch: vi.fn(),
+  getLatestEpisodeProductionBatch: vi.fn(),
   cancelEpisodeProductionBatch: vi.fn(),
   resumeEpisodeProductionBatch: vi.fn(),
   reviewEpisodeContinuity: vi.fn(),
@@ -286,14 +287,17 @@ describe('FableLoom routes', () => {
       id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued',
     };
     fableLoom.startFalVideoAutomation.mockResolvedValueOnce(job);
-    const created = await request(makeApp())
+    const app = makeApp();
+    const io = { emit: vi.fn() };
+    app.set('io', io);
+    const created = await request(app)
       .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video')
       .send({ prompt: 'One continuous example shot.', aspectRatio: '9:16' });
 
     expect(created.status).toBe(202);
     expect(created.body).toEqual(job);
     expect(fableLoom.startFalVideoAutomation).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', {
-      prompt: 'One continuous example shot.', aspectRatio: '9:16',
+      prompt: 'One continuous example shot.', aspectRatio: '9:16', io,
     });
 
     fableLoom.getFalVideoAutomation.mockReturnValueOnce({ ...job, status: 'running' });
@@ -551,6 +555,15 @@ describe('FableLoom routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.mode).toBe('current_canon');
       expect(fableLoom.planEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('reattaches the latest scoped run without starting production', async () => {
+      fableLoom.getLatestEpisodeProductionBatch.mockReturnValueOnce(null);
+      const res = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ run: null });
+      expect(fableLoom.getLatestEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1');
+      expect(fableLoom.startEpisodeProductionBatch).not.toHaveBeenCalled();
     });
 
     it('POST /:id/episodes/:episodeId/production/batch starts a batch run', async () => {

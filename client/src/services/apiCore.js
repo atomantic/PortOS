@@ -75,7 +75,12 @@ export async function request(endpoint, options = {}) {
     try {
       await throwApiError(response);
     } catch (err) {
-      if (!silent) {
+      // A host-control refusal (server: lib/hostControlRoutes.js) always
+      // surfaces, even from a silent caller: the operator pressed a button
+      // that ran nothing, and only this message says why.
+      if (err.code === 'HOST_CONTROL_FORBIDDEN') {
+        toast.error(err.message);
+      } else if (!silent) {
         // Platform unavailability is a warning, not an error
         if (err.code === 'PLATFORM_UNAVAILABLE') {
           toast(err.message, { icon: '⚠️' });

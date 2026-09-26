@@ -20,7 +20,7 @@ vi.mock('../services/decks.js', () => ({
 }));
 vi.mock('../services/deckStyleAnalysis.js', () => ({ analyzeDeckSample: vi.fn() }));
 vi.mock('../services/deckPrompts.js', () => ({
-  PROMPTS_PER_CALL: 12,
+  PROMPTS_PER_CALL: 16,
   castDeckFromUniverse: vi.fn(),
   generateDeckCardPrompts: vi.fn(),
 }));
@@ -68,9 +68,11 @@ describe('deck routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     svc.getDeck.mockResolvedValue(deck());
-    generateDeckCardPrompts.mockImplementation(async ({ onChunk }) => {
+    generateDeckCardPrompts.mockImplementation(async ({ onBatchStart, onActivity, onChunk }) => {
       const prompts = [{ cardId: C0, prompt: 'a fool' }];
-      await onChunk?.(prompts);
+      await onBatchStart?.({ chunk: 1, chunks: 1, requested: 2 });
+      onActivity?.({ chunk: 1, chunks: 1, requested: 2 });
+      await onChunk?.(prompts, { chunk: 1, chunks: 1, requested: 2 });
       return { prompts, llm: { provider: 'p', model: 'm' } };
     });
   });
@@ -165,7 +167,13 @@ describe('deck routes', () => {
     expect(beginPromptProgress.mock.invocationCallOrder[0]).toBeLessThan(emitPromptProgress.mock.invocationCallOrder[0]);
     expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({ type: 'start', requested: 2 }));
     expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
-      type: 'chunk', chunk: 1, written: 1, requested: 2, keys: [C0],
+      type: 'batch-start', chunk: 1, chunks: 1, written: 0, requested: 2,
+    }));
+    expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
+      type: 'activity', chunk: 1, chunks: 1, written: 0, requested: 2,
+    }));
+    expect(emitPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
+      type: 'chunk', chunk: 1, written: 1, requested: 2, cardsWritten: 1, keys: [C0],
     }));
     expect(finishPromptProgress).toHaveBeenCalledWith(D1, expect.objectContaining({
       type: 'complete', written: 1, requested: 2,

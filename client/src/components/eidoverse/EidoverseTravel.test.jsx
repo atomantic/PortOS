@@ -1,6 +1,22 @@
 import { createRef } from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+
+const socket = vi.hoisted(() => {
+  const listeners = new Map();
+  return {
+    emit: vi.fn(),
+    on: (event, fn) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(fn);
+    },
+    off: (event, fn) => listeners.get(event)?.delete(fn),
+    receive: (event, payload) => {
+      for (const fn of listeners.get(event) || []) fn(payload);
+    },
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socket }));
 
 vi.mock('../../services/api', () => ({
   getEidoverseDestinations: vi.fn(async () => ({
@@ -9,10 +25,10 @@ vi.mock('../../services/api', () => ({
   departEidoverse: vi.fn(),
 }));
 
-import { departEidoverse } from '../../services/api';
+import { departEidoverse, getEidoverseDestinations } from '../../services/api';
 import EidoverseTravel from './EidoverseTravel';
 
-afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
 it('enters the admitted destination only after the current world leaves, and stays put if departure fails', async () => {
   const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
@@ -50,4 +66,75 @@ it('restores departure controls after a pending visit settles across a renderer 
   });
   expect(screen.getByRole('button', { name: 'Example world' })).toBeEnabled();
   expect(departEidoverse).toHaveBeenCalledExactlyOnceWith('example-peer', { silent: true });
+});
+
+it('pushes destinations without polling and reconciles once on reconnect and reshow', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  const changed = vi.fn();
+  const travelRef = createRef();
+  const view = render(<EidoverseTravel enabled travelRef={travelRef} onDestinationsChange={changed} />);
+  await act(async () => {});
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
+  expect(socket.emit).toHaveBeenCalledWith('eidoverse-travel:subscribe');
+  expect(screen.getByRole('button', { name: 'Example world' })).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
+
+  await act(async () => socket.receive('eidoverse-travel:destinations', {
+    destinations: [{ peerId: 'other-peer', label: 'Other world' }],
+  }));
+  expect(screen.getByRole('button', { name: 'Other world' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Example world' })).not.toBeInTheDocument();
+  expect(changed).toHaveBeenCalledTimes(1);
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
+
+  await act(async () => socket.receive('connect'));
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(2);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  expect(socket.emit).toHaveBeenCalledWith('eidoverse-travel:unsubscribe');
+  await act(async () => {
+    socket.receive('connect');
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(2);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(3);
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(3);
+  view.rerender(<EidoverseTravel enabled={false} travelRef={travelRef} />);
+  await act(async () => {
+    socket.receive('connect');
+    socket.receive('eidoverse-travel:destinations', { destinations: [] });
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(3);
+});
+
+it('keeps a pushed destination snapshot when an older read finishes later', async () => {
+  let finish;
+  getEidoverseDestinations.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  render(<EidoverseTravel enabled travelRef={createRef()} />);
+  await act(async () => socket.receive('eidoverse-travel:destinations', {
+    destinations: [{ peerId: 'current-peer', label: 'Current world' }],
+  }));
+  await act(async () => finish({ destinations: [] }));
+  expect(screen.getByRole('button', { name: 'Current world' })).toBeInTheDocument();
+});
+
+it('retries a deferred world update when the parent becomes ready without another destination event', async () => {
+  const travelRef = createRef();
+  const deferred = vi.fn(() => false);
+  const ready = vi.fn(() => true);
+  const view = render(<EidoverseTravel enabled travelRef={travelRef} onDestinationsChange={deferred} />);
+  await screen.findByRole('button', { name: 'Example world' });
+  await act(async () => socket.receive('eidoverse-travel:destinations', {
+    destinations: [{ peerId: 'next-peer', label: 'Next world' }],
+  }));
+  expect(deferred).toHaveBeenCalledTimes(1);
+  view.rerender(<EidoverseTravel enabled travelRef={travelRef} onDestinationsChange={ready} />);
+  expect(ready).toHaveBeenCalledTimes(1);
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
 });

@@ -36,8 +36,10 @@ function testDataRoot() {
   if (!TEST_DATA_ROOT) TEST_DATA_ROOT = mkdtempSync(joinPath(tmpdir(), 'portos-backup-data-'));
   return TEST_DATA_ROOT;
 }
-vi.mock('../lib/fileUtils.js', async (importOriginal) =>
-  makePathsProxy(await importOriginal(), { dataRoot: testDataRoot }));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: { atomicWrite: vi.fn(actual.atomicWrite) } });
+});
 
 afterAll(() => {
   if (TEST_DATA_ROOT) rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
@@ -47,6 +49,8 @@ afterAll(() => {
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  query: vi.fn().mockResolvedValue({ rows: [] }),
+  withDatabaseMaintenance: vi.fn(fn => fn()),
   ensureSchema: vi.fn().mockResolvedValue(undefined),
   // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
   // path and the existing status tests don't trigger live binary discovery.
@@ -56,8 +60,16 @@ vi.mock('../lib/db.js', () => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn().mockResolvedValue(0),
 }));
-import { ensureSchema } from '../lib/db.js';
+import { ensureSchema, query, withDatabaseMaintenance } from '../lib/db.js';
+vi.mock('./backupDatabaseReset.js', () => ({
+  getDatabaseResetPlan: async () => ({ preflight: 'SELECT 1', reset: 'RESET_APPROVED_SCHEMA' }),
+}));
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
+// restorePostgres lazily imports the orchestrator to rewind peer cursors (#8710).
+const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn().mockResolvedValue(2));
+vi.mock('./syncOrchestrator.js', () => ({
+  rewindPostgresSyncCursors,
+}));
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
@@ -446,6 +458,48 @@ describe('listSnapshots', () => {
     } finally {
       await fs.rm(destRoot, { recursive: true, force: true });
     }
+  });
+
+  it.each(['EIO', 'EACCES'])('rejects root and namespace %s without exposing paths or returning partial data', async code => {
+    const cause = Object.assign(new Error('private destination and machine'), { code });
+    const spy = vi.spyOn(fs, 'readdir').mockRejectedValue(cause);
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      message: `Backup inventory unavailable: read-snapshots-root (${code})`,
+      context: { operation: 'read-snapshots-root', filesystemCode: code },
+    });
+    spy.mockImplementation(async path => {
+      if (String(path) === joinPath('/dest', 'snapshots')) return [dirent('healthy', true), dirent('unreadable', true)];
+      if (String(path).endsWith('unreadable')) throw cause;
+      return [dirent('2026-06-08T15-18-34', true)];
+    });
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      message: `Backup inventory unavailable: read-namespace (${code})`,
+    });
+    spy.mockRestore();
+  });
+
+  it('accepts missing snapshots only under a readable destination', async () => {
+    const missing = Object.assign(new Error('private path'), { code: 'ENOENT' });
+    const spy = vi.spyOn(fs, 'readdir').mockImplementation(async path => {
+      if (String(path) === '/dest') return [];
+      throw missing;
+    });
+    expect(await listSnapshots('/dest')).toEqual([]);
+    spy.mockRejectedValue(missing);
+    await expect(listSnapshots('/dest')).rejects.toMatchObject({
+      code: 'BACKUP_INVENTORY_UNAVAILABLE',
+      context: { operation: 'read-destination', filesystemCode: 'ENOENT' },
+    });
+    spy.mockRestore();
+  });
+
+  it('skips a namespace removed during enumeration', async () => {
+    const spy = vi.spyOn(fs, 'readdir').mockResolvedValueOnce([dirent('disappeared', true)])
+      .mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'ENOENT' }));
+    expect(await listSnapshots('/dest')).toEqual([]);
+    spy.mockRestore();
   });
 
   it('returns [] for a falsy destPath without touching the filesystem', async () => {
@@ -1018,6 +1072,7 @@ describe('restorePostgres', () => {
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
+    checkHealth.mockResolvedValue({ connected: true });
     ({ restorePostgres } = await import('./backup.js'));
   });
 
@@ -1058,6 +1113,16 @@ describe('restorePostgres', () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('refuses unexpected schema objects before entering maintenance or spawning replay', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    query.mockRejectedValueOnce(new Error('unexpected object'));
+    expect(await restorePostgres('/dest', 'snap-1', { dryRun: false }))
+      .toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('reads a previous-machine dump from the explicitly selected namespace', async () => {
@@ -1108,12 +1173,15 @@ describe('restorePostgres', () => {
     });
     try {
       const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
       const [bin, args, opts] = spawn.mock.calls[0];
       expect(bin).toBe('psql');
       expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
       expect(opts.shell).toBe(false);
       expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+      expect(args.indexOf('-c')).toBeLessThan(args.indexOf('-f'));
+      expect(args).toContain('RESET_APPROVED_SCHEMA');
+      expect(args).toContain('-X');
       expect(child.stdin).toBeNull();
       expect(child.stdout).not.toBeNull();
     } finally {
@@ -1183,6 +1251,62 @@ describe('restorePostgres', () => {
     expect(result.error).toContain('not rolled back');
     expect(result.error).toContain('Restart PortOS');
     if (phase === 'schema') expect(runDbMigrations).not.toHaveBeenCalled();
+    expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+  });
+
+  // #8710: a restore must not leave peers skipping rows in either direction.
+  describe('federation resync', () => {
+    const setvalCalls = () => query.mock.calls.filter(([sql]) => sql.includes('setval'));
+    const captureCalls = () => query.mock.calls.filter(([sql]) => sql.includes('FROM pg_sequences') && !sql.includes('setval'));
+    beforeEach(() => {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+      mockLegacyDumpRead();
+      query.mockImplementation(async (sql) => (sql.includes('FROM pg_sequences') && !sql.includes('setval')
+        ? { rows: [{ sequencename: 'memories_sync_feed_seq', last_value: '1000000000000500' }] }
+        : { rows: [] }));
+    });
+    afterEach(() => query.mockReset().mockResolvedValue({ rows: [] }));
+
+    const runRestore = async ({ exitCode = 0 } = {}) => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await flush();
+      proc.emit('close', exitCode);
+      return pending;
+    };
+
+    it('floors feed sequences at their pre-replay value and rewinds peer cursors after reconciliation', async () => {
+      const result = await runRestore();
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
+      // Captured inside maintenance, before psql replays the dump.
+      expect(captureCalls()).toHaveLength(1);
+      expect(captureCalls()[0][1][0]).toContain('catalog_ingredients_sync_feed_seq');
+      expect(query.mock.invocationCallOrder.at(-2)).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+      // Floored after schema recovery (which recreates missing sequences).
+      expect(setvalCalls()).toHaveLength(1);
+      expect(setvalCalls()[0][0]).toContain('GREATEST');
+      expect(setvalCalls()[0][1]).toEqual([['memories_sync_feed_seq'], ['1000000000000500']]);
+      expect(query.mock.invocationCallOrder.at(-1)).toBeGreaterThan(runDbMigrations.mock.invocationCallOrder[0]);
+      expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
+    });
+
+    it('changes neither sequences nor cursors on dry-run, replay failure, or reconciliation failure', async () => {
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun: true })).toMatchObject({ status: 'ok', dryRun: true });
+      expect(await runRestore({ exitCode: 1 })).toMatchObject({ status: 'failed', reason: 'restore_error' });
+      spawn.mockClear();
+      runDbMigrations.mockRejectedValueOnce(new Error('upgrade failed'));
+      expect(await runRestore()).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation' });
+      expect(setvalCalls()).toHaveLength(0);
+      expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+    });
+
+    it('reports an applied dump whose peer resync failed', async () => {
+      rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full'));
+      const result = await runRestore();
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_sync_resync' });
+      expect(result.error).toContain('dump was applied');
+    });
   });
 
   // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest
@@ -2078,8 +2202,10 @@ describe('getState and saveState', () => {
     // data/ tree — and `runBackup lifecycle` below then rewrote the
     // developer's genuine data/backup/state.json on every run (#6176; the
     // runtime write guard is what surfaced it).
-    vi.doMock('../lib/fileUtils.js', async (importOriginal) =>
-      makePathsProxy(await importOriginal(), { dataRoot: testDataRoot }));
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => {
+      const actual = await importOriginal();
+      return makePathsProxy(actual, { dataRoot: testDataRoot, overrides: { atomicWrite: vi.fn(actual.atomicWrite) } });
+    });
     vi.resetModules();
     const { rm } = await import('fs/promises');
     if (tmpRoot) await rm(tmpRoot, { recursive: true, force: true });
@@ -2178,11 +2304,15 @@ describe('getState and saveState', () => {
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
+vi.mock('./cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
+import { withLiveCosRestore } from './cosState.js';
+
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
     spawn.mockReset();
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
+    withLiveCosRestore.mockClear();
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -2288,6 +2418,22 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it('echoes the subdirFilter back in the result', async () => {
       await expect(runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' }))
         .resolves.toMatchObject({ subdirFilter: 'brain' });
+    });
+  });
+
+  describe('CoS restore ownership boundary', () => {
+    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
+    });
+    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveCosRestore).not.toHaveBeenCalled();
+    });
+    it('refuses unsafe CoS restore before rsync', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -2457,6 +2603,33 @@ describe('runBackup lifecycle', () => {
     if (prevMemoryBackend === undefined) delete process.env.MEMORY_BACKEND;
     else process.env.MEMORY_BACKEND = prevMemoryBackend;
     rmSync(destRoot, { recursive: true, force: true });
+  });
+
+  it.each([0, 1])('invalidates scheduled backups only after readable lifecycle transitions (exit %s)', async (exitCode) => {
+    const { dashboardEvents } = await import('./dashboardEvents.js');
+    const { getState, listSnapshots } = await import('./backup.js');
+    const reads = [];
+    const listener = () => reads.push(Promise.all([getState(), listSnapshots(destRoot)]));
+    dashboardEvents.on('backup:changed', listener);
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    try {
+      const pending = runBackup(destRoot, null).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const [started, initialSnapshots] = await reads[0];
+      expect(started.status).toBe('running');
+      expect(initialSnapshots[0].incomplete).toBe(true);
+      proc.emit('close', exitCode);
+      const result = await pending;
+      expect(reads).toHaveLength(2);
+      const [finished, snapshots] = await reads[1];
+      expect(finished.status).toBe(exitCode ? 'error' : 'ok');
+      expect(snapshots[0].incomplete).toBe(false);
+      expect(Boolean(snapshots[0].failed)).toBe(Boolean(exitCode));
+      if (exitCode) expect(result).toBeInstanceOf(Error);
+    } finally {
+      dashboardEvents.off('backup:changed', listener);
+    }
   });
 
   it('rsyncs, writes a manifest and state, and emits started/completed', async () => {
@@ -2912,6 +3085,41 @@ describe('runBackup lifecycle', () => {
     await expect(retry).resolves.toMatchObject({ status: 'ok' });
   });
 
+  it('projects a failed scheduled attempt when state persistence fails, then recovers', async () => {
+    const { saveState, getState, listSnapshots } = await import('./backup.js');
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    await saveState({ lastSnapshotId: 'previous-snapshot', status: 'ok', error: null });
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot).catch(error => error);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotId = basename(await findSnapshotDir());
+    const persistedBefore = await readJson(joinPath(dataRoot, 'backup', 'state.json'));
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
+    atomicWrite.mockRejectedValueOnce(Object.assign(new Error('private path and credential'), { code: 'EACCES' }));
+    proc.emit('close', 23);
+    expect(await pending).toMatchObject({ message: expect.stringContaining('rsync exited with code 23') });
+    expect(isBackupInProgress()).toBe(false);
+    expect(diagnostic).toHaveBeenCalledWith(`❌ Backup status persistence failed: transition=error snapshot=${snapshotId} code=EACCES`);
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json'))).toEqual(persistedBefore);
+    expect(await getState()).toMatchObject({
+      status: 'error', lastSnapshotId: 'previous-snapshot', pgBackup: null,
+      error: 'Backup failed; status persistence failed (EACCES). See server logs.',
+    });
+    expect((await listSnapshots(destRoot))[0].failed).toBe(true);
+    // A rejected subsequent write must not clear the process-local projection.
+    atomicWrite.mockRejectedValueOnce(new Error('still unavailable'));
+    await expect(saveState({ status: 'ok' })).rejects.toThrow('still unavailable');
+    expect((await getState()).status).toBe('error');
+    await saveState({ pgBackup: { status: 'skipped' } });
+    expect(await getState()).toMatchObject({ status: 'ok', error: null, lastSnapshotId: 'previous-snapshot' });
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json'))).toMatchObject({ status: 'ok', error: null });
+    // Prove the overlay is gone, rather than merely masked by matching values.
+    const fsp = await actualFs();
+    await fsp.writeFile(joinPath(dataRoot, 'backup', 'state.json'), JSON.stringify({ status: 'ok', lastSnapshotId: 'recovered-snapshot' }));
+    expect(await getState()).toEqual({ status: 'ok', lastSnapshotId: 'recovered-snapshot' });
+  });
+
   it.each(['ENOENT', 'EACCES', 'EIO'])('persists a failed preflight (%s) over prior success and permits repair', async (code) => {
     const { saveState, getState } = await import('./backup.js');
     const priorRun = '2026-01-01T00:00:00.000Z';
@@ -2953,7 +3161,7 @@ describe('runBackup lifecycle', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Retention pruning (#8334) — after a successful run, the oldest COMPLETED
+  // Retention pruning (#8334) — after a dump-successful run, the oldest COMPLETED
   // snapshots on THIS machine beyond retentionCount are deleted. Failed,
   // in-progress, and other-source snapshots must never be touched, and
   // retentionCount null/undefined must never prune anything (an existing
@@ -2981,12 +3189,20 @@ describe('runBackup lifecycle', () => {
       const otherMachine = await seedSnapshot('previous-machine', '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
 
       const io = { emit: vi.fn() };
-      const proc = fakeProc();
-      spawn.mockReturnValue(proc);
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
       const pending = runBackup(destRoot, io, { retentionCount: 2 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
-      proc.emit('close', 0);
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
+      await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
+      pgDump.emit('close', 0);
       const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
 
       // Keeps the newest 2 completed snapshots on this machine: the run just
       // created and old3. old1 and old2 are pruned.
@@ -3000,6 +3216,46 @@ describe('runBackup lifecycle', () => {
       await expect(fsp.stat(incomplete)).resolves.toBeDefined();
       await expect(fsp.stat(failed)).resolves.toBeDefined();
       await expect(fsp.stat(otherMachine)).resolves.toBeDefined();
+    });
+
+    it('preserves older snapshots and reports zero pruned when the database dump fails', async () => {
+      const fsp = await actualFs();
+      const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
+
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      getBackendName.mockReturnValue('postgres');
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
+      const { errorEvents } = await import('../lib/errorHandler.js');
+      errorEvents.once('error', () => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      pgDump.emit('close', 1);
+
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'degraded', pgBackup: { status: 'failed' }, prunedSnapshots: 0 });
+      await expect(fsp.stat(old1)).resolves.toBeDefined();
+      await expect(fsp.stat(old2)).resolves.toBeDefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^⚠️ Backup retention skipped: DB dump dump_error — keeping older snapshots$/));
+    });
+
+    it('still prunes when the explicit file-backend dump is skipped', async () => {
+      const fsp = await actualFs();
+      const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      const rsync = fakeProc();
+      spawn.mockReturnValue(rsync);
+      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      rsync.emit('close', 0);
+
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'skipped' }, prunedSnapshots: 1 });
+      await expect(fsp.stat(old)).rejects.toThrow();
     });
 
     it('does not prune anything when retentionCount is null (unlimited — the legacy/unset default)', async () => {

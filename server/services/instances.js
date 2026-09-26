@@ -17,8 +17,9 @@ import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerFetch, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { autoSubscribePeerToAllRecords } from './sharing/recordEvents.js';
@@ -499,7 +500,7 @@ export async function removePeer(id, { stopTransport = true } = {}) {
   return removed;
 }
 
-export async function updatePeer(id, updates) {
+export async function updatePeer(id, updates, { probe = true } = {}) {
   let hostChanged = false;
   // Credential edits must reconnect the live socket relay (it pins the
   // Basic-auth header into extraHeaders at connect time), not just the next
@@ -657,7 +658,7 @@ export async function updatePeer(id, updates) {
   // bypasses the nextProbeAt gate and, on success, resets backoff + reconnects
   // the relay with the new credential. Fire-and-forget; failure just re-arms
   // backoff as before.
-  if (authChanged && result && result.enabled !== false) {
+  if (probe && authChanged && result && result.enabled !== false) {
     probePeer(result).catch((err) => console.log(`⚠️ Probe after credential change failed: ${err.message}`));
   }
   // Backfill-subscribe every local record of any kind whose category just
@@ -689,6 +690,112 @@ export async function updatePeer(id, updates) {
   return result;
 }
 
+/**
+ * Generate and provision the same pair secret on both ends of a peer link.
+ * The peer's saved instance password is used only for this one setup request;
+ * subsequent federation requests use the scoped pair token.
+ */
+const peerPairingQueue = createKeyCachedQueue();
+
+export function pairPeerSyncSecret(id) {
+  return peerPairingQueue(id, () => pairPeerSyncSecretNow(id));
+}
+
+async function pairPeerSyncSecretNow(id) {
+  const peer = (await getPeers()).find((item) => item.id === id);
+  if (!peer) throw new ServerError('Peer not found', { status: 404 });
+  if (!peer.instanceId || peer.instanceId === UNKNOWN_INSTANCE_ID) {
+    throw new ServerError('Probe or connect this peer before pairing sync.', { status: 409, code: 'PEER_IDENTITY_REQUIRED' });
+  }
+  if (typeof peer.auth?.password !== 'string' || !peer.auth.password) {
+    throw new ServerError('Save this peer’s instance password before pairing automatically.', {
+      status: 400, code: 'PEER_PAIR_CREDENTIAL_REQUIRED',
+    });
+  }
+
+  const selfInstanceId = await getInstanceId();
+  if (!selfInstanceId || selfInstanceId === UNKNOWN_INSTANCE_ID) {
+    throw new ServerError('This instance identity is not ready for peer pairing.', { status: 409, code: 'INSTANCE_IDENTITY_REQUIRED' });
+  }
+  const syncSecret = typeof peer.syncSecret === 'string' && peer.syncSecret.length >= 32 && peer.peerAuthAccepted !== true
+    ? peer.syncSecret
+    : crypto.randomBytes(32).toString('base64url');
+  const headers = {
+    'Content-Type': 'application/json',
+    // Force this one-time bootstrap to use the saved instance password, even
+    // if a stale pair token is cached locally. The receiver rejects peer-token
+    // authority on this operator-scoped setup route.
+    [PEER_AUTH_HEADER]: '',
+    ...peerAuthHeaders(peer),
+  };
+  let response;
+  try {
+    response = await withAbortTimeout(PROBE_TIMEOUT_MS, (signal) => peerFetch(
+      `${peerBaseUrl(peer)}/api/instances/peers/pair-secret`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ syncSecret }),
+        redirect: 'error',
+        signal,
+      },
+      peer,
+    ));
+  } catch {
+    throw new ServerError('Couldn’t reach this peer to pair the sync secret. Retry when it is online.', {
+      status: 502, code: 'PEER_PAIR_UNREACHABLE',
+    });
+  }
+
+  if (!response.ok) {
+    const message = response.status === 401
+      ? 'The peer rejected its saved instance password. Update the peer credential, then retry.'
+      : response.status === 404
+        ? 'The peer could not pair this instance. Upgrade both peers and make sure they are connected.'
+        : response.status === 403
+          ? 'The peer requires its instance password for automatic pairing. Save that password on this peer, then retry.'
+          : `The peer could not pair the sync secret (HTTP ${response.status}).`;
+    throw new ServerError(message, { status: 502, code: 'PEER_PAIR_REJECTED' });
+  }
+  const body = await response.json().catch(() => null);
+  if (body?.paired !== true) {
+    throw new ServerError('The peer did not confirm sync-secret pairing.', { status: 502, code: 'PEER_PAIR_UNCONFIRMED' });
+  }
+
+  const updated = await updatePeer(id, { syncSecret }, { probe: false });
+  if (!updated) throw new ServerError('Peer not found', { status: 404 });
+  if (updated.enabled !== false) return (await probePeer(updated).catch(() => null)) || updated;
+  return updated;
+}
+
+/** Save a pair secret only for the already-registered peer named by its identity header. */
+export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
+  let changed = false;
+  const peer = await withData(async (data) => {
+    const matches = data.peers.filter((item) => item.instanceId === instanceId);
+    if (matches.length !== 1) return null;
+    const entry = matches[0];
+    if (entry.syncSecret !== syncSecret) {
+      entry.syncSecret = syncSecret;
+      entry.peerAuthAccepted = false;
+      changed = true;
+    }
+    // Pairing also records this machine's choice to accept inbound pushes;
+    // sync/category flags still decide which records may be written.
+    if (entry.syncSecret && !entry.directions?.includes('inbound')) {
+      const directions = Array.isArray(entry.directions) && entry.directions.length ? entry.directions : ['outbound'];
+      entry.directions = [...directions, 'inbound'];
+      changed = true;
+    }
+    instanceEvents.emit('peers:updated', data.peers);
+    return entry;
+  });
+  if (changed && peer) disconnectFromPeer(peer.id);
+  return peer;
+}
+
+const reciprocalSyncQueue = createKeyCachedQueue();
+
 // Per-peer tail that serializes reciprocal-sync sends. Two rapid category
 // toggles for the same peer each want to push the full resulting map; if their
 // fire-and-forget requests raced, the earlier (staler) map could land last on
@@ -698,8 +805,6 @@ export async function updatePeer(id, updates) {
 // Per-peer serialization (silence prior + self-pruning tail) via the shared
 // helper — `work` runs on both fulfil and reject of the prior send, so a failed
 // send can't break the chain.
-const reciprocalSyncQueue = createKeyCachedQueue();
-
 export function enqueueReciprocalSync(peerId) {
   return reciprocalSyncQueue(peerId, async () => {
     // Re-read the peer fresh at send time — the last enqueued send wins with

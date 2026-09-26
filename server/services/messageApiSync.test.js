@@ -44,6 +44,7 @@ describe('syncOutlookApi — malformed-body masquerade guard', () => {
     const result = await syncOutlookApi(ACCOUNT, { messages: [] }, null, { mode: 'full' });
     expect(result.status).toBe('success');
     expect(result.messages).toEqual([]);
+    expect(result.inboxComplete).toBe(true);
   });
 
   it('parses messages from a valid populated body', async () => {
@@ -52,5 +53,32 @@ describe('syncOutlookApi — malformed-body masquerade guard', () => {
     expect(result.status).toBe('success');
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].subject).toBe('Hello');
+    expect(result.inboxComplete).toBe(false);
   });
+  it('does not certify a capped listing with another page', async () => {
+    fetchWithTimeout.mockResolvedValue(mockJsonResponse({
+      value: Array.from({ length: 200 }, (_, i) => ({ Id: 'mail-' + i })),
+      '@odata.nextLink': 'https://outlook.office.com/next',
+    }));
+    const result = await syncOutlookApi(ACCOUNT, {}, null, { mode: 'full' });
+    expect(result.messages).toHaveLength(200);
+    expect(result.inboxComplete).toBe(false);
+  });
+
+  it('certifies a full snapshot only after its last page', async () => {
+    fetchWithTimeout.mockResolvedValueOnce(mockJsonResponse({
+      value: [{ Id: 'a' }], '@odata.nextLink': 'https://outlook.office.com/next',
+    })).mockResolvedValueOnce(mockJsonResponse({ value: [{ Id: 'b' }] }));
+    const result = await syncOutlookApi(ACCOUNT, {}, null, { mode: 'full' });
+    expect(result.messages).toHaveLength(2);
+    expect(result.inboxComplete).toBe(true);
+  });
+
+  it('merges valid rows without certifying malformed membership', async () => {
+    fetchWithTimeout.mockResolvedValue(mockJsonResponse({ value: [{ Id: 'a' }, {}] }));
+    const result = await syncOutlookApi(ACCOUNT, {}, null, { mode: 'full' });
+    expect(result.messages).toHaveLength(1);
+    expect(result.inboxComplete).toBe(false);
+  });
+
 });

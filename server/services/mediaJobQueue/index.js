@@ -49,6 +49,10 @@ import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
 import { createVideoHolds } from './videoHolds.js';
+import {
+  canReceiveProgress, canRequestCancellation, claimTerminalOutcome,
+  snapshotCancellationIntent, applyCancellationIntent, restoreCancellationIntent,
+} from './jobLifecycle.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
@@ -166,7 +170,7 @@ async function safeUnlinkUpload(path) {
 // KNOWN_MEDIA_KINDS in federatedMedia/) are closed lists that do not name it,
 // so shipping a user's source video across the wire would take a deliberate
 // edit to one of them rather than a mode string slipping through.
-export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'image', 'training', 'audio']);
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'html-composition', 'image', 'training', 'audio']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -179,6 +183,7 @@ function getGenModuleForJob(job) {
   // later local branch would happily claim it and render a second time on this
   // machine.
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
+  if (job.kind === 'html-composition') return import('../htmlComposition/index.js');
   if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
@@ -284,6 +289,11 @@ const sseJobs = new Map();
 
 let workerStarted = false;
 let initPromise = null;
+// Shutdown latch (#8691): once set, nothing promotes a waiting job to running —
+// neither the worker nor Run Now — and nothing re-arms the worker. Waiting jobs
+// stay durably queued for the next process, which restores them untouched.
+let dispatchQuiesced = false;
+export const MEDIA_QUEUE_SHUTTING_DOWN = 'MEDIA_QUEUE_SHUTTING_DOWN';
 const terminalOperations = new Set();
 
 function trackTerminalOperation(operation) {
@@ -456,8 +466,16 @@ let persistBlocked = false;
 function persist() {
   // Blocked: nothing is written, but callers awaiting durability (enqueueJob)
   // must not inherit a stale rejection from a write that predates the latch.
-  if (persistBlocked) return persistChain.catch(() => {});
-  persistChain = persistChain.then(persistImpl, persistImpl);
+  if (persistBlocked) {
+    mediaJobEvents.emit('changed', {});
+    return persistChain.catch(() => {});
+  }
+  // Every queue mutation, including holds, deletion and debounced progress,
+  // converges here. Invalidate after the write settles so readers see the final
+  // in-memory state even when persistence is unavailable.
+  persistChain = persistChain.then(persistImpl, persistImpl).finally(() => {
+    mediaJobEvents.emit('changed', {});
+  });
   return persistChain;
 }
 async function persistImpl() {
@@ -657,9 +675,9 @@ export async function initMediaJobQueue() {
 }
 
 function startWorker() {
-  if (workerStarted) return;
+  if (workerStarted || dispatchQuiesced) return;
   workerStarted = true;
-  // Detach from awaiting so init can return; the loop runs forever.
+  // Detach from awaiting so init can return; the loop runs until shutdown quiesces it.
   drainLoop().catch((err) => {
     console.error(`❌ mediaJobQueue worker crashed: ${err.message}`, err.stack || '');
     workerStarted = false;
@@ -669,6 +687,9 @@ function startWorker() {
 // Every lane uses fire-and-forget so the poll loop is never blocked by a
 // running job in another lane.
 function startLaneJob(job, { lane }) {
+  // The one promotion boundary every dispatch path crosses, so the shutdown
+  // latch holds here even for a caller that raced past its own check.
+  if (dispatchQuiesced) return false;
   // If the job isn't in the queue, it was already promoted (e.g. by a parallel
   // runJobNow). Skip — promoting again would double-start the job and corrupt
   // the lane (push it onto cloudRunning/running twice). Silently splice(-1)
@@ -676,7 +697,7 @@ function startLaneJob(job, { lane }) {
   const idx = queue.indexOf(job);
   if (idx < 0) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
-    return;
+    return false;
   }
   queue.splice(idx, 1);
   job.status = 'running';
@@ -744,12 +765,15 @@ function startLaneJob(job, { lane }) {
     recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
   })();
+  return true;
 }
 
 async function drainLoop() {
-  while (true) {
+  while (!dispatchQuiesced) {
     const candidates = queue.slice();
     await videoHolds.resolveCohorts(candidates);
+    // Shutdown may have begun while cohorts resolved; exit without promoting.
+    if (dispatchQuiesced) break;
     videoHolds.updateQueued(queue);
     // Single queue scan, promoting work independently into each open lane.
     const limits = laneLimits();
@@ -762,12 +786,24 @@ async function drainLoop() {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
       const lane = jobLane(job);
       if (slots[lane] <= 0) continue;
-      startLaneJob(job, { lane });
+      if (!startLaneJob(job, { lane })) continue;
       slots[lane] -= 1;
       if (Object.values(slots).every((remaining) => remaining <= 0)) break;
     }
     await sleep(150);
   }
+}
+
+// Stop dispatch for server shutdown (#8691). Synchronous and idempotent so the
+// signal handler can call it before its first await. Waiting jobs are neither
+// canceled nor failed — they persist as queued and the next boot restores
+// them; already-running jobs keep their normal completion path, which the
+// shutdown flush then captures. Returns true on the call that latched it.
+export function quiesceMediaJobQueue() {
+  if (dispatchQuiesced) return false;
+  dispatchQuiesced = true;
+  console.log(`⏸️  mediaJobQueue dispatch stopped for shutdown (${queue.length} waiting job(s) kept queued)`);
+  return true;
 }
 
 // Drop a job from the archive (e.g. after a successful retry — the old failed
@@ -800,6 +836,9 @@ export function runJobNow(jobId) {
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
   if (!isCloudImageJob(job)) {
     return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI image jobs can be run now; GPU jobs serialize on the MLX runtime' };
+  }
+  if (dispatchQuiesced) {
+    return { ok: false, code: MEDIA_QUEUE_SHUTTING_DOWN, error: 'The server is shutting down; the job stays queued and resumes after restart' };
   }
   startLaneJob(job, { lane: 'cloud' });
   return { ok: true, status: 'running' };
@@ -987,8 +1026,7 @@ async function runJob(job) {
   // (excluded from persistImpl's serialized field set).
   let watchdogTimer;
   async function terminate(state, apply) {
-    if (job.terminating || job.status !== 'running') return;
-    job.terminating = true;
+    if (!claimTerminalOutcome(job)) return;
     // setInterval now (was setTimeout) — using clearInterval to match the new
     // API. (Node accepts either clearTimeout or clearInterval on the same
     // Timeout handle, so this is purely stylistic.)
@@ -1030,7 +1068,7 @@ async function runJob(job) {
 
   const handlers = {
     progress: (payload) => {
-      if (job.terminating || job.status !== 'running') return;
+      if (!canReceiveProgress(job)) return;
       let didUpdatePersistedProgress = false;
       if (payload.type === 'progress' && typeof payload.progress === 'number' && Number.isFinite(payload.progress)) {
         job.progress = Math.max(0, Math.min(1, payload.progress));
@@ -1112,7 +1150,7 @@ async function runJob(job) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' || job.kind === 'video-upscale' ? videoGenEvents
+  const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'html-composition' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' ? audioGenEvents
     : imageGenEvents;
@@ -1162,7 +1200,7 @@ async function runJob(job) {
     // job.terminating closes the window terminate() opens: it now awaits a
     // disk drain before flipping job.status, so a tick that only checked
     // status could fire mod.cancel on a job that is already terminating.
-    if (job.terminating || job.status !== 'running') return;
+    if (!canRequestCancellation(job)) return;
     const idleFor = Date.now() - lastActivityAt;
     if (idleFor < idleTimeoutMs) return;
     watchdogInFlight = true;
@@ -1177,7 +1215,7 @@ async function runJob(job) {
       const mod = await getGenModuleForJob(job);
       // Re-check after the await — terminate() may have started (and is
       // draining to disk with job.status still 'running') during the import.
-      if (job.terminating || job.status !== 'running') return;
+      if (!canRequestCancellation(job)) return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
       if (mod?.cancel) mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
@@ -1215,6 +1253,8 @@ async function runJob(job) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'html-composition') {
+      await mod.renderComposition({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video-upscale') {
       await mod.runVideoUpscale({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'training') {
@@ -1430,36 +1470,27 @@ export async function cancelJob(jobId) {
     // async progress-drain leaves job.status === 'running' for a beat, but the
     // outcome is decided. Don't fire a redundant provider cancel or report
     // 'canceling' — treat it like an already-terminal job (route maps to 409).
-    if (runningJob.terminating) {
+    if (!canRequestCancellation(runningJob)) {
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
     const mod = await getGenModuleForJob(runningJob);
-    if (runningJob.terminating || runningJob.status !== 'running') {
+    // Completion may claim the outcome while provider resolution yields.
+    if (!canRequestCancellation(runningJob)) {
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
-    const previousCancelRequested = runningJob.cancelRequested;
-    const previousRemoteMedia = runningJob.params?.remoteMedia;
-    // cancelRequested flips the dispatcher's `failed` handler into the
-    // `canceled` branch instead of marking it failed.
-    runningJob.cancelRequested = true;
+    const previousIntent = snapshotCancellationIntent(runningJob);
+    // Set intent before a provider can emit failure synchronously.
+    applyCancellationIntent(runningJob);
     if (isRemoteMediaJob(runningJob)) {
-      // Remote cancellation can outlive this process when the peer is down.
-      // Persist the intent before signaling the adapter so boot reconciliation
-      // replays the stable submission and resumes cancellation instead of
-      // silently resurrecting the render.
-      runningJob.params.remoteMedia = {
-        ...(runningJob.params.remoteMedia && typeof runningJob.params.remoteMedia === 'object'
-          ? runningJob.params.remoteMedia : {}),
-        cancelRequested: true,
-      };
+      // Durable intent precedes the adapter call so boot recovery resumes
+      // cancellation rather than silently resurrecting the remote render.
       await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
     }
     if (mod?.cancel && mod.cancel(jobId) === false) {
       // A provider may have crossed its durable finalization boundary before
       // its completed event reaches the queue. Refusal must not turn a later
       // finalization failure into a cancellation or leave retry markers set.
-      runningJob.cancelRequested = previousCancelRequested;
-      if (isRemoteMediaJob(runningJob)) runningJob.params.remoteMedia = previousRemoteMedia;
+      restoreCancellationIntent(runningJob, previousIntent);
       if (isRemoteMediaJob(runningJob)) await persist();
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
@@ -1568,6 +1599,7 @@ export function __resetForTests() {
   videoHolds.clear();
   sseJobs.clear();
   workerStarted = false;
+  dispatchQuiesced = false;
   initPromise = null;
   // Reset the lane limit too — a test that called setCodexParallelLimit(N)
   // otherwise leaks N into subsequent tests and makes ordering matter.

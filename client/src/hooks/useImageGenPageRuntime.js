@@ -9,7 +9,7 @@ import {
 import { clampImageEdge } from '../lib/imageGenResolutions';
 import { useImageGenForm } from './useImageGenForm';
 import { useImageGenGallery } from './useImageGenGallery';
-import { useAutoRefetch } from './useAutoRefetch';
+import { useSocketResource } from './useSocketResource';
 import { useFederatedMediaTarget } from './useFederatedMediaTarget';
 import { useImageGenProgress } from './useImageGenProgress';
 import { useMediaCompletionRefresh } from './useMediaCompletionRefresh';
@@ -30,6 +30,8 @@ import {
   listMediaJobs,
   regenerateGalleryImage,
 } from '../services/api';
+
+const IMAGE_QUEUE_EVENTS = ['media-jobs:changed'];
 
 const STAGE_LABELS = {
   starting: 'Starting…',
@@ -131,7 +133,6 @@ export function useImageGenPageRuntime() {
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMeta, setErrorMeta] = useState(null);
   const [localProgress, setLocalProgress] = useState(null);
-  const [pendingQueued, setPendingQueued] = useState(0);
   const [stage, setStage] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -211,18 +212,35 @@ export function useImageGenPageRuntime() {
     wasSettingsOpenRef.current = settingsOpen;
   }, [settingsOpen, refreshRegenAvailability, form.settings.reloadBackends]);
 
-  const queueActive = pendingQueued > 0;
-  const lastBusyRef = useRef(0);
-  const pollQueue = useCallback(async () => {
-    const jobs = await listMediaJobs({ kind: 'image' }).catch(() => null);
-    if (!jobs) return;
-    const stillBusy = jobs.filter((job) => job.status === 'queued' || job.status === 'running').length;
-    const next = Math.max(0, stillBusy - (generating ? 1 : 0));
-    if (stillBusy < lastBusyRef.current) gallery.refreshRecent();
-    lastBusyRef.current = stillBusy;
-    setPendingQueued((previous) => (previous === next ? previous : next));
-  }, [generating, gallery.refreshRecent]);
-  useAutoRefetch(pollQueue, 4000, { enabled: queueActive, pollOnly: true });
+  const { data: queueJobs, updateData: updateQueueJobs } = useSocketResource(
+    () => listMediaJobs({ kind: 'image' }),
+    { events: IMAGE_QUEUE_EVENTS },
+  );
+  const previousQueueRef = useRef(null);
+  useEffect(() => {
+    if (!queueJobs) return;
+    const previous = previousQueueRef.current;
+    previousQueueRef.current = queueJobs;
+    if (!previous) return;
+    const activeIds = new Set(queueJobs
+      .filter((job) => job.status === 'queued' || job.status === 'running')
+      .map((job) => job.id));
+    // Recover gallery output when a terminal event was missed while offline.
+    // Compare identities, not just counts: another enqueue can replace a job.
+    if (previous.some((job) => ['queued', 'running'].includes(job.status) && !activeIds.has(job.id))) {
+      gallery.refreshRecent();
+    }
+  }, [queueJobs, gallery.refreshRecent]);
+  const pendingQueued = Math.max(0, (queueJobs || [])
+    .filter((job) => job.status === 'queued' || job.status === 'running').length - (generating ? 1 : 0));
+  const rememberQueuedJob = (ack) => {
+    const id = ack?.jobId || ack?.generationId;
+    if (!id) return;
+    // The queue event may beat the HTTP acknowledgement. Merge by id so the
+    // response cannot double-count a job or revive an already completed one.
+    updateQueueJobs((previous) => (previous || []).some((job) => job.id === id)
+      ? previous : [...(previous || []), { id, status: ack.status || 'queued' }]);
+  };
 
   const submitGenerationPayload = async () => {
     const composed = composeStyledPrompt(fields.prompt, fields.negativePrompt, derived.activeStylePresets);
@@ -276,9 +294,13 @@ export function useImageGenPageRuntime() {
         referenceStrengths: derived.populatedRefs.map((slot) => slot.strength),
       } : {};
       const formData = buildFormData({ ...payload, ...initFields, ...referenceFields });
-      return { payload, data: await generateImageMultipart(formData, { silent: true }) };
+      const data = await generateImageMultipart(formData, { silent: true });
+      rememberQueuedJob(data);
+      return { payload, data };
     }
-    return { payload, data: await generateImage(payload, { silent: true }) };
+    const data = await generateImage(payload, { silent: true });
+    rememberQueuedJob(data);
+    return { payload, data };
   };
 
   const startLocalGeneration = async () => {
@@ -325,7 +347,6 @@ export function useImageGenPageRuntime() {
     const results = await Promise.all(submissions);
     const queued = results.filter((result) => result && !(result instanceof Error)).length;
     const failed = results.length - queued;
-    if (queued > 0) setPendingQueued((countValue) => countValue + queued);
     if (queued > 0) toast.success(count === 1 ? 'Queued' : `Queued ${queued}`);
     if (failed > 0) toast.error(`${failed} job(s) failed to queue`);
   };
@@ -423,11 +444,11 @@ export function useImageGenPageRuntime() {
       toast.success(`Light regen → ${variant.filename}`);
       return;
     }
-    await regenerateGalleryImage(image.filename, { strength: options.strength, prompt: options.prompt }).catch((generationError) => {
+    const ack = await regenerateGalleryImage(image.filename, { strength: options.strength, prompt: options.prompt }).catch((generationError) => {
       toast.error(generationError.message || 'Failed to start regeneration');
       throw generationError;
     });
-    setPendingQueued((count) => count + 1);
+    rememberQueuedJob(ack);
     toast.success('Regenerating — the new image will appear when it finishes');
   };
 

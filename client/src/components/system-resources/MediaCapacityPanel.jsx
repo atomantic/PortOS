@@ -1,7 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Gauge } from 'lucide-react';
 import { Link } from 'react-router';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useSocketSubscription } from '../../hooks/useSocketSubscription.js';
+import { useVisibilityEvent } from '../../hooks/useVisibilityEvent.js';
+import useMounted from '../../hooks/useMounted.js';
+import socket from '../../services/socket';
 import * as api from '../../services/api.js';
 import Pill from '../ui/Pill';
 import { timeAgo } from '../../utils/formatters';
@@ -83,8 +86,12 @@ export default function MediaCapacityPanel({ media }) {
   const [peers, setPeers] = useState(null);
   const [peersFailed, setPeersFailed] = useState(false);
 
+  const mounted = useMounted();
+  const revision = useRef(0);
   const loadPeers = useCallback(async () => {
+    const request = ++revision.current;
     const data = await api.getInstances({ silent: true }).catch(() => null);
+    if (!mounted.current || request !== revision.current) return;
     // A read that failed, and a read that came back without a peer array, are
     // both "we do not know" — distinct from `[]`, which is "read fine, no
     // peers". Coercing a malformed body to `[]` would render the confident
@@ -95,15 +102,27 @@ export default function MediaCapacityPanel({ media }) {
     }
     setPeersFailed(false);
     setPeers(data.peers);
-  }, []);
+  }, [mounted]);
 
-  // Poll on the same cadence as the health report this panel sits in. Loading
-  // once on mount left a peer that came back (or was just enabled, or just went
-  // stale) frozen at its mount-time reading for as long as the user stayed on
-  // the page — and this panel's whole job is to say what is usable *now*.
-  // pollOnly: loadPeers owns its own state so it can keep "the read failed"
-  // separate from "there are no providers", which a single `data` slot cannot.
-  useAutoRefetch(loadPeers, 15_000, { pollOnly: true });
+  useEffect(() => {
+    const updatePeers = (snapshot) => {
+      if (!Array.isArray(snapshot)) return;
+      // An older HTTP response must not overwrite a newer pushed snapshot.
+      revision.current += 1;
+      setPeers(snapshot);
+      setPeersFailed(false);
+    };
+    socket.on('instances:peers:updated', updatePeers);
+    loadPeers();
+    return () => {
+      revision.current += 1;
+      socket.off('instances:peers:updated', updatePeers);
+    };
+  }, [loadPeers]);
+  useSocketSubscription('instances', { onResubscribe: loadPeers });
+  useVisibilityEvent((state) => {
+    if (state === 'visible') loadPeers();
+  });
 
   const providers = (peers || []).filter((peer) => peer?.mediaProvider?.enabled === true);
   const cuda = CUDA_META[media?.gpu?.cudaStatus] || CUDA_META.unknown;

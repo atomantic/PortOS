@@ -133,3 +133,64 @@ describe('importAppleHealthXml temp-file lifecycle', () => {
     expect(trace).toEqual(['close', 'unlink']);
   });
 });
+
+describe('importAppleHealthXml upsert behavior', () => {
+  let dir;
+  let xmlPath;
+  let readCalls;
+  let writeCalls;
+
+  beforeEach(async () => {
+    streams.length = 0;
+    trace.length = 0;
+    parser.impl = null;
+    readCalls = [];
+    writeCalls = [];
+
+    // Track calls to readDayFile and writeDayFile
+    store.writeDayFile = async (dateStr, data) => {
+      writeCalls.push({ dateStr, data: JSON.parse(JSON.stringify(data)) });
+    };
+
+    dir = await mkdtemp(join(tmpdir(), 'portos-ahxml-upsert-'));
+    xmlPath = join(dir, 'export.xml');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('updates step count when re-importing with a higher total', async () => {
+    const XML_PARTIAL = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+  <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Watch" unit="count" startDate="2025-01-15 08:00:00 -0800" endDate="2025-01-15 08:05:00 -0800" value="100"/>
+  <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Watch" unit="count" startDate="2025-01-15 08:10:00 -0800" endDate="2025-01-15 08:15:00 -0800" value="50"/>
+</HealthData>`;
+
+    await writeFile(xmlPath, XML_PARTIAL, 'utf-8');
+    await importAppleHealthXml(xmlPath, null);
+
+    // Should have written one day with aggregated step count
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0].dateStr).toBe('2025-01-15');
+    // The aggregation should sum to 150
+    expect(writeCalls[0].data.metrics.step_count[0].qty).toBe(150);
+  });
+
+  it('updates day with aggregated sleep analysis from re-import', async () => {
+    const XML_SLEEP = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+  <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="iPhone" value="HKCategoryValueSleepAnalysisAsleep" startDate="2025-01-14 23:00:00 -0800" endDate="2025-01-15 07:00:00 -0800"/>
+  <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="iPhone" value="HKCategoryValueSleepAnalysisAwake" startDate="2025-01-15 07:00:00 -0800" endDate="2025-01-15 07:10:00 -0800"/>
+</HealthData>`;
+
+    await writeFile(xmlPath, XML_SLEEP, 'utf-8');
+    await importAppleHealthXml(xmlPath, null);
+
+    // Should have written two days with sleep analysis
+    expect(writeCalls).toHaveLength(2);
+    // Check that sleep_analysis was aggregated
+    const day15 = writeCalls.find(c => c.dateStr === '2025-01-15');
+    expect(day15.data.metrics.sleep_analysis).toBeDefined();
+  });
+});

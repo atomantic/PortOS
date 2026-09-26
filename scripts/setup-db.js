@@ -145,7 +145,7 @@ function isDockerSchemaReady() {
   try {
     const output = execFileSync(
       'docker',
-      ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', 'portos', '-d', 'portos', '-tAc',
+      ['compose', 'exec', '-T', 'db', 'psql', '-X', '-U', PG_USER, '-d', PG_DATABASE, '-tAc',
         "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"],
       { stdio: 'pipe', cwd: rootDir }
     ).toString();
@@ -168,7 +168,7 @@ function isDockerSchemaReady() {
 function waitForHealth(maxAttempts = 30) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', 'portos'], {
+      execFileSync('docker', ['compose', 'exec', '-T', 'db', 'pg_isready', '-h', '127.0.0.1', '-U', PG_USER], {
         stdio: 'pipe',
         cwd: rootDir
       });

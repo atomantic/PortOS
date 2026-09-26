@@ -119,6 +119,9 @@ export function useShellSession({ isFullscreen } = {}) {
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
+  // Set when the server refuses the shell to this connection: a remote
+  // browser on a password-free install has no host-control authority (#8708).
+  const [hostControlForbidden, setHostControlForbidden] = useState(false);
   const sessionsRef = useRef([]);
 
   useEffect(() => { urlSessionIdRef.current = urlSessionId; }, [urlSessionId]);
@@ -741,7 +744,15 @@ export function useShellSession({ isFullscreen } = {}) {
       recoverToSurvivor(sid);
     };
 
-    const handleShellError = ({ error, sessionId: errSid }) => {
+    const handleShellError = ({ error, code, sessionId: errSid }) => {
+      // A refusal answers every shell event, including the list request no
+      // pending attach correlates with — settle any pending start/attach and
+      // surface it once instead of letting the page wait forever.
+      if (code === 'HOST_CONTROL_FORBIDDEN') {
+        cancelPendingAttach();
+        setHostControlForbidden(true);
+        return;
+      }
       // Correlate this error to our current pending request before deciding whether
       // to display it. Four cases:
       //   1) start failure: server-side errSid omitted, our pending is 'new'. Show + recover.
@@ -886,6 +897,7 @@ export function useShellSession({ isFullscreen } = {}) {
   return {
     terminalRef,
     connected,
+    hostControlForbidden,
     sessions,
     activeSessionId,
     activeSession,

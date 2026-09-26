@@ -1,3 +1,4 @@
+import { messageLogError } from '../lib/messageLogError.js';
 
 import { createHash } from 'crypto';
 import { join } from 'path';
@@ -118,18 +119,16 @@ export async function getMessages(options = {}) {
 
 export async function deleteCache(accountId) {
   if (!UUID_RE.test(accountId)) return;
-  const { unlink } = await import('fs/promises');
-  const filePath = join(CACHE_DIR, `${accountId}.json`);
-  try {
-    await unlink(filePath);
+  // Drain cache writers before erasing; a writer already in flight must not
+  // recreate the file after deletion reports success.
+  return queueAccountWrite(accountId, async () => {
+    const { unlink } = await import('fs/promises');
+    const filePath = join(CACHE_DIR, `${accountId}.json`);
+    await unlink(filePath).catch(err => {
+      if (err.code !== 'ENOENT') throw err;
+    });
     console.log(`🗑️ Message cache deleted for account ${accountId}`);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.log(`🗑️ No message cache to delete for account ${accountId}`);
-    } else {
-      console.error(`❌ Failed to delete message cache for account ${accountId}: ${err.message}`);
-    }
-  }
+  });
 }
 
 export async function getMessage(accountId, messageId) {
@@ -161,9 +160,14 @@ export async function syncAccount(accountId, io, options = {}) {
   syncLocks.set(accountId, true);
   const mode = options.mode || 'unread';
   io?.emit('messages:sync:started', { accountId, mode });
-  console.log(`📧 Starting ${mode} sync for ${account.name} (${account.type})`);
+  console.log(`📧 Starting ${mode} sync for account ${account.id} (${account.type})`);
 
   const providerSync = async () => {
+    // The initial read may predate queued deletion. Recheck under the cache
+    // queue before a stale sync can write after cleanup.
+    const currentAccount = await getAccount(accountId);
+    if (!currentAccount) return { error: 'Account not found' };
+    if (!currentAccount.enabled) return { error: 'Account is disabled', status: 400 };
     const cache = await loadCache(accountId);
     let providerResult;
     if (account.type === 'gmail') {
@@ -173,11 +177,11 @@ export async function syncAccount(accountId, io, options = {}) {
       // Try API sync first (fast), fall back to Playwright (slow)
       const { syncOutlookApi } = await import('./messageApiSync.js');
       providerResult = await syncOutlookApi(account, cache, io, { mode }).catch(err => {
-        console.log(`📧 API sync error, falling back to Playwright: ${err.message}`);
+        console.log(`📧 API sync error, falling back to Playwright: ${messageLogError(err)}`);
         return null;
       });
       if (!providerResult) {
-        console.log(`📧 Falling back to Playwright sync for ${account.email}`);
+        console.log(`📧 Falling back to Playwright sync for account ${account.id}`);
         const { syncPlaywright } = await import('./messagePlaywrightSync.js');
         providerResult = await syncPlaywright(account, cache, io, { mode });
       }
@@ -231,14 +235,15 @@ export async function syncAccount(accountId, io, options = {}) {
     }
     cache.messages.push(...uniqueNew);
 
-    // Reconcile: remove cached messages no longer present in inbox during full sync
+    // Only explicit, exhaustive inbox coverage authorizes membership deletion.
+    // Legacy arrays and bounded/partial successes still merge, but never prune.
     let pruned = 0;
-    if (mode === 'full' && providerStatus === 'success' && newMessages.length > 0) {
+    if (mode === 'full' && providerStatus === 'success' && providerResult?.inboxComplete === true) {
       const fetchedIds = new Set(newMessages.filter(m => m.externalId).map(m => m.externalId));
       const before = cache.messages.length;
       cache.messages = cache.messages.filter(m => !m.externalId || fetchedIds.has(m.externalId));
       pruned = before - cache.messages.length;
-      if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale messages from ${account.name}`);
+      if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale messages from account ${account.id}`);
     }
 
     // Trim to maxMessages
@@ -257,7 +262,7 @@ export async function syncAccount(accountId, io, options = {}) {
     // prior auto-log failure self-heals on the next sync. Deduped per thread+day
     // (partial unique index), so re-scanning already-logged messages is a no-op.
     await logMessageTouchpoints(account, cache.messages).catch((err) =>
-      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${messageLogError(err)}`));
 
     // Apply + persist the owner's Gmail send-as aliases (#2831) BEFORE the activity
     // ingest below, so THIS sync's `messageActivityCandidates` already excludes every
@@ -283,11 +288,11 @@ export async function syncAccount(accountId, io, options = {}) {
       let repaired = true;
       await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) => {
         repaired = false;
-        console.error(`🗓️  Activity alias backfill failed for account ${accountId} — deferring alias persist so the next sync retries: ${err.message}`);
+        console.error(`🗓️  Activity alias backfill failed for account ${accountId} — deferring alias persist so the next sync retries: ${messageLogError(err)}`);
       });
       if (repaired) {
         await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
-          console.error(`📧 Send-as alias persist failed for account ${accountId}: ${err.message}`));
+          console.error(`📧 Send-as alias persist failed for account ${accountId}: ${messageLogError(err)}`));
       }
     }
 
@@ -299,7 +304,7 @@ export async function syncAccount(accountId, io, options = {}) {
     let activityIngestFailed = false;
     await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) => {
       activityIngestFailed = true;
-      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`);
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${messageLogError(err)}`);
     });
 
     // Reply-detection watermark (#2796): stamp when a Gmail account with sent-ingest
@@ -315,14 +320,14 @@ export async function syncAccount(accountId, io, options = {}) {
       // full watermark (or a stale recent one) would let a replied thread look
       // unanswered. Stamping partial keeps the account fail-closed until a clean sync.
       await markSentIngested(accountId, { partial: sentTruncated || activityIngestFailed }).catch((err) =>
-        console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${err.message}`));
+        console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${messageLogError(err)}`));
     }
 
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {
       io?.emit('messages:changed', {});
     }
-    console.log(`📧 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
+    console.log(`📧 Sync complete for account ${account.id}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
 
     return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus };
   };
@@ -332,7 +337,7 @@ export async function syncAccount(accountId, io, options = {}) {
   // blocks a second concurrent sync; the tail additionally orders the sync's
   // write against the other cache mutators so none clobbers the others.
   const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
-    console.error(`📧 Sync failed for ${account.name} (${account.type}): ${error.message}`);
+    console.error(`📧 Sync failed for account ${account.id} (${account.type}): ${messageLogError(error)}`);
     await updateSyncStatus(accountId, 'error').catch(() => {});
     io?.emit('messages:sync:failed', { accountId, error: error.message });
     return { error: error.message, status: 502 };
@@ -434,7 +439,7 @@ export async function refreshMessages(accountId, messageIds) {
         continue;
       }
 
-      console.log(`📧 Refreshing "${message.subject}" via ${account.type}`);
+      console.log(`📧 Refreshing ${message.id} via ${account.type}`);
       const detail = await refreshMessageDetail(account, message);
       // Structured error from refreshMessageDetail
       if (detail && detail.error) {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -12,7 +12,8 @@ import { copyToClipboard } from '../lib/clipboard';
 import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import useMounted from '../hooks/useMounted.js';
+import { useSocketResource } from '../hooks/useSocketResource';
 import EmptyState from '../components/EmptyState';
 import Banner from '../components/ui/Banner';
 import ModelsTabsHeader, { ModelsSectionLayout } from '../components/models/ModelsTabsHeader';
@@ -34,6 +35,10 @@ import ProviderServicesTab from '../components/providers/ProviderServicesTab';
 import ProviderCompatibilityMatrix from '../components/providers/ProviderCompatibilityMatrix';
 import ProviderComposePopover from '../components/providers/ProviderComposePopover';
 import DefaultProviderHelper from '../components/providers/DefaultProviderHelper';
+
+const STATUS_EVENTS = ['provider-status:changed'];
+const READINESS_EVENTS = ['provider-readiness:changed'];
+const ACCOUNT_EVENTS = ['codex-account:changed'];
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -116,6 +121,9 @@ export default function AIProviders() {
     [sampleProviders],
   );
   const hasCodexSubscriptionProvider = providers.some(isCodexSubscriptionProvider);
+  const [observationUnavailable, setObservationUnavailable] = useState({});
+  const observationRevision = useRef({ account: 0, readiness: 0, status: 0 });
+  const observationMounted = useMounted();
 
   const mergeCodexCatalog = useCallback((catalog) => {
     if (!Array.isArray(catalog)) return;
@@ -145,8 +153,10 @@ export default function AIProviders() {
     // normal client library always has this function; the guard makes a mixed
     // client/server upgrade leave the established provider controls intact.
     if (typeof api.getCodexAccount !== 'function') return undefined;
+    const revision = ++observationRevision.current.account;
     setCodexAccountLoading(true);
     const result = await api.getCodexAccount({ fresh, silent: true }).catch(() => null);
+    if (!observationMounted.current || revision !== observationRevision.current.account) return;
     const readiness = result?.readiness && typeof result.readiness === 'object' ? result.readiness : null;
     setCodexAccount(readiness);
     setCodexAccountLoading(false);
@@ -155,8 +165,7 @@ export default function AIProviders() {
   }, [loadCodexModels]);
 
   useEffect(() => {
-    if (hasCodexSubscriptionProvider) loadCodexAccount();
-    else {
+    if (!hasCodexSubscriptionProvider) {
       setCodexAccount(undefined);
       setCodexModels(null);
     }
@@ -271,8 +280,9 @@ export default function AIProviders() {
     setLoading(providers.length === 0);
     setLoadError(false);
     let providersFailed = false;
+    const statusRevision = ++observationRevision.current.status;
     const [providersData, appsData, statusData, orchestrationProfilesData] = await Promise.all([
-      api.getProviders().catch(() => {
+      api.getProviders({ fresh: true }).catch(() => {
         providersFailed = true;
         return null;
       }),
@@ -295,7 +305,7 @@ export default function AIProviders() {
         : null);
     }
     setApps(appsData);
-    setStatuses(statusData.providers || {});
+    if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
     const profList = Array.isArray(orchestrationProfilesData)
       ? orchestrationProfilesData
       : orchestrationProfilesData?.profiles || [];
@@ -307,29 +317,36 @@ export default function AIProviders() {
   // when a provider fails elsewhere and clears itself once its recovery window
   // passes (the server expires `estimatedRecovery` on read), without a full reload.
   const refreshStatuses = useCallback(async () => {
-    const statusData = await api.getProviderStatuses().catch(() => null);
+    const revision = ++observationRevision.current.status;
+    const statusData = await api.getProviderStatuses({ silent: true }).catch(() => null);
+    if (!observationMounted.current || revision !== observationRevision.current.status) return;
+    setObservationUnavailable(previous => ({ ...previous, status: !statusData?.providers }));
     if (statusData?.providers) setStatuses(statusData.providers);
   }, []);
 
   // Local-daemon readiness (is llama-server / Ollama actually up and serving the
   // model this provider names?). Off the critical path like the runtime probes,
-  // and re-polled on the same cadence as the status map so starting a daemon
+  // and reconciled from the shared observer so starting a daemon
   // from the Models → Runtimes page clears the card's checklist on its own.
   const loadReadiness = useCallback(async () => {
+    const revision = ++observationRevision.current.readiness;
     const data = await api.getProviderReadiness({ silent: true }).catch(() => null);
-    setReadiness(data?.readiness && typeof data.readiness === 'object' ? data.readiness : {});
+    if (!observationMounted.current || revision !== observationRevision.current.readiness) return;
+    const valid = data?.readiness && typeof data.readiness === 'object';
+    setObservationUnavailable(previous => ({ ...previous, readiness: !valid }));
+    if (valid) setReadiness(data.readiness);
   }, []);
 
-  // `useAutoRefetch` rather than a raw interval so both polls pause while the
-  // tab is hidden — a readiness tick costs one HTTP probe per distinct local
-  // endpoint, which a backgrounded settings tab should not keep spending.
-  const pollCards = useCallback(() => Promise.all([
-    refreshStatuses(),
-    loadReadiness(),
-    hasCodexSubscriptionProvider ? loadCodexAccount() : Promise.resolve(),
-  ]), [refreshStatuses, loadReadiness, hasCodexSubscriptionProvider, loadCodexAccount]);
-  // The Harnesses view renders none of what the poll refreshes, so it pauses there.
-  useAutoRefetch(pollCards, 20000, { pollOnly: true, enabled: activeTab !== 'harnesses' });
+  useSocketResource(refreshStatuses, {
+    namespace: 'provider-status', events: STATUS_EVENTS, enabled: activeTab !== 'harnesses',
+  });
+  useSocketResource(loadReadiness, {
+    namespace: 'provider-readiness', events: READINESS_EVENTS, enabled: activeTab !== 'harnesses',
+  });
+  useSocketResource(() => loadCodexAccount(), {
+    namespace: 'codex-account', events: ACCOUNT_EVENTS,
+    enabled: activeTab !== 'harnesses' && hasCodexSubscriptionProvider,
+  });
 
   // Clear a provider's bench (runtime unavailability) so the next call retries it.
   // Note: if the underlying cause persists (e.g. an invalid model id), the very
@@ -338,6 +355,7 @@ export default function AIProviders() {
     setRecovering(prev => ({ ...prev, [id]: true }));
     const result = await api.recoverProvider(id, { silent: true }).catch(() => null);
     if (result) {
+      observationRevision.current.status += 1;
       setStatuses(prev => ({ ...prev, [id]: { ...prev[id], available: true, reason: 'ok', message: 'Provider available', timeUntilRecovery: null } }));
       toast.success('Provider marked available — it will be retried on the next call');
     } else {
@@ -411,6 +429,7 @@ export default function AIProviders() {
       authUrl: isHttpsUrl(result.login.authUrl) ? result.login.authUrl : null,
       verificationUrl: isHttpsUrl(result.login.verificationUrl) ? result.login.verificationUrl : null,
     };
+    observationRevision.current.account += 1;
     setCodexAccount((current) => ({
       ...(current && typeof current === 'object' ? current : {}),
       status: 'login-pending',
@@ -427,6 +446,7 @@ export default function AIProviders() {
       toast.error('Could not cancel ChatGPT sign-in');
       return;
     }
+    observationRevision.current.account += 1;
     setCodexAccount(result.readiness);
   };
 
@@ -438,6 +458,7 @@ export default function AIProviders() {
       toast.error('Could not log out of ChatGPT');
       return;
     }
+    observationRevision.current.account += 1;
     setCodexAccount(result.readiness);
     toast.success('ChatGPT subscription signed out');
   };
@@ -498,7 +519,7 @@ export default function AIProviders() {
   // `prerequisitesMet`, the codex account) and un-group a unified card. The
   // model and catalog fields fan out to every mode in the group server-side
   // (`sharedModeUpdates`), so they are applied to the siblings here too rather
-  // than leaving them showing the pre-refresh catalog until the next poll.
+  // than leaving them showing the pre-refresh catalog until the next observation.
   // `modelCatalog` is the unscoped full list when model access hides entries;
   // the editor saves from it, so it must move with each refresh.
   // `modelContextWindows` is copied even when absent — a refresh that pruned it
@@ -636,7 +657,7 @@ export default function AIProviders() {
   };
 
   // A daemon was just installed/started. Only the readiness checklist changed —
-  // re-poll it so the card's banner collapses to the "ready" pill on its own.
+  // re-read it so the card's banner collapses to the "ready" pill on its own.
   const handleRuntimeSetupComplete = () => {
     toast.success(`${settingUpRuntime?.label || 'Local runtime'} is set up`);
     loadReadiness();
@@ -670,7 +691,7 @@ export default function AIProviders() {
   // its readiness (runtime install state + credentials + the runtime bench,
   // folded into the state that drives the card's color, its badge and its
   // section), and the id lookup the cards use for fallback/sibling references.
-  // Memoized because this page re-renders on the 20s status poll and on every
+  // Memoized because this page re-renders on status events and on every
   // keystroke in the ad-hoc runner's prompt box.
   const { providersById, runtimeByProviderId, cardStateByProviderId, presetSections } = useMemo(() => {
     const byId = Object.fromEntries(providers.map(p => [p.id, p]));
@@ -824,6 +845,9 @@ export default function AIProviders() {
       <PageHeader icon={Bot} title="AI Providers" actions={headerActions} />
 
       <ModelsTabsHeader activeTab="providers" />
+      {activeTab !== 'harnesses' && Object.values(observationUnavailable).some(Boolean) && (
+        <Banner variant="warning">Provider readiness status unavailable. Showing the last known state.</Banner>
+      )}
       <div className="px-4 pt-3">
         <ProviderPageTabs activeTab={activeTab} />
       </div>

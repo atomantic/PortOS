@@ -50,7 +50,7 @@
 import WebSocket from 'ws';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { DEFAULT_BASE_URL, resolveBeeperConfig } from './beeperClient.js';
-import { getBeeperSyncConfig, isBeeperIngestionArmed, runBeeperSweep } from './beeperSync.js';
+import { getBeeperSyncConfig, isBeeperIngestionArmed, runBeeperSweep, reconcileBeeperEvent } from './beeperSync.js';
 
 const LOG_PREFIX = '🫧 Beeper socket';
 
@@ -396,7 +396,11 @@ function handleFrame(raw, target) {
     return;
   }
   if (DOMAIN_EVENT_TYPES.has(frame.type)) {
-    beeperSocketEvents.emit('invalidate', toInvalidation(frame));
+    const invalidation = toInvalidation(frame);
+    beeperSocketEvents.emit('invalidate', invalidation);
+    reconcileBeeperEvent(invalidation).catch(() => {
+      console.warn('🫧 Beeper message reconciliation deferred to the periodic sweep');
+    });
   }
 }
 

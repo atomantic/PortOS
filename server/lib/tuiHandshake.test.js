@@ -14,6 +14,8 @@ import {
   OOM_NUDGE_ARM_WINDOW_MS,
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
+  createTruncationNudgeGate,
+  TRUNCATION_NUDGE_MAX_ATTEMPTS,
   createStallNudgeGate,
   STALL_NUDGE_MAX_TOTAL,
   STALL_NUDGE_IDLE_MS,
@@ -47,7 +49,6 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
-  isPasteConfirmed,
   isCollapsedPasteChip,
   createInputReadyTracker,
   createStartupDialogAnswers,
@@ -1914,6 +1915,41 @@ describe('createOomNudgeGate', () => {
     const gate = createOomNudgeGate();
     expect(gate.arm(null, 0)).toBeNull();
     expect(gate.takeNudge(OOM_NUDGE_SETTLE_MS + 1, 0)).toBe(0);
+  });
+});
+
+describe('createTruncationNudgeGate', () => {
+  // The gate delegates to createOomNudgeGate (same shape: a dead turn, an
+  // intact session), so the full silence/cooldown/budget policy is pinned by
+  // the OOM suite above. These two prove the delegation stays behavioral —
+  // the truncation gate still nudges on quiet and still hands back the
+  // exhausted verdict — rather than asserting constant equality.
+  const analysis = { category: 'output-length', message: 'Provider cut the response off before completion' };
+
+  it('nudges only once the session has actually gone quiet', () => {
+    const gate = createTruncationNudgeGate();
+    const t0 = 1_000_000;
+    expect(gate.arm(analysis, t0)).toBe('armed');
+    // The banner is still on screen — nudging here lands on chrome, not on an
+    // idle composer.
+    expect(gate.takeNudge(t0 + OOM_NUDGE_SETTLE_MS, t0 + 5_000)).toBe(0);
+    expect(gate.takeNudge(t0 + OOM_NUDGE_SETTLE_MS + 5_001, t0 + 5_000)).toBe(1);
+    // Fired once; the arm is spent until the next distinct truncation.
+    expect(gate.takeNudge(t0 + 60_000, t0 + 5_000)).toBe(0);
+  });
+
+  it('hands back an exhausted verdict once the nudge budget is spent', () => {
+    const gate = createTruncationNudgeGate();
+    let t = 0;
+    for (let i = 1; i <= TRUNCATION_NUDGE_MAX_ATTEMPTS; i += 1) {
+      expect(gate.arm(analysis, t)).toBe('armed');
+      t += OOM_NUDGE_SETTLE_MS + 1;
+      expect(gate.takeNudge(t, t - OOM_NUDGE_SETTLE_MS - 1)).toBe(i);
+      t += OOM_NUDGE_COOLDOWN_MS;
+    }
+    // Truncated again after the budget: this provider is not going to finish
+    // the response, so the caller fails over instead of nudging again.
+    expect(gate.arm(analysis, t)).toBe('exhausted');
   });
 });
 

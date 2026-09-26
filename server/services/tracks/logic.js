@@ -31,9 +31,10 @@
  *                     point at whichever render is currently ACTIVE (selected).
  *   - chiptuneScore / chiptunePrompt — the LLM-composed looping 8-bit score
  *                     and the brief it was composed from (#2911), or null / ''
- *   - waveSketch / waveSketchPrompt — the Music Designer's LLM-drawn wave
- *                     sketch (lib/waveSketch.js) and the description it was
- *                     drawn from (#8376), or null / ''
+ *   - waveSketch / waveSketchPrompt — the Music Designer's LLM-painted
+ *                     canvas (v2, lib/paintedCanvas.js, #8464) or a legacy v1
+ *                     drawn sketch (lib/waveSketch.js), and the description it
+ *                     came from (#8376), or null / ''
  *
  * Tracks are `db-primary` (PostgreSQL `tracks` table). The audio bytes live in
  * the shared music library (services/pipeline/musicLibrary.js, `data/music/`);

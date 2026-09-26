@@ -22,7 +22,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
@@ -1010,6 +1010,88 @@ export function dispatchRecoveredTaskOutputHook({ agentId, task, success, worksp
     readPayload: !!workspacePath,
     recovery: true,
   });
+}
+
+/**
+ * Retire an agent whose process is gone — the one step list both recovery
+ * paths now share (issue #8440). Before this, the orphan sweep
+ * (`runCleanupOrphanedAgents`) and the post-restart recovery
+ * (`completeUntrackedAgentFromCosState`) each hand-maintained their own copy
+ * of this sequence, and the copies drifted (only the sweep closed the run
+ * record; #3182's output-hook fix had to land in both).
+ *
+ * Order matters and is preserved from the sweep, the stricter of the two
+ * originals: the output hook reads the last surviving sentinel/output before
+ * it is removed, the run record closes BEFORE the agent record (so a run
+ * write failure leaves the agent eligible for the next sweep to retry, while
+ * a later agent-write failure is harmless because `completeAgentRun`'s
+ * `endTime` guard makes a retry a no-op), and the agent record closes last.
+ *
+ * A private-security task/agent has no immutable source inventory with which
+ * to validate a report, so it is always retired as a failure (the caller's
+ * `success` is overridden) and its run-record output is redacted to a fixed
+ * notice rather than the raw transcript.
+ *
+ * @param {object} params
+ * @param {object} params.agent        the dead agent's record (`id`, `metadata`, `output`, `startedAt`)
+ * @param {object|null} params.task    the agent's task, if resolvable (drives the private-security check
+ *   and the programmatic-I/O output hook)
+ * @param {boolean} params.success     the run's outcome; overridden to `false` for a private-security task
+ * @param {number} params.exitCode     the exit code recorded on the closed run (143/1 for the sweep's
+ *   interrupted/orphaned reap, the real exit code for post-restart recovery)
+ * @param {number} params.duration     the run's wall-clock duration in ms, for the closed run record
+ * @param {string} [params.errorMessage] the error recorded on the agent (and, wrapped, on the run record)
+ * @param {string} [params.category]   the run-record error category (e.g. `orphaned` / `interrupted`)
+ * @param {object} [params.agentResultExtra] caller-specific fields merged into the agent-record
+ *   result (e.g. the sweep's `interruptedByRestart` telemetry) — kept out of the shared shape so
+ *   one caller's bookkeeping detail doesn't leak an unused field onto the other's records
+ * @returns {Promise<{ success: boolean }>} the effective success used for the retirement (post
+ *   private-security override), so callers that branch on it don't have to re-derive it
+ */
+export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
+  const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
+  const effectiveSuccess = isPrivateSecurity ? false : success;
+
+  await dispatchRecoveredTaskOutputHook({
+    agentId: agent.id,
+    task,
+    success: effectiveSuccess,
+    workspacePath: agent.metadata?.workspacePath || null,
+  });
+
+  // Recovery retires the run without reaching finalizeAgent's completion
+  // cleanup, so the sentinel has no other owner — and the hook above was the
+  // last thing to read it. Keep this recovery-only dependency lazy: the
+  // completion-cleanup module also imports worktree/PR orchestration, while
+  // agentFinalization is on the static path of nearly every agent service.
+  const { removeCompletionSentinel } = await import('./agentCompletionCleanup.js');
+  await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
+    .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
+
+  if (agent.metadata?.runId) {
+    const bufferedOutput = Array.isArray(agent.output)
+      ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
+      : '';
+    const output = await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt')) ?? bufferedOutput;
+    await completeAgentRun(
+      agent.metadata.runId,
+      isPrivateSecurity ? 'Private security assessment interrupted; inspect its local assessment archive.' : output,
+      exitCode,
+      duration,
+      { message: errorMessage, category },
+    );
+  }
+
+  await completeAgent(agent.id, {
+    success: effectiveSuccess,
+    exitCode,
+    duration,
+    orphaned: true,
+    error: errorMessage,
+    ...agentResultExtra,
+  });
+
+  return { success: effectiveSuccess };
 }
 
 /**

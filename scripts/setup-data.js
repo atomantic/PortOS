@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { md5, buildPromptDriftTables } from './migrations/_lib.js';
 import { isSeedableReferencePath } from './lib/migrationOwnedPaths.js';
-import { mergeJsonStarter } from './lib/mergeJsonStarter.js';
+import { mergeJsonStarterTargets } from './lib/mergeJsonStarter.js';
 import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -97,22 +97,22 @@ if (!existsSync(dataDir)) {
 // already exists. Each merge target points at one top-level dict-shaped key
 // (`stages` for stage-config.json, `variables` for variables.json) and the
 // merger adds entries the user is missing without overwriting anything they
-// have. Caveat: if a user deliberately deleted a starter entry it WILL come
-// back on the next run — that's the documented trade-off vs. silent drift.
+// have. data/setup-data-seeded.json records which starter keys each target has
+// already been offered, so a starter entry the user deleted stays deleted while
+// an entry new in a later release still arrives. An install with no ledger entry
+// for a target gets every missing key once (bootstrap), then the ledger is written.
 const JSON_MERGE_TARGETS = [
   { relPath: 'prompts/stage-config.json', mergeKey: 'stages' },
   { relPath: 'prompts/variables.json',    mergeKey: 'variables' },
   { relPath: 'providers.json',            mergeKey: 'providers' },
 ];
 
-for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
-  mergeJsonStarter({
-    samplePath: join(referenceDir, relPath),
-    dataPath: join(dataDir, relPath),
-    mergeKey,
-    displayPath: relPath,
-  });
-}
+mergeJsonStarterTargets({
+  targets: JSON_MERGE_TARGETS,
+  referenceDir,
+  dataDir,
+  ledgerPath: join(dataDir, 'setup-data-seeded.json'),
+});
 
 // Drift detection — warn when a data.reference/prompts/{stages,_partials}/*.md
 // differs from the installed copy. Only fires on existing installs (fresh

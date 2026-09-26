@@ -58,13 +58,13 @@ vi.mock('../videoGen/local.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
-vi.mock('./projects.js', () => ({ getProject: vi.fn(), updateProject: vi.fn(async () => ({})) }));
+vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})) }));
 
 import { renderMusicVideo, getRenderJobStatus } from './render.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, updateProject } from './projects.js';
+import { getProject, listProjects, updateProject } from './projects.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
@@ -170,4 +170,94 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(getRenderJobStatus(jobId).error).toBeUndefined();
   });
+});
+
+
+describe('status write failures are logged, not swallowed (#8430)', () => {
+  it('logs a failed status→complete write and still finishes the job', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pid = 'write-1';
+    prime(pid);
+    updateProject.mockImplementation(async (_id, patch) => {
+      if (patch.status === 'complete') throw new Error('disk full');
+      return {};
+    });
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    proc.emit('close', 0, null);
+    await tick();
+
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
+      && line.includes(pid) && line.includes('status→complete'))).toBe(true);
+    updateProject.mockImplementation(async () => ({}));
+    errorSpy.mockRestore();
+  });
+});
+
+describe('recoverStuckMusicVideoRenders (#8430)', () => {
+  it('demotes stale renders by history, skips live jobs and other statuses', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prime('live-1');
+    await renderMusicVideo('live-1');
+    updateProject.mockClear();
+    listProjects.mockResolvedValueOnce([
+      { id: 'done-1', status: 'rendering', renderHistoryId: 'hist-1' },
+      { id: 'fresh-1', status: 'rendering' },
+      { id: 'live-1', status: 'rendering' },
+      { id: 'idle-1', status: 'ready' },
+    ]);
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(updateProject.mock.calls).toEqual([
+      ['done-1', { status: 'complete' }],
+      ['fresh-1', { status: 'ready' }],
+    ]);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 2/2'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('propagates a list failure instead of reporting zero recovered', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    listProjects.mockRejectedValueOnce(new Error('DB unavailable'));
+    await expect(recoverStuckMusicVideoRenders()).rejects.toThrow('DB unavailable');
+    expect(updateProject).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed demotion and keeps recovering the rest', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    listProjects.mockResolvedValueOnce([
+      { id: 'bad-1', status: 'rendering' },
+      { id: 'good-1', status: 'rendering' },
+    ]);
+    updateProject.mockRejectedValueOnce(new Error('write failed'));
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(updateProject).toHaveBeenCalledWith('good-1', { status: 'ready' });
+    expect(errorSpy.mock.calls.some(([line]) => line.includes('bad-1'))).toBe(true);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 1/2'))).toBe(true);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+});
+
+it('chooses the loudest section midpoint within the rendered duration', async () => {
+  prime('poster-section');
+  const project = await getProject();
+  getProject.mockResolvedValue({ ...project, audioAnalysis: { sections: [
+    { startSec: 0, endSec: 1, energy: 0.2 },
+    { startSec: 1, endSec: 2, energy: 0.9 },
+  ] } });
+  const { jobId } = await renderMusicVideo('poster-section');
+  lastProc().emit('spawn');
+  lastProc().emit('close', 0, null);
+  await tick();
+  expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1.5 });
+  expect(getRenderJobStatus(jobId).status).toBe('complete');
 });

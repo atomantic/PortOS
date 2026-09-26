@@ -1,5 +1,6 @@
 /** Persisted task schedule state and prompt-default compatibility upgrades. */
 
+import { dashboardEvents } from './dashboardEvents.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -303,6 +304,7 @@ async function saveScheduleNow(schedule) {
   await ensureDataDir();
   schedule.lastUpdated = new Date().toISOString();
   await atomicWrite(SCHEDULE_FILE, schedule);
+  dashboardEvents.emit('cos:schedule:changed');
 }
 
 export function saveSchedule(schedule) {

@@ -42,6 +42,8 @@ import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import useDrawerTab from '../hooks/useDrawerTab';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
+import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
+import UnsavedChangesConfirm from '../components/ui/UnsavedChangesConfirm';
 import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow';
 import CharacterEvolutionLens from '../components/character/CharacterEvolutionLens';
 import { EVOLUTION_STAGES, isDeclaredEvolution } from '../lib/characterEvolution.js';
@@ -161,7 +163,7 @@ export default function PipelineSeries() {
   // setters). Flushes the full bible field-set; the API helper's auto-toast is
   // suppressed (silent) so `onFlushError` emits the single failure toast that
   // tells the user their edits didn't persist.
-  const { updateSeriesFromServer, handleIssuesUpdate, flushPending, registerDraftFlush } = useArcCanvasSync({
+  const { updateSeriesFromServer, handleIssuesUpdate, flushPending, registerDraftFlush, isDirty } = useArcCanvasSync({
     series,
     setSeries,
     setIssues,
@@ -170,6 +172,10 @@ export default function PipelineSeries() {
     silent: true,
     onFlushError: (err) => toast.error(`Pre-flush save failed: ${err.message}`),
   });
+  // Unsaved bible edits park every exit — another series in the sidebar, ⌘K,
+  // Back, tab close (#8423). Discarding just lets the navigation run; the next
+  // series' load replaces the local state and recaptures the baseline.
+  const routeGuard = useUnsavedChangesGuard(isDirty);
 
   const handleSave = async () => {
     if (!series) return;
@@ -298,6 +304,14 @@ export default function PipelineSeries() {
               Save series
             </button>
           </header>
+
+          <UnsavedChangesConfirm
+            guard={routeGuard}
+            when={!saving}
+            question="Discard your unsaved series bible changes?"
+            label={`Discard unsaved changes to ${series.name || 'this series'}`}
+            onDiscard={routeGuard.proceed}
+          />
 
           <div className="flex flex-wrap items-center gap-3 text-sm">
             {issues.length > 0 && (

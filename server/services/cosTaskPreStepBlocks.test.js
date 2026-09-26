@@ -148,10 +148,10 @@ describe('resolveSwarmBlock', () => {
   });
 
   it('returns a gh swarm directive for the github claim body', () => {
-    const block = resolveSwarmBlock('claim-issue', 3);
+    const block = resolveSwarmBlock('claim-issue', 12);
     expect(block).toContain('SWARM MODE');
-    expect(block).toContain('--swarm=3');
-    expect(block).toContain('3 independent issues');
+    expect(block).toContain('--swarm=12');
+    expect(block).toContain('12 independent issues');
     expect(block).toContain('gh pr merge');
     // Ends with a separator so the single-issue body reads as the per-agent flow.
     expect(block.trimEnd().endsWith('---')).toBe(true);

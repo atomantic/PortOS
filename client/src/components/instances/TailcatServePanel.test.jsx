@@ -1,5 +1,5 @@
 import { TailcatServeProvider } from './TailcatServeProvider';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render as renderUI, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -13,6 +13,21 @@ vi.mock('../../services/api', () => ({
 vi.mock('../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
+
+vi.mock('../../services/socket', () => {
+  const listeners = new Map();
+  return { default: {
+    on: vi.fn((event, handler) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(handler);
+    }),
+    off: vi.fn((event, handler) => listeners.get(event)?.delete(handler)),
+    emit: (event, payload) => listeners.get(event)?.forEach(handler => handler(payload)),
+  } };
+});
+import socket from '../../services/socket';
+
+afterEach(() => vi.useRealTimers());
 
 import { getTailcatServe, startTailcatServe, stopTailcatServe } from '../../services/api';
 import TailcatServePanel from './TailcatServePanel';
@@ -98,4 +113,57 @@ it('does not overwrite a start receipt with an older in-flight status read', asy
   expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
   await act(async () => resolveRead(stopped));
   expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+});
+
+it('shares lifecycle changes between both controls without recurring status reads', async () => {
+  vi.useFakeTimers();
+  getTailcatServe.mockReset().mockResolvedValue(stopped);
+  const { unmount } = render(<><TailcatServePanel /><TailcatServePanel compact /></>);
+  await act(async () => {});
+  expect(getTailcatServe).toHaveBeenCalledTimes(1);
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(getTailcatServe).toHaveBeenCalledTimes(1);
+
+  getTailcatServe.mockResolvedValue(serving);
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.getAllByRole('button', { name: 'Stop' })).toHaveLength(2);
+  getTailcatServe.mockResolvedValue({ ...serving, live: false, status: 'failed', lastError: 'Example process exited' });
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(2);
+
+  const reads = getTailcatServe.mock.calls.length;
+  await act(async () => socket.emit('connect'));
+  expect(getTailcatServe).toHaveBeenCalledTimes(reads + 1);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(getTailcatServe).toHaveBeenCalledTimes(reads + 1);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(getTailcatServe).toHaveBeenCalledTimes(reads + 2);
+  unmount();
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(getTailcatServe).toHaveBeenCalledTimes(reads + 2);
+});
+
+it.each([false, true])('reconciles changes received during a mutation (failed=%s)', async (failed) => {
+  getTailcatServe.mockReset().mockResolvedValue(stopped);
+  let finishMutation;
+  startTailcatServe.mockImplementationOnce(() => new Promise((resolve, reject) => {
+    finishMutation = () => failed ? reject(new Error('Example failure')) : resolve(serving);
+  }));
+  const user = userEvent.setup();
+  render(<TailcatServePanel />);
+  await waitFor(() => expect(getTailcatServe).toHaveBeenCalledTimes(1));
+  await user.click(screen.getByRole('button', { name: 'Start serve' }));
+  getTailcatServe.mockResolvedValue({ ...serving, live: false, status: 'failed', lastError: 'Example process exited' });
+  await act(async () => {
+    socket.emit('tailcat:serve:changed', {});
+    socket.emit('tailcat:serve:changed', {});
+  });
+  expect(getTailcatServe).toHaveBeenCalledTimes(1);
+  await act(async () => finishMutation());
+  expect(getTailcatServe).toHaveBeenCalledTimes(2);
+  expect(screen.getByText('Example process exited')).toBeInTheDocument();
 });

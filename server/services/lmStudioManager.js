@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from './modelObservation.js';
 /**
  * LM Studio Manager Service
  *
@@ -309,6 +310,8 @@ async function loadModel(modelId) {
 
   console.log(`📦 Model loaded: ${modelId}`)
   cosEvents.emit('lmstudio:modelLoaded', { modelId })
+  invalidateModelObservation('loaded-models')
+  invalidateModelObservation('provider-readiness')
 
   return { success: true, modelId, ...response }
 }
@@ -399,6 +402,8 @@ async function loadModelWithArgs(modelId, args = []) {
   else tunedLoads.delete(modelId)
   console.log(`📦 LM Studio loaded ${modelId}${signature ? ` (${signature})` : ` without ${carried}`}`)
   cosEvents.emit('lmstudio:modelLoaded', { modelId })
+  invalidateModelObservation('loaded-models')
+  invalidateModelObservation('provider-readiness')
   return { success: true }
 }
 
@@ -441,6 +446,8 @@ async function unloadModel(modelId) {
   tunedLoads.delete(modelId)
   console.log(`📤 Model unloaded: ${modelId}`)
   cosEvents.emit('lmstudio:modelUnloaded', { modelId })
+  invalidateModelObservation('loaded-models')
+  invalidateModelObservation('provider-readiness')
 
   return { success: true, modelId }
 }
@@ -987,6 +994,8 @@ async function deleteModel(modelId) {
   await rmdir(join(dir, '..')).catch(() => {})
   console.log(`🗑️ LM Studio deleted: ${modelId} (${dir})`)
   cosEvents.emit('lmstudio:modelDeleted', { modelId })
+  invalidateModelObservation('loaded-models')
+  invalidateModelObservation('provider-readiness')
   return { success: true, modelId }
 }
 

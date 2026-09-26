@@ -7,10 +7,11 @@
  * list, naming a downgraded test file that is not tracked, or reporting
  * "CI will also run: db" from a plan field that has since been renamed.
  */
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { cp } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
@@ -93,6 +94,7 @@ describe('pregate hidden-content invocation', () => {
   let scratch;
   let root;
   let base;
+  let template;
   const trackedPath = 'docs/tracked note.md';
   const clean = '# Example\n';
   const hidden = `${clean}hidden: \u200B\n`;
@@ -106,8 +108,10 @@ describe('pregate hidden-content invocation', () => {
     index: readFileSync(join(root, '.git', 'index')),
   });
 
-  beforeEach(async () => {
-    ({ scratch, repo: root } = await makeGitSandbox({ prefix: 'portos-pregate-cli-' }));
+  beforeAll(async () => {
+    template = await makeGitSandbox({ prefix: 'portos-pregate-template-' });
+    root = template.repo;
+    scratch = template.scratch;
     git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // No runners or test files: docs-only changes produce an empty test plan.
@@ -129,8 +133,24 @@ describe('pregate hidden-content invocation', () => {
     base = git('rev-parse', 'HEAD');
   });
 
+  beforeEach(async () => {
+    scratch = mkdtempSync(join(tmpdir(), 'portos-pregate-cli-'));
+    root = join(scratch, 'primary');
+    // Clone the fully committed fixture, not the raw git template. Windows
+    // otherwise repeats source copies, git add and git commit for every case.
+    await cp(template.repo, root, { recursive: true });
+    // The copied index still holds the template files' stat data. Refresh it
+    // before the test snapshots its bytes, or the CLI's ordinary Git reads
+    // appear to mutate the index even when they only notice the copy.
+    git('update-index', '--refresh');
+  });
+
   afterEach(async () => {
     await destroyGitSandbox(scratch);
+  });
+
+  afterAll(async () => {
+    if (template?.scratch) await destroyGitSandbox(template.scratch);
   });
 
   it.each(['committed', 'staged', 'unstaged', 'untracked'])(

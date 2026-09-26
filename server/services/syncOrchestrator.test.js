@@ -250,6 +250,55 @@ describe('syncOrchestrator', () => {
       applyRemote.mockResolvedValue({ applied: false, count: 0 });
     });
 
+    // An endless chunked body (no Content-Length) must fail the pull at the cap
+    // rather than grow the heap. One shared chunk keeps the test cheap.
+    const endlessBody = () => {
+      const chunk = new Uint8Array(16 * 1024 * 1024);
+      const state = { pulled: 0, cancel: vi.fn() };
+      state.response = new Response(new ReadableStream({
+        pull(controller) { state.pulled++; controller.enqueue(chunk); },
+        cancel: state.cancel,
+      }));
+      return state;
+    };
+
+    it('drops a snapshot that streams past the body cap without buffering it all', async () => {
+      const body = endlessBody();
+      mockFetch.mockImplementation(async () => body.response);
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { brain: true, memory: false } });
+      expect(result.brain.totalApplied).toBe(0);
+      expect(applyBrainChanges).not.toHaveBeenCalled();
+      expect(body.cancel).toHaveBeenCalledOnce();
+      // 256 MiB default cap / 16 MiB chunks, plus the stream's read-ahead.
+      expect(body.pulled).toBeLessThanOrEqual(18);
+    });
+
+    it('skips an avatar that streams past the asset cap', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      const body = endlessBody();
+      mockFetch.mockImplementation(async (url) => (url.includes('/data/images/')
+        ? body.response
+        : { ok: true, json: async () => ({ data: { avatarPath: '/data/images/example.png' }, checksum: 'avatar' }) }));
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      expect(body.cancel).toHaveBeenCalledOnce();
+      expect(body.pulled).toBeLessThanOrEqual(8);
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
+    it('does not fetch or store a peer-supplied SVG avatar', async () => {
+      const { applyRemote } = await import('./dataSync.js');
+      applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+        data: { avatarPath: '/data/images/peer.svg' }, checksum: 'avatar',
+      }) });
+      await syncWithPeer({ ...mockPeer, syncCategories: { brain: false, memory: false, character: true } });
+      expect(mockFetch.mock.calls.some(([url]) => String(url).includes('/data/images/peer.svg'))).toBe(false);
+      expect(writeFileGuarded).not.toHaveBeenCalled();
+      applyRemote.mockResolvedValue({ applied: false, count: 0 });
+    });
+
     it.each([
       ['non-success response', () => new Response('unavailable', { status: 503 })],
       ['malformed JSON', () => new Response('{')],
@@ -578,6 +627,29 @@ describe('syncOrchestrator', () => {
       expect(mockFetch.mock.calls[0][0]).toContain('since[ingredients]=999');
       expect(mockFetch.mock.calls[1][0]).toContain('since[ingredients]=0');
       expect(applyCatalogChanges).toHaveBeenCalledTimes(1);
+    });
+
+    it('advances durably deferred child cursors to reach later tag and scrap parent pages', async () => {
+      for (const position of ['1', '2']) {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            maxSequences: { tags: position, scraps: position }, hasMore: position === '1',
+          }),
+        });
+      }
+      applyCatalogChanges
+        .mockResolvedValueOnce({
+          tags: { deferred: 1, failed: 0 }, scraps: { deferred: 1, failed: 0 },
+        })
+        .mockResolvedValueOnce({
+          tags: { inserted: 1, failed: 0 }, scraps: { inserted: 1, failed: 0 },
+        });
+      const result = await syncWithPeer(catalogPeer);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).toContain('since[tags]=1');
+      expect(mockFetch.mock.calls[1][0]).toContain('since[scraps]=1');
+      expect(result.catalog.catalogSeqs).toMatchObject({ tags: '2', scraps: '2' });
     });
 
     it('holds a kind cursor when that kind had apply failures (parent on a later page)', async () => {
@@ -1622,6 +1694,56 @@ describe('syncOrchestrator', () => {
       stopSyncOrchestrator();
 
       expect(instanceEvents.removeListener).toHaveBeenCalledWith('peer:online', expect.any(Function));
+    });
+  });
+
+  // #8710: a DB restore discards rows the memory/Catalog cursors already passed.
+  describe('rewindPostgresSyncCursors', () => {
+    const ZERO_CATALOG = { scraps: '0', ingredients: '0', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' };
+    let store;
+    beforeEach(() => {
+      store = {
+        'peer-inst-1': {
+          brainSeq: 42, memorySeq: '1000000000000050',
+          catalogSeqs: { ...ZERO_CATALOG, ingredients: '1000000000000009' },
+          checksums: { goals: 'g1' }, brainChecksum: 'b1', lastSyncAt: '2026-01-01T00:00:00.000Z',
+        },
+        'peer-inst-2': { memorySeq: '1000000000000007' },
+      };
+      readJSONFile.mockImplementation(async () => structuredClone(store));
+      atomicWrite.mockImplementation(async (path, payload) => {
+        if (String(path).includes('instances_sync_cursors')) store = structuredClone(payload);
+      });
+    });
+
+    it('zeroes memory and every Catalog kind for every peer, leaving brain and checksum state', async () => {
+      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      expect(await rewindPostgresSyncCursors()).toBe(2);
+      expect(store['peer-inst-1']).toEqual({
+        brainSeq: 42, memorySeq: '0', catalogSeqs: ZERO_CATALOG,
+        checksums: { goals: 'g1' }, brainChecksum: 'b1', lastSyncAt: '2026-01-01T00:00:00.000Z',
+      });
+      expect(store['peer-inst-2']).toEqual({ memorySeq: '0', catalogSeqs: ZERO_CATALOG });
+    });
+
+    it('keeps the rewind when a sync that read cursors before it finishes afterwards', async () => {
+      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      const peer = { ...mockPeer, syncCategories: { memory: true } };
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/memory/sync')) {
+          // The restore completes while this pull is on the wire.
+          await rewindPostgresSyncCursors();
+          return { ok: true, json: async () => ({ memories: [{ id: 'm1' }], maxSequence: '1000000000000060', hasMore: false }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+      applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
+
+      await syncWithPeer(peer);
+
+      expect(mockFetch.mock.calls.some(([url]) => url.includes('since=1000000000000050'))).toBe(true);
+      expect(store['peer-inst-1'].memorySeq).toBe('0');
+      expect(store['peer-inst-1'].catalogSeqs).toEqual(ZERO_CATALOG);
     });
   });
 });

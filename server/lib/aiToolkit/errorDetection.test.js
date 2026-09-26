@@ -7,10 +7,12 @@ import {
   createImmediateFallbackSignalDetector,
   createTerminalModelErrorDetector,
   createLocalRuntimeOomDetector,
+  createTruncatedResponseDetector,
   createTerminalRequestTimeoutDetector,
   detectImmediateFallbackSignal,
   detectClaudeSessionLimitBanner,
   detectLocalRuntimeOom,
+  detectTruncatedResponse,
   detectTerminalModelError,
   detectTerminalRequestTimeout,
   detectTuiRetryBanner,
@@ -707,6 +709,49 @@ describe('Error Detection', () => {
         requiresFallback: true,
         actionable: false,
       });
+    });
+  });
+
+  describe('detectTruncatedResponse', () => {
+    // pi's TUI halt banner, as the ANSI-stripped screen renders it — the
+    // sentence a halted session sits on until somebody types `continue`.
+    const TRUNCATION_BANNER = 'Response was truncated before completion.';
+
+    it('detects the truncation banner', () => {
+      expect(detectTruncatedResponse(TRUNCATION_BANNER)).toMatchObject({
+        category: 'output-length',
+        requiresFallback: true,
+        // Nobody has to fix anything — the session just needs a turn.
+        actionable: false,
+        // Nudge-then-fail-over is the caller's policy, not a grace window here.
+        graceMs: 0,
+        origin: 'provider',
+      });
+    });
+
+    it('survives the TUI hard-wrapping the sentence at a space', () => {
+      expect(detectTruncatedResponse('Response was truncated before\ncompletion.'))
+        .toMatchObject({ category: 'output-length' });
+    });
+
+    it('leaves ordinary prose about truncation alone', () => {
+      expect(detectTruncatedResponse('the log was truncated for brevity')).toBeNull();
+      expect(detectTruncatedResponse('truncated before saving')).toBeNull();
+      expect(detectTruncatedResponse('')).toBeNull();
+    });
+
+    it('buffers the banner across stream chunks', () => {
+      const detect = createTruncatedResponseDetector();
+      expect(detect('...(00000008: Response was truncated')).toBeNull();
+      expect(detect(' before completion.')).toMatchObject({ category: 'output-length' });
+    });
+
+    it('reports a message that cannot re-match the detector', () => {
+      // Same reasoning as detectLocalRuntimeOom: the message becomes the run's
+      // error string, which a CoS task description can quote back through this
+      // very detector via the TUI's prompt echo.
+      const { message } = detectTruncatedResponse(TRUNCATION_BANNER);
+      expect(detectTruncatedResponse(message)).toBeNull();
     });
   });
 

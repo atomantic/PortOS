@@ -13,9 +13,9 @@
  * loom (no universe reachable from the loom or its series) gets no compiled
  * request back, and the browser preset is the only style it would ever see.
  * The compiler drops style tokens the authored prompt already carries
- * (`dropTokensPresentIn` in server/lib/universeVisualStyle.js), so the linked
- * path does not emit the token list twice — do not fix the overlap by
- * deleting either side.
+ * (`stripStyleClause` matched against the same `universeStylePreset` clause,
+ * both in server/lib/universeVisualStyle.js), so the linked path does not
+ * emit the token list twice — do not fix the overlap by deleting either side.
  */
 
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt';

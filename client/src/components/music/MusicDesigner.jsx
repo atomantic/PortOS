@@ -54,7 +54,7 @@ const STEPS = [
 ];
 const STEP_IDS = STEPS.map((s) => s.id);
 // How the render step turns the description into sound: an on-device/remote
-// audio model, a waveform the AI draws point by point, or Strudel code the AI
+// audio model, a spectrogram the AI paints stroke by stroke, or Strudel code the AI
 // writes. Rides in `?engine=` (absent = the audio model).
 const RENDER_ENGINES = [
   { id: 'model', label: 'Audio model', icon: AudioWaveform },
@@ -68,7 +68,7 @@ const ENGINE_IDS = RENDER_ENGINES.map((e) => e.id);
 const LLM_ENGINE_PANELS = { drawn: WaveformPanel, code: CodePanel };
 const PROMPT_HINTS = {
   model: 'Required. This editable description is the prompt sent to the selected audio engine.',
-  drawn: 'Required. The AI draws the waveform from this editable description.',
+  drawn: 'Required. The AI paints the music from this editable description.',
   code: 'Required. The AI writes the Strudel code from this editable description.',
 };
 const FIRST_STEP = STEP_IDS[0];

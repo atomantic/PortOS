@@ -21,10 +21,10 @@
  * without the user having to find a second button.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useMounted from '../../hooks/useMounted';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { Loader2, Wand2, Download, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import { analyzeMusicLyrics } from '../../lib/musicDuration.js';
@@ -95,6 +95,8 @@ function formatExecutionProfile(profile) {
   return profile || '';
 }
 
+const MUSIC_QUEUE_EVENTS = ['media-jobs:changed'];
+
 const REMOTE_AUDIO_OPTIONS = Object.freeze({
   style: ['ambient', 'cinematic', 'classical', 'electronic', 'folk', 'hip-hop', 'jazz', 'metal', 'orchestral', 'pop', 'rock', 'synthwave'],
   mood: ['bright', 'calm', 'dark', 'dreamy', 'energetic', 'hopeful', 'melancholic', 'mysterious', 'playful', 'tense', 'triumphant', 'warm'],
@@ -143,28 +145,34 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const [userSelectedEngine, setUserSelectedEngine] = useState(false);
   const mountedRef = useMounted();
 
-  const refreshActiveJob = async () => {
+  // Queue discovery and per-job progress have separate lifetimes. An empty
+  // active queue must not detach the job before its terminal event is handled.
+  const settledJobRef = useRef(null);
+  const { data: discoveredJob } = useSocketResource(async () => {
     const snapshot = await getActiveProcessing({ silent: true });
-    if (!mountedRef.current) return;
-    const jobs = snapshot?.jobs || [];
-    const found = jobs.find((job) => {
+    return (snapshot?.jobs || []).find((job) => {
       const tag = job.params?.musicStudio;
       return job.kind === 'audio' && (track?.id ? tag?.trackId === track.id : tag && !tag.trackId);
-    });
-    if (found) {
-      setActiveJob(found);
-      setActiveJobId(found.id);
-      if (typeof found.params?.musicStudio?.instrumentalOnly === 'boolean') {
-        setInstrumentalOnly(found.params.musicStudio.instrumentalOnly);
-      }
-      setGenerating(true);
-    } else if (progress.status !== 'completed') {
-      setActiveJob(null);
-      setActiveJobId(null);
-    }
-  };
+    }) || null;
+  }, { events: MUSIC_QUEUE_EVENTS, resourceKey: track?.id || null });
 
-  useAutoRefetch(refreshActiveJob, 3000, { pollOnly: true });
+  useEffect(() => {
+    setActiveJob(null);
+    setActiveJobId(null);
+    setGenerating(false);
+    settledJobRef.current = null;
+  }, [track?.id]);
+
+  useEffect(() => {
+    if (!discoveredJob || discoveredJob.id === settledJobRef.current) return;
+    setActiveJob(discoveredJob);
+    setActiveJobId(discoveredJob.id);
+    if (typeof discoveredJob.params?.musicStudio?.instrumentalOnly === 'boolean') {
+      setInstrumentalOnly(discoveredJob.params.musicStudio.instrumentalOnly);
+    }
+    setGenerating(true);
+  }, [discoveredJob]);
+
   const progress = useMediaJobProgress(activeJobId, { kind: 'audio' });
   const isGenerating = generating || ['queued', 'running'].includes(activeJob?.status) || ['queued', 'running'].includes(progress.status);
 
@@ -172,15 +180,19 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     if (!activeJobId || progress.status !== 'completed') return undefined;
     let canceled = false;
     const finish = async () => {
-      const job = await getMediaJob(activeJobId).catch(() => null);
-      const targetId = track?.id || job?.result?.trackId || progress.trackId;
-      if (!targetId || canceled) return;
+      let targetId = track?.id || progress.trackId;
+      if (!targetId) {
+        const job = await getMediaJob(activeJobId).catch(() => null);
+        targetId = job?.result?.trackId;
+      }
+      if (canceled) return;
       let updated = null;
-      for (let attempt = 0; attempt < 4 && !updated && !canceled; attempt += 1) {
+      for (let attempt = 0; targetId && attempt < 4 && !updated && !canceled; attempt += 1) {
         updated = await getTrack(targetId, { silent: true }).catch(() => null);
         if (!updated && attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250));
       }
       if (canceled || !mountedRef.current) return;
+      settledJobRef.current = activeJobId;
       setGenerating(false);
       setActiveJob(null);
       setActiveJobId(null);
@@ -190,6 +202,15 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
     finish();
     return () => { canceled = true; };
   }, [activeJobId, progress.status, progress.trackId, track?.id]);
+
+  useEffect(() => {
+    if (!activeJobId || !['failed', 'canceled'].includes(progress.status)) return;
+    settledJobRef.current = activeJobId;
+    setGenerating(false);
+    setActiveJob(null);
+    setActiveJobId(null);
+    if (progress.status === 'failed') toast.error(progress.error || 'Music generation failed');
+  }, [activeJobId, progress.status, progress.error]);
 
   // Returns the freshly-fetched list as well as storing it: the post-runtime
   // chain below needs the NEW engine record, and reading `engine` off state
@@ -443,11 +464,8 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const handleCancel = async () => {
     if (!activeJobId) return;
     await cancelMediaJob(activeJobId, { silent: true }).catch((err) => toast.error(err.message || 'Cancel failed'));
-    if (mountedRef.current) {
-      setGenerating(false);
-      setActiveJob(null);
-      setActiveJobId(null);
-    }
+    // Keep observing until the server confirms cancellation. A failed request
+    // or an in-flight cancellation must not re-enable a duplicate paid render.
   };
 
   const handleInstall = async () => {

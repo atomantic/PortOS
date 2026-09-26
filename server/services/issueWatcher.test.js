@@ -710,6 +710,67 @@ describe('processTaskOutput', () => {
     ))).toBe(true);
   });
 
+  // Eligibility can also lapse in the window between the APPROVE and the merge.
+  // The two landing paths answer that differently today, and the shared ladder
+  // has to carry both: a fresh approval drops silently (the review itself is
+  // still visible on the PR), while a queued one tells the operator it lost an
+  // approval they may have been waiting on.
+  it('drops a fresh approval without notifying when eligibility lapses before the merge', async () => {
+    const issue = { number: 101, state: 'open', assignees: [{ login: 'contributor' }] };
+    installDefaultGhMock({ issueDetails: { 101: issue } });
+    const forgeRead = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation((args, ...rest) => {
+      if (args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input')) issue.state = 'closed';
+      return forgeRead(args, ...rest);
+    });
+    mergePrMock.mockResolvedValue({ success: true });
+
+    const result = await processTaskOutput({
+      appId: APP.id,
+      success: true,
+      task: { metadata: eligibilityMetadata },
+      requireEligibilityFacts: true,
+      payload: {
+        issueComments: [],
+        pullRequests: [{
+          number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'No material issues found.', findings: [],
+          rebaseRequired: false, ciPolicy: 'required',
+        }],
+      },
+    });
+
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
+    expect(result.dropped).toEqual([
+      { number: 7, reason: 'the linked issue state or author assignment changed since the eligibility gate ran' },
+    ]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
+  });
+
+  it('discards a queued approval and notifies when eligibility lapses while it waits', async () => {
+    installDefaultGhMock({
+      issueDetails: { 101: { number: 101, state: 'closed', assignees: [{ login: 'contributor' }] } },
+      reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
+    });
+    mergePrMock.mockResolvedValue({ success: true });
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), url: 'https://github.com/o/r/pull/7',
+      contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
+      authorLogin: 'contributor', eligibilityFacts, ciPolicy: 'required', rebaseRequired: false, ticks: 0,
+    }] } });
+
+    await buildTaskInput({ app: apps.get(APP.id) });
+
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Issue Watcher PR #7 needs attention',
+      description: 'The linked issue state or assignee changed, so the previous approval was discarded.',
+      link: 'https://github.com/o/r/pull/7',
+    }));
+  });
+
   // The gate approved this diff against the issue as it read at scan time. If
   // that requirement was rewritten since, the review answered a question nobody
   // is asking any more — so the approval is discarded rather than merged.

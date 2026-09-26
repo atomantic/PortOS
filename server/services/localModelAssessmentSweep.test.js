@@ -57,7 +57,8 @@ describe('startSweep', () => {
     }));
     runAssessment.mockResolvedValue(measured());
 
-    const started = await startSweep({ scope: 'unmeasured' });
+    const changes = [];
+    const started = await startSweep({ scope: 'unmeasured', onChange: (state) => changes.push(state) });
     expect(started.status).toBe('running');
     expect(started.total).toBe(2);
 
@@ -68,6 +69,20 @@ describe('startSweep', () => {
     expect(status.results[0].meanTokensPerSecond).toBe(42);
     // Sequential by design — two models at once would measure the contention.
     expect(runAssessment).toHaveBeenCalledTimes(2);
+    expect(changes.map((state) => [state.status, state.completed, state.current?.modelId ?? null, state.settled])).toEqual([
+      ['running', 0, null, false],
+      ['running', 0, 'a', false],
+      ['running', 1, null, false],
+      ['running', 1, 'b', false],
+      ['running', 2, null, false],
+      ['complete', 2, null, true],
+    ]);
+    expect(changes[0].results).toEqual([]);
+    for (const state of changes) {
+      expect(state).not.toHaveProperty('controller');
+      expect(state).not.toHaveProperty('notifyChange');
+      expect(state).not.toHaveProperty('launchStates');
+    }
   });
 
   it('passes each target\'s recorded tuning through, so a re-measure reproduces it', async () => {
@@ -212,7 +227,7 @@ describe('startSweep', () => {
     getAssessmentReport.mockResolvedValue(report({ unassessed: [{ backend: 'ollama', modelId: 'a' }] }));
     runAssessment.mockResolvedValue(measured());
 
-    await startSweep({ scope: 'unmeasured', onProgress: () => { throw new Error('socket closed'); } });
+    await startSweep({ scope: 'unmeasured', onProgress: () => { throw new Error('socket closed'); }, onChange: () => { throw new Error('socket closed'); } });
     await settle();
     expect(getSweepStatus().status).toBe('complete');
   });
@@ -600,19 +615,25 @@ describe('startSweep — the tuning dimension', () => {
 
   // `settled` outlasts `status`: the page keeps its per-model actions disabled
   // while a stopped sweep is still aborting and still restoring.
-  it('reports itself unsettled until the queue and the restore are both done', async () => {
+  it('pushes cancellation immediately and settlement only after restoring the runtime', async () => {
     onlyTarget();
     let releaseRun;
+    let releaseRestore;
+    const changes = [];
     runAssessment.mockImplementationOnce(() => new Promise((resolve) => { releaseRun = resolve; }));
+    restoreLaunchState.mockImplementationOnce(() => new Promise((resolve) => { releaseRestore = resolve; }));
 
-    await startSweep({ backend: 'llama', modelId: 'target', tunings: true });
+    await startSweep({ backend: 'llama', modelId: 'target', tunings: true, onChange: (state) => changes.push(state) });
     cancelSweep();
-    expect(getSweepStatus().status).toBe('cancelled');
-    expect(getSweepStatus().settled).toBe(false);
-
+    expect(changes.at(-1)).toMatchObject({ status: 'cancelled', settled: false, cancelRequested: true });
     releaseRun({ cancelled: true });
     await settle();
-    expect(getSweepStatus().settled).toBe(true);
+    expect(restoreLaunchState).toHaveBeenCalled();
+    expect(changes.at(-1).settled).toBe(false);
+    releaseRestore({ restored: true });
+    await settle();
+    expect(changes.at(-1)).toMatchObject({ status: 'cancelled', settled: true, current: null });
+    expect(changes.filter((state) => state.settled)).toHaveLength(1);
   });
 
   // The measurements all landed, so the sweep did not fail — but the runtime is

@@ -38,6 +38,7 @@ PortOS can execute host commands and access private files. It must remain on the
 - **Command policies**: Execution follows each surface's operator/unattended policy and agent execution profile (see `server/lib/commandSecurity.js`); these controls do not sandbox the entire application
 - **Input validation**: All API inputs are validated using Zod schemas
 - **Opt-in authentication**: Off by default (trusting private network/Tailscale), PortOS supports opt-in instance password authentication (enforced by `server/services/authGate.js`) gating `/api/*`, `/data/*`, and `/sdapi/*` via session cookies, Bearer tokens, or HTTP Basic credentials
+- **Host-control authority**: routes that execute on the host — `/api/commands/*` plus the audited `HOST_CONTROL_ROUTES` list in `server/lib/hostControlRoutes.js` (app create/start/restart, CoS agent queueing, git, scaffold, standardize) — and the matching Socket.IO events need an operator session, or a local connection when no password is set. A remote LAN/tailnet caller on a password-free install, and any peer or Basic credential, gets `403 HOST_CONTROL_FORBIDDEN`
 
 Never publish PortOS administration, APIs, sockets, sidecars, or host controls through public tunnels, reverse proxies, or forwarding. A password or TLS does not make public deployment supported. For private deployments, consider:
 - Binding to `127.0.0.1` instead of `0.0.0.0`
@@ -742,6 +743,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
 | `/api/devtools/video-download` | Video download |
 | `/api/video-timeline` | Video timeline editor |
+| `/api/html-composition` | Offline seekable HTML-to-MP4 rendering; [contract and job endpoints](./HTML_COMPOSITIONS.md) |
 | `/api/continuous-video` | Continuous-video episodes (script + bible → chained multi-clip generation) |
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
@@ -997,6 +999,8 @@ Common error codes:
 
 
 ### Catalog scrap graph commits
+
+An optional UUID `operationKey` makes a reviewed submission retry-safe. Reuse it for retries with the same accepted content, relationships, scrap, universe and role: the server returns the original ingredient response without creating another batch, including after restart or concurrent requests. Reusing it with different input returns HTTP 409. Embedding output is excluded from request identity. Mint a new key for an intentional new submission; callers omitting it keep legacy behavior. Receipts remain local to the accepting instance and persist with its database.
 
 `POST /api/catalog/scraps/:id/commit` accepts up to 200 `accepted` entries and an optional `relationships` array (at most 1,000 edges). Each explicit edge has `fromDraftId`, `toDraftId`, `kind`, and nonempty `evidence` (at most 400 characters). When the array is present, every accepted entry needs a unique nonempty `draftId` (at most 120 characters); both endpoints must be accepted IDs and self-edges are rejected. Draft IDs stay outside persisted payloads. Renaming or reordering entries does not change endpoint identity.
 

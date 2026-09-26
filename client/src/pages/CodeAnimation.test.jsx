@@ -1,17 +1,28 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
-const pollHarness = vi.hoisted(() => ({ callbacks: new Map() }));
+const socketHarness = vi.hoisted(() => ({ handlers: new Map() }));
+
+vi.mock('../services/socket', () => ({ default: {
+  emit: vi.fn(),
+  on: vi.fn((event, handler) => {
+    const handlers = socketHarness.handlers.get(event) || new Set();
+    handlers.add(handler);
+    socketHarness.handlers.set(event, handlers);
+  }),
+  off: vi.fn((event, handler) => socketHarness.handlers.get(event)?.delete(handler)),
+} }));
 
 vi.mock('../services/api', () => ({
   buildCodeAnimationPrompt: vi.fn(),
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
-  listCodeAnimationJobs: vi.fn().mockResolvedValue([]),
+  listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
   listMoodBoardNames: vi.fn(),
+  listTracks: vi.fn().mockResolvedValue([]),
   listUniverseNames: vi.fn(),
   listUniverseStyles: vi.fn(),
   startCodeAnimationGeneration: vi.fn(),
@@ -29,20 +40,16 @@ vi.mock('../hooks/useProviderModels', () => ({
     loading: false,
   }),
 }));
-vi.mock('../hooks/useAutoRefetch', () => ({
-  useAutoRefetch: (callback, interval, { enabled }) => {
-    if (enabled) pollHarness.callbacks.set(interval, callback);
-    else pollHarness.callbacks.delete(interval);
-  },
-}));
 
 import CodeAnimation from './CodeAnimation';
 import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
+  listCodeAnimationJobPage,
   getCodeAnimationOptions,
   listMoodBoardNames,
+  listTracks,
   listUniverseNames,
   listUniverseStyles,
   startCodeAnimationGeneration,
@@ -71,15 +78,42 @@ const renderPage = async (initialEntry = '/code-animation') => {
   return result;
 };
 
+const emitSocket = async (event, payload) => {
+  await act(async () => {
+    for (const handler of socketHarness.handlers.get(event) || []) handler(payload);
+  });
+};
+
+const changeVisibility = async (value) => {
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+};
+
+const runningJob = {
+  id: 'job-1', status: 'running', title: 'Example animation',
+  input: { title: 'Example animation', concept: 'A lantern rises' },
+  prompt: 'Example prompt', createdAt: '2026-01-01T00:00:00.000Z',
+};
+const completedJob = {
+  ...runningJob, status: 'completed', html: '<html><body>Finished animation</body></html>',
+  audioUrl: '/api/uploads/example-audio.mp3',
+  frame: { width: 1280, height: 720, durationSeconds: 20, fps: 30 },
+};
+
 describe('Code Animation page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    pollHarness.callbacks.clear();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    socketHarness.handlers.clear();
+    listCodeAnimationJobPage.mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null });
     localStorage.clear();
     getCodeAnimationOptions.mockResolvedValue(OPTIONS);
     listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
     listUniverseStyles.mockResolvedValue([{ id: 'u1', name: 'Example Universe', influences: { embrace: ['ink wash'], avoid: ['photorealism'] } }]);
     listMoodBoardNames.mockResolvedValue([{ id: 'b1', name: 'Dusk' }]);
+    listTracks.mockResolvedValue([]);
     buildCodeAnimationPrompt.mockResolvedValue({
       prompt: 'You are an award-winning creative coder…',
       attachments: [{ label: 'Night markets', origin: 'universe', url: '/data/image-refs/style-ref.png' }],
@@ -87,6 +121,90 @@ describe('Code Animation page', () => {
       audioUrl: null,
       moodBoardId: 'b1',
     });
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('restores a routed job, updates its preview on its event, and never polls', async () => {
+    getCodeAnimationJob.mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Example animation');
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('A lantern rises');
+    expect(screen.getByLabelText('Generated prompt')).toHaveValue('Example prompt');
+    vi.useFakeTimers();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+
+    await emitSocket('code-animation:changed', { id: 'unrelated-job' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(1);
+    getCodeAnimationJob.mockResolvedValue(completedJob);
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Example animation/ })).toHaveTextContent('Completed');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Preview without audio' }));
+    expect(await screen.findByTitle('Code animation preview')).toHaveAttribute('srcdoc', expect.stringContaining('Finished animation'));
+
+    // Terminal records still reconcile: a missing output can be discovered later.
+    getCodeAnimationJob.mockResolvedValue({ ...completedJob, status: 'failed', error: 'Output missing', html: null });
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(screen.getByText('Generation failed: Output missing')).toBeInTheDocument();
+    expect(screen.queryByTitle('Code animation preview')).not.toBeInTheDocument();
+  });
+
+  it('reconciles once per reconnect and tab re-show, including transient errors and missing jobs', async () => {
+    getCodeAnimationJob.mockRejectedValueOnce(new Error('Temporary outage')).mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    expect(screen.queryByText('That generation is no longer available.')).not.toBeInTheDocument();
+    await emitSocket('connect');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Example animation');
+    await changeVisibility('hidden');
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    getCodeAnimationJob.mockRejectedValueOnce({ status: 404, message: 'Missing' });
+    await changeVisibility('visible');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+    expect(screen.getByText('That generation is no longer available.')).toBeInTheDocument();
+    await changeVisibility('visible');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+  });
+
+  it('offers recovery when the final event read fails without discarding the displayed job', async () => {
+    getCodeAnimationJob.mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    getCodeAnimationJob.mockRejectedValueOnce(new Error('Temporary outage'));
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(screen.getByText(/displayed status may be out of date/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generating…' })).toBeDisabled();
+    getCodeAnimationJob.mockResolvedValue(completedJob);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry job status' }));
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+    expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry job status' })).not.toBeInTheDocument();
+  });
+
+  it('drops a pending response after selecting another job and releases listeners on unmount', async () => {
+    let resolveFirst;
+    getCodeAnimationJob.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
+      .mockResolvedValue({ ...runningJob, id: 'job-2', title: 'Second animation',
+        input: { title: 'Second animation', concept: 'Another scene' } });
+    listCodeAnimationJobPage.mockResolvedValue({ items: [{ ...runningJob, id: 'job-2', title: 'Second animation' }],
+      total: 1, counts: { running: 1, completed: 0 }, nextCursor: null });
+    const view = await renderPage('/code-animation/job-1');
+    await userEvent.setup().click(screen.getByRole('link', { name: /Second animation/ }));
+    await waitFor(() => expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation'));
+    await act(async () => resolveFirst(completedJob));
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
+    expect(screen.queryByRole('button', { name: 'Run with audio' })).not.toBeInTheDocument();
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
+    view.unmount();
+    await emitSocket('code-animation:changed', { id: 'job-2' });
+    await emitSocket('connect');
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
   });
 
   it('recovers from a parseable but malformed saved draft', async () => {
@@ -101,6 +219,27 @@ describe('Code Animation page', () => {
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('');
     expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
+  });
+
+  it('loads one compact page, stays idle, and refreshes on durable changes and reconnect', async () => {
+    const jobs = Array.from({ length: 50 }, (_, n) => ({
+      id: `job-${n}`, status: 'completed', title: `Animation ${n}`, createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    listCodeAnimationJobPage.mockResolvedValue({ items: jobs, total: 1000,
+      counts: { running: 0, completed: 1000 }, nextCursor: 'next-page' });
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Animation \d+/ })).toHaveLength(50));
+    expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('0 in progress · 1,000 completed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load older animations' })).toBeInTheDocument();
+    vi.useFakeTimers();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    vi.useRealTimers();
+    expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
+    await act(async () => { for (const handler of socketHarness.handlers.get('code-animation:changed') || []) handler({ id: 'job-0' }); });
+    await waitFor(() => expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(2));
+    await act(async () => { for (const handler of socketHarness.handlers.get('connect') || []) handler(); });
+    await waitFor(() => expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(3));
   });
 
   it('builds a universe-styled prompt that follows the universe mood board by default', async () => {
@@ -204,12 +343,12 @@ describe('Code Animation page', () => {
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('My style');
   });
 
-  it('keeps edits made after starting a generation when the first poll returns its input snapshot', async () => {
+  it('keeps edits made after starting a generation when an invalidation returns its input snapshot', async () => {
     const user = userEvent.setup();
     startCodeAnimationGeneration.mockResolvedValueOnce({
       id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
     });
-    getCodeAnimationJob.mockResolvedValueOnce({
+    getCodeAnimationJob.mockResolvedValue({
       id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
     });
     await renderPage();
@@ -220,7 +359,7 @@ describe('Code Animation page', () => {
     await waitFor(() => expect(startCodeAnimationGeneration).toHaveBeenCalledOnce());
     await user.type(screen.getByLabelText(/^title/i), 'Edited after submit');
 
-    await act(async () => pollHarness.callbacks.get(3_000)());
+    await emitSocket('code-animation:changed', { id: 'job-1' });
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Edited after submit');
   });
@@ -233,5 +372,57 @@ describe('Code Animation page', () => {
     await user.click(screen.getByRole('button', { name: /build prompt/i }));
     await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
     expect(buildCodeAnimationPrompt.mock.calls[0][0].moodBoardId).toBe('');
+  });
+
+  it('picks a track from the music library, shows library badge, and sends track audio in brief', async () => {
+    const user = userEvent.setup();
+    listTracks.mockResolvedValue([
+      { id: 'track-1', title: 'Neon Rain', audioFilename: 'neon-rain.mp3', durationSec: 42.5 },
+    ]);
+    await renderPage();
+
+    expect(screen.getByRole('button', { name: /pick from music library/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /pick from music library/i }));
+
+    expect(screen.getByText('Pick soundtrack track')).toBeInTheDocument();
+    expect(screen.getByText('Neon Rain')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /select neon rain/i }));
+    await user.click(screen.getByRole('button', { name: /select track/i }));
+
+    expect(screen.getByText('Neon Rain')).toBeInTheDocument();
+    expect(screen.getByText('42.5s')).toBeInTheDocument();
+    expect(screen.getByText('Library track')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/what happens/i), 'Robots dancing');
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await waitFor(() => expect(buildCodeAnimationPrompt).toHaveBeenCalled());
+    expect(buildCodeAnimationPrompt.mock.calls[0][0].audio).toEqual({
+      source: 'track',
+      trackId: 'track-1',
+      label: 'Neon Rain',
+      durationSeconds: 42.5,
+      notes: '',
+    });
+
+    await user.click(screen.getByRole('button', { name: /remove audio track/i }));
+    expect(screen.getByRole('button', { name: /pick from music library/i })).toBeInTheDocument();
+  });
+
+  it('restores draft with library track audio from localStorage', async () => {
+    localStorage.setItem('portos.codeAnimation.draft', JSON.stringify({
+      audio: {
+        source: 'track',
+        trackId: 'track-stored',
+        label: 'Ambient Drone',
+        durationSeconds: 60,
+      },
+    }));
+
+    await renderPage();
+
+    expect(screen.getByText('Ambient Drone')).toBeInTheDocument();
+    expect(screen.getByText('60.0s')).toBeInTheDocument();
+    expect(screen.getByText('Library track')).toBeInTheDocument();
   });
 });

@@ -17,7 +17,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * `cleanupOnError` + the matching `agent:deferred` / `agent:error` event:
  *
  *   { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
- *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task re-queued
+ *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task paused on a `git-conflict-wait` cooldown
  *   { outcome: 'blocked', reason }                          // explicit worktree requested but creation failed
  *                                                           // (`worktree-busy` blocks are a TIMED pause and revive themselves)
  *
@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -43,7 +43,7 @@ import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
-import { isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
+import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
@@ -80,6 +80,8 @@ async function blockTask(task, reason, blockedCategory, extraMetadata = {}) {
 // task takes the ordinary `worktree-failed` block and the orphaned-PR notifier
 // raises its card.
 const WORKTREE_BUSY_COOLDOWN_MS = 2 * 60 * 1000;
+// How long a task blocked by an unpullable shared checkout waits before retrying.
+const GIT_CONFLICT_COOLDOWN_MS = 5 * 60 * 1000;
 const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 
 // Compatibility export for callers that reached for the accessor from this
@@ -159,6 +161,7 @@ async function prepareRequestedWorktree({
   forkHead,
   allowSharedWorkspaceFallback,
 }) {
+  const isolateDependencies = resolveTaskHookType(task) === 'dependency-updates';
   // Detecting the base branch and resolving the branch holder are independent
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
@@ -218,7 +221,8 @@ async function prepareRequestedWorktree({
     // `origin/<branch>` to attach to (#6064). Null for every other task, which
     // is the behavior that predates it.
     forkHead: forkHead || undefined,
-    planId: task.metadata?.planId || undefined
+    planId: task.metadata?.planId || undefined,
+    linkDependencies: !isolateDependencies,
   }).catch(err => {
     worktreeError = err;
     emitLog('warn', `🌳 Worktree creation failed for task ${task.id}: ${err.message}`, { taskId: task.id });
@@ -227,6 +231,11 @@ async function prepareRequestedWorktree({
 
   if (worktreeInfo) {
     const nextWorkspacePath = worktreeInfo.worktreePath;
+    // An adopted tree may predate the dependency-update opt-out. Detach only
+    // the source-checkout links; preserve a real install already in the tree.
+    if (isolateDependencies && takeover?.worktreeInfo) {
+      await unlinkWorktreeDependencies(workspacePath, nextWorkspacePath);
+    }
     const origin = worktreeInfo.adopted
       ? `adopted from ${takeover?.adoptedFrom || task.metadata?.resumedFromAgentId || 'the interrupted run'}`
       : `base: ${worktreeInfo.baseBranch}`;
@@ -419,7 +428,11 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   if (!isReadOnly && !claimWorkspace) {
     // Isolated tasks fetch their base in createWorktree; never rebase the
     // shared checkout as a side effect of preparing a separate workspace.
-    const pullResult = wantsWorktree ? { skipped: 'isolated-task' } : await git.ensureLatest(workspacePath).catch(err => {
+    // The conflict-resolution task works on the very checkout that won't pull;
+    // gating it on a clean pull would defer it forever.
+    const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
+      : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
+      : await git.ensureLatest(workspacePath).catch(err => {
       emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
       return { success: false, error: err.message };
     });
@@ -432,22 +445,30 @@ export async function prepareAgentWorkspace({ agentId, task }) {
       });
 
       const appId = task.metadata?.app || null;
+      // The description's first line is the duplicate key, so it stays stable
+      // across retries; the (varying) git error goes in the context.
       const conflictDesc = `Resolve git conflict in ${resolvedAppName || workspacePath} on branch ${pullResult.branch}. `
-        + `The branch has diverged from origin and automatic rebase failed. `
-        + `Error: ${pullResult.error}`;
+        + `The branch has diverged from origin and automatic rebase failed.`;
 
       await addTask({
         description: conflictDesc,
         priority: 'HIGH',
         app: appId,
-        context: `This conflict is blocking task ${task.id}: "${task.description}". `
+        metadata: { gitConflictResolution: true },
+        context: `Error: ${pullResult.error}\n`
+          + `This conflict is blocking task ${task.id}: "${task.description}". `
           + `Resolve the conflict, commit, and push so the blocked task can proceed.`,
         position: 'top'
       }, 'internal').catch(err => {
         emitLog('warn', `Failed to create conflict resolution task: ${err.message}`, { taskId: task.id });
       });
 
-      await updateTask(task.id, { status: 'pending' }, task.taskType || 'user').catch(() => {});
+      // A timed pause, not `pending`: a pending task is re-dequeued within
+      // seconds and re-runs the same failing rebase in a hot loop until the
+      // resolver lands. The cooldown sweeper revives it.
+      await blockTask(task, `Git conflict in ${resolvedAppName || workspacePath} (branch ${pullResult.branch}); waiting for the resolver task`, 'git-conflict-wait', {
+        cooldownUntil: new Date(Date.now() + GIT_CONFLICT_COOLDOWN_MS).toISOString(),
+      });
       return {
         outcome: 'deferred',
         reason: 'Git conflict blocks task — conflict resolution task created',
@@ -575,7 +596,8 @@ export async function prepareAgentWorkspace({ agentId, task }) {
         });
 
         worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-          planId: task.metadata?.planId || undefined
+          planId: task.metadata?.planId || undefined,
+          linkDependencies: resolveTaskHookType(task) !== 'dependency-updates',
         }).catch(err => {
           emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
           return null;

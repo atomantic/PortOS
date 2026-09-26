@@ -91,11 +91,17 @@ export function useErrorNotifications() {
     socket.on('error:notified', handleError);
     socket.on('system:critical-error', handleCriticalError);
     socket.on('error:recover:requested', handleRecoveryRequested);
+    // The server refuses `error:recover` from a non-local socket on a
+    // password-free install (HOST_CONTROL_FORBIDDEN); say so instead of
+    // leaving the optimistic "dispatched" toast as the last word.
+    const handleRecoveryError = (payload) => toast.error(payload?.message || 'Recovery agent could not be dispatched');
+    socket.on('error:recover:error', handleRecoveryError);
 
     return () => {
       socket.off('error:notified', handleError);
       socket.off('system:critical-error', handleCriticalError);
       socket.off('error:recover:requested', handleRecoveryRequested);
+      socket.off('error:recover:error', handleRecoveryError);
     };
   }, []);
 

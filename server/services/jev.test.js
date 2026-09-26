@@ -152,6 +152,84 @@ describe('scoreHypotheses', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('does not spawn after stop cancels a pending cache lookup', async () => {
+    makeInstalled();
+    let resolveFiles;
+    findCachedRepoFiles.mockReturnValueOnce(new Promise((resolve) => { resolveFiles = resolve; }));
+    const pending = jev.scoreHypotheses({ premise: 'p', hypotheses: ['a', 'b'] });
+    jev.stopJevSidecar();
+    resolveFiles([MODEL_FILE]);
+    expect(await pending).toEqual({ ok: false, code: 'jev-start-failed' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(['stop', 'exit'])('rejects successful health received after child %s', async (action) => {
+    makeInstalled();
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const { jevEvents } = await import('./jevEvents.js');
+    const states = [];
+    jevEvents.on('status', () => states.push(jev.isJevSidecarRunning()));
+    let resolveHealth;
+    const health = new Promise((resolve) => { resolveHealth = resolve; });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => health }));
+    const pending = jev.scoreHypotheses({ premise: 'p', hypotheses: ['a', 'b'] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    if (action === 'stop') jev.stopJevSidecar();
+    else child.emitClose(0);
+    resolveHealth({ ready: true });
+    expect(await pending).toEqual({ ok: false, code: 'jev-start-failed' });
+    expect(jev.isJevSidecarRunning()).toBe(false);
+    expect(states).not.toContain(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['starting', 'resident'])('keeps a newer %s child owned when the canceled start settles', async (state) => {
+    makeInstalled();
+    const oldChild = fakeChild();
+    const newChild = fakeChild();
+    spawn.mockReturnValueOnce(oldChild).mockReturnValue(newChild);
+    let resolveOldHealth;
+    let resolveNewHealth;
+    const oldHealth = new Promise((resolve) => { resolveOldHealth = resolve; });
+    const newHealth = new Promise((resolve) => { resolveNewHealth = resolve; });
+    const scores = [
+      { hypothesis: 'a', entailment: 0.9, contradiction: 0, neutral: 0.1 },
+      { hypothesis: 'b', entailment: 0.1, contradiction: 0, neutral: 0.9 },
+    ];
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => oldHealth })
+      .mockResolvedValueOnce({ ok: true, json: () => newHealth })
+      .mockImplementation(async () => scoreOk(scores)));
+    const { jevEvents } = await import('./jevEvents.js');
+    const states = [];
+    jevEvents.on('status', () => states.push(jev.isJevSidecarRunning()));
+    const request = { premise: 'p', hypotheses: ['a', 'b'] };
+    const oldRequest = jev.scoreHypotheses(request);
+    await vi.advanceTimersByTimeAsync(0);
+    jev.stopJevSidecar();
+    const newRequest = jev.scoreHypotheses(request);
+    await vi.advanceTimersByTimeAsync(0);
+    if (state === 'resident') {
+      resolveNewHealth({ ready: true });
+      expect((await newRequest).ok).toBe(true);
+    }
+    resolveOldHealth({ ready: true });
+    expect(await oldRequest).toEqual({ ok: false, code: 'jev-start-failed' });
+    const joinedRequest = jev.scoreHypotheses(request);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    resolveNewHealth({ ready: true });
+    expect(await newRequest).toEqual({ ok: true, scores });
+    expect(await joinedRequest).toEqual({ ok: true, scores });
+    expect(states).toEqual([false, true]);
+    jev.stopJevSidecar();
+    expect(newChild.killed).toBe(true);
+    expect(states).toEqual([false, true, false]);
+  });
+
   it('reports jev-start-failed when the sidecar dies before reporting ready', async () => {
     makeInstalled();
     const child = fakeChild();
@@ -192,6 +270,9 @@ describe('scoreHypotheses', () => {
 describe('idle unload', () => {
   it('reaps the sidecar after the idle window, and only after it', async () => {
     makeInstalled();
+    const { jevEvents } = await import('./jevEvents.js');
+    const states = [];
+    jevEvents.on('status', () => states.push(jev.isJevSidecarRunning()));
     const child = fakeChild();
     spawn.mockReturnValue(child);
     vi.stubGlobal('fetch', vi.fn(async (url) => (String(url).endsWith('/health') ? healthOk : scoreOk([
@@ -207,6 +288,7 @@ describe('idle unload', () => {
     vi.advanceTimersByTime(1);
     expect(child.killed).toBe(true);
     expect(jev.isJevSidecarRunning()).toBe(false);
+    expect(states).toEqual([true, false]);
   });
 });
 
@@ -252,4 +334,27 @@ describe('buildJevEnv', () => {
       'HF_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'PYTHONPATH',
     ]));
   });
+});
+
+it('notifies a failed install and an unexpected resident process exit', async () => {
+  const { jevEvents } = await import('./jevEvents.js');
+  const changed = vi.fn();
+  jevEvents.on('status', changed);
+  existsSync.mockReturnValue(false);
+  findCachedRepoFiles.mockResolvedValue(null);
+  expect((await jev.installJev()).ok).toBe(false);
+  expect(changed).toHaveBeenCalledWith({});
+
+  makeInstalled();
+  const child = fakeChild();
+  spawn.mockReturnValue(child);
+  vi.stubGlobal('fetch', vi.fn(async (url) => String(url).endsWith('/health') ? healthOk : scoreOk([
+    { hypothesis: 'a', entailment: 0.9, contradiction: 0, neutral: 0.1 },
+    { hypothesis: 'b', entailment: 0.1, contradiction: 0, neutral: 0.9 },
+  ])));
+  await jev.scoreHypotheses({ premise: 'p', hypotheses: ['a', 'b'] });
+  changed.mockClear();
+  child.emitClose(1);
+  expect(jev.isJevSidecarRunning()).toBe(false);
+  expect(changed).toHaveBeenCalledExactlyOnceWith({});
 });

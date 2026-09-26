@@ -6,28 +6,43 @@ or its network address does not authorize record ingestion.
 
 ## Configure a pair
 
-1. Upgrade both instances and sign in with an operator session on each machine.
-   Peer configuration requires a session even on loopback, because a development
-   proxy can relay remote traffic over a local socket. Open **Instances**.
-2. On each matching peer card, select **Set sync secret** and enter the same
-   randomly generated secret (32–256 characters). Use a different secret for each
-   pair; a password manager can generate and transfer it.
-3. Enable sync and the desired categories on **each** machine. Saving a secret
-   admits inbound record pushes; it does not enable categories. Category and
-   full-mirror changes on one machine no longer override the paired machine's
-   local settings through an anonymous reciprocal callback.
-4. Use **Sync now** to retry pending records. Missing or mismatched secrets return
-   `PEER_SYNC_AUTH_REQUIRED`; disabled peers, non-inbound peers, sync-off peers,
-   and disabled categories return `PEER_SYNC_NOT_ADMITTED` before any record,
-   asset, tombstone cursor, or subscription write.
+1. Upgrade both instances and sign in to the instance where you want to start
+   pairing. The peer must already be registered on both machines, and this
+   instance must have the peer's instance password saved on its peer card.
+2. On that peer card, select **Generate & pair**. PortOS creates a random secret,
+   sends it to the peer's matching record using the saved password for this
+   one-time setup request, and stores it locally. The secret is never shown in
+   the browser or returned by either API. **Retry pairing** resends the existing
+   secret; **Rotate pair secret** creates and sends a new one.
+3. Enable sync and the desired categories on each machine. Pairing admits
+   authenticated pushes but does not enable categories. Category and full-mirror
+   changes on one machine do not override the paired machine's local settings
+   through an anonymous reciprocal callback.
+4. Use **Sync now** to retry pending records. A missing or mismatched secret
+   returns `PEER_SYNC_AUTH_REQUIRED`; pair the peer from its **Instances** page.
+   Disabled peers, non-inbound peers, sync-off peers, and disabled categories
+   return `PEER_SYNC_NOT_ADMITTED` before any record, asset, tombstone cursor, or
+   subscription write.
 
-To revoke or rotate a pair, remove or replace its sync secret. Secrets stay in the
-existing machine-local `instances.json` peer configuration, are stripped from
-client/socket and announcement payloads, and never travel in record bodies. The
-sender attaches `X-PortOS-Peer-Sync-Token` only to `/api/peer-sync/push`, alongside
-the peer credential below. HTTP redirects
-are refused for credentialed pushes. Use the existing private encrypted transport
-(Tailscale or HTTPS) to protect these credentials in transit.
+The one-time `POST /api/instances/peers/pair-secret` bootstrap accepts a verified
+instance-password Basic credential only for the caller's already-registered peer
+identity. A scoped peer token cannot call it or change local peer settings.
+Redirects are refused. The saved password is not included in the browser response;
+after the peer confirms the generated token, it can be removed from the peer card.
+
+Secrets stay in each machine's local `instances.json` peer configuration, are
+stripped from client/socket and announcement payloads, and never travel in record
+bodies. The sender attaches `X-PortOS-Peer-Sync-Token` only to
+`/api/peer-sync/push`, alongside the scoped peer credential. Use the existing
+private transport (Tailscale or HTTPS) to protect credentials in transit.
+
+## Peer destinations must serve endpoints directly
+
+All peer HTTP requests refuse redirects, even when a caller requests redirect
+following. HTTPS requests also never follow redirects; their redirect response
+is non-OK and handled as a peer transport/configuration failure. Configure each
+peer address to serve its federation endpoints directly. Redirect failures do
+not authorize credential-free retries, address changes, or re-pairing.
 
 ## Peer credentials are not operator authority
 
@@ -72,15 +87,40 @@ GET includes HEAD. Paths with `.`/`..`/empty segments or encoded separators
 are refused. The generic `GET /api/instances/peers/:id/query` proxy reaches only
 these paths on a paired peer.
 
+`POST /api/instances/peers/pair-secret` is a separate Basic-auth bootstrap, not
+part of `PEER_API_SURFACE`: it accepts only a verified instance password, binds
+the request to the caller's existing peer identity, and stores only that peer's
+generated sync secret. A scoped peer token is refused on this path.
+
 Removing an entry is a breaking change for older peers that still call it: they
 receive `403 PEER_SCOPE_FORBIDDEN`, and the receiver logs one `⛔ Peer … refused
 outside the federation surface` line per peer, method, and path. Adding a peer
 call site means adding its entry in the same change.
 
+### Using a peer's image, video, and LLM services
+
+Once a peer card reports **Peer confirmed the matching sync credential**, the
+password saved on that card is no longer needed for anything that peer serves
+you. Removing it does not affect federated image, video, and audio jobs
+(`/api/federation/media/v1/*`), fleet LLM host discovery and key retrieval
+(`/api/providers/fleet-host*`), or sync, because each request carries the peer
+token. Inference itself goes straight to the host's fleet LLM port with that
+host's API key, separate from PortOS authentication.
+
+"Remove the stored password" refers only to the copy of the **peer's** password
+saved on your peer card. Keep each machine's own instance password; it protects
+that machine's operator routes. **Rotate pair secret** needs the peer's password
+again, so save it back on the card when you rotate the secret.
+
+A media host with no instance password still verifies the pair token on the
+federation surface, so its provider keeps admitting paired peers. Automatic
+pairing requires that host to have an instance password when the pair is set up.
+
 Legacy HTTP Basic is the instance password itself, so it keeps operator reach
 (`method: 'basic'`, still refused host control). Its holder can already sign in
 at `/api/auth/login`, and the companion app uses it as a full session
-(`docs/COMPANION_APP_API.md`). Pair each peer so it stops sending the password.
+(`docs/COMPANION_APP_API.md`). The saved password is used once for pair setup;
+after the peer confirms the scoped credential, remove the stored password.
 
 Rollout without breaking older installs:
 
@@ -105,16 +145,18 @@ The handshake version is `peerAuth` in `server/lib/schemaVersions.js`.
 Existing peer records remain intact. No secret is synthesized or trusted from
 network discovery. After upgrading, incoming record pushes pause until the pair
 is configured, and existing pending subscriptions can retry afterward. Older
-senders cannot authenticate to an upgraded receiver; upgrade and pair them. New
-senders retain the record envelope's existing schema compatibility handling for
-older receivers, which ignore the additional HTTP header. An older receiver
-still needs to upgrade to enforce admission itself.
+senders cannot authenticate to an upgraded receiver; upgrade and pair them.
+Automatic pairing requires the pair-secret bootstrap endpoint on the remote
+instance, so upgrade both peers before pairing. New senders retain the record
+envelope's existing schema compatibility handling for older receivers, which
+ignore the additional HTTP header. An older receiver still needs to upgrade to
+enforce admission itself.
 
 An explicit record pull uses the locally configured peer destination and verifies
 that the response's source, kind, and record ID match that request. It still
 requires local pairing, an enabled peer, sync consent, and category permission.
 Discovery may list an unpaired peer; discovery alone cannot admit its record pushes.
-Peer configuration changes require a verified operator session. If the instance
-password is unset, set one and sign in to configure the pair; it may be disabled
-after pairing. The peer-specific checks continue to apply while the global
-password is unset. Existing host-issued operator session tokens also work.
+Local peer configuration changes require a verified operator session. The
+one-time remote bootstrap requires the saved instance password and is restricted
+to installing a generated pair secret on the caller's matching peer record.
+Existing host-issued operator session tokens also work.

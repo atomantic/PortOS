@@ -8,17 +8,41 @@
  * disabling backups cancels it.
  */
 
-import { schedule, cancel } from './eventScheduler.js';
-import { getSettings, settingsEvents } from './settings.js';
-import { runBackup } from './backup.js';
-import { getUserTimezone } from './userTimezone.js';
+import { schedule, cancel, parseCronToPrevRun } from './eventScheduler.js';
+import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
+import { runBackup, getState } from './backup.js';
+import { getUserTimezone, getTimezoneUpdatedAt } from './userTimezone.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const EVENT_ID = 'backup-daily';
 
+// How long to wait before retrying a boot-time read that came back corrupt
+// (issue #8428) — long enough to skip past a transient EIO/iCloud-dataless
+// blip without spamming retries, short enough that the schedule self-heals
+// well inside a normal session.
+const CORRUPT_SETTINGS_RETRY_MS = 60_000;
+
+// Boot delay before a detected missed-slot catch-up actually runs (#8456) —
+// long enough that it never piles onto boot-time migrations and store
+// warm-up, short enough that it still runs well inside a normal session.
+const CATCHUP_BOOT_DELAY_MS = 5 * 60_000;
+
 // Only confirmed disabled or runnable configurations are cached.
 // null means stopped or failed, so identical inputs can retry.
 let reconciliationState = null;
+
+// Guards against stacking multiple boot-retry timers while settings.json
+// stays unreadable across several syncBackupSchedule() calls.
+let corruptRetryTimer = null;
+
+// At most one missed-slot catch-up attempt per process boot (#8456) — set the
+// moment a catch-up is EVALUATED (whether or not one is actually scheduled),
+// so a settings save right after boot can't re-arm a second attempt.
+let catchUpEvaluated = false;
+
+// The pending catch-up timer, so stopBackupScheduler() (used between tests,
+// and by anything that tears the scheduler down) can cancel it.
+let catchUpTimer = null;
 
 /**
  * The registration-affecting slice of settings: `null` when backup scheduling
@@ -31,22 +55,118 @@ function registrationInputs(settings) {
 }
 
 /**
+ * Re-read settings and run a backup if it is still wanted — the cron handler
+ * body, shared with the missed-slot catch-up (#8456) so both paths respect a
+ * disable/destPath-clear that happened after registration/detection.
+ * @param {string} logReason - what triggered this run, for the log line
+ */
+async function runScheduledBackup(logReason) {
+  const fresh = await getSettings();
+  const effective = resolveBackupConfig(fresh.backup);
+  if (!effective.enabled) {
+    console.log('💾 Backup scheduler: disabled since registration — skipping run');
+    return;
+  }
+  if (!effective.destPath) {
+    console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
+    return;
+  }
+  const excludePaths = fresh.backup?.excludePaths || [];
+  const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
+  console.log(`💾 Backup scheduler: running ${logReason} backup`);
+  await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
+}
+
+/**
+ * If the most recent cron slot elapsed without a backup — the server was down
+ * or crash-looping across it (#8456) — schedule a one-time catch-up run after
+ * a fixed boot delay. At most one evaluation per process boot: `catchUpEvaluated`
+ * is set here regardless of outcome, so a settings save immediately after boot
+ * can't re-arm a second attempt for a slot this same boot already judged.
+ *
+ * Skipped when the registration-affecting config (cron/enabled/destPath) OR
+ * the global timezone changed AFTER the missed slot — `backupConfigUpdatedAt`
+ * / `timezoneUpdatedAt` are stamped by settings.js's `save()` only when those
+ * fields actually change, so an install that never touched them keeps the
+ * plain catch-up (sentinel `0` never gates), mirroring
+ * `dailyReminderScheduler.js`'s two `updatedAt` floors.
+ */
+async function maybeCatchUpMissedSlot(inputs, timezone, settings) {
+  if (catchUpEvaluated) return;
+  catchUpEvaluated = true;
+  try {
+    const prevRun = parseCronToPrevRun(inputs.cron, new Date(), timezone);
+    if (!prevRun) return;
+    const prevRunMs = prevRun.getTime();
+
+    const state = await getState().catch(() => null);
+    const lastRunMs = state?.lastRun ? new Date(state.lastRun).getTime() : NaN;
+    if (Number.isFinite(lastRunMs) && lastRunMs >= prevRunMs) return; // not missed
+
+    const configUpdatedAt = Number(settings?.backupConfigUpdatedAt) || 0;
+    const timezoneUpdatedAt = (await getTimezoneUpdatedAt().catch(() => null)) || 0;
+    const cutoff = Math.max(configUpdatedAt, timezoneUpdatedAt);
+    if (cutoff && prevRunMs < cutoff) {
+      console.log(`💾 Backup scheduler: missed slot (${prevRun.toISOString()}) predates last config/timezone change — skipping catch-up`);
+      return;
+    }
+
+    console.log(`💾 Backup scheduler: missed slot ${prevRun.toISOString()} — catching up in ${Math.round(CATCHUP_BOOT_DELAY_MS / 60_000)}m`);
+    catchUpTimer = setTimeout(() => {
+      catchUpTimer = null;
+      runScheduledBackup('missed-slot catch-up').catch(err =>
+        console.error(`❌ Backup scheduler: catch-up run failed: ${err.message}`));
+    }, CATCHUP_BOOT_DELAY_MS);
+    catchUpTimer.unref?.();
+  } catch (err) {
+    console.error(`❌ Backup scheduler: missed-slot check failed: ${err.message}`);
+  }
+}
+
+/**
  * (Re)synchronize the backup cron to match the given settings snapshot.
  * Idempotent — safe to call at boot and after every settings save. Registering
  * a cron fires nothing until its expression elapses, so this never triggers a
  * backup by itself.
  * @param {object} [settings] - a settings snapshot; re-read when omitted
+ * @param {object} [options]
+ * @param {boolean} [options.catchUpMissedSlot] - Check for and schedule a
+ *   catch-up for a slot that already elapsed (server-restart recovery). Only
+ *   the boot-time call (`startBackupScheduler`) sets this; a reschedule from a
+ *   settings/timezone save must not replay a slot the user did not miss.
  * @returns {Promise<boolean>} whether a cron is registered after the sync
  */
-export async function syncBackupSchedule(settings) {
-  const current = settings || await getSettings().catch(() => null);
+export async function syncBackupSchedule(settings, { catchUpMissedSlot = false } = {}) {
+  if (!settings) {
+    // No explicit snapshot: this is the boot path (or a corrupt-read retry),
+    // so read through the strict status so an unreadable/malformed
+    // settings.json is distinguishable from "backup genuinely disabled"
+    // (issue #8428). `settings:updated` always hands syncBackupSchedule a
+    // clean parsed snapshot, so the explicit-argument path is unaffected.
+    const { corrupt, settings: read } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: {} }));
+    if (corrupt) {
+      console.error('❌ Backup scheduler: settings unreadable — keeping current registration, will retry on next settings change');
+      const wasScheduled = reconciliationState?.kind === 'scheduled';
+      // Don't cache a signature/state for a failed read — the next sync
+      // (settings:invalidated, or the boot retry below) must re-evaluate
+      // rather than treating this as a confirmed disabled state.
+      reconciliationState = null;
+      scheduleCorruptRetry(catchUpMissedSlot);
+      return wasScheduled;
+    }
+    return syncBackupSchedule(read, { catchUpMissedSlot });
+  }
+  const current = settings;
   const inputs = registrationInputs(current);
   const timezone = await getUserTimezone().catch(() => 'UTC');
 
   // Only `cron` + `timezone` + active/inactive are baked into the registration;
   // destPath and the exclude lists are re-read by the handler on every run.
   const signature = JSON.stringify({ active: Boolean(inputs), cron: inputs?.cron ?? null, tz: timezone });
-  if (signature === reconciliationState?.signature) return reconciliationState.kind === 'scheduled';
+  if (signature === reconciliationState?.signature) {
+    if (inputs && catchUpMissedSlot) await maybeCatchUpMissedSlot(inputs, timezone, current);
+    return reconciliationState.kind === 'scheduled';
+  }
 
   if (!inputs) {
     if (reconciliationState?.kind === 'scheduled') {
@@ -60,6 +180,9 @@ export async function syncBackupSchedule(settings) {
   }
 
   reconciliationState = attemptRegistration(inputs, timezone, signature);
+  if (reconciliationState?.kind === 'scheduled' && catchUpMissedSlot) {
+    await maybeCatchUpMissedSlot(inputs, timezone, current);
+  }
   return reconciliationState?.kind === 'scheduled';
 }
 
@@ -79,22 +202,7 @@ function attemptRegistration(inputs, timezone, signature) {
       type: 'cron',
       cron: inputs.cron,
       timezone,
-      handler: async () => {
-        const fresh = await getSettings();
-        const effective = resolveBackupConfig(fresh.backup);
-        if (!effective.enabled) {
-          console.log('💾 Backup scheduler: disabled since registration — skipping run');
-          return;
-        }
-        if (!effective.destPath) {
-          console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
-          return;
-        }
-        const excludePaths = fresh.backup?.excludePaths || [];
-        const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
-        console.log('💾 Backup scheduler: running scheduled backup');
-        await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes, retentionCount: effective.retentionCount });
-      },
+      handler: () => runScheduledBackup('scheduled'),
       metadata: { source: 'backupScheduler' }
     });
   } catch (err) {
@@ -115,6 +223,22 @@ function attemptRegistration(inputs, timezone, signature) {
   return { kind: 'scheduled', signature };
 }
 
+/**
+ * Arm a single one-shot retry after a corrupt boot/re-sync read (#8428), so a
+ * transient failure self-heals without waiting for a user-driven settings
+ * save. Runs outside the request lifecycle — the process-boundary try/catch
+ * convention applies, not the route error-bubbling one.
+ */
+function scheduleCorruptRetry(catchUpMissedSlot = false) {
+  if (corruptRetryTimer) return;
+  corruptRetryTimer = setTimeout(() => {
+    corruptRetryTimer = null;
+    syncBackupSchedule(undefined, { catchUpMissedSlot }).catch(err =>
+      console.error(`❌ Backup scheduler: corrupt-settings retry failed: ${err.message}`));
+  }, CORRUPT_SETTINGS_RETRY_MS);
+  corruptRetryTimer.unref?.();
+}
+
 // Re-sync on every settings save rather than from the settings route — keeps
 // the HTTP handler decoupled from the backup graph (mirrors
 // seriesAutopilotScheduler.js). The signature guard makes unrelated saves free.
@@ -123,13 +247,23 @@ settingsEvents.on('settings:updated', (cleaned) => {
     console.error(`❌ Backup schedule re-sync failed: ${err.message}`));
 });
 
+// A corrupt boot read invalidates the settings read cache (settings.js's
+// reloadSettings()); re-sync as soon as a later read clears, without waiting
+// for a settings:updated save (#8428).
+settingsEvents.on('settings:invalidated', () => {
+  syncBackupSchedule().catch(err =>
+    console.error(`❌ Backup schedule invalidation re-sync failed: ${err.message}`));
+});
+
 /**
  * Boot entry point — registers the cron once at startup if backup is
- * configured. Later enable/disable/cron edits are picked up by the
- * `settings:updated` subscription above.
+ * configured, then checks for a missed slot (#8456) — the daemon being down
+ * or crash-looping across the scheduled time. Later enable/disable/cron edits
+ * are picked up by the `settings:updated` subscription above, which never
+ * re-arms a catch-up.
  */
 export async function startBackupScheduler() {
-  return syncBackupSchedule();
+  return syncBackupSchedule(undefined, { catchUpMissedSlot: true });
 }
 
 /**
@@ -138,5 +272,14 @@ export async function startBackupScheduler() {
 export function stopBackupScheduler() {
   cancel(EVENT_ID);
   reconciliationState = null;
+  if (corruptRetryTimer) {
+    clearTimeout(corruptRetryTimer);
+    corruptRetryTimer = null;
+  }
+  if (catchUpTimer) {
+    clearTimeout(catchUpTimer);
+    catchUpTimer = null;
+  }
+  catchUpEvaluated = false;
   console.log('💾 Backup scheduler: stopped');
 }

@@ -393,6 +393,7 @@ export async function ignoreVersion(version) {
     if (!state.ignoredVersions.includes(version)) {
       state.ignoredVersions.push(version);
       await saveState(state);
+      noteSystemActivity('update', 'ignored');
     }
     return state;
   });
@@ -406,6 +407,7 @@ export async function clearIgnored() {
     const state = await loadState();
     state.ignoredVersions = [];
     await saveState(state);
+    noteSystemActivity('update', 'ignored-cleared');
     return state;
   });
 }

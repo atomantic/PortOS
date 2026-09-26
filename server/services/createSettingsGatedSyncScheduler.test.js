@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 const scheduleMock = vi.fn();
-vi.mock('./eventScheduler.js', () => ({ schedule: (...args) => scheduleMock(...args) }));
+const cancelMock = vi.fn();
+const settingsEvents = new EventEmitter();
+let registeredEvent = null;
+vi.mock('./settings.js', () => ({ settingsEvents }));
+vi.mock('./eventScheduler.js', () => ({
+  schedule: (event) => { registeredEvent = event; return scheduleMock(event); },
+  cancel: (id) => { registeredEvent = null; return cancelMock(id); },
+  getEvent: () => registeredEvent,
+}));
 
 const { createSyncScheduler } = await import('./createSettingsGatedSyncScheduler.js');
 
@@ -10,12 +19,15 @@ let logSpy;
 
 beforeEach(() => {
   scheduleMock.mockClear();
+  cancelMock.mockClear();
+  registeredEvent = null;
   logs = [];
   logSpy = vi.spyOn(console, 'log').mockImplementation((line) => { logs.push(line); });
 });
 
 afterEach(() => {
   logSpy.mockRestore();
+  settingsEvents.removeAllListeners();
 });
 
 const build = (getConfig, runSync = vi.fn()) => ({
@@ -31,6 +43,35 @@ const build = (getConfig, runSync = vi.fn()) => ({
 });
 
 describe('createSyncScheduler', () => {
+  it('reconciles enable, cadence change, unrelated save, and disable after boot', async () => {
+    let config = { enabled: false, intervalMinutes: 25 };
+    const { start } = build(async () => config);
+    await start();
+    expect(scheduleMock).not.toHaveBeenCalled();
+
+    config = { enabled: true, intervalMinutes: 25 };
+    settingsEvents.emit('settings:updated');
+    await start();
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
+    expect(scheduleMock.mock.calls[0][0].intervalMs).toBe(25 * 60 * 1000);
+    expect(scheduleMock.mock.calls[0][0].handler).toBeTypeOf('function');
+
+    settingsEvents.emit('settings:updated');
+    await start();
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
+
+    config = { enabled: true, intervalMinutes: 40 };
+    settingsEvents.emit('settings:updated');
+    await start();
+    expect(scheduleMock).toHaveBeenCalledTimes(2);
+    expect(scheduleMock.mock.calls[1][0].intervalMs).toBe(40 * 60 * 1000);
+
+    config = { enabled: false, intervalMinutes: 40 };
+    settingsEvents.emit('settings:updated');
+    await start();
+    expect(cancelMock).toHaveBeenCalledExactlyOnceWith('demo-sync');
+  });
+
   it('no-ops (and never schedules) when disabled in settings', async () => {
     const { start } = build(vi.fn(async () => ({ enabled: false, intervalMinutes: 25 })));
 

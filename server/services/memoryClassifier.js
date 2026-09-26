@@ -29,7 +29,6 @@ const DEFAULT_CONFIG = {
   model: 'gptoss-20b',
   timeout: 60000,
   maxOutputLength: 10000,
-  minConfidence: 0.7,
   fallbackToPatterns: true
 };
 

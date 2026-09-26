@@ -323,6 +323,14 @@ CREATE TRIGGER trg_memory_updated_at
 -- Federates via sync_sequence BIGSERIAL + LWW on updated_at (same pattern as
 -- the memories table above).
 
+-- Machine-local retry receipts: retained with the database backup, never federated.
+CREATE TABLE IF NOT EXISTS catalog_commit_receipts (
+  operation_key UUID PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  ingredients JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Raw user input preserved verbatim. One scrap can spawn many ingredients.
 CREATE TABLE IF NOT EXISTS catalog_scraps (
   id TEXT PRIMARY KEY,                         -- 'cat-scrap-<uuid>'
@@ -1732,6 +1740,7 @@ CREATE TABLE IF NOT EXISTS beeper_accounts (
   status TEXT NOT NULL DEFAULT '',
   bridge_id TEXT NOT NULL DEFAULT '',
   last_seen_at TIMESTAMPTZ,
+  chat_cursor TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1798,6 +1807,7 @@ CREATE TABLE IF NOT EXISTS beeper_messages (
   -- against the local user (accounts[].user.id differs from senderID on every
   -- network), so this is the only reliable inbound/outbound signal.
   is_sender BOOLEAN NOT NULL DEFAULT FALSE,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1873,6 +1883,12 @@ CREATE TABLE IF NOT EXISTS beeper_sync_cursors (
 -- a failed row is never retried in place — a re-send is a NEW row, because
 -- Beeper has no idempotency key on send. Mirrors the beeper.js block in
 -- server/lib/db/schema/.
+CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
+  account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  upper_bound TEXT
+);
+
 CREATE TABLE IF NOT EXISTS beeper_outbox (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
@@ -2243,3 +2259,13 @@ DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredi
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
 DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+
+-- Durable receiver-local Catalog dependency inbox (#8683).
+CREATE TABLE IF NOT EXISTS catalog_pending_applies (
+      kind TEXT NOT NULL CHECK (kind IN ('tags', 'scraps')),
+      id TEXT NOT NULL,
+      parent_id TEXT NOT NULL,
+      source_updated_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (kind, id)
+    );

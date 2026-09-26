@@ -35,12 +35,15 @@ import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } fro
 import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
+
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
 import { agentIssueLinkifier } from '../../../lib/issueRefs';
 import { harnessLabel, providerHarnessId } from '../../../utils/providerHarnesses';
+
+const STATS_EVENTS = ['cos:agent:updated', 'cos:agent:output'];
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
 // Avoid lookbehind to support older Safari/iOS runtimes
@@ -411,7 +414,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const [activeStageTab, setActiveStageTab] = useState(null);
   const [stageOutputs, setStageOutputs] = useState({});
   const [loadingStageId, setLoadingStageId] = useState(null);
-  const [processStats, setProcessStats] = useState(null);
   const [pausing, setPausing] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [killing, setKilling] = useState(false);
@@ -514,19 +516,19 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     return () => clearInterval(interval);
   }, [inactive]);
 
-  // Fetch process stats for running agents (skip for remote peers).
-  // Only overwrite prior stats on a successful response so a transient
-  // error doesn't blank out the previously displayed CPU/mem/PID.
-  const fetchStats = useCallback(async () => {
-    try {
-      const stats = await api.getCosAgentStats(agent.id, { silent: true });
-      setProcessStats(stats);
-    } catch {
-      // preserve last-good stats on transient blip
-    }
-  }, [agent.id]);
-
-  useAutoRefetch(fetchStats, 5000, { enabled: expanded && !inactive && !remote, pollOnly: true });
+  // Read only for an expanded, active local agent. The resource key discards
+  // in-flight responses after collapsing, switching agents, or going inactive.
+  const statsEnabled = expanded && !inactive && !remote;
+  const { data: processStats } = useSocketResource(
+    () => statsEnabled ? api.getCosAgentStats(agent.id, { silent: true }) : null,
+    {
+      namespace: 'cos',
+      enabled: statsEnabled,
+      events: STATS_EVENTS,
+      resourceKey: statsEnabled ? agent.id : null,
+      matchesEvent: payload => statsEnabled && (payload?.agentId ?? payload?.id) === agent.id,
+    },
+  );
 
   const handlePause = async () => {
     if (!onPause) return;

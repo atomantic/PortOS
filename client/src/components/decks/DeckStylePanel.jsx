@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ImagePlus, Trash2 } from 'lucide-react';
 import InfluenceChipsInput from '../universeBuilder/InfluenceChipsInput';
 import DeckSampleModal from './DeckSampleModal';
+import DeckStyleSources from './DeckStyleSources';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import {
   DECK_CARD_ORIENTATION, DECK_CARD_ORIENTATION_LABELS, DECK_CARD_ORIENTATIONS, DECK_KIND_LABELS,
@@ -33,6 +34,7 @@ export default function DeckStylePanel({ deck, universes, onPatch, onDeckReplace
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <section className="space-y-3 bg-port-card border border-port-border rounded-md p-3">
         <h2 className="text-sm font-medium text-white">Style guide</h2>
+        <DeckStyleSources key={`${deck.id}:${deck.universeId || ''}`} deck={deck} onPatch={onPatch} />
         <div>
           <label htmlFor="deck-description" className="block text-xs text-gray-400 mb-1">Concept</label>
           <textarea id="deck-description" rows={2} value={description.value} onChange={description.onChange} onBlur={description.onBlur} placeholder="What this deck is about — its world, its mood, who it is for." className={INPUT_CLASS} />

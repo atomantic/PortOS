@@ -3,6 +3,7 @@
  * Uses the shared Google OAuth client from googleAuth.js (same credentials as Calendar).
  */
 
+import { messageLogError } from '../lib/messageLogError.js';
 import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
@@ -26,7 +27,7 @@ function makeExternalId(gmailId) {
  */
 export async function fetchSendAsAliases(gmailClient) {
   const res = await gmailClient.users.settings.sendAs.list({ userId: 'me' }).catch((err) => {
-    console.warn(`📧 Gmail send-as alias fetch failed: ${err.message}`);
+    console.warn(`📧 Gmail send-as alias fetch failed: ${messageLogError(err)}`);
     return null;
   });
   if (!res) return null; // sentinel: fetch failed — do not clobber the stored aliases
@@ -228,7 +229,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   const auth = await getAuthenticatedClient();
 
   if (!auth) {
-    console.log(`📧 Gmail sync for ${account.email}: Google OAuth not configured`);
+    console.log(`📧 Gmail sync for account ${account.id}: Google OAuth not configured`);
     return { messages: [], status: 'not-configured' };
   }
 
@@ -245,7 +246,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   const passes = gmailSyncPasses(mode, ingestSent, maxMessages);
   const totalCap = passes.reduce((sum, p) => sum + p.cap, 0);
 
-  console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for ${account.email}`);
+  console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for account ${account.id}`);
 
   // Step 1: List message IDs — one pass per (query, cap), each paginated fully up
   // to its cap and deduped across passes (a thread can appear in both inbox and
@@ -259,7 +260,19 @@ export async function syncGmail(account, cache, io, options = {}) {
         maxResults,
         ...(pageToken && { pageToken }),
       });
-      return { messages: listResult.data.messages || [], nextPageToken: listResult.data.nextPageToken || null };
+      const data = listResult.data;
+      // Gmail omits messages for an empty inbox, but a missing/malformed body
+      // cannot prove that the inbox is empty.
+      if (!data || typeof data !== 'object' || Array.isArray(data)
+        || (data.messages !== undefined && !Array.isArray(data.messages))
+        || (data.nextPageToken !== undefined && typeof data.nextPageToken !== 'string')) {
+        throw new Error('Malformed Gmail message listing');
+      }
+      const listed = data.messages ?? [];
+      if (listed.some(item => !item || typeof item.id !== 'string' || !item.id)) {
+        throw new Error('Malformed Gmail message ID');
+      }
+      return { messages: listed, nextPageToken: data.nextPageToken || null };
     },
     { onProgress: (current) => io?.emit('messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
   );
@@ -269,7 +282,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   // drops the account rather than nudging on incomplete reply evidence.
   const sentTruncated = ingestSent && truncated.includes(sentQuery());
   if (sentTruncated) {
-    console.warn(`📧 Gmail sent-mail coverage partial for ${account.email} — >${SENT_INGEST_MAX} sent in ${SENT_INGEST_DAYS}d; reply detection paused for this account until a full sync`);
+    console.warn(`📧 Gmail sent-mail coverage partial for account ${account.id} — >${SENT_INGEST_MAX} sent in ${SENT_INGEST_DAYS}d; reply detection paused for this account until a full sync`);
   }
 
   console.log(`📧 Gmail: found ${messageIds.length} message IDs, fetching details`);
@@ -285,11 +298,15 @@ export async function syncGmail(account, cache, io, options = {}) {
     const batch = messageIds.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map(({ id: gmailId }) =>
       gmailClient.users.messages.get({ userId: 'me', id: gmailId, format: 'full' })
-        .catch(err => { console.log(`📧 Gmail: failed to fetch ${gmailId}: ${err.message}`); return null; })
+        .catch(err => { console.warn(`📧 Gmail: failed to fetch message detail: ${messageLogError(err)}`); return null; })
     ));
 
     for (let j = 0; j < results.length; j++) {
-      if (!results[j]) { detailFetchFailures++; continue; }
+      if (!results[j]?.data || results[j].data.id !== batch[j].id
+        || !Array.isArray(results[j].data.labelIds) || !results[j].data.payload) {
+        detailFetchFailures++;
+        continue;
+      }
       const data = results[j].data;
       const { id: gmailId, threadId: gmailThreadId } = batch[j];
       const headers = data.payload?.headers || [];
@@ -357,11 +374,12 @@ export async function syncGmail(account, cache, io, options = {}) {
   // reply detection isn't trusted for this account anyway, so don't over-signal.)
   const sentCoveragePartial = sentTruncated || (ingestSent && detailFetchFailures > 0);
   if (ingestSent && detailFetchFailures > 0 && !sentTruncated) {
-    console.warn(`📧 Gmail: ${detailFetchFailures} message detail fetch(es) failed for ${account.email} — reply detection paused for this account this sync (incomplete coverage)`);
+    console.warn(`📧 Gmail: ${detailFetchFailures} message detail fetch(es) failed for account ${account.id} — reply detection paused for this account this sync (incomplete coverage)`);
   }
 
   console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
-  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
+  const inboxComplete = mode === 'full' && !truncated.includes(inboxQuery(mode)) && detailFetchFailures === 0;
+  return { messages: inboxMessages, inboxComplete, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
 }
 
 /**
@@ -403,7 +421,7 @@ export async function sendGmail(account, draft) {
     userId: 'me',
     requestBody: { raw }
   }).catch(err => {
-    console.error(`📧 Gmail send failed: ${err.message}`);
+    console.error(`📧 Gmail send failed: ${messageLogError(err)}`);
     return null;
   });
 
@@ -411,6 +429,6 @@ export async function sendGmail(account, draft) {
     return { success: false, error: 'Gmail API send failed', status: 502, code: 'GMAIL_SEND_FAILED' };
   }
 
-  console.log(`📧 Gmail sent: ${draft.subject} (id: ${result.data?.id})`);
+  console.log(`📧 Gmail sent: draft ${draft.id}`);
   return { success: true };
 }

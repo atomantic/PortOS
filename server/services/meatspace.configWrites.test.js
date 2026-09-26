@@ -28,6 +28,7 @@ vi.mock('./mortalLoomStore.js', () => ({
 vi.mock('fs/promises', () => ({ readFile: vi.fn(async () => '{}') }));
 
 const meatspace = await import('./meatspace.js');
+const { meatspaceEvents } = await import('./meatspaceEvents.js');
 
 const initialConfig = () => ({
   birthDate: null,
@@ -49,6 +50,18 @@ describe('meatspace config write serialization (#4913)', () => {
   beforeEach(() => {
     store.config = initialConfig();
     store.goals = null;
+  });
+
+  it('invalidates the death clock only after its changed inputs persist', async () => {
+    const snapshots = [];
+    const listener = payload => snapshots.push({ payload, config: structuredClone(store.config) });
+    meatspaceEvents.on('death-clock:changed', listener);
+    await meatspace.updateBirthDate('1980-01-01', { syncGoals: false });
+    await meatspace.updateLifestyle({ sleepHoursPerNight: 8 });
+    meatspaceEvents.off('death-clock:changed', listener);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]).toMatchObject({ payload: {}, config: { birthDate: '1980-01-01' } });
+    expect(snapshots[1].config.lifestyle.sleepHoursPerNight).toBe(8);
   });
 
   it('retains simultaneous config and lifestyle patches', async () => {

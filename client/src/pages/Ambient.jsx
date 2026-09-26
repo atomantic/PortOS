@@ -2,11 +2,15 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowLeft, Maximize, Minimize } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+import { useSocket } from '../hooks/useSocket';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
 import DeathClockCountdown from '../components/DeathClockCountdown';
 
-const REFRESH_INTERVAL = 30000;
+const CALENDAR_EVENTS = ['calendar:sync:completed'];
+const DEATH_CLOCK_EVENTS = ['meatspace:death-clock:changed'];
+const GOAL_EVENTS = ['cos:goals:changed'];
+const SUMMARY_EVENTS = ['cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed'];
 const IDLE_DELAY = 3000;
 
 const goalColor = (rate) =>
@@ -30,21 +34,49 @@ export default function Ambient() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const idleTimer = useRef(null);
 
-  const { data } = useAutoRefetch(async () => {
+  const socket = useSocket();
+  const day = time.toDateString();
+  // A tab may resume after midnight before its next clock tick. Reads record
+  // their own day so the tick cannot duplicate reconnect/tab-show reconciliation.
+  const reconciledDays = useRef({ deathClock: day, summary: day, calendar: day });
+  const { data: deathData, refetch: refreshDeathClock } = useSocketResource(() => {
+    reconciledDays.current.deathClock = new Date().toDateString();
+    return api.getDeathClock();
+  }, {
+    events: DEATH_CLOCK_EVENTS
+  });
+  const { data: cosSummary, refetch: refreshSummary } = useSocketResource(() => {
+    reconciledDays.current.summary = new Date().toDateString();
+    return api.getCosQuickSummary({ silent: true });
+  }, {
+    namespace: 'cos', events: SUMMARY_EVENTS
+  });
+  const { data: goals } = useSocketResource(() => api.getCosGoalProgressSummary({ silent: true }), {
+    namespace: 'cos', events: GOAL_EVENTS
+  });
+  const { data: calendarEvents, refetch: refreshCalendar } = useSocketResource(async () => {
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+    reconciledDays.current.calendar = now.toDateString();
+    const params = {
+      startDate: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
+      endDate: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
+      limit: 200
+    };
+    const events = [];
+    let page;
+    do {
+      page = await api.getCalendarEvents({ ...params, offset: events.length });
+      events.push(...page.events);
+    } while (page.events.length && events.length < page.total);
+    return events;
+  }, { events: CALENDAR_EVENTS });
 
-    const [deathClock, cosSummary, goals, events, health] = await Promise.all([
-      api.getDeathClock().catch(() => null),
-      api.getCosQuickSummary({ silent: true }).catch(() => null),
-      api.getCosGoalProgressSummary({ silent: true }).catch(() => null),
-      api.getCalendarEvents({ start: startOfDay, end: endOfDay }).catch(() => []),
-      api.checkHealth().catch(() => null),
-    ]);
-
-    return { deathClock, cosSummary, goals, events, health };
-  }, REFRESH_INTERVAL);
+  useEffect(() => {
+    if (document.visibilityState === 'hidden') return;
+    if (reconciledDays.current.deathClock !== day) refreshDeathClock();
+    if (reconciledDays.current.summary !== day) refreshSummary();
+    if (reconciledDays.current.calendar !== day) refreshCalendar();
+  }, [day, refreshDeathClock, refreshSummary, refreshCalendar]);
 
   useEffect(() => {
     const interval = setInterval(() => setTime(new Date()), 1000);
@@ -82,18 +114,14 @@ export default function Ambient() {
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  const cosSummary = data?.cosSummary;
   const today = useMemo(() => cosSummary?.today || {}, [cosSummary]);
-  const goals = data?.goals;
-  const deathData = data?.deathClock;
 
   const upcomingEvents = useMemo(() => {
-    const events = Array.isArray(data?.events) ? data.events : [];
-    const now = new Date();
+    const events = Array.isArray(calendarEvents) ? calendarEvents : [];
     return events
-      .filter(e => new Date(e.end || e.start) >= now)
+      .filter(e => new Date(e.endTime || e.end || e.startTime || e.start) >= time)
       .slice(0, 6);
-  }, [data?.events]);
+  }, [calendarEvents, time]);
 
   return (
     // Ambient mode is a full-screen always-on display for a dim room, so it
@@ -163,7 +191,7 @@ export default function Ambient() {
                     <div className="min-w-0">
                       <div className="text-sm text-gray-300 truncate">{event.summary || event.title}</div>
                       <div className="text-xs text-gray-600">
-                        {event.allDay ? 'All day' : `${formatTimeOfDay(event.start)} – ${formatTimeOfDay(event.end)}`}
+                        {(event.isAllDay ?? event.allDay) ? 'All day' : `${formatTimeOfDay(event.startTime || event.start)} – ${formatTimeOfDay(event.endTime || event.end)}`}
                       </div>
                     </div>
                   </div>
@@ -224,8 +252,8 @@ export default function Ambient() {
       }`}>
         <span>PortOS Ambient</span>
         <span className="flex items-center gap-2">
-          <span className={`w-1.5 h-1.5 rounded-full ${data?.health ? 'bg-port-success' : 'bg-gray-700'}`} />
-          {data?.health ? 'System Online' : 'Connecting...'}
+          <span className={`w-1.5 h-1.5 rounded-full ${socket.connected ? 'bg-port-success' : 'bg-gray-700'}`} />
+          {socket.connected ? 'System Online' : 'Connecting...'}
         </span>
       </div>
     </div>

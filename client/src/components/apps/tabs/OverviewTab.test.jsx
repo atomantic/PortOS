@@ -31,6 +31,7 @@ vi.mock('../../../hooks/useAppOperation', () => ({
   })),
 }));
 
+vi.mock('../LaunchVideoPanel', () => ({ default: () => null }));
 vi.mock('../ActivityLog', () => ({ default: () => null }));
 vi.mock('../SlashDoPanel', () => ({ default: () => null }));
 vi.mock('../../ui/Banner', () => ({ default: () => null }));

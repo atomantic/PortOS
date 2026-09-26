@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   attachClient,
+  beginStageProgress,
   emitStageProgress,
   finishStageProgress,
   isChannelOpen,
@@ -53,6 +54,19 @@ describe('text-stage progress channel', () => {
 
     emitStageProgress('issue-1', 'prose', { type: 'phase', phase: 'generate', attempt: 1 });
     expect(framesOf(res)).toEqual([{ type: 'phase', phase: 'generate', attempt: 1 }]);
+  });
+
+  it('replays POST-first progress and keeps the reserved channel through a long run', () => {
+    expect(beginStageProgress('issue-1', 'prose')).toBe(true);
+    emitStageProgress('issue-1', 'prose', { type: 'start' });
+    emitStageProgress('issue-1', 'prose', { type: 'phase', phase: 'generate' });
+    vi.advanceTimersByTime(CHANNEL_IDLE_MS * 3);
+
+    const late = fakeRes();
+    attachClient('issue-1', 'prose', late);
+    expect(framesOf(late)).toEqual([{ type: 'phase', phase: 'generate' }]);
+    expect(late.ended).toBe(false);
+    expect(beginStageProgress('issue-1', 'prose')).toBe(false);
   });
 
   it('keeps channels separate per issue and per stage', () => {

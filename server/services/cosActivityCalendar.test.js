@@ -140,3 +140,27 @@ describe('getActivityCalendar', () => {
     expect(summary).toMatchObject({ activeDays: 0, totalTasks: 0 });
   });
 });
+
+
+it('invalidates the day-boundary snapshot once across simultaneous dashboard reads', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T23:59:30Z'));
+  const { dashboardEvents, scheduleDashboardExpiry } = await import('./dashboardEvents.js');
+  const changed = vi.fn();
+  dashboardEvents.on('cos:day:changed', changed);
+  try {
+    const before = await getActivityCalendar(1);
+    await getActivityCalendar(1);
+    expect(before.weeks.flat().find(day => day.isToday).date).toBe('2026-01-01');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(changed).toHaveBeenCalledTimes(1);
+    const after = await getActivityCalendar(1);
+    expect(after.weeks.flat().find(day => day.isToday).date).toBe('2026-01-02');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally {
+    scheduleDashboardExpiry('cos:day:changed', null);
+    dashboardEvents.off('cos:day:changed', changed);
+    vi.useRealTimers();
+  }
+});

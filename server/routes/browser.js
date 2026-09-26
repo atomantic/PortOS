@@ -5,6 +5,7 @@ import { validateRequest } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
+import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
 import * as browserService from '../services/browserService.js';
 
 const router = express.Router();
@@ -77,7 +78,7 @@ const updateConfigSchema = z.object({
 
 // GET /api/browser - Full browser status
 router.get('/', asyncHandler(async (req, res) => {
-  const status = await browserService.getFullStatus();
+  const status = await getBrowserStatusSnapshot();
   res.json(status);
 }));
 

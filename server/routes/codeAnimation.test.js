@@ -17,23 +17,44 @@ vi.mock('../services/codeAnimation/jobStore.js', () => ({
   getCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.get(id) ?? null),
   isCodeAnimationJobId: (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id),
   listCodeAnimationJobRecords: vi.fn(async () => [...codeAnimationRecords.values()]),
+  listRunningCodeAnimationJobIds: vi.fn(async () => [...codeAnimationRecords.values()].filter((job) => job.status === 'running').map((job) => job.id)),
+  listCodeAnimationJobPage: vi.fn(async ({ limit, cursor }) => [...codeAnimationRecords.values()]
+    .filter((job) => !cursor || job.createdAt < cursor.createdAt || (job.createdAt === cursor.createdAt && job.id < cursor.id))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+    .slice(0, limit + 1).map(({ id, status, title, providerId, model, createdAt }) => ({ id, status, title, providerId, model, createdAt }))),
+  countCodeAnimationJobs: vi.fn(async () => ({
+    total: codeAnimationRecords.size,
+    running: [...codeAnimationRecords.values()].filter((job) => job.status === 'running').length,
+    completed: [...codeAnimationRecords.values()].filter((job) => job.status === 'completed').length,
+  })),
   readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
   saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
   saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
 }));
+vi.mock('../services/socket.js', () => ({
+  // Observe the persisted state at emit time: a notification before a save
+  // would make a socket-driven client read stale data with no later retry.
+  emitCodeAnimationChanged: vi.fn((id) => ({
+    id, status: codeAnimationRecords.get(id)?.status, html: codeAnimationHtml.get(id),
+  })),
+}));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../services/tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('../services/promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
   resolveProviderAndModel: vi.fn(),
   assertProvider: vi.fn(),
 }));
 
+import { emitCodeAnimationChanged } from '../services/socket.js';
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
 import { getProviderById } from '../services/providers.js';
+import { getTrack } from '../services/tracks/index.js';
+import { listCodeAnimationJobPage, listCodeAnimationJobRecords } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import routes from './codeAnimation.js';
 
@@ -74,11 +95,14 @@ beforeAll(() => {
   mkdirSync(PATHS.uploads, { recursive: true });
   mkdirSync(PATHS.imageRefs, { recursive: true });
   mkdirSync(PATHS.images, { recursive: true });
+  mkdirSync(PATHS.music, { recursive: true });
   writeFileSync(join(PATHS.uploads, 'abc12345-hero.png'), 'png');
   writeFileSync(join(PATHS.uploads, 'abc12345-theme.mp3'), 'mp3');
   writeFileSync(join(PATHS.imageRefs, 'style-ref.png'), 'png');
   writeFileSync(join(PATHS.images, 'pin.png'), 'png');
   writeFileSync(join(PATHS.imageRefs, 'sheet.png'), 'png');
+  writeFileSync(join(PATHS.music, 'track-active.mp3'), 'mp3');
+  writeFileSync(join(PATHS.music, 'wavesketch-active.wav'), 'wav');
 });
 afterAll(cleanupTempDataRoots);
 
@@ -89,6 +113,54 @@ beforeEach(() => {
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
+});
+
+describe('GET /api/code-animation/jobs', () => {
+  it('reconciles only stale running records before paging and counting', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    codeAnimationRecords.set(id, { id, status: 'running', title: 'Interrupted', concept: 'Private brief',
+      createdAt: '2026-01-01T00:00:00.000Z' });
+    const response = await request(makeApp()).get('/api/code-animation/jobs?limit=50');
+    expect(response.status).toBe(200);
+    expect(response.body.items).toMatchObject([{ id, status: 'failed' }]);
+    expect(response.body.counts).toEqual({ running: 0, completed: 0 });
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id, status: 'failed', html: undefined },
+    ]);
+    expect(listCodeAnimationJobRecords).not.toHaveBeenCalled();
+    expect((await request(makeApp()).get(`/api/code-animation/generate/${id}`)).body.error)
+      .toMatch(/interrupted by a server restart/);
+  });
+
+  it('keeps the legacy array and pages a compact thousand-job archive with stable equal-time cursors', async () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    for (let n = 0; n < 1000; n += 1) {
+      const id = `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+      codeAnimationRecords.set(id, { id, status: 'completed', title: `Animation ${n}`, concept: 'x'.repeat(2000), createdAt });
+    }
+    const app = makeApp();
+    const legacy = await request(app).get('/api/code-animation/jobs');
+    expect(legacy.status).toBe(200);
+    expect(legacy.body).toHaveLength(1000);
+    expect(legacy.body[0].concept).toHaveLength(2000);
+
+    const first = await request(app).get('/api/code-animation/jobs?limit=50');
+    expect(first.status).toBe(200);
+    expect(first.body.items).toHaveLength(50);
+    expect(first.body.items[0]).not.toHaveProperty('concept');
+    expect(first.body.counts).toEqual({ running: 0, completed: 1000 });
+    expect(first.body.total).toBe(1000);
+    expect(JSON.stringify(first.body).length).toBeLessThan(JSON.stringify(legacy.body).length / 10);
+    expect(first.body.nextCursor).toBeTruthy();
+    expect(JSON.parse(Buffer.from(first.body.nextCursor, 'base64url').toString('utf8'))).toEqual([createdAt, first.body.items.at(-1).id]);
+    const second = await request(app).get(`/api/code-animation/jobs?limit=50&cursor=${encodeURIComponent(first.body.nextCursor)}`);
+    expect(second.body.items).toHaveLength(50);
+    expect(new Set([...first.body.items, ...second.body.items].map(({ id }) => id)).size).toBe(100);
+    const capped = await request(app).get('/api/code-animation/jobs?limit=1000');
+    expect(capped.body.items).toHaveLength(100);
+    expect(listCodeAnimationJobPage).toHaveBeenLastCalledWith({ limit: 100, cursor: null });
+    expect((await request(app).get('/api/code-animation/jobs?cursor=garbage')).status).toBe(400);
+  });
 });
 
 describe('POST /api/code-animation/brief', () => {
@@ -209,6 +281,79 @@ describe('POST /api/code-animation/prompt', () => {
     getUniverse.mockRejectedValueOnce(Object.assign(new Error('Universe not found'), { code: 'NOT_FOUND' }));
     expect((await request(app).post('/api/code-animation/prompt').send(brief)).status).toBe(404);
   });
+
+  it('creates an animation with a music-library track and gets the resolved music URL and duration', async () => {
+    getTrack.mockResolvedValueOnce({
+      id: 'track-1',
+      title: 'Neon Drift',
+      audioFilename: 'track-active.mp3',
+      durationSec: 45,
+      waveSketch: null,
+    });
+    const res = await request(makeApp()).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-1' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.audioUrl).toBe('/data/music/track-active.mp3');
+    expect(res.body.prompt).toContain('"Neon Drift" (45.0s long)');
+    expect(res.body.prompt).not.toContain('Drawn waveform timing cues');
+  });
+
+  it('appends timing cues when the track has a waveSketch, but not for a plain diffusion track', async () => {
+    const sketch = {
+      version: 1,
+      title: 'Glass Tide',
+      durationSec: 2,
+      shapes: { glass: [0, 0.8, 1, 0.3, 0, -0.5, -1, -0.2] },
+      voices: [{ name: 'lead', shape: 'glass', notes: [{ t: 0, d: 1, pitch: 'A4' }, { t: 1, d: 1, pitch: 'E5' }] }],
+      contour: [0.1, 0.8, 0.4],
+    };
+    getTrack.mockResolvedValueOnce({
+      id: 'track-wave',
+      title: 'Glass Tide',
+      audioFilename: 'wavesketch-active.wav',
+      durationSec: 2,
+      waveSketch: sketch,
+    });
+    const res = await request(makeApp()).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-wave' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.audioUrl).toBe('/data/music/wavesketch-active.wav');
+    expect(res.body.prompt).toContain('Drawn waveform timing cues:');
+    expect(res.body.prompt).toContain('- Section/onset times:');
+    expect(res.body.prompt).toContain('- Strongest onsets:');
+    expect(res.body.prompt).toContain('- Loudness contour:');
+  });
+
+  it('returns 400 AUDIO_NOT_FOUND for unknown, deleted, or missing audio file track', async () => {
+    const app = makeApp();
+    getTrack.mockResolvedValueOnce(null);
+    const unknown = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-missing' },
+    });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.code).toBe('AUDIO_NOT_FOUND');
+
+    getTrack.mockResolvedValueOnce({ id: 'track-deleted', deletedAt: '2026-01-01T00:00:00Z', audioFilename: 'track-active.mp3' });
+    const deleted = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-deleted' },
+    });
+    expect(deleted.status).toBe(400);
+    expect(deleted.body.code).toBe('AUDIO_NOT_FOUND');
+
+    getTrack.mockResolvedValueOnce({ id: 'track-no-file', audioFilename: 'ghost-file.mp3' });
+    const missingFile = await request(app).post('/api/code-animation/prompt').send({
+      ...brief,
+      audio: { source: 'track', trackId: 'track-no-file' },
+    });
+    expect(missingFile.status).toBe(400);
+    expect(missingFile.body.code).toBe('AUDIO_NOT_FOUND');
+  });
 });
 
 describe('POST /api/code-animation/generate', () => {
@@ -236,6 +381,10 @@ describe('POST /api/code-animation/generate', () => {
     const job = await pollUntilSettled(app, res.body.id);
     expect(job).toMatchObject({ status: 'completed', providerId: 'api-1', model: 'example-model', runId: 'run-1' });
     expect(job.html).toBe('<!DOCTYPE html><html><body><canvas></canvas></body></html>');
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id: job.id, status: 'running', html: undefined },
+      { id: job.id, status: 'completed', html: job.html },
+    ]);
     const call = runPromptThroughProvider.mock.calls[0][0];
     expect(call.source).toBe('code-animation-generation');
     expect(call.cwd).toBe(PATHS.data);
@@ -256,6 +405,10 @@ describe('POST /api/code-animation/generate', () => {
     const job = await pollUntilSettled(app, res.body.id);
     expect(job.status).toBe('failed');
     expect(job.error).toMatch(/did not contain an HTML document/);
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id: job.id, status: 'running', html: undefined },
+      { id: job.id, status: 'failed', html: undefined },
+    ]);
   });
 
   it('refuses a disabled provider before starting a job', async () => {

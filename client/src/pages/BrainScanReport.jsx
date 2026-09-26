@@ -4,7 +4,9 @@ import { ArrowLeft, FileText, RefreshCw, ShieldAlert, ShieldCheck, Skull } from 
 import * as api from '../services/api';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+
+const REPORT_EVENTS = ['brain:links:changed'];
 
 const VERDICT_STYLES = {
   CLEAN: { Icon: ShieldCheck, className: 'bg-port-success/15 text-port-success border-port-success/30' },
@@ -35,7 +37,10 @@ function ScanReportForLink({ id }) {
     ]);
     return { id, link, report };
   }, [id]);
-  const { data, loading, refetch } = useAutoRefetch(fetchReport, 30_000);
+  const { data, loading, refetch } = useSocketResource(fetchReport, {
+    events: REPORT_EVENTS,
+    matchesEvent: payload => payload?.id === id
+  });
   if (loading || (data && data.id !== id)) {
     return (
       <Shell>

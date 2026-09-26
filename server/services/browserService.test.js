@@ -782,3 +782,56 @@ describe('navigateToUrlPinned tab ownership (closeAfterRead)', () => {
     expect(fake.closed).toEqual(fake.opened);
   });
 });
+
+describe('read-only browser observation', () => {
+  let tempRoot;
+  let probe;
+  let pm2;
+  let pageBody;
+  beforeEach(() => {
+    vi.resetModules();
+    tempRoot = createTempDataRoot('portos-browser-observe-');
+    pageBody = [{ id: 'example-page', title: 'Example', url: 'https://example.com', type: 'page' }];
+    pm2 = { execPm2: vi.fn(), listProcessesStrict: vi.fn().mockResolvedValue([{ name: 'portos-browser', status: 'online' }]) };
+    probe = vi.fn(async url => new Response(JSON.stringify(
+      url.endsWith('/health') ? { status: 'healthy' }
+        : url.endsWith('/json/list') ? pageBody : { Browser: 'Example browser' }
+    )));
+    vi.doMock('./pm2.js', () => pm2);
+    vi.doMock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: probe }));
+    vi.doMock('../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
+      dataRoot: tempRoot,
+      extraOverrides: root => ({ browserDownloads: join(root, 'downloads') }),
+    }));
+  });
+  afterEach(async () => {
+    vi.doUnmock('./pm2.js');
+    vi.doUnmock('../lib/fetchWithTimeout.js');
+    vi.doUnmock('../lib/fileUtils.js');
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+  it('reads pages and downloads without launch/navigation, rejects unreadable snapshots, and accepts confirmed stop', async () => {
+    const service = await import('./browserService.js');
+    await mkdir(join(tempRoot, 'downloads'), { recursive: true });
+    await writeFile(join(tempRoot, 'downloads', 'example.txt'), 'example');
+    const changed = vi.fn();
+    service.browserEvents.on('downloads:changed', changed);
+    expect(await service.getFullStatus({ strict: true })).toMatchObject({
+      connected: true, pageCount: 1,
+      pages: [{ title: 'Example' }], downloads: { files: [{ name: 'example.txt' }] },
+    });
+    expect(await service.deleteDownload('example.txt')).toBe(true);
+    expect(changed).toHaveBeenCalledOnce();
+    pageBody = { malformed: true };
+    await expect(service.getFullStatus({ strict: true })).rejects.toThrow('pages unavailable');
+    pm2.listProcessesStrict.mockResolvedValue(null);
+    await expect(service.getFullStatus({ strict: true })).rejects.toThrow('process status unavailable');
+    pm2.listProcessesStrict.mockResolvedValue([{ name: 'portos-browser', status: 'stopped' }]);
+    probe.mockRejectedValue(new Error('offline'));
+    expect(await service.getFullStatus({ strict: true })).toMatchObject({
+      connected: false, process: { status: 'stopped' }, pages: [], downloads: { files: [] },
+    });
+    expect(pm2.execPm2).not.toHaveBeenCalled();
+    expect(probe.mock.calls.every(([url]) => /\/(health|json\/list|json\/version)$/.test(url))).toBe(true);
+  });
+});

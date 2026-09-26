@@ -1,3 +1,4 @@
+import { spriteEvents } from './events.js';
 /**
  * Reference workflow orchestration (#2896): generate → candidates → lock,
  * against the file record backend + a tmpdir asset tree. The media-job queue
@@ -7,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
@@ -476,7 +477,22 @@ describe('attachReferenceCandidate', () => {
       chromaKey: '#FF00FF', mode: 'codex', model: 'm', jobId: 'j1',
       designPrompt: 'a ranger', filename: 'render-1.png',
     };
-    const first = await attachReferenceCandidate(ctx);
+    // The notification must follow BOTH the asset and its provenance sidecar.
+    const persisted = [];
+    const onChanged = ({ recordId }) => {
+      if (recordId === id) persisted.push(JSON.parse(readFileSync(
+        join(TEST_ROOT, 'sprites', id, 'reference/candidates/walk-south-candidate-01.generation.json'), 'utf8',
+      )));
+    };
+    spriteEvents.on('changed', onChanged);
+    let first;
+    try {
+      first = await attachReferenceCandidate(ctx);
+    } finally {
+      spriteEvents.off('changed', onChanged);
+    }
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].candidatePath).toBe(first.candidatePath);
     expect(first.candidatePath).toBe('reference/candidates/walk-south-candidate-01.png');
     const second = await attachReferenceCandidate(ctx);
     expect(second.candidatePath).toBe('reference/candidates/walk-south-candidate-02.png');

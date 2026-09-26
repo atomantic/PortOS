@@ -1217,3 +1217,59 @@ describe('ChiefOfStaff route-scoped data', () => {
     expect(api.getCosTasks).not.toHaveBeenCalled();
   });
 });
+
+
+describe('ChiefOfStaff active-agent snapshot readiness', () => {
+  const agent = { id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: { taskDescription: 'Example active work' } };
+  const socketHandler = event => socketStub.on.mock.calls.filter(([name]) => name === event).at(-1)[1];
+
+  it('shows pending on navigation and paints agents before a slow status summary', async () => {
+    await renderSettledAt('mind');
+    let resolveAgents;
+    api.getCosAgents.mockReturnValueOnce(new Promise(resolve => { resolveAgents = resolve; }));
+    api.getCosStatus.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    expect(await screen.findByText('Loading active agents…')).toBeInTheDocument();
+    expect(screen.queryByText(/No active agents/)).toBeNull();
+    await act(async () => resolveAgents([agent]));
+    expect(await screen.findByText('Example active work')).toBeInTheDocument();
+  });
+
+  it('distinguishes a failed initial read from empty and retries without reloading the page', async () => {
+    api.getCosAgents.mockRejectedValueOnce(new Error('Unavailable'));
+    await renderSettledAt('agents');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load active agents.');
+    expect(screen.queryByText(/No active agents/)).toBeNull();
+    api.getCosAgents.mockResolvedValue([agent]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry agents' }));
+    expect(await screen.findByText('Example active work')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('preserves known agents across non-agent tabs and a failed refresh', async () => {
+    api.getCosAgents.mockResolvedValue([agent]);
+    await renderSettledAt('agents');
+    expect(await screen.findByText('Example active work')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Mind' }));
+    await screen.findByTestId('mind-tab');
+    api.getCosAgents.mockRejectedValue(new Error('Unavailable'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing the last loaded agents.');
+    expect(screen.getByText('Example active work')).toBeInTheDocument();
+    expect(screen.queryByText(/No active agents/)).toBeNull();
+  });
+
+  it('merges lifecycle events received while the initial snapshot is in flight', async () => {
+    await renderSettledAt('mind');
+    let resolveAgents;
+    api.getCosAgents.mockReturnValueOnce(new Promise(resolve => { resolveAgents = resolve; }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    await waitFor(() => expect(api.getCosAgents).toHaveBeenCalled());
+    await act(async () => {
+      socketHandler('cos:agent:updated')({ ...agent, status: 'paused' });
+      resolveAgents([agent]);
+    });
+    expect(await screen.findByText('Paused Agents')).toBeInTheDocument();
+    expect(screen.queryByText('1 running')).toBeNull();
+  });
+});

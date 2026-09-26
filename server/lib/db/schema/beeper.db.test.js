@@ -67,6 +67,7 @@ describe.skipIf(!runDb)('beeper conversation-mirror schema (#27)', () => {
       'beeper_messages',
       'beeper_outbox',
       'beeper_participants',
+      'beeper_reconcile_cursors',
       'beeper_sync_cursors',
     ]);
   });

@@ -44,6 +44,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   createWorktree: vi.fn(),
   adoptWorktree: vi.fn(),
+  unlinkWorktreeDependencies: vi.fn().mockResolvedValue(undefined),
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
   mergeBaseIntoFeatureWorktree: vi.fn(),
@@ -65,12 +66,12 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
-import { updateTask, getAgents } from './cos.js';
+import { updateTask, addTask, getAgents } from './cos.js';
 import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, releaseIdleSiblingNextHolder } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, releaseIdleSiblingNextHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -176,6 +177,25 @@ describe('prepareAgentWorkspace', () => {
     expect(detectConflicts).not.toHaveBeenCalled();
   });
 
+  it('does not link source dependencies into dependency-update worktrees', async () => {
+    createWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-deps',
+      branchName: 'cos/t-deps/agent-deps',
+      baseBranch: 'main',
+    });
+    const task = {
+      id: 't-deps', taskType: 'internal',
+      metadata: { analysisType: 'dependency-updates', useWorktree: true },
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-deps', task });
+
+    expect(r.outcome).toBe('ready');
+    expect(createWorktree).toHaveBeenCalledWith('agent-deps', expect.any(String), 't-deps', expect.objectContaining({
+      linkDependencies: false,
+    }));
+  });
+
   it('blocks a read-only task when its required worktree cannot be created', async () => {
     createWorktree.mockResolvedValue(null);
     const task = {
@@ -221,6 +241,20 @@ describe('prepareAgentWorkspace', () => {
     expect(r.outcome).toBe('deferred');
     expect(r.deferReason).toBe('git-conflict');
     expect(r.branch).toBe('feature/x');
+    // A timed pause, not `pending` — pending was re-dequeued every few seconds.
+    const [, patch] = updateTask.mock.calls.find(([id]) => id === 't-conflict');
+    expect(patch.status).toBe('blocked');
+    expect(patch.metadata.blockedCategory).toBe('git-conflict-wait');
+    expect(Date.parse(patch.metadata.cooldownUntil)).toBeGreaterThan(Date.now());
+    expect(addTask.mock.calls[0][0].metadata).toEqual({ gitConflictResolution: true });
+  });
+
+  it('lets the conflict-resolver task skip the pull it exists to fix', async () => {
+    ensureLatest.mockResolvedValue({ conflict: true, branch: 'main', error: 'rebase failed' });
+    const task = { id: 't-resolver', taskType: 'internal', metadata: { gitConflictResolution: true } };
+    const r = await prepareAgentWorkspace({ agentId: 'agent-r', task });
+    expect(r.outcome).toBe('ready');
+    expect(ensureLatest).not.toHaveBeenCalled();
   });
 
   it('proceeds in the shared workspace when the pull is clean and no conflict is detected', async () => {
@@ -343,9 +377,12 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
       baseBranch: null, existingBranch: true, adopted: true
     });
 
-    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: resumeTask() });
+    const r = await prepareAgentWorkspace({
+      agentId: 'agent-new', task: resumeTask({ analysisType: 'dependency-updates' }),
+    });
 
     expect(adoptWorktree).toHaveBeenCalledWith('agent-new', expect.any(String), DEAD_TREE, 'cos/t-resume/agent-dead');
+    expect(unlinkWorktreeDependencies).toHaveBeenCalledWith(expect.any(String), '/mock/worktrees/agent-new');
     expect(createWorktree).not.toHaveBeenCalled();
     expect(r.outcome).toBe('ready');
     expect(r.worktreeInfo.adopted).toBe(true);

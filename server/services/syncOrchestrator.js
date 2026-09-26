@@ -15,7 +15,7 @@ import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
-import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT } from '../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_IDLE_TIMEOUT, PEER_BODY_DEFAULT_MAX_BYTES } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
@@ -93,6 +93,31 @@ async function withCursors(fn) {
   });
 }
 
+// Bumped by every rewind. A sync cycle that read its cursors under an older
+// generation pulled against the pre-restore database, so its advanced
+// memory/Catalog cursors must not overwrite the rewind.
+let postgresCursorGeneration = 0;
+
+/**
+ * Rewind every peer's PostgreSQL delta cursors (memory + Catalog) to the start
+ * after a database restore discarded rows those cursors had already passed
+ * (#8710). The next sync replays each peer's streams through the idempotent
+ * LWW / ON CONFLICT apply paths. Only these two streams have no reconcile
+ * to fall back on; brain cursors and snapshot checksums are left alone.
+ * @returns {Promise<number>} peers rewound
+ */
+export async function rewindPostgresSyncCursors() {
+  return withCursors((cursors) => {
+    postgresCursorGeneration += 1;
+    const peers = Object.values(cursors).filter(isPlainObjectShallow);
+    for (const cursor of peers) {
+      cursor.memorySeq = '0';
+      cursor.catalogSeqs = Object.fromEntries(CATALOG_CURSOR_KINDS.map((kind) => [kind, '0']));
+    }
+    return peers.length;
+  });
+}
+
 // --- Peer fetch helper ---
 
 // Every outbound hop goes through `peerFetch` so it carries
@@ -105,7 +130,12 @@ async function withCursors(fn) {
 // Headers retain their 15s budget. HTTP body reads get a separate 60s idle
 // deadline so large, progressing downloads may finish; HTTPS is already
 // buffered within the request budget. Body stalls must reach the cycle's
-// failure path instead of becoming a successful no-op.
+// failure path instead of becoming a successful no-op. Bodies are also capped
+// while streaming (a chunked body carries no Content-Length to pre-check), so an
+// endless peer response fails this pull (null) instead of exhausting the heap.
+// Avatar images share the per-asset pull cap (ASSET_PULL_MAX_BYTES).
+const AVATAR_IMAGE_MAX_BYTES = 100 * 1024 * 1024;
+
 function handlePeerBodyError(error) {
   if (error.code === PEER_BODY_IDLE_TIMEOUT) throw error;
   return null;
@@ -113,10 +143,12 @@ function handlePeerBodyError(error) {
 
 async function fetchPeer(peer, path) {
   const url = `${peerBaseUrl(peer)}${path}`;
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+  // maxBytes caps the HTTPS shim; readPeerBody caps a native-fetch stream.
+  const maxBytes = PEER_BODY_DEFAULT_MAX_BYTES;
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal, maxBytes }, peer))
     .catch(() => null);
   if (!res?.ok) return null;
-  return readPeerBody(res, 'json').catch(handlePeerBodyError);
+  return readPeerBody(res, 'json', { maxBytes }).catch(handlePeerBodyError);
 }
 
 /**
@@ -127,7 +159,7 @@ async function syncImageFromPeer(peer, avatarPath) {
   // Validate avatarPath is a safe relative image path under /data/images/
   if (!avatarPath || avatarPath.includes('..') || !avatarPath.startsWith('/data/images/')) return;
   const filename = avatarPath.split('/').pop();
-  if (!filename || !/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(filename)) return;
+  if (!filename || !/\.(png|jpg|jpeg|gif|webp|avif)$/i.test(filename)) return;
   const localPath = join(PATHS.images, filename);
 
   // Skip if we already have it
@@ -136,10 +168,11 @@ async function syncImageFromPeer(peer, avatarPath) {
 
   const url = `${peerBaseUrl(peer)}${avatarPath}`;
   // Use the same request and body-idle budgets as JSON snapshots.
-  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) => peerFetch(url, { signal }, peer))
+  const res = await withAbortTimeout(FETCH_TIMEOUT_MS, (signal) =>
+    peerFetch(url, { signal, maxBytes: AVATAR_IMAGE_MAX_BYTES }, peer))
     .catch(() => null);
   if (!res?.ok) return;
-  await readPeerBody(res, 'arrayBuffer')
+  await readPeerBody(res, 'arrayBuffer', { maxBytes: AVATAR_IMAGE_MAX_BYTES })
     .then(async (bytes) => {
       await ensureDir(PATHS.images);
       await writeFileGuarded(localPath, Buffer.from(bytes));
@@ -516,7 +549,11 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   if (!checksumRes?.checksum) return { totalApplied: 0, checksum: null };
 
   const lastChecksum = cachedChecksums?.[category] ?? null;
-  if (lastChecksum && lastChecksum === checksumRes.checksum) {
+  // A saved schema gap is compatibility state, independent of payload changes.
+  // Keep retrying that category even when its payload checksum is unchanged so
+  // a peer upgrade can clear the old warning without requiring another edit.
+  const hasSchemaGap = Boolean(peer?.schemaGaps?.[category]);
+  if (lastChecksum && lastChecksum === checksumRes.checksum && !hasSchemaGap) {
     return { totalApplied: 0, checksum: checksumRes.checksum };
   }
 
@@ -800,7 +837,9 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
 
     // Read cursor snapshot outside lock so network I/O doesn't block other peers
     // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
+    let cursorGeneration;
     const cursor = await readCursors((cursors) => {
+      cursorGeneration = postgresCursorGeneration;
       const raw = { ...(cursors[peerId] || {}) };
       return detectCursorReset(raw, peer);
     });
@@ -893,11 +932,14 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
           cursors[peerId].brainChecksumTypes = brainResult.brainChecksumTypes;
         }
       }
-      if (memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
+      // A DB restore rewound the Postgres cursors mid-cycle: this cycle's
+      // positions describe rows the restore discarded, so keep the rewind.
+      const postgresCursorsCurrent = cursorGeneration === postgresCursorGeneration;
+      if (postgresCursorsCurrent && memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
       // Persist the per-kind catalog cursor only when the drain wasn't blocked
       // by a schema gap — a blocked cycle leaves the prior cursor so we re-try
       // the same window after the sender upgrades (mirrors the snapshot path).
-      if (categories.catalog && !catalogResult.blockedBySchema && isPlainObjectShallow(catalogResult.catalogSeqs)) {
+      if (postgresCursorsCurrent && categories.catalog && !catalogResult.blockedBySchema && isPlainObjectShallow(catalogResult.catalogSeqs)) {
         cursors[peerId].catalogSeqs = catalogResult.catalogSeqs;
       }
       if (!cursors[peerId].checksums) cursors[peerId].checksums = {};

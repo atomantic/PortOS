@@ -13,6 +13,7 @@ export default function Security() {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const audioContextRef = useRef(null);
+  const mediaSourceRef = useRef(null);
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const deviceRestartTimerRef = useRef(null);
@@ -76,31 +77,42 @@ export default function Security() {
     }
   }, [selectedVideo, selectedAudio]);
 
-  // Set up audio level monitoring from audio element
+  // Set up audio level monitoring from audio element. An HTMLMediaElement can be
+  // attached to only one MediaElementAudioSourceNode for its lifetime (Web Audio
+  // spec) — the <audio> element here is never remounted, so the AudioContext and
+  // its source node are built ONCE per element and reused across every stream
+  // restart. A restart only resumes the existing context and restarts the meter
+  // loop; the context itself is closed exclusively on unmount (see the cleanup
+  // effect below).
   const setupAudioAnalyser = useCallback(async (audioElement) => {
-    // Clean up existing audio context
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
 
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    let audioContext = audioContextRef.current;
+    let analyser = analyserRef.current;
 
-    // The graph is built BEFORE the session claim, on purpose: node
-    // construction can throw (createMediaElementSource refuses an element that
-    // is already wired to another source node), and a throw past the claim
-    // would leave the document pinned output-only with no release left to call.
-    // Building against a not-yet-resumed context is fine — only the resume has
-    // to happen with the claim in force, so the context comes up on the right
-    // session.
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaElementSource(audioElement);
+    if (!audioContext || !mediaSourceRef.current) {
+      // The graph is built BEFORE the session claim, on purpose: node
+      // construction can throw (createMediaElementSource refuses an element
+      // that is already wired to another source node), and a throw past the
+      // claim would leave the document pinned output-only with no release left
+      // to call. Building against a not-yet-resumed context is fine — only the
+      // resume has to happen with the claim in force, so the context comes up
+      // on the right session.
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaElementSource(audioElement);
 
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    source.connect(audioContext.destination); // Connect to speakers
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      source.connect(audioContext.destination); // Connect to speakers
+
+      audioContextRef.current = audioContext;
+      mediaSourceRef.current = source;
+      analyserRef.current = analyser;
+    }
 
     // One slot: a re-setup (device switch, stream restart) replaces the previous
     // claim rather than stranding it.
@@ -111,9 +123,6 @@ export default function Security() {
     await resumeAudioContext(audioContext).catch(() => {
       setAudioNeedsInteraction(true);
     });
-
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
 
     // Use time-domain data for better audio level detection
     const dataArray = new Uint8Array(analyser.fftSize);
@@ -149,18 +158,25 @@ export default function Security() {
     }
   }, []);
 
-  // Start media stream from server
-  const startMedia = useCallback(async () => {
+  // Start media stream from server. `overrides` lets a caller (toggleVideo /
+  // toggleAudio) post the value it JUST computed instead of the state var,
+  // which a `useCallback` closes over from the render that created it — a
+  // stale-closure restart would tell the server to keep streaming the OLD
+  // enabled/disabled flag for one more round-trip.
+  const startMedia = useCallback(async (overrides = {}) => {
     setIsLoading(true);
     setError(null);
     setAudioNeedsInteraction(false);
+
+    const video = overrides.video !== undefined ? overrides.video : videoEnabled;
+    const audio = overrides.audio !== undefined ? overrides.audio : audioEnabled;
 
     // Start streaming on server
     await api.post('/media/start', {
       videoDeviceId: selectedVideo,
       audioDeviceId: selectedAudio,
-      video: videoEnabled,
-      audio: audioEnabled
+      video,
+      audio
     });
 
     setStreaming(true);
@@ -190,12 +206,12 @@ export default function Security() {
       audioRef.current.src = `/api/media/audio?t=${timestamp}`;
 
       audioRef.current.play().then(() => {
-        if (active) setupAudioAnalyser(audioRef.current);
+        if (active) setupAudioAnalyser(audioRef.current).catch(() => {});
       }).catch(() => {
         if (!active) return;
         // On mobile browsers, autoplay is often blocked - show interaction prompt
         setAudioNeedsInteraction(true);
-        setupAudioAnalyser(audioRef.current); // Set up analyser anyway for when user enables
+        setupAudioAnalyser(audioRef.current).catch(() => {}); // Set up analyser anyway for when user enables
       });
     }
 
@@ -215,11 +231,15 @@ export default function Security() {
       audioRef.current.src = '';
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
+      // Suspend, don't close — the context and its MediaElementSourceNode are
+      // scoped to the <audio> element's lifetime (it can only ever be wired to
+      // ONE source node), so they're reused on the next start. Only the
+      // unmount cleanup effect below closes the context.
+      audioContextRef.current.suspend?.()?.catch(() => {});
     }
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
     // Nothing is sounding any more, so hand the session back — holding it would
     // follow the user (SPA, no reload) onto every other page and refuse the
@@ -235,8 +255,9 @@ export default function Security() {
     setVideoEnabled(newValue);
 
     if (streaming) {
-      // Restart stream with new video setting
-      startMedia();
+      // Restart stream with the NEW setting — startMedia's own closure over
+      // videoEnabled is still the pre-toggle value in this render.
+      startMedia({ video: newValue });
     }
   }, [videoEnabled, streaming, startMedia]);
 
@@ -246,8 +267,8 @@ export default function Security() {
     setAudioEnabled(newValue);
 
     if (streaming) {
-      // Restart stream with new audio setting
-      startMedia();
+      // Restart stream with the NEW setting — same stale-closure reason as above.
+      startMedia({ audio: newValue });
     }
   }, [audioEnabled, streaming, startMedia]);
 
@@ -266,6 +287,21 @@ export default function Security() {
       }
     };
   }, [streaming, stopMedia]);
+
+  // The AudioContext and its MediaElementSourceNode are scoped to the <audio>
+  // element's lifetime (setupAudioAnalyser builds them once and reuses them
+  // across restarts), so they're closed only here — the element itself is
+  // never remounted while this component is mounted.
+  useEffect(() => {
+    return () => {
+      if (audioContextRef.current) {
+        audioContextRef.current.close?.()?.catch(() => {});
+        audioContextRef.current = null;
+      }
+      mediaSourceRef.current = null;
+      analyserRef.current = null;
+    };
+  }, []);
 
   // Handle device change
   const handleDeviceChange = useCallback(async (type, deviceId) => {

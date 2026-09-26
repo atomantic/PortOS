@@ -21,7 +21,7 @@
 
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
-import { emitStageProgress, finishStageProgress } from './textStageProgress.js';
+import { beginStageProgress, emitStageProgress, finishStageProgress } from './textStageProgress.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse, summarizeCanonExtraction } from '../universeCanon.js';
 import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
@@ -889,14 +889,18 @@ export async function generateStage(issueId, stageId, options = {}) {
   if (!TEXT_STAGE_IDS.includes(stageId)) {
     throw new Error(`generateStage: unsupported stageId "${stageId}"`);
   }
-  const emit = (payload) => emitStageProgress(issueId, stageId, payload);
+  // Generation may overlap, but only the first run owns this stream.
+  const ownsProgress = beginStageProgress(issueId, stageId);
+  const emit = (payload) => {
+    if (ownsProgress) emitStageProgress(issueId, stageId, payload);
+  };
   emit({ type: 'start', issueId, stageId, at: new Date().toISOString() });
   // Settle to an outcome object rather than try/catch so the terminal frame
   // ships on BOTH paths before the error resumes bubbling to the caller.
   const outcome = await runTextStage(issueId, stageId, options, emit)
     .then((result) => ({ result }), (error) => ({ error }));
   if (outcome.error) {
-    finishStageProgress(issueId, stageId, {
+    if (ownsProgress) finishStageProgress(issueId, stageId, {
       type: 'error',
       issueId,
       stageId,
@@ -905,7 +909,7 @@ export async function generateStage(issueId, stageId, options = {}) {
     });
     throw outcome.error;
   }
-  finishStageProgress(issueId, stageId, {
+  if (ownsProgress) finishStageProgress(issueId, stageId, {
     type: 'complete',
     issueId,
     stageId,

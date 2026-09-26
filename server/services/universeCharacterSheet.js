@@ -526,8 +526,13 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     onCompleted: async (job) => {
       detach();
       const sourceFilename = job.result?.filename;
-      await onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant }).catch((err) => {
+      const result = await onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant }).catch((err) => {
         console.error(`❌ ${variantConfig.label} post-completion failed [${shortId(jobId)}]: ${err?.message}`);
+      });
+      releasePendingSheetSlot(universeId, entryId, jobId, variant);
+      mediaJobEvents.emit('reference-sheet:changed', {
+        universeId, entryId, jobId, variant,
+        status: result?.superseded ? 'superseded' : result ? 'ready' : 'failed',
       });
     },
     onFailed: (job) => {
@@ -540,7 +545,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
 
   // Deterministic destination filename — uses the queue's jobId so the client
-  // can patch optimistically on SSE completion without a universe refetch.
+  // can correlate the persisted pointer with this particular render.
   // onSheetComplete derives the same filename from the same inputs.
   const destFilename = sheetFilename(universeId, entryId, jobId, variantConfig.filenameToken);
   console.log(`🎨 ${variantConfig.label} render — universe=${shortId(universeId)} entry=${shortId(entryId)} job=${shortId(jobId)} mode=${activeMode} model=${modelId} position=${queued.position}`);
@@ -591,6 +596,9 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   // polluting imageRefs would 404 the CanonCard thumbnail.
   let stamped = false;
   await updateUniverse(universeId, (latest) => {
+    // Recheck inside the serialized write: a newer render can claim the slot
+    // while this completion waits for an earlier universe update.
+    if (getPendingSheetSlot(universeId, entryId, variant) !== jobId) return null;
     const latestList = Array.isArray(latest.characters) ? latest.characters : [];
     const latestIdx = latestList.findIndex((c) => c.id === entryId);
     if (latestIdx < 0) return null;
@@ -615,6 +623,20 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   }
   console.log(`📌 Character ${shortId(entryId)} [${variant}] = ${destFilename}`);
   return { filename: destFilename, path: destPath, variant };
+}
+
+export async function getCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
+  getVariantConfig(variant);
+  // Capture before the record read so an older snapshot cannot be paired
+  // with a just-released slot and mistaken for a failed publication.
+  const pendingJobId = getPendingSheetSlot(universeId, entryId, variant) ?? null;
+  const universe = await getUniverse(universeId);
+  const character = universe.characters?.find(entry => entry.id === entryId);
+  if (!character) throw new ServerError('Character not found in universe', { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
+  return {
+    filename: readSheetPointer(character, variant),
+    pendingJobId,
+  };
 }
 
 /**

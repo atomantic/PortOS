@@ -425,3 +425,11 @@ it('hides the reviewer picker when claim-issue is configured with merge-on-green
    renderControls({ taskType: 'claim-issue', taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, prCompletion: 'merge-on-green' } });
    expect(screen.queryByTestId('reviewer-picker')).not.toBeInTheDocument();
 });
+
+it('offers and saves twelve parallel claim workers without dropping other metadata', async () => {
+  const onUpdate = renderControls({ taskType: 'claim-issue', taskMetadata: { simplify: true } });
+  const select = screen.getByLabelText('Swarm Mode');
+  expect([...select.options].map(option => Number(option.value))).toEqual([0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  await act(async () => fireEvent.change(select, { target: { value: '12' } }));
+  expect(onUpdate).toHaveBeenCalledWith('claim-issue', { taskMetadata: { simplify: true, swarmCount: 12 } });
+});

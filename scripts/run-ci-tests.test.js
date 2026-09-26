@@ -1,9 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  structuredFailureDiagnostics,
   extractCrashedTestFile,
   hasOtherTestFailures,
   planCrashRetry,
@@ -171,6 +173,14 @@ describe('planCrashRetry', () => {
     });
   });
 
+  it('removes reporter color resets from the retry filename', () => {
+    expect(planCrashRetry('server', '\u001b[31m' + CRASH_OUTPUT + '\u001b[39m')).toEqual({
+      retry: true,
+      relPath: 'server/services/sprites/importer.test.js',
+      selector: './services/sprites/importer.test.js',
+    });
+  });
+
   it('declines to retry a crash reported in the other workspace', () => {
     // A server-shard crash never gets replayed as a client-scoped selector.
     expect(planCrashRetry('client', CRASH_OUTPUT)).toEqual({
@@ -209,6 +219,12 @@ describe('hasOtherTestFailures', () => {
     ))).toBe(true);
   });
 
+  it('parses colored summaries without masking assertion failures', () => {
+    const colored = CLEAN_RUN_SUMMARY.replace(/(\d+ (?:passed|error))/g, '\u001b[32m$1\u001b[39m');
+    expect(hasOtherTestFailures(colored)).toBe(false);
+    expect(hasOtherTestFailures(colored.replace('798 passed', '797 passed | \u001b[31m1 failed'))).toBe(true);
+  });
+
   it('reads true when a second, unrelated unhandled error shares the run with the crash', () => {
     expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace('1 error', '2 errors'))).toBe(true);
   });
@@ -231,4 +247,42 @@ describe('relatedInputs', () => {
       '../scripts/repo-scan-guards.test.js',
     ]);
   });
+});
+
+
+describe('structured failure diagnostics', () => {
+  it('recovers a real bail failure with default and GitHub reporters even if their summary is incomplete', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-diagnostics-'));
+    try {
+      const report = join(fixture, 'report.json');
+      writeFileSync(join(fixture, 'fixture.test.js'),
+        "test('synthetic assertion diagnostic', () => { expect(1, 'synthetic mismatch').toBe(2); });");
+      writeFileSync(join(fixture, 'vitest.config.mjs'),
+        'export default { test: { globals: true, maxWorkers: 1 } };');
+      const runnerUrl = new URL('./run-ci-tests.js', import.meta.url).href;
+      const args = ['--config', join(fixture, 'vitest.config.mjs'), '--root', fixture, './fixture.test.js'];
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e',
+        `import { runNpm } from ${JSON.stringify(runnerUrl)};
+         const result = await runNpm('server', 'test:ci:related', ${JSON.stringify(args)});
+         process.exitCode = result.status;`,
+      ], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, NODE_ENV: 'test' } });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain('Test Files');
+      expect(result.stdout).toContain('Tests');
+      expect(result.stderr).toContain('Failed Tests');
+      // Inspect only the structured fallback, independent of terminal summaries.
+      const diagnostic = result.stderr.slice(result.stderr.indexOf('Structured Vitest'));
+      expect(diagnostic).toContain('fixture.test.js > synthetic assertion diagnostic');
+      expect(diagnostic).toContain('synthetic mismatch');
+      expect(diagnostic).toContain('Structured Vitest failure diagnostics');
+      writeFileSync(report, '{');
+      expect(structuredFailureDiagnostics(report)).toContain('Inconclusive');
+      writeFileSync(report, JSON.stringify({ testResults: [] }));
+      expect(structuredFailureDiagnostics(report)).toContain('Inconclusive');
+      expect(structuredFailureDiagnostics(join(fixture, 'missing.json'))).toContain('Inconclusive');
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 35_000);
 });

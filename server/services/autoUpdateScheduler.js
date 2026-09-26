@@ -34,8 +34,12 @@
  * one that can occur is the repair agent in step 4, which is itself switchable.
  */
 
+import { watch } from 'chokidar';
+import { join, resolve } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
+import { execGit } from '../lib/execGit.js';
 import { schedule, cancel } from './eventScheduler.js';
-import { getSettings, settingsEvents } from './settings.js';
+import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { getSystemActivity } from './activeProcessing.js';
 import { startPortosSelfUpdate } from './portosSelfUpdate.js';
 import { runAppUpdate } from './appUpdateRunner.js';
@@ -50,14 +54,59 @@ const EVENT_ID = 'portos-auto-update';
 /** How often the scheduler looks for an idle window once it is armed. */
 const AUTO_UPDATE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
+// How long to wait before retrying a boot-time read that came back corrupt
+// (issue #8428) — mirrors backupScheduler's retry window.
+const CORRUPT_SETTINGS_RETRY_MS = 60_000;
+
 // Only confirmed enabled/disabled states are cached; the signature makes an
 // unrelated settings save free, exactly as backupScheduler's does.
 let registrationSignature = null;
+
+// Guards against stacking multiple boot-retry timers while settings.json
+// stays unreadable across several syncAutoUpdateSchedule() calls.
+let corruptRetryTimer = null;
 
 // The Socket.IO server, captured at boot so the scheduler's run emits the same
 // `portos:update:*` / `app:update:*` frames a click would — a user watching the
 // Update page sees the automatic run stream like any other.
 let ioRef = null;
+
+// Payload-free invalidations: never broadcast configuration, repo paths or
+// activity records. A short fixed window bounds bursts without starving reads.
+let statusTimer = null;
+let configSignature = null;
+let repoWatcher = null;
+let watcherStart = null;
+
+function invalidateStatus() {
+  if (!ioRef || statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    try {
+      ioRef?.emit('portos:auto-update:changed', {});
+    } catch (err) {
+      console.error(`❌ Auto-update status notify failed: ${err.message}`);
+    }
+  }, 100);
+  statusTimer.unref?.();
+}
+
+// Git operations performed outside PortOS have no service event. Watch only
+// committed ref metadata, including worktree/common-dir layouts. Exclude index:
+// git status itself can refresh it, which would make a read/notify feedback loop.
+// Working-tree-only edits reconcile on activity, scheduler ticks and tab show.
+async function watchRepoChanges() {
+  const [{ stdout: gitDir }, { stdout: commonDir }] = await Promise.all([
+    execGit(['rev-parse', '--absolute-git-dir'], PATHS.root),
+    execGit(['rev-parse', '--git-common-dir'], PATHS.root),
+  ]);
+  const roots = [...new Set([gitDir.trim(), resolve(PATHS.root, commonDir.trim())])];
+  repoWatcher = watch(roots.flatMap(root => [
+    join(root, 'HEAD'), join(root, 'refs'), join(root, 'packed-refs'),
+  ]), { ignoreInitial: true, persistent: false, ignored: /\.lock$/ });
+  repoWatcher.on('all', invalidateStatus);
+  repoWatcher.on('error', err => console.error(`❌ Auto-update repo watcher failed: ${err.message}`));
+}
 
 /**
  * When the clock for the minimum interval starts.
@@ -130,6 +179,7 @@ const failingRuntimeWrites = new Set();
 async function writeRuntime(patch, operation) {
   return updateChecker.recordAutoUpdateRuntime(patch).then(
     () => {
+      invalidateStatus();
       if (failingRuntimeWrites.delete(operation)) {
         console.log(`✅ Auto-update runtime write recovered (${operation})`);
       }
@@ -343,8 +393,31 @@ async function launchUpdateFor(channel, io) {
  * @returns {Promise<boolean>} whether the poll is registered afterwards.
  */
 export async function syncAutoUpdateSchedule(settings) {
-  const current = settings || await getSettings().catch(() => null);
+  if (!settings) {
+    // No explicit snapshot: boot path (or a corrupt-read retry). Read through
+    // the strict status so an unreadable/malformed settings.json is
+    // distinguishable from "auto-update genuinely off" (issue #8428).
+    // `settings:updated` always hands this a clean parsed snapshot, so the
+    // explicit-argument path below is unaffected.
+    const { corrupt, settings: read } = await getSettingsWithStatus().catch(() => ({ corrupt: true, settings: {} }));
+    if (corrupt) {
+      console.error('❌ Automatic updates: settings unreadable — keeping current registration, will retry on next settings change');
+      const wasEnabled = registrationSignature !== null && JSON.parse(registrationSignature).enabled === true;
+      // Don't cache a signature for a failed read — the next sync
+      // (settings:invalidated, or the boot retry below) must re-evaluate.
+      registrationSignature = null;
+      scheduleCorruptRetry();
+      return wasEnabled;
+    }
+    return syncAutoUpdateSchedule(read);
+  }
+  const current = settings;
   const config = resolveAutoUpdateConfig(current?.autoUpdate);
+  const nextConfigSignature = JSON.stringify(config);
+  if (configSignature !== nextConfigSignature) {
+    configSignature = nextConfigSignature;
+    invalidateStatus();
+  }
   // Only the enabled flag shapes the REGISTRATION; the channel and the interval
   // are re-read inside the handler, so changing either takes effect on the next
   // tick without a re-register.
@@ -373,6 +446,22 @@ export async function syncAutoUpdateSchedule(settings) {
   return true;
 }
 
+/**
+ * Arm a single one-shot retry after a corrupt boot/re-sync read (#8428), so a
+ * transient failure self-heals without waiting for a user-driven settings
+ * save. Runs outside the request lifecycle — the process-boundary try/catch
+ * convention applies, not the route error-bubbling one.
+ */
+function scheduleCorruptRetry() {
+  if (corruptRetryTimer) return;
+  corruptRetryTimer = setTimeout(() => {
+    corruptRetryTimer = null;
+    syncAutoUpdateSchedule().catch(err =>
+      console.error(`❌ Automatic updates: corrupt-settings retry failed: ${err.message}`));
+  }, CORRUPT_SETTINGS_RETRY_MS);
+  corruptRetryTimer.unref?.();
+}
+
 // Re-sync on every settings save rather than from the settings route — keeps
 // the HTTP handler decoupled from the update graph (mirrors backupScheduler).
 // The signature guard makes unrelated saves free.
@@ -381,20 +470,45 @@ settingsEvents.on('settings:updated', (cleaned) => {
     console.error(`❌ Auto-update schedule re-sync failed: ${err.message}`));
 });
 
+// A corrupt boot read invalidates the settings read cache (settings.js's
+// reloadSettings()); re-sync as soon as a later read clears, without waiting
+// for a settings:updated save (#8428).
+settingsEvents.on('settings:invalidated', () => {
+  syncAutoUpdateSchedule().catch(err =>
+    console.error(`❌ Auto-update schedule invalidation re-sync failed: ${err.message}`));
+});
+
 /**
  * Boot entry point — captures the Socket.IO server so an automatic run streams
  * its progress to whoever is watching, then registers the poll if the feature
  * is on. Later enable/disable edits are picked up by the subscription above.
  */
-export function startAutoUpdateScheduler(io) {
+export async function startAutoUpdateScheduler(io) {
   ioRef = io || null;
+  if (!watcherStart) {
+    watcherStart = watchRepoChanges().catch(err => {
+      watcherStart = null;
+      console.error(`❌ Auto-update repo watcher unavailable: ${err.message}`);
+    });
+  }
+  await watcherStart;
   return syncAutoUpdateSchedule();
 }
 
 /** Test-only: drop the cached registration signature. */
 export function __resetAutoUpdateSchedulerForTests() {
+  if (statusTimer) clearTimeout(statusTimer);
+  statusTimer = null;
+  configSignature = null;
+  repoWatcher?.close();
+  repoWatcher = null;
+  watcherStart = null;
   registrationSignature = null;
   lastLoggedSkip = null;
   ioRef = null;
   failingRuntimeWrites.clear();
+  if (corruptRetryTimer) {
+    clearTimeout(corruptRetryTimer);
+    corruptRetryTimer = null;
+  }
 }

@@ -20,11 +20,17 @@
  * deterministically (noise is seeded per stroke), so the browser preview and
  * the server-rendered WAV are the same samples.
  *
+ * Version 2 (#8464) replaced drawing with painting: a stereo spectrogram
+ * canvas (lib/paintedCanvas.js). New paintings are always v2; v1 sketches
+ * stored on tracks keep rendering here unchanged. `normalizeWaveSketch` and
+ * `synthesizeSketchChannels` dispatch on `version`, so callers hold either.
+ *
  * Pure and dependency-free: imported by the client (MusicDesigner's drawn
  * waveform engine) as well as server/services/musicWaveform.js.
  */
 
 import { pitchToMidi, midiToFreq } from './pitchMath.js';
+import { PAINTED_CANVAS_VERSION, normalizePaintedCanvas, synthesizePaintedCanvas } from './paintedCanvas.js';
 
 export const WAVE_SKETCH_VERSION = 1;
 export const WAVE_SKETCH_SAMPLE_RATE = 44100;
@@ -107,11 +113,13 @@ function normalizeNote(raw, { durationSec, isNoise, shapeNames }) {
 }
 
 /**
- * Validate + canonicalize an LLM (or client round-tripped) wave sketch.
+ * Validate + canonicalize an LLM (or client round-tripped) wave sketch of
+ * either version (a v2 painted canvas is normalized by lib/paintedCanvas.js).
  * Returns the normalized sketch, or null when nothing playable survives.
  */
 export function normalizeWaveSketch(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.version === PAINTED_CANVAS_VERSION) return normalizePaintedCanvas(raw);
 
   const shapes = {};
   const rawShapes = raw.shapes && typeof raw.shapes === 'object' && !Array.isArray(raw.shapes) ? raw.shapes : {};
@@ -282,6 +290,17 @@ export function synthesizeWaveSketch(sketch, { sampleRate = WAVE_SKETCH_SAMPLE_R
     for (let s = 0; s < total; s += 1) out[s] *= scale;
   }
   return out;
+}
+
+/** True for a v2 painted canvas (vs a v1 drawn sketch). */
+export const isPaintedCanvas = (sketch) => sketch?.version === PAINTED_CANVAS_VERSION;
+
+/**
+ * Render a NORMALIZED sketch of either version to its PCM channels: `[mono]`
+ * for a v1 drawing, `[left, right]` for a v2 painting.
+ */
+export function synthesizeSketchChannels(sketch, options) {
+  return isPaintedCanvas(sketch) ? synthesizePaintedCanvas(sketch, options) : [synthesizeWaveSketch(sketch, options)];
 }
 
 /**

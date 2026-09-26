@@ -73,8 +73,11 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
     await rm(root, { recursive: true, force: true });
   });
   expect(results).toHaveLength(3);
-  expect(results[2].code, results[2].stderr).toBe(0);
-  expect(JSON.parse(results[2].stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', model: 'review-model', findings: 'NO FINDINGS' });
+  // #6338: a CLI reviewer is granted only through a maintained no-tool
+  // (read-only) recipe. A generic harness has none, so the bridge refuses it
+  // instead of running the vendor's unrestricted argv.
+  expect(results[2].code).not.toBe(0);
+  expect(results[2].stderr).toMatch(/REVIEWER_UNSUPPORTED/);
   for (const [index, model] of ['review-model', 'default-model'].entries()) {
     const result = results[index];
     expect(result.code, result.stderr).toBe(0);

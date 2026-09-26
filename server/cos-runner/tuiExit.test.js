@@ -17,7 +17,7 @@ function setup(extra = {}) {
   const withState = vi.fn(async fn => fn(state));
   const onExit = createTuiExitHandler({
     agentId: 'agent-old', taskId: 'task-1', sessionId: 'session-1',
-    agent, activeAgents, io, emitToServer, withState,
+    agent, activeAgents, io, emitToServer, withState, persistCompletion: vi.fn().mockResolvedValue(),
   });
   return { agent, activeAgents, state, io, emitToServer, withState, onExit };
 }

@@ -6,13 +6,12 @@ import {
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import useFableLoomAiRun from '../../hooks/useFableLoomAiRun';
 import useProviderModels from '../../hooks/useProviderModels';
 import {
   cancelLoomEditorialAutopilot,
   getLoom,
-  getLoomEditorialAutopilotRun,
   getLoomEditorialAutopilotStatus,
   remediateLoomEditorial,
   reviewLoomPlaythroughs,
@@ -22,7 +21,6 @@ import { effectiveModelFor, effortAwareModelOptions } from '../../utils/provider
 import LoomAiRunStatus from './LoomAiRunStatus';
 
 const ACTIVE_STATUSES = new Set(['running', 'canceling']);
-const TERMINAL_STATUSES = new Set(['completed', 'paused', 'failed', 'canceled']);
 
 const routePayload = (route) => ({
   ...(route.providerId ? { providerId: route.providerId } : {}),
@@ -85,8 +83,19 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
   const [maxRounds, setMaxRounds] = useState(3);
   const [selfImprove, setSelfImprove] = useState(false);
   const [result, setResult] = useState(null);
-  const [autopilotRun, setAutopilotRun] = useState(null);
-  const handledTerminalRunRef = useRef(null);
+  const loomIdentityRef = useRef(loom.id);
+  loomIdentityRef.current = loom.id;
+  const { run: autopilotRun, applyRun: setAutopilotRun } = useFableLoomRun({
+    loomId: loom.id,
+    event: 'fableloom:editorial:run',
+    loadRun: () => getLoomEditorialAutopilotStatus(loom.id, { silent: true }).then(response => response.run),
+    onTerminal: (run, isCurrent) => {
+      setResult({ type: 'autopilot', run });
+      getLoom(loom.id, { silent: true }).then(updated => {
+        if (isCurrent()) onLoomUpdate(updated);
+      }).catch(() => {});
+    },
+  });
   const remediationAi = useFableLoomAiRun();
   const playtestAi = useFableLoomAiRun();
   const { providers, activeProviderId, loading: providersLoading } = useProviderModels({
@@ -99,53 +108,17 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
   const selectedModel = effectiveModelFor(selectedProvider, route.model);
   const routeBody = useMemo(() => routePayload(route), [route]);
 
-  useEffect(() => {
-    setResult(null);
-    setAutopilotRun(null);
-    handledTerminalRunRef.current = null;
-    let ignore = false;
-    getLoomEditorialAutopilotStatus(loom.id, { silent: true })
-      .then(({ run }) => {
-        if (ignore || !run) return;
-        setAutopilotRun(run);
-        if (ACTIVE_STATUSES.has(run.status)) {
-          setRoute({ providerId: run.route?.providerId || '', model: run.route?.model || '', effort: run.route?.effort || '' });
-          setMode(run.mode || 'series');
-          setMaxRounds(run.maxRounds);
-          setSelfImprove(run.selfImproveEnabled === true);
-        }
-      })
-      .catch(() => {});
-    return () => { ignore = true; };
-  }, [loom.id]);
+  useEffect(() => { setResult(null); }, [loom.id]);
 
   const autopilotActive = ACTIVE_STATUSES.has(autopilotRun?.status);
-  // useAutoRefetch clears its interval when `enabled` drops, but it cannot cancel
-  // a request already in flight. Stamp what each poll asked about so a reply that
-  // lands after the loom or the run changed can't overwrite newer state — this is
-  // the `ignore` flag the old per-effect cleanup owned, and the same identity-ref
-  // pattern LoomProductionPanel uses for its batch poll.
-  const autopilotIdentityRef = useRef(null);
-  autopilotIdentityRef.current = `${loom.id}:${autopilotRun?.id ?? ''}`;
-  const refreshAutopilotRun = () => {
-    const identity = autopilotIdentityRef.current;
-    return getLoomEditorialAutopilotRun(loom.id, autopilotRun.id, { silent: true })
-      .then((run) => { if (identity === autopilotIdentityRef.current) setAutopilotRun(run); })
-      .catch(() => {});
-  };
-  useAutoRefetch(refreshAutopilotRun, 2000, {
-    enabled: autopilotActive && Boolean(autopilotRun?.id),
-    immediate: false,
-    pollOnly: true,
-  });
-
   useEffect(() => {
-    if (!TERMINAL_STATUSES.has(autopilotRun?.status)
-      || handledTerminalRunRef.current === autopilotRun.id) return;
-    handledTerminalRunRef.current = autopilotRun.id;
-    setResult({ type: 'autopilot', run: autopilotRun });
-    getLoom(loom.id, { silent: true }).then(onLoomUpdate).catch(() => {});
-  }, [autopilotRun, loom.id, onLoomUpdate]);
+    if (!ACTIVE_STATUSES.has(autopilotRun?.status)) return;
+    setResult(null);
+    setRoute({ providerId: autopilotRun.route?.providerId || '', model: autopilotRun.route?.model || '', effort: autopilotRun.route?.effort || '' });
+    setMode(autopilotRun.mode || 'series');
+    setMaxRounds(autopilotRun.maxRounds);
+    setSelfImprove(autopilotRun.selfImproveEnabled === true);
+  }, [autopilotRun?.id]);
 
   const [remediate, remediating] = useAsyncAction(async () => {
     const operationId = remediationAi.begin();
@@ -186,9 +159,9 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
       ...(mode === 'planning' ? { mode } : {}),
       ...(selfImprove ? { selfImprove: true } : {}),
     }, { silent: true });
-    handledTerminalRunRef.current = null;
-    setAutopilotRun(run);
+    if (loomIdentityRef.current !== loom.id) return;
     setResult(null);
+    setAutopilotRun(run);
     toast.success(run.alreadyRunning ? 'Reattached to the active editorial autopilot' : 'Editorial autopilot started');
   }, { errorMessage: 'Could not start editorial autopilot' });
 
@@ -200,7 +173,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
   const busy = remediating || playtesting || startingAutopilot || cancelingAutopilot || autopilotActive;
   const blocked = dirty || !loom.episodes.length;
   const response = result?.response;
-  const shownRun = result?.type === 'autopilot' ? result.run : result ? null : autopilotRun;
+  const shownRun = autopilotActive || result?.type === 'autopilot' ? autopilotRun : result ? null : autopilotRun;
   const diagnostics = result?.type === 'remediation' ? response?.diagnostics : null;
   const deterministic = result?.type === 'playtest'
     ? response?.deterministic

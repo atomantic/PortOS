@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promisify } from 'node:util';
 const mocks = vi.hoisted(() => ({ exec: vi.fn(), enabled: vi.fn(), supported: vi.fn(), exists: vi.fn(), read: vi.fn() }));
 vi.mock('../lib/childProcess.js', () => ({ execFile: Object.assign(() => {}, { [promisify.custom]: mocks.exec }) }));
@@ -7,13 +7,17 @@ vi.mock('../lib/platform.js', () => ({ isAppleSilicon: mocks.supported }));
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mocks.enabled }));
 vi.mock('node:fs', () => ({ existsSync: mocks.exists }));
 vi.mock('node:fs/promises', () => ({ readFile: mocks.read, mkdir: vi.fn().mockResolvedValue(), writeFile: vi.fn().mockResolvedValue(), rename: vi.fn().mockResolvedValue(), unlink: vi.fn().mockResolvedValue() }));
+import { layaMlxEvents } from './layaMlxEvents.js';
 import { LAYA_MLX } from '../lib/layaMlx.js';
 import { getLayaStatus, installLaya, scoreLaya } from './layaMlx.js';
 const input = { premise: 'The invoice was paid twice.', instructions: 'Choose a department.', options: ['billing', 'sales'], minMargin: 0.15 };
 const output = { answers: { decision: { type: 'choice', choice: 'billing', probabilities: { billing: 0.9, sales: 0.1 }, confidence: 0.53 } } };
 let stdin;
+const notifications = vi.fn();
+afterEach(() => layaMlxEvents.removeAllListeners());
 beforeEach(() => {
   vi.clearAllMocks();
+  layaMlxEvents.on('updated', notifications);
   mocks.enabled.mockResolvedValue(true);
   mocks.supported.mockReturnValue(true);
   mocks.exists.mockReturnValue(true);
@@ -27,12 +31,14 @@ describe('Laya manual experiment workflow', () => {
     mocks.supported.mockReturnValue(false);
     expect(await installLaya()).toEqual({ ok: false, code: 'laya-unsupported' });
     expect(mocks.exec).not.toHaveBeenCalled();
+    expect(notifications).not.toHaveBeenCalled();
   });
   it('gates disabled experiments before spawning and validates requests', async () => {
     mocks.enabled.mockResolvedValue(false);
     expect(await scoreLaya(input)).toMatchObject({ code: 'laya-disabled' });
     expect(await scoreLaya({ ...input, options: ['same', 'same'] })).toMatchObject({ code: 'laya-request-invalid' });
     expect(mocks.exec).not.toHaveBeenCalled();
+    expect(notifications).not.toHaveBeenCalled();
   });
   it('scores offline through stdin without leaking credentials or confusing confidence with entailment', async () => {
     vi.stubEnv('GH_TOKEN', 'test-secret');
@@ -67,7 +73,10 @@ describe('Laya manual experiment workflow', () => {
     expect(await scoreLaya(input)).toMatchObject({ code: 'laya-busy' });
     expect(await installLaya()).toMatchObject({ code: 'laya-busy' });
     reject(new Error('private traceback'));
+    expect(notifications).toHaveBeenCalledTimes(1);
     expect(await first).toEqual({ ok: false, code: 'laya-scoring-failed' });
+    expect(notifications).toHaveBeenCalledTimes(2);
+    expect(await getLayaStatus()).toMatchObject({ scoring: false });
     expect(await scoreLaya(input)).toMatchObject({ ok: true });
   });
 });
@@ -75,9 +84,14 @@ describe('Laya manual experiment workflow', () => {
 it('installs only on request, pins runtime and weights, and reports bounded setup failures', async () => {
   expect(await installLaya()).toEqual({ ok: true, installing: true });
   await vi.waitFor(async () => expect((await getLayaStatus()).installing).toBe(false));
+  expect(notifications).toHaveBeenLastCalledWith({});
+  expect(notifications).toHaveBeenCalledTimes(6);
   expect(mocks.exec.mock.calls.some(([, args]) => args.includes(`https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`))).toBe(true);
   expect(mocks.exec.mock.calls.some(([, args]) => args.includes(LAYA_MLX.revision) && args.includes(LAYA_MLX.repository))).toBe(true);
+  notifications.mockClear();
   mocks.exec.mockRejectedValueOnce(new Error('private Python diagnostic'));
   await installLaya();
   await vi.waitFor(async () => expect(await getLayaStatus()).toMatchObject({ installing: false, installError: 'laya-install-python-failed' }));
+  expect(notifications).toHaveBeenCalledTimes(3);
+  expect(notifications).toHaveBeenLastCalledWith({});
 });

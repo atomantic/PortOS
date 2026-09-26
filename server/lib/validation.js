@@ -13,6 +13,7 @@ export const gitDeleteBranchBodySchema = z.object({
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
+import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
@@ -86,6 +87,13 @@ export {
 // `ports` is an open-ended label→port map so app-specific keys derived from
 // *_PORT env vars (coinbaseIpc, geminiIpc, etc.) survive validation alongside
 // the well-known labels (api, ui, devUi, cdp, health).
+export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
+
+export const processActionSchema = z.object({
+  action: z.enum(['start', 'stop', 'restart']),
+  appId: z.string().min(1).optional()
+});
+
 export const processSchema = z.object({
   name: z.string().min(1),
   port: z.number().int().min(1).max(65535).nullable().optional(),
@@ -166,28 +174,9 @@ export const layeredIntelligenceConfigSchema = z.object({
   providerId: providerRefSchema.nullable().optional(),
   model: z.string().nullable().optional(),
   sources: z.object({
-    goals: z.boolean().optional(),
-    // The app's own success/performance metrics doc (METRICS.md in the app repo).
-    // Default on: the primary signal for judging a managed app against its goals.
-    appMetrics: z.boolean().optional(),
-    cosMetrics: z.boolean().optional(),
-    healthReport: z.boolean().optional(),
-    planMd: z.boolean().optional(),
-    openIssues: z.boolean().optional(),
-    // The committed backlog (#2698): `plan`-labeled tracker issues / the
-    // prioritized Jira backlog / PLAN.md's unchecked items, fed in so the reasoner
-    // can suppress a proposal that overlaps work already in scope. Default on.
-    plannedWork: z.boolean().optional(),
-    // PortOS-only product-success signals (POST engagement and creative
-    // commission feedback). Managed apps use appMetrics/custom sources.
-    productMetrics: z.boolean().optional(),
-    // Feedback loop (#2428): feed past LI proposals + their tracker outcomes back
-    // into the reasoning prompt. Default on for PortOS, off for managed apps.
-    outcomes: z.boolean().optional(),
-    // Self-evaluation (#2700): fold LI's own merge rate, already-filed proposal
-    // count, and agent-run health back into the prompt so the loop can judge its
-    // proposal quality before filing. Default on for PortOS, off for managed apps.
-    selfEval: z.boolean().optional(),
+    // One optional toggle per built-in Layer-1 source; the ordered key list (and
+    // what each source means) lives in layeredIntelligenceSources.js.
+    ...Object.fromEntries(LAYERED_INTELLIGENCE_SOURCE_KEYS.map(key => [key, z.boolean().optional()])),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
     // `label`. gatherSources also re-enforces the file confinement + the
@@ -1659,6 +1648,10 @@ export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
 
+export const appIconQuerySchema = z.object({
+  size: z.enum(['64', '128', '256']).default('128').transform(Number),
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.
@@ -2433,3 +2426,50 @@ export const mindBundleApplySchema = z.object({
     PERSISTENT_MIND_BUNDLE_GROUPS.map((group) => [group, z.enum(MIND_BUNDLE_GROUP_CHOICES).optional()]),
   )).strict(),
 }).strict();
+
+export const appLaunchVideoRequestSchema = z.object({
+  tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
+  direction: z.string().trim().max(2000).default(''),
+  format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
+  targetDurationSec: z.number().int().min(15).max(25).default(20),
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
+}).strict();
+
+export const launchVideoOptionsSchema = z.object({
+  targetDurationSec: z.number().min(15).max(25),
+  appId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
+  runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
+}).strict().refine(value => Boolean(value.appId) === Boolean(value.runId), 'appId and runId must be supplied together');
+
+export const launchVideoStoryboardSchema = z.object({
+  posterSec: z.number().nonnegative(),
+  scenes: z.array(z.object({
+    durationSec: z.number().positive(),
+    lines: z.array(z.object({
+      text: z.string().trim().min(1).max(10000),
+      wordCount: z.number().int().positive(),
+      holdSec: z.number().positive(),
+    }).strict()).max(100),
+  }).strict()).min(1).max(100),
+}).strict();
+
+// HTML composition inputs are local, editable assets, never provider prompts.
+export const htmlCompositionRenderSchema = z.object({
+  launchVideo: launchVideoOptionsSchema.optional(),
+  directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
+});
+
+export const htmlCompositionContractSchema = z.object({
+  durationSec: z.number().min(1).max(120),
+  fps: z.number().int().min(12).max(60),
+  width: z.number().int(),
+  height: z.number().int(),
+}).superRefine((value, ctx) => {
+  if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
+    ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
+  }
+  if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
+    ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
+  }
+});

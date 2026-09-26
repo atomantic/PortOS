@@ -6,6 +6,8 @@
  * No data is ever lost — unique records from both sides are kept (union semantics).
  */
 
+import { meatspaceEvents } from './meatspaceEvents.js';
+import { dashboardEvents } from './dashboardEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
@@ -436,6 +438,7 @@ async function applyGoalsRemote(remoteData) {
 
   if (goalsChanged || remoteMaxTs > localMaxTs) {
     await atomicWrite(GOALS_FILE, merged);
+    dashboardEvents.emit('goals:changed');
     console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
     return { applied: true, count: mergedGoals.length };
   }
@@ -562,6 +565,7 @@ async function applyMeatspaceRemote(remoteData) {
       const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
       if (changed) {
         await atomicWrite(filePath, merged);
+        if (filename === 'config.json') meatspaceEvents.emit('death-clock:changed', {});
         totalApplied++;
       }
     } else {

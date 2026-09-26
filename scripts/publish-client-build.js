@@ -19,6 +19,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,9 @@ const ROOT_DIR = dirname(SCRIPT_DIR);
 const DEFAULT_CLIENT_DIR = join(ROOT_DIR, 'client');
 const STAGE_PREFIX = '.dist-stage-';
 const ABANDONED_STAGE_AGE_MS = 24 * 60 * 60 * 1000;
+const PUBLISHED_BUILD_MANIFEST = '.published-builds.json';
+const RETAINED_BUILD_COUNT = 3;
+const STALE_ASSET_AGE_MS = 24 * 60 * 60 * 1000;
 
 function localReferencePath(reference, stageDir) {
   if (!reference || reference.startsWith('//')) return null;
@@ -126,7 +130,78 @@ function publishEntry(source, destination) {
   }
 }
 
-export function publishStagedBuild(stageDir, distDir, { beforeIndexPublish } = {}) {
+function listFiles(directory, root = directory) {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return listFiles(path, root);
+    if (!entry.isFile()) return [];
+    return [relative(root, path).split(sep).join('/')];
+  });
+}
+
+function prunePublishedAssets(distDir, buildAssets, now = Date.now()) {
+  const manifestPath = join(distDir, PUBLISHED_BUILD_MANIFEST);
+  const lockPath = `${manifestPath}.lock`;
+  let lock;
+  const waitCell = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 5000;
+  while (lock === undefined) {
+    try {
+      lock = openSync(lockPath, 'wx');
+    } catch (error) {
+      if (error.code !== 'EEXIST' || Date.now() >= deadline) throw error;
+      Atomics.wait(waitCell, 0, 0, 10);
+    }
+  }
+  try {
+    prunePublishedAssetsUnderLock(distDir, buildAssets, now, manifestPath);
+  } finally {
+    closeSync(lock);
+    rmSync(lockPath, { force: true });
+  }
+}
+
+function prunePublishedAssetsUnderLock(distDir, buildAssets, now, manifestPath) {
+  let previousBuilds = [];
+  if (existsSync(manifestPath)) {
+    previousBuilds = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (!Array.isArray(previousBuilds)) throw new Error('Published build manifest must be an array');
+  }
+  const builds = [
+    { publishedAt: new Date(now).toISOString(), assets: buildAssets },
+    ...previousBuilds,
+  ].slice(0, RETAINED_BUILD_COUNT);
+  const temporaryManifest = `${manifestPath}.${process.pid}.${randomUUID()}`;
+  try {
+    writeFileSync(temporaryManifest, `${JSON.stringify(builds, null, 2)}\n`);
+    renameSync(temporaryManifest, manifestPath);
+  } finally {
+    rmSync(temporaryManifest, { force: true });
+  }
+
+  // Re-read after writing: another publisher may have added assets while this
+  // build was being published. Its manifest entry and the mtime grace both
+  // protect assets that are not part of this process's own staged build.
+  const currentBuilds = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (!Array.isArray(currentBuilds)) throw new Error('Published build manifest must be an array');
+  const retained = new Set(currentBuilds.flatMap((build) => Array.isArray(build.assets) ? build.assets : []));
+  const assetsDir = join(distDir, 'assets');
+  let prunedCount = 0;
+  let prunedBytes = 0;
+  for (const asset of listFiles(assetsDir, distDir)) {
+    if (retained.has(asset)) continue;
+    const assetPath = join(distDir, asset);
+    const assetStat = statSync(assetPath);
+    if (now - assetStat.mtimeMs < STALE_ASSET_AGE_MS) continue;
+    prunedBytes += assetStat.size;
+    rmSync(assetPath);
+    prunedCount += 1;
+  }
+  console.log(`🧹 Pruned ${prunedCount} stale client assets (${(prunedBytes / 1024 / 1024).toFixed(1)} MB)`);
+}
+
+export function publishStagedBuild(stageDir, distDir, { beforeIndexPublish, pruneAssets = prunePublishedAssets } = {}) {
   validateStagedBuild(stageDir);
   mkdirSync(distDir, { recursive: true });
   for (const entry of readdirSync(stageDir, { withFileTypes: true })) {
@@ -157,6 +232,11 @@ export function publishStagedBuild(stageDir, distDir, { beforeIndexPublish } = {
   } finally {
     rmSync(temporaryIndex, { force: true });
   }
+  try {
+    pruneAssets(distDir, listFiles(join(stageDir, 'assets'), stageDir).map((path) => path));
+  } catch (error) {
+    console.error(`❌ Failed to prune stale client assets: ${error.message}`);
+  }
 }
 
 export async function publishClientBuild({
@@ -164,12 +244,13 @@ export async function publishClientBuild({
   distDir = join(clientDir, 'dist'),
   runBuild = runViteBuild,
   beforeIndexPublish,
+  pruneAssets,
 } = {}) {
   cleanAbandonedStages(clientDir);
   const stageDir = mkdtempSync(join(clientDir, STAGE_PREFIX));
   try {
     await runBuild(stageDir, clientDir);
-    publishStagedBuild(stageDir, distDir, { beforeIndexPublish });
+    publishStagedBuild(stageDir, distDir, { beforeIndexPublish, pruneAssets });
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
   }

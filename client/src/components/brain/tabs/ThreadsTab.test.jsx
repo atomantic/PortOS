@@ -85,7 +85,8 @@ describe('ThreadsTab', () => {
     fireEvent.click(await screen.findByText('Plain loop'));
     expect(screen.getByTestId('location').textContent).toBe('?thread=op');
     await screen.findByRole('dialog');
-    expect(screen.getByDisplayValue('Call back')).toBeTruthy();
+    // The drawer shell mounts before its asynchronous record hydration.
+    expect(await screen.findByDisplayValue('Call back')).toBeTruthy();
   });
 
   it('checks a thread off in place without refetching the list', async () => {

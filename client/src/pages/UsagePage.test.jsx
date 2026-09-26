@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import socket from '../services/socket';
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('events');
+  return { default: new EventEmitter() };
+});
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -41,6 +47,22 @@ beforeEach(() => {
 });
 
 describe('UsagePage subscription savings', () => {
+  it('updates quota cards on completion without recurring fetches', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
+    api.getProviderUsage.mockResolvedValue({ providers: [{
+      family: 'claude', label: 'Claude Code', supported: true,
+      limits: [{ key: 'week', label: 'Updated window', percentUsed: 73, percentRemaining: 27 }],
+    }] });
+    await act(async () => { socket.emit('provider-quota:updated', {}); });
+    expect(await screen.findByText('Updated window')).toBeInTheDocument();
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(2);
+    expect(api.getProviderUsage).toHaveBeenLastCalledWith({ refresh: false });
+  });
+
   const savings = {
     range: { start: '2026-02-01', end: '2026-02-07', days: 7 },
     configured: false,
@@ -76,6 +98,44 @@ describe('UsagePage subscription savings', () => {
 });
 
 describe('UsagePage historical reconciliation', () => {
+  it('renders backfill events without polling and reconciles missed updates', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.getUsageBackfillStatus.mockResolvedValue({ status: 'running', processed: 1, total: 5 });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('Processing 1 of 5 runs…')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(api.getUsageBackfillStatus).toHaveBeenCalledTimes(1);
+    api.getUsageBackfillStatus.mockResolvedValue({ status: 'running', processed: 3, total: 5 });
+    await act(async () => { socket.emit('usage-backfill:updated', {}); });
+    expect(await screen.findByText('Processing 3 of 5 runs…')).toBeInTheDocument();
+    expect(api.getUsageBackfillStatus).toHaveBeenCalledTimes(2);
+    const usageReads = api.getUsage.mock.calls.length;
+    api.getUsageBackfillStatus.mockResolvedValue({ status: 'complete', corrected: 4 });
+    await act(async () => { socket.emit('usage-backfill:updated', {}); });
+    expect(await screen.findByText('Corrected 4 runs.')).toBeInTheDocument();
+    expect(api.getUsage.mock.calls.length).toBe(usageReads + 1);
+    await act(async () => { socket.emit('connect'); });
+    expect(api.getUsageBackfillStatus).toHaveBeenCalledTimes(4);
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('hidden');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    api.getUsageBackfillStatus.mockResolvedValue({ status: 'error', error: 'Example scan failed' });
+    visibility.mockReturnValue('visible');
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(api.getUsageBackfillStatus).toHaveBeenCalledTimes(5);
+    expect(await screen.findByText('Example scan failed')).toBeInTheDocument();
+  });
+
+  it('reconciles a completion that beats the start response', async () => {
+    api.startUsageBackfill.mockResolvedValue({ status: 'running' });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const button = await screen.findByRole('button', { name: 'Reconcile now' });
+    api.getUsageBackfillStatus.mockResolvedValue({ status: 'complete', corrected: 3 });
+    fireEvent.click(button);
+    expect(await screen.findByText('Corrected 3 runs.')).toBeInTheDocument();
+    expect(api.startUsageBackfill).toHaveBeenCalledTimes(1);
+  });
+
   it('starts only from the explicit user action and reports completion', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 
