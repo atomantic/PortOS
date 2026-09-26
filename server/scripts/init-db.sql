@@ -1799,6 +1799,7 @@ CREATE TABLE IF NOT EXISTS beeper_messages (
   -- against the local user (accounts[].user.id differs from senderID on every
   -- network), so this is the only reliable inbound/outbound signal.
   is_sender BOOLEAN NOT NULL DEFAULT FALSE,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT 'epoch',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1874,6 +1875,12 @@ CREATE TABLE IF NOT EXISTS beeper_sync_cursors (
 -- a failed row is never retried in place — a re-send is a NEW row, because
 -- Beeper has no idempotency key on send. Mirrors the beeper.js block in
 -- server/lib/db/schema/.
+CREATE TABLE IF NOT EXISTS beeper_reconcile_cursors (
+  account_id TEXT PRIMARY KEY REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  upper_bound TEXT
+);
+
 CREATE TABLE IF NOT EXISTS beeper_outbox (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,

@@ -40,7 +40,7 @@
 
 import { query, withTransaction } from '../lib/db.js';
 import { BeeperApiError, getMessage, listMessagesPage, sendMessage } from './beeperClient.js';
-import { normalizeMessageRow } from './beeperSync.js';
+import { normalizeMessageRow, upsertMirroredMessage } from './beeperSync.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 
 const LOG_PREFIX = '🫧 Beeper outbox';
@@ -591,38 +591,13 @@ async function lookupSentMessage(pending) {
   }) ?? null;
 }
 
-/**
- * Mirror the confirmed message so the thread shows it without waiting for the
- * next sweep. `normalizeMessageRow` is beeperSync's own normalizer, reused so
- * an outbound row is shaped exactly like an ingested one; the upsert carries
- * the same non-destructive COALESCE guards as the sweep's, and the sweep's
- * later re-observation of the same id updates rather than duplicates it.
- *
- * `is_sender` is written as TRUE literally rather than from the normalizer's
- * `row.isSender`: PortOS just sent this message, so it is outbound whatever the
- * confirming payload says, and the field is optional on the API's own `Message`
- * (`normalizeMessageRow` lands an omitted one on FALSE). The ON CONFLICT arm
- * keeps the sweep's never-downgrade rule, so a later inbound page that omits
- * the field cannot flip a message the user sent onto the other side of the
- * thread.
+/** Mirror confirmed sends through the same version/retention gate as ingestion.
+ * PortOS knows this is outbound even when the source omits isSender.
  */
-async function mirrorSentMessage(client, conversationId, message) {
-  const row = normalizeMessageRow(message, new Date(runtime.now()).toISOString());
+async function mirrorSentMessage(client, conversationId, message, observedAt) {
+  const row = normalizeMessageRow(message, observedAt);
   if (!row.id) return;
-  await client.query(
-    `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
-     ON CONFLICT (id) DO UPDATE SET
-       body = COALESCE(NULLIF(EXCLUDED.body, ''), beeper_messages.body),
-       sender_id = COALESCE(NULLIF(EXCLUDED.sender_id, ''), beeper_messages.sender_id),
-       sent_at = COALESCE(EXCLUDED.sent_at, beeper_messages.sent_at),
-       edited_at = COALESCE(EXCLUDED.edited_at, beeper_messages.edited_at),
-       unsent_at = COALESCE(beeper_messages.unsent_at, EXCLUDED.unsent_at),
-       sort_key = COALESCE(NULLIF(EXCLUDED.sort_key, ''), beeper_messages.sort_key),
-       is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
-       updated_at = NOW()`,
-    [row.id, conversationId, row.senderId, row.body, row.sentAt, row.editedAt, row.unsentAt, row.sortKey],
-  );
+  await upsertMirroredMessage(client, conversationId, { ...row, isSender: true });
 }
 
 function releasePending(id) {
@@ -660,6 +635,7 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
   if (pending.resolving) return null;
   pending.resolving = true;
 
+  const observedAt = new Date(runtime.now()).toISOString();
   const found = await lookupSentMessage(pending)
     .then((value) => ({ ok: true, value }))
     .catch((err) => ({ ok: false, err }));
@@ -709,7 +685,7 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
       [id, String(message.id), message?.timestamp ?? null],
     );
     if ((settled?.rowCount ?? 0) !== 1) return null;
-    await mirrorSentMessage(client, pending.conversationId, message);
+    await mirrorSentMessage(client, pending.conversationId, message, observedAt);
     return settled.rows[0];
   }), () => {
     releasePending(id);

@@ -82,7 +82,8 @@ vi.mock('./beeperTribe.js', () => ({
 }));
 
 const {
-  runBeeperSweep, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
+  runBeeperSweep,
+  reconcileBeeperEvent, isBeeperIngestionArmed, getBeeperSyncConfig, chatNeedsSweep,
   normalizeAccountRow, normalizeMessageRow, normalizeAttachmentRows, DEFAULT_INTERVAL_MINUTES,
 } = await import('./beeperSync.js');
 const { getBeeperSweepProgress, __resetBeeperSweepProgressForTests } = await import('./beeperSweepProgress.js');
@@ -561,7 +562,7 @@ describe('cursor transactionality', () => {
 
     const insert = txWrites.find(({ text }) => text.includes('INSERT INTO beeper_messages'));
     expect(insert).toBeTruthy();
-    expect(insert.params.at(-1)).toBe(true);
+    expect(insert.params[8]).toBe(true);
     // A later page may omit the optional field; the upsert must not flip a
     // message the user actually sent onto the other side of the thread. This is
     // the guard's SHAPE against a mocked client — the row-level proof that a
@@ -1213,5 +1214,19 @@ describe('account enumeration continuation', () => {
     installFetch({ chatPages: [{ items: [], hasMore: true, oldestCursor: '21' }] });
     await expect(runBeeperSweep()).rejects.toMatchObject({ code: 'SWEEP_FAILED' });
     expect(accountCheckpoint).toBe('21');
+  });
+});
+
+describe('stored-message event reconciliation', () => {
+  it('does no transport work when ingestion is disabled or the message is not mirrored', async () => {
+    installFetch();
+    getSettingsMock.mockResolvedValue({ beeper: { enabled: false } });
+    await reconcileBeeperEvent({ kind: 'message.upserted', chatID: 'example-chat', ids: ['old-message'] });
+    expect(dbCalls).toEqual([]);
+    expect(fetchedUrls).toEqual([]);
+    getSettingsMock.mockResolvedValue({ beeper: { enabled: true, token: 'test-token' } });
+    await reconcileBeeperEvent({ kind: 'message.deleted', chatID: 'example-chat', ids: ['unknown-message'] });
+    expect(fetchedUrls).toEqual([]);
+    expect(txWrites).toEqual([]);
   });
 });

@@ -44,17 +44,7 @@ vi.mock('./beeperClient.js', () => ({
 // The real normalizer is pure and covered by beeperSync's own suite; mocked
 // here only to keep the ingestion stack (settings, Tribe, the pool) out of this
 // module graph.
-vi.mock('./beeperSync.js', () => ({
-  normalizeMessageRow: (message, observedAt) => ({
-    id: String(message?.id ?? ''),
-    senderId: String(message?.senderID ?? ''),
-    body: typeof message?.text === 'string' ? message.text : '',
-    sentAt: message?.timestamp ?? null,
-    editedAt: message?.editedTimestamp ?? null,
-    unsentAt: message?.isDeleted === true ? observedAt : null,
-    sortKey: String(message?.sortKey ?? ''),
-  }),
-}));
+
 
 // --- in-memory stand-in for the tables this service touches -----------------
 const outbox = new Map();
@@ -606,13 +596,8 @@ describe('confirmation — socket first, 30s GET fallback', () => {
     expect(mirrored).toHaveLength(1);
     expect(mirrored[0][0]).toBe('msg-final-1');
     expect(mirrored[0][1]).toBe(CONVERSATION_ID);
-    // The mirrored row is OUTBOUND. `is_sender` is written as a literal TRUE
-    // rather than read off the confirming payload — the field is optional on
-    // the API's own Message, and PortOS knows it sent this one — and the
-    // conflict arm keeps the sweep's never-downgrade rule so a later inbound
-    // page that omits the field cannot flip it back to the other side.
-    expect(mirroredSql[0]).toMatch(/INSERT INTO beeper_messages \([^)]*, is_sender\)/);
-    expect(mirroredSql[0]).toMatch(/VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, TRUE\)/);
+    // PortOS knows this is outbound even if the confirming payload omits isSender.
+    expect(mirrored[0][8]).toBe(true);
     expect(mirroredSql[0]).toMatch(/is_sender = beeper_messages\.is_sender OR EXCLUDED\.is_sender/);
     // The frame this service emits carries ids only — never the body.
     const emitted = frames.find((frame) => frame.ids?.includes('msg-final-1') && frame.ts);
