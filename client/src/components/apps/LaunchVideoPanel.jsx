@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { Download } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
-import useProviderModels from '../../hooks/useProviderModels';
+import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
 import { copyToClipboard } from '../../lib/clipboard';
@@ -11,7 +11,6 @@ import socket from '../../services/socket';
 import { createAppLaunchVideo, getAppLaunchVideos } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { trackAudioUrl } from '../../services/apiTracks';
-import { enabledProcessProviderFilter } from '../../utils/providers';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
@@ -30,13 +29,9 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [music, setMusic] = useState(false);
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
-  const [effort, setEffort] = useState('');
   const [error, setError] = useState('');
   const submitting = useRef(false);
-  const {
-    providers, selectedProviderId, selectedModel, availableModels, loading: providersLoading,
-    setSelectedProviderId, setSelectedModel,
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
+  const picker = useRunWithPicker();
 
   useEffect(() => {
     let active = true;
@@ -52,9 +47,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     await createAppLaunchVideo(appId, {
       tone, direction, format, targetDurationSec: duration,
       ...(music ? { musicTrack } : {}),
-      ...(selectedProviderId ? { provider: selectedProviderId } : {}),
-      ...(selectedModel ? { model: selectedModel } : {}),
-      ...(effort ? { effort } : {}),
+      ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
   });
 
@@ -62,20 +55,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     {error && <p role="alert" className="text-port-error">{error}</p>}
     <section className="space-y-2">
       <div className="text-xs uppercase tracking-wide text-gray-500">Agent</div>
-      <ProviderModelSelector
-        providers={providers}
-        selectedProviderId={selectedProviderId}
-        selectedModel={selectedModel}
-        availableModels={availableModels}
-        loading={providersLoading}
-        onProviderChange={id => { setSelectedProviderId(id); setEffort(''); }}
-        onModelChange={setSelectedModel}
-        effort={effort}
-        onEffortChange={setEffort}
-        emptyProviderOption="Auto (default)"
-        emptyModelOption="Default model"
-        highlightToolUse
-      />
+      <ProviderModelSelector {...picker.selectorProps} />
     </section>
     <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
