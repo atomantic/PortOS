@@ -14,6 +14,7 @@ import {
   renderCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
   listSheetVariants,
+  getCharacterReferenceSheet,
 } from '../../services/universeCharacterSheet.js';
 import { mapServiceError } from './shared.js';
 
@@ -53,6 +54,12 @@ router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(asyn
 const deleteReferenceSheetQuerySchema = z.object({
   variant: z.string().trim().min(1).max(48).optional(),
 });
+router.get('/:id/characters/:entryId/reference-sheet', asyncHandler(async (req, res) => {
+  const opts = validateRequest(deleteReferenceSheetQuerySchema, req.query ?? {});
+  const result = await getCharacterReferenceSheet(req.params.id, req.params.entryId, opts)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
 router.delete('/:id/characters/:entryId/reference-sheet', asyncHandler(async (req, res) => {
   const opts = validateRequest(deleteReferenceSheetQuerySchema, req.query ?? {});
   const result = await deleteCharacterReferenceSheet(req.params.id, req.params.entryId, opts)

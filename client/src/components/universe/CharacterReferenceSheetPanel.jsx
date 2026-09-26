@@ -3,7 +3,7 @@
  *
  * The panel reads the server's variant catalog (`GET /reference-sheet-variants`)
  * on mount and renders one self-contained row per variant. Each row tracks
- * its own in-flight render job, HEAD-poll, and completion callback so a
+ * its own in-flight render job and publication callback so a
  * blueprint render can be in flight while a standard sheet is showing, etc.
  * Adding a new variant on the server (e.g. 'noir') lights up a new row here
  * automatically — no client code changes needed.
@@ -19,100 +19,58 @@ import {
   renderCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
   fetchReferenceSheetVariants,
+  getCharacterReferenceSheet,
 } from '../../services/apiUniverseBuilder';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import useMounted from '../../hooks/useMounted';
 import { readSheetPointer, LEGACY_SHEET_VARIANT_ID } from '../../lib/sheetPointers';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import MediaImage from '../MediaImage';
 
-// HEAD-poll for the rendered sheet at its destination URL, with backoff. The
-// server-side onSheetComplete listener copies the gallery PNG into
-// /data/image-refs/ AFTER the SSE 'completed' event fires (the listener is
-// async, the event was sync), so claiming the file exists at SSE-completion
-// time races and shows a 404 thumbnail. Returns true once reachable, false
-// after the budget elapses, or `null` when the caller aborts (lets the
-// caller distinguish "give up + warn" from "navigated away, ignore").
-//
-// `cache: 'no-store'` is load-bearing — without it, the browser caches a
-// transient 404 and poisons subsequent <img> requests for the same URL.
-async function waitForImageRef(filename, { maxMs = 3000, intervalMs = 150, signal } = {}) {
-  if (!filename) return false;
-  if (signal?.aborted) return null;
-  const url = `/data/image-refs/${filename}`;
-  const deadline = Date.now() + maxMs;
-  while (Date.now() < deadline) {
-    if (signal?.aborted) return null;
-    const res = await fetch(url, { method: 'HEAD', cache: 'no-store', signal })
-      .catch(() => null);
-    if (signal?.aborted) return null;
-    if (res?.ok) return true;
-    await new Promise((resolve) => {
-      const timer = setTimeout(resolve, intervalMs);
-      signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-    });
-  }
-  return false;
-}
+const SHEET_EVENTS = ['reference-sheet:changed'];
 
-// One self-contained render row per variant — owns its jobId + HEAD-poll
-// so a render in this variant cannot collide with a parallel render of a
-// different variant for the same character. Local to this module.
 function VariantRow({
   variant, universeId, entry, locked, onSheetCompleted, onSheetDeleted, onOpenLightbox,
 }) {
   const existing = useMemo(() => readSheetPointer(entry, variant.id), [entry, variant.id]);
   const [jobId, setJobId] = useState(null);
+  const [requestGeneration, setRequestGeneration] = useState(0);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // Captured at render-start so the SSE-completion handler can pass the
-  // image-refs filename up to the parent — the SSE event itself names the
-  // gallery copy in /data/images/, which is a different path.
   const destFilenameRef = useRef(null);
-  // Prevent the completion callback from firing twice under React 18
-  // StrictMode dev double-mount.
-  const settledRef = useRef(null);
-  // mountedRef gates the post-completion HEAD-poll callback so an unmount
-  // (universe switch, parent collapse) mid-poll doesn't fire onSheetCompleted
-  // against a stale entry/universe. useMounted resets on every effect setup —
-  // a plain useRef(true) + cleanup-only effect leaves it false after
-  // StrictMode's mount→cleanup→remount dev cycle.
+  const pendingRef = useRef(false);
   const mountedRef = useMounted();
-  // Cancels the in-flight HEAD-poll loop on unmount or new render kicking off;
-  // without it the loop keeps issuing requests against a dead component.
-  const pollAbortRef = useRef(null);
-
-  const { status, filename, error, progress } = useMediaJobProgress(jobId);
+  const { status, error, progress } = useMediaJobProgress(jobId);
+  const { data: sheet, updateData } = useSocketResource(
+    () => getCharacterReferenceSheet(universeId, entry.id, variant.id, { silent: true }), {
+      events: SHEET_EVENTS,
+      resourceKey: `${universeId}:${entry.id}:${variant.id}:${requestGeneration}`,
+      matchesEvent: data => data.universeId === universeId && data.entryId === entry.id && data.variant === variant.id,
+    });
 
   useEffect(() => {
-    if (!jobId) { settledRef.current = null; return; }
-    if (settledRef.current === jobId) return;
-    if (status === 'completed' && filename) {
-      settledRef.current = jobId;
-      const dest = destFilenameRef.current;
-      const entryId = entry?.id;
+    if (sheet?.filename && sheet.filename !== existing) onSheetCompleted?.(entry.id, sheet.filename, variant.id);
+    if (!sheet || !jobId || sheet.pendingJobId === jobId) return;
+    if (sheet.filename !== destFilenameRef.current && !sheet.pendingJobId) {
+      toast.error('Sheet render finished but the reference sheet could not be saved');
+    }
+    destFilenameRef.current = null;
+    setJobId(null);
+  }, [sheet, jobId, existing, entry.id, variant.id, onSheetCompleted]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    if (existing && existing === destFilenameRef.current) {
       destFilenameRef.current = null;
       setJobId(null);
-      pollAbortRef.current?.abort();
-      const controller = new AbortController();
-      pollAbortRef.current = controller;
-      waitForImageRef(dest, { signal: controller.signal }).then((ok) => {
-        if (pollAbortRef.current === controller) pollAbortRef.current = null;
-        if (!mountedRef.current) return;
-        if (ok === null) return;
-        if (ok) onSheetCompleted?.(entryId, dest, variant.id);
-        else toast.error('Sheet render finished but the image never appeared — refresh to see it');
-      });
     } else if (status === 'failed' || status === 'canceled') {
-      settledRef.current = jobId;
       destFilenameRef.current = null;
       toast.error(`Sheet render failed: ${error || status}`);
       setJobId(null);
     }
-  }, [jobId, status, filename, error, entry?.id, variant.id, onSheetCompleted, mountedRef]);
-
-  useEffect(() => () => { pollAbortRef.current?.abort(); }, []);
+  }, [jobId, existing, status, error]);
 
   const handleDelete = async () => {
     if (deleting || !universeId || !entry?.id || !existing) return;
@@ -123,19 +81,23 @@ function VariantRow({
       .catch((err) => { toast.error(err.message || 'Failed to delete reference sheet'); return null; })
       .finally(() => { setDeleting(false); });
     if (!result) return;
+    updateData({ filename: null, pendingJobId: null });
     setConfirmingDelete(false);
     onSheetDeleted?.(entry.id, variant.id);
     toast.success(`Deleted ${variant.label} for ${entry.name}`);
   };
 
   const handleGenerate = async () => {
-    if (jobId || !universeId || !entry?.id) return;
+    if (jobId || pendingRef.current || !universeId || !entry?.id) return;
+    pendingRef.current = true;
     const queued = await renderCharacterReferenceSheet(universeId, entry.id, { variant: variant.id }, { silent: true })
-      .catch((err) => { toast.error(err.message || 'Sheet render failed to start'); return null; });
+      .catch((err) => { if (mountedRef.current) toast.error(err.message || 'Sheet render failed to start'); return null; });
+    pendingRef.current = false;
+    if (!mountedRef.current) return;
     if (!queued?.jobId) return;
-    pollAbortRef.current?.abort();
-    pollAbortRef.current = null;
+
     destFilenameRef.current = queued.destFilename || null;
+    setRequestGeneration(generation => generation + 1);
     setJobId(queued.jobId);
     toast.success(`Rendering ${variant.label.toLowerCase()} for ${entry.name}…`);
   };
@@ -257,7 +219,6 @@ export default function CharacterReferenceSheetPanel({
 }) {
   const [variants, setVariants] = useState(() => _variantCache);
   const mountedRef = useMounted();
-
   useEffect(() => {
     if (variants) return undefined;
     let alive = true;
@@ -279,7 +240,7 @@ export default function CharacterReferenceSheetPanel({
     <div className="mt-2 space-y-2">
       {variants.map((variant) => (
         <VariantRow
-          key={variant.id}
+          key={`${universeId}:${entry.id}:${variant.id}`}
           variant={variant}
           universeId={universeId}
           entry={entry}

@@ -44,6 +44,19 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'reference-sheet:changed': {
+    direction: 'server-to-client',
+    summary: 'Correlated sheet publication outcome after the image copy and character pointer write finish.',
+    payloadSchema: {
+      type: 'object', required: ['universeId', 'entryId', 'jobId', 'variant', 'status'],
+      properties: {
+        universeId: { type: 'string' }, entryId: { type: 'string' },
+        jobId: { type: 'string' }, variant: { type: 'string' },
+        status: { type: 'string', enum: ['ready', 'failed', 'superseded'] },
+      },
+      additionalProperties: false,
+    },
+  },
   'cos:day:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate UTC-day aggregates when the current activity-calendar day expires.',
