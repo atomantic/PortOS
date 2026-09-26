@@ -210,13 +210,19 @@ export async function evaluateSceneWithVision(project, scene) {
   }).catch((err) => console.log(`⚠️ CD vision recordRun(running) failed: ${err.message}`));
 
   try {
-    const prompt = buildEvaluateVisionPrompt(project, scene, frames.length);
+    // The commission style source's reference images (#8724) ride AFTER the
+    // frames so the prompt can name each group by position. A project without
+    // them sends exactly the frames, as before.
+    const references = project.styleReferenceImages?.length
+      ? (await import('../creativeStyleSources.js')).styleReferenceImagePaths(project.styleReferenceImages)
+      : [];
+    const prompt = buildEvaluateVisionPrompt(project, scene, frames.length, { referenceCount: references.length });
     const result = await runPromptThroughProvider({
       provider: target.provider,
       model: target.model,
       prompt,
       source: 'cd-scene-evaluate',
-      screenshots: frames,
+      screenshots: [...frames, ...references],
       timeout: target.provider.timeout ?? DEFAULT_VISION_EVAL_TIMEOUT_MS,
       ...(project.workspace === 'video' ? { allowFallback: false } : {}),
     });
