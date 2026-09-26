@@ -30,6 +30,7 @@
  */
 
 import { spawn } from '../../lib/childProcess.js';
+import { bufferedSpawn, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -122,18 +123,20 @@ export async function checkConnection({ codexPath } = {}) {
   // (which would consume the user's Codex quota); the settings UI just wants
   // "yes the binary exists and is reachable".
   const bin = codexPath || DEFAULT_BIN;
-  const proc = spawn(bin, ['--version'], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  let out = '';
-  proc.stdout.on('data', (c) => { out += c.toString(); });
-  proc.stderr.on('data', (c) => { out += c.toString(); });
-  return new Promise((resolve) => {
-    proc.on('error', (err) => resolve({ connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `Codex CLI not found (${err.message})` }));
-    proc.on('close', (code) => {
-      if (code !== 0) return resolve({ connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `codex --version exited ${code}` });
-      const versionMatch = out.match(/codex-cli\s+([\d.]+)/i) || out.match(/(\d+\.\d+\.\d+)/);
-      resolve({ connected: true, mode: IMAGE_GEN_MODE.CODEX, model: versionMatch ? `codex-cli ${versionMatch[1]}` : 'codex-cli' });
-    });
-  });
+  const prepared = prepareCliSpawn(bin, ['--version']);
+  const result = await bufferedSpawn(prepared.command, prepared.args, { timeoutMs: 15_000, shell: false });
+  if (result.error) {
+    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `Codex CLI not found (${result.error.message})` };
+  }
+  if (result.timedOut) {
+    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: 'codex --version timed out' };
+  }
+  if (result.code !== 0) {
+    return { connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `codex --version exited ${result.code}` };
+  }
+  const out = `${result.stdout}${result.stderr}`;
+  const versionMatch = out.match(/codex-cli\s+([\d.]+)/i) || out.match(/(\d+\.\d+\.\d+)/);
+  return { connected: true, mode: IMAGE_GEN_MODE.CODEX, model: versionMatch ? `codex-cli ${versionMatch[1]}` : 'codex-cli' };
 }
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
