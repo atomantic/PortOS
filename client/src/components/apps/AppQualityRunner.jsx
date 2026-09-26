@@ -1,11 +1,13 @@
-import { useCallback, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import ProviderModelSelector from '../ProviderModelSelector';
 import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { enabledProcessProviderFilter } from '../../utils/providers';
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+
+const RUN_EVENTS = ['cos:maintenance:updated'];
 
 // Inapplicable here (no UI for an accessibility audit, say): the server skips
 // the dispatch anyway, so the batch selections leave it out. Picking the one
@@ -34,9 +36,12 @@ export default function AppQualityRunner({ app, children }) {
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [runs, setRuns] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-  const revision = useRef(0);
+  const appIdRef = useRef(app.id);
+  appIdRef.current = app.id;
+  useEffect(() => {
+    setBusy(false);
+    setError('');
+  }, [app.id]);
   const picker = useProviderModels({ filter: enabledProcessProviderFilter, withEffort: true });
   const selectedCategories = categories.filter(category => {
     if (selection === 'all') return isApplicable(category);
@@ -56,32 +61,29 @@ export default function AppQualityRunner({ app, children }) {
     : selection === 'all'
       ? 'No applicable checks are available.'
       : 'No checks need evidence. Unavailable assessments and categories that do not apply to this repository are excluded.';
-  const loadRuns = useCallback(async () => {
-    const requestedRevision = revision.current;
-    const response = await getMaintenanceRuns({ silent: true }).catch(() => null);
-    if (!response || requestedRevision !== revision.current) return;
-    setRuns(response.runs.filter(entry => entry.appId === app.id));
-    setLoaded(true);
-  }, [app.id]);
-  useAutoRefetch(loadRuns, 15000, { enabled: !busy, immediate: !loaded, pollOnly: true });
+  const { data, loading, error: loadError, refetch: loadRuns, updateData: setRuns } = useSocketResource(
+    () => getMaintenanceRuns({ silent: true }).then(response => response.runs.filter(entry => entry.appId === app.id)),
+    { namespace: 'cos', events: RUN_EVENTS, resourceKey: app.id, matchesEvent: run => run?.appId === app.id },
+  );
+  const runs = data ?? [];
   const start = async () => {
-    revision.current += 1;
     setBusy(true);
     setError('');
     const response = await startMaintenanceRun({ appId: app.id, providerId: picker.selectedProviderId, model: picker.selectedModel,
       effort: effort || null, mode, claimBetweenAudits: false, taskTypes,
       // A category picked by name is the user's explicit choice and runs even if
       // the repository scan says it cannot apply; batch selections stay gated.
-      ...(!batchSelection ? { explicitCheck: true } : {}) }, { silent: true }).catch(err => { setError(err.message); return null; });
-    if (response) setRuns(previous => [response.run, ...previous.filter(entry => entry.id !== response.run.id)]);
+      ...(!batchSelection ? { explicitCheck: true } : {}) }, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
+    if (appIdRef.current !== app.id) return;
+    if (response) setRuns(previous => [response.run, ...(previous ?? []).filter(entry => entry.id !== response.run.id)]);
     setBusy(false);
   };
   const stop = async (id) => {
-    revision.current += 1;
     setBusy(true);
     setError('');
-    const response = await stopMaintenanceRun(id, { silent: true }).catch(err => { setError(err.message); return null; });
-    if (response) setRuns(previous => previous.map(entry => entry.id === response.run.id ? response.run : entry));
+    const response = await stopMaintenanceRun(id, { silent: true }).catch(err => { if (appIdRef.current === app.id) setError(err.message); return null; });
+    if (appIdRef.current !== app.id) return;
+    if (response) setRuns(previous => (previous ?? []).map(entry => entry.id === response.run.id ? response.run : entry));
     setBusy(false);
   };
   const controls = <section id="quality-runner" aria-label="Run quality checks" className="space-y-3">
@@ -106,7 +108,7 @@ export default function AppQualityRunner({ app, children }) {
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{selectedCategories.map(category => category.label).join(', ') || emptySelectionMessage}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
-    {!loaded && <p className="text-xs" role="status">Loading runner status… <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
+    {(loading || loadError) && <p className="text-xs" role="status">{loadError ? 'Runner status is unavailable.' : 'Loading runner status…'} <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
     {runs.filter((run, index) => run.status === 'running' || index === 0).map(run => <div key={run.id} className="space-y-2">
       <MaintenanceRunStatus run={run} />

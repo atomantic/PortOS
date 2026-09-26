@@ -1,12 +1,18 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Bot, ExternalLink, ListOrdered, PauseCircle, Play, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router';
 import MediaJobsQueue from '../media/MediaJobsQueue.jsx';
 import BrailleSpinner from '../BrailleSpinner.jsx';
 import Banner from '../ui/Banner.jsx';
 import toast from '../ui/Toast.jsx';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useSocketResource } from '../../hooks/useSocketResource.js';
 import * as api from '../../services/api.js';
+
+const QUEUE_EVENTS = [
+  'cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:user:added',
+  'cos:tasks:user:completed', 'cos:tasks:cos:changed',
+  'cos:agent:spawned', 'cos:agent:updated', 'cos:agent:completed',
+];
 
 const taskLabel = (task) => task.title || task.description || task.prompt || task.id;
 
@@ -21,20 +27,9 @@ function CountCard({ label, value, tone = 'text-white' }) {
 
 export default function QueuesPanel() {
   const [spawningId, setSpawningId] = useState(null);
-  const [queueError, setQueueError] = useState(null);
-  const fetchTasks = useCallback(() => api.getCosTasks({ silent: true }).then(
-    (next) => {
-      setQueueError(null);
-      return next;
-    },
-    (error) => {
-      setQueueError(error?.message || 'Agent queue status is unavailable');
-      throw error;
-    },
-  ), []);
-  const { data, loading, refetch } = useAutoRefetch(
-    fetchTasks,
-    5000,
+  const { data, loading, error: queueError, refetch, updateData } = useSocketResource(
+    () => api.getCosTasks({ silent: true }),
+    { namespace: 'cos', events: QUEUE_EVENTS },
   );
   const tasks = useMemo(() => {
     const user = data?.user?.tasks || [];
@@ -61,6 +56,15 @@ export default function QueuesPanel() {
     });
     setSpawningId(null);
     if (!result) return;
+    updateData(previous => {
+      const source = task.source === 'user' ? 'user' : 'cos';
+      if (!previous?.[source]?.tasks) return previous;
+      return {
+        ...previous,
+        [source]: { ...previous[source], tasks: previous[source].tasks.map(entry =>
+          entry.id === task.id && entry.status === 'pending' ? { ...entry, spawning: true } : entry) },
+      };
+    });
     toast.success(`Spawning ${task.id}`);
     refetch();
   };
