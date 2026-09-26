@@ -26,6 +26,17 @@ const input = (schema, summary) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'brain:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate Brain summary/settings after a persisted change.',
+    payloadSchema: { type: 'object', properties: { type: { type: 'string' }, id: { type: 'string' } }, required: ['type'], additionalProperties: false },
+  },
+  'brain:links:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate one link including clone progress and scan-report completion.',
+    payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+  },
+
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),

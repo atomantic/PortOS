@@ -7,14 +7,18 @@ const visible = () => document.visibilityState !== 'hidden';
 
 /**
  * Read once, then reconcile a resource on room events, reconnect and tab show.
+ * Omit namespace for globally broadcast events. fetchFn receives
+ * { reconcile, events: [{ event, payload }] } for targeted invalidation reads.
  * Keep events stable (module-level). fetchFn returns data without setting state.
  * resourceKey cancels old reads; updateData applies mutation responses and
  * prevents an older in-flight read from overwriting them.
  */
-export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true }) {
+export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare }) {
   const [state, setState] = useState({ key: resourceKey, data: null, loading: true, error: null });
   const fetchRef = useRef(fetchFn);
   const matchesRef = useRef(matchesEvent);
+  const compareRef = useRef(compare);
+  compareRef.current = compare;
   fetchRef.current = fetchFn;
   matchesRef.current = matchesEvent;
   const controller = useRef(null);
@@ -29,7 +33,11 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
     let pending = null;
     let dirty = false;
     let revision = 0;
-    const read = () => {
+    let reconcile = false;
+    let invalidations = [];
+    const read = (invalidation = null) => {
+      if (invalidation) invalidations.push(invalidation);
+      else reconcile = true;
       if (disposed) return Promise.resolve();
       if (pending) {
         dirty = true;
@@ -41,9 +49,16 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
         do {
           dirty = false;
           const started = revision;
-          await Promise.resolve().then(() => fetchRef.current()).then(data => {
+          const request = { reconcile, events: invalidations };
+          reconcile = false;
+          invalidations = [];
+          await Promise.resolve().then(() => fetchRef.current(request)).then(data => {
             if (!disposed && started === revision) {
-              setState({ key: resourceKey, data, loading: false, error: null });
+              setState(previous => ({
+                key: resourceKey,
+                data: compareRef.current?.(previous.data, data) ? previous.data : data,
+                loading: false, error: null
+              }));
             }
           }, error => {
             if (!disposed && started === revision) {
@@ -64,15 +79,23 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
       },
     };
     setState({ key: resourceKey, data: null, loading: true, error: null });
-    const invalidate = payload => {
-      if (visible() && matchesRef.current(payload)) read();
-    };
-    for (const event of events) socket.on(event, invalidate);
+    const handlers = events.map(event => {
+      const invalidate = payload => {
+        if (visible() && matchesRef.current(payload, event)) read({ event, payload });
+      };
+      socket.on(event, invalidate);
+      return [event, invalidate];
+    });
+    // Broadcast domains have no subscription room. Room consumers already
+    // reconcile through useSocketSubscription, so never attach both paths.
+    const reconnect = () => { if (visible()) read(); };
+    if (!namespace) socket.on('connect', reconnect);
     if (visible()) read();
     return () => {
       disposed = true;
       controller.current = null;
-      for (const event of events) socket.off(event, invalidate);
+      for (const [event, handler] of handlers) socket.off(event, handler);
+      if (!namespace) socket.off('connect', reconnect);
     };
   }, [namespace, events, resourceKey]);
 

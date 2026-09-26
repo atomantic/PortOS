@@ -88,7 +88,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useCosTaskUpdates` | Shared five-event CoS task lifecycle subscription; re-subscribes on socket reconnect and forwards normalized task updates to the current callback. | A CoS task surface with its own task-status reducer. |
-| `useSocketResource` | Initial resource read plus room-event, reconnect and tab-show reconciliation; single-flight reads, identity guards and immediate mutation updates. | Views replacing content polls with existing socket invalidations. |
+| `useSocketResource` | Initial resource read plus room/broadcast event, reconnect and tab-show reconciliation; single-flight reads, identity guards and immediate mutation updates. | Views replacing content polls with existing socket invalidations. |
 | `useSocketSubscription` | Refcounted `<namespace>:subscribe`/`unsubscribe` for a `registerSubscriber` room: the first mounted consumer subscribes and re-emits on every socket reconnect, the last to unmount unsubscribes, and `onResubscribe` refetches whatever a consumer may have missed while disconnected. | Any hook/page that emits a literal `<ns>:subscribe` for `cos`/`errors`/`notifications`/`agents`/`instances`/`loops`/`beeper` — don't hand-roll the reconnect dance; `client/src/socketSubscriptionConventions.test.js` enforces this. |
 | `useAccountSyncStatus` | Per-account busy/auth state and deduplicated HTTP/socket sync outcomes. | Calendar and Messages sync controls. |
 | `useSocket` | Shared socket instance + connection status. | You need to subscribe to a socket event. |

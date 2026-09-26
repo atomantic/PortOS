@@ -34,7 +34,8 @@ import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { timeAgo } from '../../../utils/formatters';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { sameJsonShape } from '../../../lib/sameJsonShape';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import BucketBoard from '../links/BucketBoard';
 import RepoRestudyPanel from '../RepoRestudyPanel';
 import LinkChip from '../links/LinkChip';
@@ -86,34 +87,17 @@ const CLONE_STATUS_STYLES = {
   failed: 'text-port-error'
 };
 
-/** A clone the server is still working on — the only reason this tab polls. */
-const isCloneInFlight = (link) => link.cloneStatus === 'cloning' || link.cloneStatus === 'pending';
+const LINK_EVENTS = ['brain:links:changed'];
 
-const CLONE_POLL_INTERVAL_MS = 3000;
-
-// Give up polling a clone that has shown no progress for roughly this long. A
-// server restart mid-clone strands the record at `cloning` forever (only the
-// promise callbacks in `cloneRepoInBackground` reset it), and without this
-// bound the poll below becomes the permanent steady state of the Links tab.
-// Any status change restarts the count; once it expires the badge says so
-// (#5463 tracks giving the stranded record itself a way back).
-const CLONE_POLL_STALL_MS = 10 * 60 * 1000;
-
-// Counted in TICKS, not wall-clock: `useAutoRefetch` pauses while the tab is
-// hidden, so a wall-clock deadline would be tripped by the resume tick alone
-// after the user left the tab backgrounded — abandoning a clone that may well
-// have finished. Ticks only accrue while we are actually looking.
-const CLONE_POLL_STALL_TICKS = Math.ceil(CLONE_POLL_STALL_MS / CLONE_POLL_INTERVAL_MS);
-
-// The fields the background clone and its post-clone intake write. The poll
+// The fields the background clone and its post-clone intake write. The event read
 // merges ONLY these onto the record it already has, so a response that was
 // already in flight when the user renamed a link or dragged its chip cannot
 // revert that edit with a pre-edit snapshot of the whole record. All five are
 // server-owned; nothing in this tab edits them locally.
 const CLONE_PROGRESS_FIELDS = ['cloneStatus', 'cloneError', 'localPath', 'malwareScan', 'repoStudy'];
 
-// `malwareScan` / `repoStudy` arrive as fresh objects on every fetch, so they
-// need a value comparison — otherwise every tick would look like a change and
+// `malwareScan` / `repoStudy` arrive as fresh objects on every event read, so they
+// need a value comparison — otherwise every event would look like a change and
 // re-render the whole list. A false "changed" costs one render; there is no
 // false "same" for equal content the server serializes consistently.
 const sameFieldValue = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -158,77 +142,57 @@ export default function LinksTab({ onRefresh }) {
     setLoading(false);
   }, []);
 
+  const readChanges = useCallback(async ({ reconcile, events }) => {
+    if (reconcile) {
+      const [data, bucketData] = await Promise.all([
+        api.getBrainLinks({ limit: 5000, silent: true }),
+        api.getBrainBuckets({ silent: true })
+      ]);
+      return { links: data.links || [], buckets: bucketData.buckets || [] };
+    }
+    const ids = [...new Set(events.map(({ payload }) => payload.id))];
+    const updates = await Promise.all(ids.map(id => api.getBrainLink(id, { silent: true })
+      .then(fresh => ({ id, fresh }))
+      .catch(error => {
+        if (error?.status === 404) return { id, gone: true };
+        return { id }; // Keep this record on transient failure; other updates still land.
+      })));
+    return { updates };
+  }, []);
+  const { data: changes, loading: reading } = useSocketResource(readChanges, {
+    events: LINK_EVENTS,
+    matchesEvent: payload => typeof payload?.id === 'string',
+    compare: sameJsonShape
+  });
   useEffect(() => {
-    let active = true;
-    fetchLinks();
-    api.getBrainBuckets({ silent: true })
-      .then(data => { if (active) setBuckets(data.buckets || []); })
-      .catch(() => { if (active) setBuckets([]); });
-    return () => { active = false; };
-  }, [fetchLinks]);
-
-  // Poll ONLY the links whose clone is in flight, patching each fresh record
-  // into local state. Re-running `fetchLinks` here re-read and re-parsed every
-  // link record server-side (one file read per link, up to 5000) and replaced
-  // the whole array — re-rendering every bucket board, chip, and search result
-  // — every 3s just to move one status badge (#5442).
-  const inFlight = links.filter(isCloneInFlight);
-  const inFlightIds = inFlight.map(l => l.id);
-  // Identity of the in-flight SET and its statuses. A change here is progress,
-  // so it restarts the no-progress tick count; an unrelated `links` update (an
-  // edit, a bucket drag) leaves both the count and the poll callback alone.
-  const inFlightKey = inFlight.map(l => `${l.id}:${l.cloneStatus}`).join('|');
-
-  const [stalledPollKey, setStalledPollKey] = useState(null);
-  // Ticks since the in-flight set last moved.
-  const noProgressTicksRef = useRef(0);
-  useEffect(() => {
-    noProgressTicksRef.current = 0;
-  }, [inFlightKey]);
-
-  // Depends on `inFlightKey` alone: the same key means the same ids, so the
-  // closure over `inFlightIds` can never go stale.
-  const pollInFlightClones = useCallback(async () => {
-    if (noProgressTicksRef.current >= CLONE_POLL_STALL_TICKS) {
-      setStalledPollKey(inFlightKey);
+    if (!reading) setLoading(false);
+    if (!changes) return;
+    if (changes.links) {
+      setLinks(changes.links);
+      setBuckets(changes.buckets);
       return;
     }
-    noProgressTicksRef.current += 1;
-    // A 404 means the user deleted the bookmark mid-clone: drop it, or its id
-    // stays in the in-flight set and is polled until the stall bound. Any other
-    // failure is transient and leaves that link exactly as it is.
-    const settled = await Promise.all(inFlightIds.map(id => api.getBrainLink(id, { silent: true })
-      .then(fresh => ({ id, fresh }))
-      .catch(err => ({ id, gone: err?.status === 404 }))));
-    const byId = new Map(settled.map(r => [r.id, r]));
+    // Merge only server-owned progress fields so a late read cannot undo a
+    // local rename or bucket drag. Completed clones still receive scan updates.
     setLinks(prev => {
+      const byId = new Map(changes.updates.map(update => [update.id, update]));
       let changed = false;
       const next = [];
       for (const link of prev) {
         const result = byId.get(link.id);
+        byId.delete(link.id);
         if (result?.gone) { changed = true; continue; }
         const patch = result?.fresh ? cloneProgressPatch(result.fresh, link) : null;
         if (!patch) { next.push(link); continue; }
         changed = true;
         next.push({ ...link, ...patch });
       }
-      // Unchanged records keep their identity — and an all-quiet tick keeps the
-      // array itself — so the boards, chips, and search don't re-render.
+      for (const result of byId.values()) {
+        if (result.fresh) { next.push(result.fresh); changed = true; }
+      }
       return changed ? next : prev;
     });
-  }, [inFlightKey]);
-
-  // True once the poll gave up: the badges below say so rather than showing a
-  // spinner for a status nothing is watching any more.
-  const cloneWatchStalled = inFlightIds.length > 0 && stalledPollKey === inFlightKey;
-
-  useAutoRefetch(pollInFlightClones, CLONE_POLL_INTERVAL_MS, {
-    enabled: inFlightIds.length > 0 && !cloneWatchStalled,
-    // The initial `fetchLinks` already delivered current statuses, so the first
-    // tick belongs one interval out, not immediately on enable.
-    immediate: false,
-    pollOnly: true
-  });
+  }, [changes, reading]);
 
   // Client-side filter (type / bucket membership) then keyword search.
   const matchesFilter = (link) => {
@@ -290,7 +254,7 @@ export default function LinksTab({ onRefresh }) {
       setInputNote('');
       setInputTags('');
       setShowDetails(false);
-      fetchLinks();
+      setLinks(prev => prev.some(link => link.id === result.id) ? prev : [result, ...prev]);
       onRefresh?.();
     }
   };
@@ -403,7 +367,7 @@ export default function LinksTab({ onRefresh }) {
       toast.success('Link updated');
       setEditingId(null);
       setEditForm({});
-      fetchLinks();
+      setLinks(prev => prev.map(link => link.id === result.id ? result : link));
     }
   };
 
@@ -421,7 +385,7 @@ export default function LinksTab({ onRefresh }) {
 
     toast.success('Link deleted');
     setConfirmingDeleteId(null);
-    fetchLinks();
+    setLinks(prev => prev.filter(link => link.id !== linkId));
     onRefresh?.();
   };
 
@@ -433,7 +397,7 @@ export default function LinksTab({ onRefresh }) {
 
     if (result) {
       toast.success('Clone started');
-      fetchLinks();
+      // The persisted clone transition arrives through brain:links:changed.
     }
   };
 
@@ -964,14 +928,6 @@ export default function LinksTab({ onRefresh }) {
                       {link.cloneStatus === 'cloning' && 'Cloning...'}
                       {link.cloneStatus === 'pending' && 'Pending clone'}
                       {link.cloneStatus === 'failed' && 'Clone failed'}
-                      {cloneWatchStalled && isCloneInFlight(link) && (
-                        <span
-                          className="text-gray-500"
-                          title="No change for 10 minutes — this tab stopped checking. Reload the page to resume."
-                        >
-                          (stalled)
-                        </span>
-                      )}
                     </span>
 
                     {/* Clone error */}

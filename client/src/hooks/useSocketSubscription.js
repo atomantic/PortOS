@@ -45,6 +45,8 @@ function getEntry(namespace) {
  *   redundant refetch in the common case (mount while already-connecting,
  *   HTTP fetch already fresh) — cheap next to silently missing a real miss.
  *
+ * Pass no namespace for broadcast-only consumers; no room is acquired.
+ *
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
  * @param {{ onResubscribe?: () => void }} [options]
@@ -54,6 +56,7 @@ export function useSocketSubscription(namespace, { onResubscribe } = {}) {
   onResubscribeRef.current = onResubscribe;
 
   useEffect(() => {
+    if (!namespace) return;
     const entry = getEntry(namespace);
 
     const callback = () => onResubscribeRef.current?.();

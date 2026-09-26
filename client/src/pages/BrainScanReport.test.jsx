@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+import socket from '../services/socket';
+
 vi.mock('../services/api', () => ({
   getBrainLink: vi.fn(),
   getBrainScanReport: vi.fn(),
@@ -111,4 +117,41 @@ describe('BrainScanReport', () => {
     expect(screen.getByTestId('markdown')).toHaveTextContent('Second report');
     expect(screen.queryByText('First link')).not.toBeInTheDocument();
   });
+});
+
+it('filters scan events, coalesces mid-read changes, and reconciles without polling', async () => {
+  api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+  api.getBrainScanReport.mockResolvedValue('Initial report');
+  await renderPage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(1);
+    await act(async () => { socket.emit('brain:links:changed', { id: 'other' }); });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(1);
+    let resolveRead;
+    api.getBrainScanReport.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    await act(async () => { socket.emit('brain:links:changed', { id: 'abc' }); });
+    api.getBrainScanReport.mockResolvedValue('Completed report');
+    await act(async () => {
+      socket.emit('brain:links:changed', { id: 'abc' });
+      socket.emit('brain:links:changed', { id: 'abc' });
+    });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveRead('Earlier report'); });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('markdown')).toHaveTextContent('Completed report');
+    api.getBrainScanReport.mockRejectedValueOnce(new Error('Unavailable'));
+    await act(async () => { socket.emit('connect'); });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(4);
+    expect(screen.getByTestId('markdown')).toHaveTextContent('Completed report');
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(5);
+    visibility.mockRestore();
+  } finally {
+    vi.useRealTimers();
+  }
 });
