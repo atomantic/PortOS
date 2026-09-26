@@ -49,7 +49,6 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   verifyPasteRendered,
-  isPasteConfirmed,
   isCollapsedPasteChip,
   createInputReadyTracker,
   createStartupDialogAnswers,
