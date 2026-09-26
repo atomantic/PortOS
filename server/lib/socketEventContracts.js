@@ -177,6 +177,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate capabilities after a persisted change or changed readiness sample.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'browser:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared browser snapshot or read failure changed; reread the cached status.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'browser:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Observe external browser state while the Browser view is mounted; never launches or navigates.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'browser:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release browser observation; the last subscriber stops the observer.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'readiness:subscribe': {
     direction: 'client-to-server',
     summary: 'Observe health and capability readiness while a view is mounted.',

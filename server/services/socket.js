@@ -1,3 +1,4 @@
+import { registerBrowserStatusSocket } from './browserStatus.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
@@ -217,6 +218,7 @@ function registerLifecycleHandlers(socket, _io) {
 const SOCKET_HANDLER_REGISTRARS = [
   registerAuthHandlers,
   registerReadinessSocket,
+  registerBrowserStatusSocket,
   registerVoiceHandlers,
   registerBuildHandlers,
   registerImporterHandlers,

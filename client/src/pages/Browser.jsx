@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
@@ -18,7 +18,8 @@ import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
 import { formatBytes, formatDateTime, formatDurationMs } from '../utils/formatters';
 
-const POLL_INTERVAL = 5000;
+const STATUS_EVENTS = ['browser:changed'];
+const readStatus = () => getBrowserStatus({ silent: true });
 
 function deriveMacAppBundle(chromePath) {
   if (!chromePath?.trim()) return null;
@@ -33,8 +34,9 @@ function formatUptime(timestamp) {
 }
 
 export default function BrowserPage() {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: status, loading, error, refetch: fetchStatus, updateData: setStatus } =
+    useSocketResource(readStatus, { namespace: 'browser', events: STATUS_EVENTS });
+  const statusError = error?.message;
   const [actionLoading, setActionLoading] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
@@ -44,20 +46,6 @@ export default function BrowserPage() {
   const [configDraft, setConfigDraft] = useState(null);
   const [navUrl, setNavUrl] = useState('');
   const [showDownloads, setShowDownloads] = useState(true);
-  const [statusError, setStatusError] = useState(null);
-
-  const fetchStatus = useCallback(async () => {
-    const data = await getBrowserStatus({ silent: true }).catch(err => {
-      setStatusError(err.message);
-      return null;
-    });
-    if (data) {
-      setStatus(data);
-      setStatusError(null);
-    }
-    setLoading(false);
-  }, []);
-
   const fetchLogs = useCallback(async () => {
     const data = await getBrowserLogs(100).catch(() => null);
     if (data) {
@@ -65,8 +53,6 @@ export default function BrowserPage() {
       setLogs(combined || '(no logs)');
     }
   }, []);
-
-  useAutoRefetch(fetchStatus, POLL_INTERVAL, { pollOnly: true });
 
   // Load config when settings panel opens
   useEffect(() => {
@@ -95,11 +81,11 @@ export default function BrowserPage() {
       } else {
         toast.success(`Browser ${action} successful`);
       }
-      // Refresh full status after action
+      setStatus(prev => prev ? { ...prev, ...result } : prev);
       await fetchStatus();
     }
     setActionLoading(null);
-  }, [fetchStatus]);
+  }, [fetchStatus, setStatus]);
 
   const handleChromePathChange = (chromePath) => setConfigDraft(d => {
     const currentAppBundle = deriveMacAppBundle(d.chromePath);
@@ -116,11 +102,12 @@ export default function BrowserPage() {
       return null;
     });
     if (saved) {
+      setStatus(prev => prev ? { ...prev, config: saved } : prev);
       setConfig(saved);
       setConfigDraft(saved);
       toast.success('Browser config saved — restart browser to apply changes');
     }
-  }, [configDraft]);
+  }, [configDraft, setStatus]);
 
   const handleDeleteDownload = useCallback(async (name) => {
     const ok = await deleteBrowserDownload(name, { silent: true }).then(() => true).catch(err => {
@@ -133,7 +120,7 @@ export default function BrowserPage() {
         downloads: { ...prev.downloads, files: prev.downloads.files.filter(f => f.name !== name) }
       }));
     }
-  }, []);
+  }, [setStatus]);
 
   const handleNavigate = useCallback(async () => {
     const trimmed = navUrl.trim();
@@ -147,10 +134,15 @@ export default function BrowserPage() {
     if (result) {
       toast.success(`Opened ${url}`);
       setNavUrl('');
+      setStatus(prev => {
+        if (!prev) return prev;
+        const pages = [...(prev.pages || []).filter(page => page.id !== result.id), result];
+        return { ...prev, pages, pageCount: pages.length };
+      });
       await fetchStatus();
     }
     setActionLoading(null);
-  }, [navUrl, fetchStatus]);
+  }, [navUrl, fetchStatus, setStatus]);
 
   const isRunning = status?.process?.status === 'online';
   const isConnected = status?.connected;

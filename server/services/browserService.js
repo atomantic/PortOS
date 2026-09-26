@@ -84,7 +84,7 @@ export async function updateConfig(updates) {
 
 // ---------- Status / Health ----------
 
-export async function getHealthStatus() {
+export async function getHealthStatus({ strict = false } = {}) {
   const config = await loadConfig();
   // Bind-all addresses are not connectable; use loopback instead
   const connectHost = config.cdpHost === '0.0.0.0' ? '127.0.0.1'
@@ -107,6 +107,7 @@ export async function getHealthStatus() {
   }
 
   const data = await readResponseJson(response);
+  if (strict && typeof data?.status !== 'string') throw new Error('Browser health unavailable');
   return {
     connected: data.status === 'healthy',
     processRunning: true,
@@ -212,10 +213,18 @@ export async function cdpRequest(path, options = {}) {
 }
 
 // Returns raw CDP page objects (includes webSocketDebuggerUrl, unlike getOpenPages)
-export async function listCdpPages() {
+export async function listCdpPages({ strict = false } = {}) {
   const response = await cdpRequest('/json/list', { timeout: HEALTH_TIMEOUT_MS }).catch(() => null);
-  if (!response || !response.ok) return [];
-  return readResponseJson(response, { fallback: [] });
+  if (!response || !response.ok) {
+    if (strict) throw new Error('Browser pages unavailable');
+    return [];
+  }
+  const pages = await readResponseJson(response, { fallback: null, emptyValue: null });
+  if (!Array.isArray(pages)) {
+    if (strict) throw new Error('Browser pages unavailable');
+    return [];
+  }
+  return pages;
 }
 
 export async function findOrOpenPage(targetUrl) {
@@ -225,7 +234,9 @@ export async function findOrOpenPage(targetUrl) {
   const response = await cdpRequest(`/json/new?${encodeURIComponent(targetUrl)}`, { method: 'PUT' });
   if (!response.ok) return null;
   // Preserve the null-on-failure contract: a malformed body stays null, not {}.
-  return readResponseJson(response, { fallback: null, emptyValue: null });
+  const page = await readResponseJson(response, { fallback: null, emptyValue: null });
+  if (page) browserEvents.emit('pages:changed');
+  return page;
 }
 
 export function isAuthPage(page) {
@@ -285,6 +296,7 @@ export async function navigateToUrl(url) {
   if (!page?.id) {
     throw new Error(`CDP navigate returned a malformed response for ${url}`);
   }
+  browserEvents.emit('pages:changed');
   console.log(`🌐 Opened ${url} in CDP browser (tab ${page.id})`);
   return { id: page.id, title: page.title || '(loading)', url: page.url, type: page.type };
 }
@@ -482,6 +494,7 @@ const PIN_SETUP_ID_BASE = 10;
 export async function closeCdpPage(id) {
   if (!id) return;
   await cdpRequest(`/json/close/${id}`, { timeout: HEALTH_TIMEOUT_MS }).catch(() => {});
+  browserEvents.emit('pages:changed');
 }
 
 // Every address Chrome ACTUALLY dialed across the capture window — the main
@@ -648,6 +661,7 @@ export async function navigateToUrlPinned(url, {
     const text = await response.text().catch(() => '');
     throw new Error(`CDP open-blank failed (${response.status}): ${text}`);
   }
+  browserEvents.emit('pages:changed');
   const target = await readResponseJson(response, { fallback: null, emptyValue: null });
   if (!target?.id || !target?.webSocketDebuggerUrl) {
     throw new Error(`CDP open-blank returned a malformed response for ${url}`);
@@ -754,6 +768,7 @@ export async function navigateToUrlPinned(url, {
   // The read (if any) already happened on this session, so the tab has served
   // its purpose — tear it down here rather than trusting every call site to.
   if (closeAfterRead) await closeCdpPage(target.id);
+  else browserEvents.emit('pages:changed');
 
   return {
     id: target.id,
@@ -766,8 +781,8 @@ export async function navigateToUrlPinned(url, {
 
 // ---------- CDP page listing (UI-shaped subset) ----------
 
-export async function getOpenPages() {
-  const pages = await listCdpPages();
+export async function getOpenPages(options) {
+  const pages = await listCdpPages(options);
   return pages.map(p => ({
     id: p.id,
     title: p.title || '(untitled)',
@@ -788,16 +803,22 @@ export async function getCdpVersion() {
 
 // ---------- Downloads ----------
 
-export async function getDownloads() {
+export async function getDownloads({ strict = false } = {}) {
   const config = await loadConfig();
   const downloadDir = config.downloadDir || DEFAULT_DOWNLOAD_DIR;
-  const entries = await readdir(downloadDir).catch(() => []);
+  const entries = await readdir(downloadDir).catch(err => {
+    if (strict && err.code !== 'ENOENT') throw err;
+    return [];
+  });
   // Filter out hidden files and .crdownload (partial Chrome downloads)
   const files = [];
   for (const name of entries) {
     if (name.startsWith('.') || name.endsWith('.crdownload')) continue;
     const filePath = join(downloadDir, name);
-    const info = await stat(filePath).catch(() => null);
+    const info = await stat(filePath).catch(err => {
+      if (strict && err.code !== 'ENOENT') throw err;
+      return null;
+    });
     if (info?.isFile()) {
       files.push({
         name,
@@ -844,12 +865,14 @@ export async function deleteDownload(name) {
   const file = await resolveDownload(name);
   if (!file) return false;
   await unlink(file.absPath);
+  browserEvents.emit('downloads:changed');
   return true;
 }
 
 // ---------- Full combined status ----------
 
-export async function getFullStatus() {
+export async function getFullStatus({ strict = false } = {}) {
+  if (strict) return readObservedStatus();
   const [health, process, pages, version, config, downloads] = await Promise.all([
     getHealthStatus(),
     getProcessStatus(),
@@ -868,4 +891,21 @@ export async function getFullStatus() {
     config,
     downloads
   };
+}
+
+// Observation never opens a CDP target or starts a process. Failed reads are
+// distinct from confirmed empty/stopped state, so the shared cache can retain
+// its last successful sample rather than publishing a false empty list.
+async function readObservedStatus() {
+  const [health, process, config, downloads] = await Promise.all([
+    getHealthStatus({ strict: true }), getProcessStatus(), getConfig(), getDownloads({ strict: true })
+  ]);
+  if (process.status === 'unavailable') throw new Error('Browser process status unavailable');
+  if (process.status === 'online' && health.error === 'Health check unreachable') {
+    throw new Error('Browser health unavailable');
+  }
+  const pages = health.connected ? await getOpenPages({ strict: true }) : [];
+  const version = health.connected ? await getCdpVersion() : null;
+  if (health.connected && !version) throw new Error('Browser version unavailable');
+  return { ...health, process, pages, pageCount: pages.length, version, config, downloads };
 }
