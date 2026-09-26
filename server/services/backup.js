@@ -1429,26 +1429,34 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // file whose digest outlasts the default deadline emits no `-ii` heartbeat
   // until it finishes (#7302), so this restore's idle floor scales to it.
   const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
-  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
-  const reconciliationError = !dryRun
-    ? await reconcileLiveFileRestore(subdirFilter).then(
-      () => null,
-      error => error,
-    )
-    : null;
+  const restoreFiles = async () => {
+    const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
+    const reconciliationError = !dryRun
+      ? await reconcileLiveFileRestore(subdirFilter).then(
+        () => null,
+        error => error,
+      )
+      : null;
 
-  if (transfer.status === 'rejected') {
-    if (dryRun) throw transfer.reason;
-    const partialRestoreError = new Error(
-      `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
-      { cause: transfer.reason },
-    );
-    if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
-    throw partialRestoreError;
+    if (transfer.status === 'rejected') {
+      if (dryRun) throw transfer.reason;
+      const partialRestoreError = new Error(
+        `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
+        { cause: transfer.reason },
+      );
+      if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
+      throw partialRestoreError;
+    }
+    if (reconciliationError) throw reconciliationError;
+
+    return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
+  };
+  const scope = subdirFilter?.split('/').filter(part => part && part !== '.').join('/');
+  if (!dryRun && (!scope || ['cos', 'cos/config.json', 'cos/state.json'].includes(scope))) {
+    const { withLiveCosRestore } = await import('./cosState.js');
+    return withLiveCosRestore(restoreFiles);
   }
-  if (reconciliationError) throw reconciliationError;
-
-  return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
+  return restoreFiles();
 }
 
 /**
