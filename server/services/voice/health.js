@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from '../modelObservation.js';
 // Voice stack health checks — whisper.cpp + LLM provider + (when active) Piper.
 
 import { existsSync } from 'fs';
@@ -72,4 +73,7 @@ export const checkAll = async (cfg) => {
   return out;
 };
 
-export const invalidateHealthCache = () => { cache = null; };
+export const invalidateHealthCache = () => {
+  cache = null;
+  invalidateModelObservation('voice-readiness');
+};

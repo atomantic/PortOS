@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from './modelObservation.js';
 /**
  * Ollama Manager Service
  *
@@ -1357,6 +1358,7 @@ async function unloadModel(modelName) {
     return { unloaded: false, reason: result._err.message || 'request failed' }
   }
   console.log(`🧹 ollama: unloaded ${modelName} (keep_alive=0)`)
+  invalidateModelObservation('loaded-models')
   return { unloaded: true, model: modelName }
 }
 

@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { registerModelObservationSocket } from '../services/modelObservation.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -422,6 +424,39 @@ describe('local LLM playground routes', () => {
 describe('local LLM memory-management routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('shares residency samples across socket viewers and fences the unload response', async () => {
+    getLoadedModels.mockResolvedValue([{ id: 'example-model' }]);
+    getLoadedLmStudioModels.mockResolvedValue([]);
+    const first = new EventEmitter();
+    const second = new EventEmitter();
+    first.connected = second.connected = true;
+    registerModelObservationSocket(first);
+    registerModelObservationSocket(second);
+    first.emit('loaded-models:subscribe');
+    second.emit('loaded-models:subscribe');
+    try {
+      const app = makeApp();
+      const [a, b] = await Promise.all([
+        request(app).get('/api/local-llm/loaded'),
+        request(app).get('/api/local-llm/loaded'),
+      ]);
+      expect(a.body.ollama).toEqual([{ id: 'example-model' }]);
+      expect(b.body).toEqual(a.body);
+      expect(getLoadedModels).toHaveBeenCalledTimes(1);
+      expect(getLoadedLmStudioModels).toHaveBeenCalledTimes(1);
+      unloadModel.mockImplementationOnce(async () => {
+        getLoadedModels.mockResolvedValue([]);
+        return { unloaded: true, model: 'example-model' };
+      });
+      await request(app).post('/api/local-llm/unload').send({ backend: 'ollama', modelId: 'example-model' });
+      const after = await request(app).get('/api/local-llm/loaded');
+      expect(after.body.ollama).toEqual([]);
+    } finally {
+      first.emit('disconnect');
+      second.emit('disconnect');
+    }
   });
 
   it('GET /loaded reports models both local backends currently have resident', async () => {

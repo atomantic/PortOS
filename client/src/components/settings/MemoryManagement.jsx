@@ -13,20 +13,15 @@
 //   - Piper TTS — spawned per-synthesis, no persistent process
 //   - Browser / Codex / Claude Code workers — managed elsewhere, not memory-pressure relevant
 //
-// Polls every 5s while mounted. The component owns the toast layer via
-// useAsyncAction (for explicit user actions) and the per-call `.catch()`
-// fallbacks in `refresh()` (for poll failures, which must NOT toast — the
-// panel would otherwise spam an error toast every 5s during a transient
-// Ollama outage). Every API helper is called with `{ silent: true }` so
-// apiCore's default toast doesn't fire underneath; per the AGENTS.md
-// "Silent vs. toasting API requests" rule, custom catch ⇒ silent: true.
+// Shared server samples drive updates; explicit actions own their toast layer.
 
 import { useState, useCallback, useRef } from 'react';
 import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useSocketResource } from '../../hooks/useSocketResource.js';
+import { useSocketSubscription } from '../../hooks/useSocketSubscription.js';
 import useMounted from '../../hooks/useMounted.js';
 import { formatBytes } from '../../utils/formatters';
 import {
@@ -38,7 +33,7 @@ import { getTtsStatus, unloadKokoroTts, controlWhisper, getVoiceStatus } from '.
 
 const SILENT = { silent: true };
 
-const POLL_MS = 5000;
+const MEMORY_EVENTS = ['loaded-models:changed', 'voice-readiness:changed'];
 
 const EMPTY_SNAPSHOT = {
   loadedOllama: [],
@@ -86,7 +81,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
    // (so "Free everything" still skips their unknown residency) but are excluded
    // from the "Status unavailable" banner — the nag the user opted out of.
   const [disabledSources, setDisabledSources] = useState([]);
-  // Guards the polled setState calls — a late /voice/status response that
+  // Guards asynchronous setState calls — a late /voice/status response that
   // resolves after unmount would otherwise call setState on a dead tree.
   // useMounted resets the ref to true on every mount so React 18 StrictMode's
   // mount→cleanup→remount cycle doesn't leave it permanently false (which
@@ -99,21 +94,21 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   // Returns the fresh snapshot so callers (notably freeAll) can act on the
   // values without waiting for React's async setState to flush — reading
   // component state immediately after `await refresh()` would still see
-  // the prior poll's snapshot.
+  // the prior snapshot.
   const refresh = useCallback(async (options = {}) => {
     const priority = options?.priority === true;
     // "Free everything" needs one authoritative pre-action snapshot. Do not
-    // let the 5s interval start a newer poll while that priority refresh is in
+    // let a socket event start a newer read while that priority refresh is in
     // flight, or the caller would have to act on an older last-known snapshot.
     if (!priority && priorityRefreshRef.current) return snapshotRef.current;
     if (priority) priorityRefreshRef.current = true;
     const generation = ++refreshGenerationRef.current;
     const [llmResult, ttsResult, voiceResult] = await Promise.allSettled([
-      getLoadedLlmModels(SILENT),
+      getLoadedLlmModels(priority ? { ...SILENT, fresh: true } : SILENT),
       getTtsStatus(SILENT),
       getVoiceStatus(SILENT),
     ]);
-    // A later-started poll/action refresh owns the UI. Return its current
+    // A later-started event/action refresh owns the UI. Return its current
     // snapshot to stale callers instead of letting an old response resurrect a
     // model that was just unloaded.
     if (generation !== refreshGenerationRef.current) {
@@ -129,7 +124,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     const ttsValid = typeof tts?.kokoro?.state === 'string';
     const voiceValid = voice != null && typeof voice === 'object';
     const llmSourceErrors = llmValid && Array.isArray(llm.sourceErrors) ? llm.sourceErrors : [];
-      // Distinguish "field absent" from "present-but-empty" so a later failed poll
+      // Distinguish "field absent" from "present-but-empty" so a later failed read
        // keeps the last-known disabled backends (the outage is the very scenario
        // the banner suppression exists for) while an explicit [] clears them.
     const llmDisabledSources = Array.isArray(llm?.disabled) ? llm.disabled : previous.disabledSources;
@@ -145,7 +140,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
       // voice.services.whisper.ok is the "PM2 process responsive" probe in
       // checkAll(). When the service block is missing (status fetch failed)
       // we default to "not running" — false negatives just mean the Stop
-      // button briefly hides, which the next poll corrects.
+      // button briefly hides, which the next observation corrects.
       whisperRunning: voiceValid ? Boolean(voice.services?.whisper?.ok) : previous.whisperRunning,
       sttEngine: voiceValid ? (voice.sttEngine || 'whisper') : previous.sttEngine,
       unavailableSources: [...new Set(failedSources)],
@@ -171,7 +166,8 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     return snapshot;
   }, [mountedRef, onLoadedModelsChange]);
 
-  useAutoRefetch(refresh, POLL_MS, { pollOnly: true });
+  useSocketSubscription('voice-readiness');
+  useSocketResource(refresh, { namespace: 'loaded-models', events: MEMORY_EVENTS });
 
   const [unloadModel, unloadingModel] = useAsyncAction(async (modelId) => {
     await unloadOllamaModel(modelId, SILENT);
@@ -199,8 +195,8 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     await refresh();
   });
   const [freeAll, freeingAll] = useAsyncAction(async () => {
-    // Re-poll first — the optimistic UI's `loadedOllama` snapshot is up to
-    // POLL_MS old, and the ollama unload now requires the model to actually
+    // Re-read first — the optimistic UI's `loadedOllama` snapshot is up to
+    // one observation old, and the ollama unload now requires the model to actually
     // be resident (else returns `not loaded`). Read from the returned
     // snapshot rather than component state — React's async setState in
     // refresh() won't have flushed by the time `loadedOllama` etc. is

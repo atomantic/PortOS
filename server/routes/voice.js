@@ -1,3 +1,4 @@
+import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 /**
  * Voice Routes
  *
@@ -36,6 +37,7 @@ import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
+router.use(observeModelMutations('voice-readiness'));
 
 const facetimeActionSchema = z.object({}).strict();
 
@@ -166,18 +168,21 @@ router.put('/config', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/voice/status — reachability + enabled flag + binary/model presence
-router.get('/status', asyncHandler(async (_req, res) => {
+const voiceObservation = observeModelResource('voice-readiness', async () => {
   const cfg = await getVoiceConfig();
   const [services, bins] = await Promise.all([checkAll(cfg), verifyBinaries(cfg)]);
   const models = verifyModels(cfg);
-  res.json({
+  return {
     enabled: cfg.enabled,
     sttEngine: cfg.stt.engine,
     ttsEngine: cfg.tts.engine,
     services,
     binaries: bins,
     models,
-  });
+  };
+}, 5000);
+router.get('/status', asyncHandler(async (_req, res) => {
+  res.json(await voiceObservation.read());
 }));
 
 router.get('/facetime/status', asyncHandler(async (_req, res) => {

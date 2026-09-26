@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from './modelObservation.js';
 /**
  * "Is everything this provider needs actually installed and running?"
  *
@@ -516,6 +517,7 @@ function memoize(fn) {
  * which change exactly what these caches remember.
  */
 export function resetProviderReadinessCache() {
+  invalidateModelObservation('provider-readiness');
   // The endpoint listing cache lives in `lib/openAiModelsProbeCache.js` — the
   // dispatch path's context gate shares it, and a daemon relaunched at a
   // different context size must invalidate BOTH readers or a run is gated on
