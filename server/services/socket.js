@@ -1,4 +1,5 @@
 import { spriteEvents } from './sprites/events.js';
+import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
@@ -240,6 +241,8 @@ function registerAuthRevocationHandler(io) {
 const forwardMeatspaceChange = payload => ioInstance?.emit('meatspace:changed', payload);
 
 function setupEventForwarding() {
+  modelLifecycleEvents.on('image-to-3d:changed', data => ioInstance?.emit('image-to-3d:changed', data));
+  modelLifecycleEvents.on('threejs-model:changed', data => ioInstance?.emit('threejs-model:changed', data));
   meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
   setupCosEventForwarding();
   setupErrorEventForwarding();

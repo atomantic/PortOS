@@ -1,4 +1,5 @@
 import { spriteEvents } from './sprites/events.js';
+import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
@@ -152,6 +153,7 @@ describe('socket.js — initSocket', () => {
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
     dashboardEvents.removeAllListeners();
+    modelLifecycleEvents.removeAllListeners();
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
@@ -180,6 +182,16 @@ describe('socket.js — initSocket', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('forwards model identity invalidations through the existing socket transport', () => {
+    io.emitted.length = 0;
+    modelLifecycleEvents.emit('image-to-3d:changed', { id: 'example-image-model' });
+    modelLifecycleEvents.emit('threejs-model:changed', { id: 'example-procedural-model' });
+    expect(io.emitted).toEqual([
+      ['image-to-3d:changed', { id: 'example-image-model' }],
+      ['threejs-model:changed', { id: 'example-procedural-model' }],
+    ]);
   });
 
   it('forwards death-clock invalidations without personal data', () => {
