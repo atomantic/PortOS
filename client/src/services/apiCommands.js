@@ -8,4 +8,10 @@ export const executeCommand = (command, workspacePath, options = {}) => request(
 });
 export const stopCommand = (id) => request(`/commands/${id}/stop`, { method: 'POST' });
 export const getAllowedCommands = () => request('/commands/allowed');
-export const getProcessesList = (options) => request('/commands/processes', options);
+export const getProcessesList = ({ appId, ...options } = {}) => request(
+  `/commands/processes${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`, options
+);
+
+export const applyProcessAction = (name, action, appId) => request(`/commands/processes/${encodeURIComponent(name)}/action`, {
+  method: 'POST', body: JSON.stringify({ action, appId })
+});

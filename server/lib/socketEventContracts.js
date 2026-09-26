@@ -118,6 +118,22 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   }),
   'logs:subscribe': input(logsSubscribeSchema, 'Subscribe to a bounded process-log tail.'),
   'logs:unsubscribe': input(logsUnsubscribeSchema, 'Release one process-log subscription or all legacy subscriptions.'),
+  'processes:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'PM2 snapshot for registered apps sharing a home; null means the probe failed.',
+    payloadSchema: {
+      type: 'object', required: ['appIds', 'defaultHome', 'processes'],
+      properties: {
+        appIds: { type: 'array', items: { type: 'string' } },
+        defaultHome: { type: 'boolean' },
+        processes: { type: ['array', 'null'], items: { type: 'object', properties: {
+          name: { type: 'string' }, status: { type: 'string' }, pid: { type: 'number' },
+          pm_id: { type: 'number' }, cpu: { type: 'number' }, memory: { type: 'number' },
+          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' }
+        } } }
+      }
+    }
+  }),
   'shell:attach': input(shellAttachSchema, 'Attach this socket to an existing terminal session.'),
   'shell:cd': input(shellCdSchema, 'Change an existing terminal session directory.'),
   'shell:input': input(shellInputSchema, 'Write bytes to an existing terminal session.'),

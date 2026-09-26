@@ -15,7 +15,7 @@ import * as api from '../../services/api';
 import { getLaunchUrls } from '../../services/appUrls';
 import socket from '../../services/socket';
 import { APP_DETAIL_TABS, NON_PM2_TYPES, getAppTypeLabel, isAppFeatureEnabled, resolveLaunchPanelProcess } from './constants';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useProcessSnapshot } from '../../hooks/useProcessSnapshot.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import DesktopLaunchProgress from './DesktopLaunchProgress';
 import OverviewTab from './tabs/OverviewTab';
@@ -166,25 +166,16 @@ function AppDetail() {
     setNativeLaunchOnline(true);
   };
 
-  // Native launch status is independent of the web app's overall PM2 state.
-  // Poll only while its live-output panel is open so closing the game moves the
-  // panel from Running to Exited without disturbing the standard web controls.
-  const refreshNativeLaunchStatus = useCallback(() => (
-    api.getNativeLaunchStatus(appId, { silent: true })
-      .then(result => {
-        if (['online', 'launching'].includes(result?.status)) {
-          setNativeLaunchOnline(true);
-        } else if (['stopped', 'errored', 'not_found', 'not_started'].includes(result?.status)) {
-          setNativeLaunchOnline(false);
-        }
-      })
-      // A failed status read is unknown, not evidence that the game exited.
-      .catch(() => {})
-  ), [appId]);
-  useAutoRefetch(refreshNativeLaunchStatus, 1500, {
+  // Native targets share their app's PM2 home, but not its web-process status.
+  const { data: nativeProcesses } = useProcessSnapshot(appId, {
     enabled: Boolean(launchProcess) && launchProcess === app?.nativeLaunch?.processName,
-    pollOnly: true,
   });
+  useEffect(() => {
+    if (!nativeProcesses) return; // Failed probes preserve the last good state.
+    const status = nativeProcesses.find(proc => proc.name === launchProcess)?.status ?? 'not_found';
+    if (['online', 'launching'].includes(status)) setNativeLaunchOnline(true);
+    else if (['stopped', 'errored', 'not_found', 'not_started'].includes(status)) setNativeLaunchOnline(false);
+  }, [nativeProcesses, launchProcess]);
 
   const handleStop = async () => {
     setActionLoading('stop');

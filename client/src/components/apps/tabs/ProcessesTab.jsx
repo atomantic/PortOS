@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { Maximize2, X } from 'lucide-react';
-import * as api from '../../../services/api';
-import { executeCommand } from '../../../services/api';
+import { applyProcessAction } from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import ProcessLogLines from '../../ui/ProcessLogLines';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { formatBytes, formatCount, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
@@ -32,13 +31,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   // launch-progress panel can't drift.
   const { logs, subscribed, clear: clearLogs } = useProcessLogs(expandedProcess, { lines: tailLines, appId });
 
-  // Let errors throw — `useAutoRefetch` preserves the last-good process list
-  // on transient failures. `silent: true` is essential here because the 5s
-  // poll would otherwise spit a toast every 5 seconds during any blip.
-  const { data, loading, refetch } = useAutoRefetch(
-    () => api.getProcessesList({ silent: true }),
-    5000,
-  );
+  const { data, loading, error, refetch, applySnapshot } = useProcessSnapshot(appId);
   const processes = data ?? [];
 
   // Pin both log panes to the bottom as lines arrive. Driven off `logs` rather
@@ -51,11 +44,9 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
 
   const pm2Action = async (action, name) => {
     setRestarting(prev => ({ ...prev, [name]: true }));
-    await executeCommand(`pm2 ${action} ${name}`, undefined).catch(() => null);
-    setTimeout(() => {
-      setRestarting(prev => ({ ...prev, [name]: false }));
-      refetch();
-    }, 2000);
+    const result = await applyProcessAction(name, action, appId).catch(() => null);
+    if (result) applySnapshot(result.processes);
+    setRestarting(prev => ({ ...prev, [name]: false }));
   };
 
   // No explicit clear here — useProcessLogs resets its buffer whenever
@@ -85,6 +76,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   return (
     <>
       <div className="space-y-4">
+        {error && <p role="status" className="text-port-warning">Process status unavailable; showing the last known state.</p>}
         <div className="flex justify-between items-center">
           <p className="text-gray-500 text-sm">{filteredProcesses.length} process{filteredProcesses.length !== 1 ? 'es' : ''}</p>
           <button

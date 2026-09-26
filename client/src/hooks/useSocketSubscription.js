@@ -49,14 +49,14 @@ function getEntry(namespace) {
  *
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
- * @param {{ onResubscribe?: () => void }} [options]
+ * @param {{ onResubscribe?: () => void, enabled?: boolean }} [options]
  */
-export function useSocketSubscription(namespace, { onResubscribe } = {}) {
+export function useSocketSubscription(namespace, { onResubscribe, enabled = true } = {}) {
   const onResubscribeRef = useRef(onResubscribe);
   onResubscribeRef.current = onResubscribe;
 
   useEffect(() => {
-    if (!namespace) return;
+    if (!namespace || !enabled) return;
     const entry = getEntry(namespace);
 
     const callback = () => onResubscribeRef.current?.();
@@ -81,5 +81,5 @@ export function useSocketSubscription(namespace, { onResubscribe } = {}) {
         registry.delete(namespace);
       }
     };
-  }, [namespace]);
+  }, [namespace, enabled]);
 }
