@@ -935,15 +935,24 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
  * enterprise hosts. A forge outage must never undo or block local cleanup.
  * The in-progress marker keeps the issue ineligible for a new claim until this
  * edit: deleting the local branch alone does not release it to the claim queue.
- * Only our own assignment is removed; other assignees are left untouched.
+ * A fresh assignee read preserves claims now held by another account.
  */
 async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeAccount = null } = {}) {
   const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
   if (!issue) return;
   await (async () => {
-    const repoSpec = githubRepoSpec(origin === undefined ? await getOriginInfo(repoPath) : origin);
+    const target = origin === undefined ? await getOriginInfo(repoPath) : origin;
+    const repoSpec = githubRepoSpec(target);
     if (!repoSpec) return;
     const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
+    const login = (await execGh([
+      'api', 'user', '--hostname', githubApiHost(target.host), '--jq', '.login'
+    ], undefined, { cwd, env })).trim();
+    const current = safeJSONParse(await execGh([
+      'issue', 'view', issue, '--repo', repoSpec, '--json', 'assignees'
+    ], undefined, { cwd, env }), null);
+    if (!login || !Array.isArray(current?.assignees)) throw new Error('claim ownership unavailable');
+    if (current.assignees.length !== 1 || current.assignees[0]?.login !== login) return;
     await execGh([
       'issue', 'edit', issue, '--repo', repoSpec,
       '--remove-assignee', '@me', '--remove-label', 'in-progress'

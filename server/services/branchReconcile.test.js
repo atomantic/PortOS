@@ -287,8 +287,15 @@ describe('classifyBranches', () => {
   });
 });
 
+const mockOwnedClaim = () => execGh.mockImplementation(async (args) => {
+  if (args[0] === 'api') return 'example-owner';
+  if (args[0] === 'issue' && args[1] === 'view') return JSON.stringify({ assignees: [{ login: 'example-owner' }] });
+  return '[]';
+});
+
 describe('retired claim markers in reconcile', () => {
   it('releases early-reaped claims on the enterprise host with the pinned account', async () => {
+    mockOwnedClaim();
     getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
     wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
     git.getBranches.mockResolvedValue([]);
@@ -297,6 +304,7 @@ describe('retired claim markers in reconcile', () => {
       'issue', 'edit', '42', '--repo', 'github.example.com/example/app',
       '--remove-assignee', '@me', '--remove-label', 'in-progress'
     ], undefined, { cwd: '/repo', env: PINNED_ENV });
+    expect(execGh).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.example.com', '--jq', '.login'], undefined, { cwd: '/repo', env: PINNED_ENV });
     expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'app-account' });
     expect(resolveForgeExecOptionsMock).toHaveBeenCalledOnce();
   });
@@ -395,6 +403,7 @@ describe('cleanupMerged', () => {
   });
 
   it('releases a retired issue claim with the repository credential after deletion', async () => {
+    mockOwnedClaim();
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/wt/retired' }]);
     expect(execGh).toHaveBeenCalledWith([
@@ -402,6 +411,20 @@ describe('cleanupMerged', () => {
       '--remove-assignee', '@me', '--remove-label', 'in-progress'
     ], undefined, { cwd: '/repo', env: PINNED_ENV });
     expect(execGh.mock.invocationCallOrder[0]).toBeGreaterThan(git.deleteBranch.mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    { assignees: [] },
+    { assignees: [{ login: 'other-owner' }] },
+    { assignees: [{ login: 'example-owner' }, { login: 'other-owner' }] }
+  ])('preserves claim markers when the assignees are not solely ours: %j', async ({ assignees }) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGh.mockImplementation(async (args) => args[0] === 'api'
+      ? 'example-owner'
+      : JSON.stringify({ assignees }));
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42' }]);
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' && args[1] === 'edit')).toBe(false);
   });
 
   it('leaves markers intact for a live owner or a failed branch deletion', async () => {
