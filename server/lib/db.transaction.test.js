@@ -10,6 +10,7 @@ const pool = vi.hoisted(() => ({
 vi.mock('pg', () => ({
   default: {
     Pool: vi.fn(function Pool() { return pool; }),
+    types: { setTypeParser: vi.fn() },
   },
 }));
 

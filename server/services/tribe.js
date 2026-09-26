@@ -17,6 +17,8 @@ import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
 import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { toUserDayKey } from '../lib/activeDays.js';
+import { getUserTimezone } from './userTimezone.js';
 import * as calendarSync from './calendarSync.js';
 
 export function isoDate(value) {
@@ -483,8 +485,15 @@ export async function createTouchpoint(personId, data = {}) {
 export async function createCalendarTouchpoint(personId, { accountId, eventId, summary }) {
   const event = await calendarSync.getEvent(accountId, eventId);
   if (!event) throw new ServerError('Calendar event not found', { status: 404 });
+  const happenedAt = event.startTime || event.endTime || new Date().toISOString();
+  // `last_contact_on` is a user-facing calendar day, not a UTC one — an evening
+  // event must land on the day the user experienced it, not tomorrow's UTC date
+  // (#8451). `createTouchpoint` uses `localDate` (falling back to the raw instant
+  // only when the caller doesn't supply one).
+  const localDate = toUserDayKey(happenedAt, await getUserTimezone());
   return createTouchpoint(personId, {
-    happenedAt: event.startTime || event.endTime || new Date().toISOString(),
+    happenedAt,
+    localDate,
     channel: event.location || 'Calendar',
     summary: summary || event.title || 'Calendar touchpoint',
     source: 'calendar',
@@ -517,6 +526,12 @@ export async function createCalendarTouchpoint(personId, { accountId, eventId, s
 // advance instead of re-implementing it (#34).
 export async function autoCreateTouchpoint(personId, data) {
   const happenedAt = data.happenedAt || new Date().toISOString();
+  // Advance last_contact_on by the user's LOCAL calendar day, not the UTC day the
+  // raw instant's date part happens to fall on — an evening meeting/message must
+  // not advance the contact date to a day that, locally, hasn't happened yet
+  // (#8451). Falls back to the raw instant only if it doesn't parse as a date at
+  // all (toUserDayKey returns null), matching the manual-touchpoint fallback.
+  const contactDay = toUserDayKey(happenedAt, await getUserTimezone()) || happenedAt;
   return withTransaction(async (client) => {
     const result = await client.query(
       `INSERT INTO tribe_touchpoints (
@@ -551,7 +566,7 @@ export async function autoCreateTouchpoint(personId, data) {
        SET last_contact_on = GREATEST(COALESCE(last_contact_on, DATE '1900-01-01'), $2::date),
            updated_at = NOW()
        WHERE id = $1`,
-      [personId, happenedAt],
+      [personId, contactDay],
     );
     return rowToTouchpoint(result.rows[0]);
   });
