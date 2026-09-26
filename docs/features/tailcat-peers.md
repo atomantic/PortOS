@@ -391,6 +391,38 @@ tailcat forward <tcADDR> 15555:5565
 - [tailscale/tailcat](https://github.com/tailscale/tailcat) — CLI reference
 
 
+### Separate authentication failures from relay TLS failures
+
+The public health probe and Tailcat relay handshake do not require a paired
+PortOS credential. A 401 or 403 response proves the tunnel carried HTTP; resolve
+that response through the instance credential / pair-secret workflow. A saved
+peer without a pair secret can remain unable to sync even after transport is
+restored. Do not remove authentication or point Tailcat at the main API port to
+work around a relay timeout.
+
+A relay timeout alone does not prove that a hosting provider banned Tailcat.
+Compare the same public relay URL from both endpoints, retaining certificate
+verification and the hostname, then repeat a bounded TLS comparison:
+
+```sh
+curl --connect-timeout 5 --max-time 10 -v https://<relay-host>/derp/probe
+curl --connect-timeout 5 --max-time 10 -v --curves X25519 https://<relay-host>/derp/probe
+```
+
+Some network paths fail with the larger post-quantum ClientHello while the same
+host succeeds with classic X25519. Go documents this compatibility failure and
+the diagnostic `GODEBUG=tlsmlkem=0` switch in its
+[GODEBUG guidance](https://go.dev/doc/godebug). A successful relay connection
+under that setting is useful evidence, but is not an end-to-end health check:
+both the serve and forward must reach the relay. Inspect verbose connection
+traces instead of inferring the failure stage from zero-valued curl timings.
+
+Keep this a bounded diagnostic. Do not automatically persist a cryptographic
+fallback, disable certificate verification, change firewall rules, or declare
+a provider policy change from timeouts. A permanent compatibility setting is a
+separate operator decision; the underlying path or middlebox defect remains
+unidentified until additional network evidence establishes it.
+
 ## Code ownership
 
 Shared CLI discovery, version-gated installation, and DERP cache priming live in
