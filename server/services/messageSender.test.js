@@ -116,11 +116,11 @@ describe('draft send workflow', () => {
     expect(doubles.sendGmail).not.toHaveBeenCalled();
     await approveDraft('draft-1');
     doubles.getAccount.mockImplementationOnce(async () => {
-      await updateDraft('draft-1', { body: 'Latest approved content' });
+      await updateDraft('draft-1', { body: 'Latest approved content', accountId: 'other-account', sendVia: 'playwright' });
       return { id: 'account-1', type: 'gmail' };
     });
     await sendDraft('draft-1');
-    expect(doubles.sendGmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ body: 'Latest approved content', status: 'sending' }));
+    expect(doubles.sendGmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ body: 'Latest approved content', status: 'sending', accountId: 'account-1', sendVia: 'api' }));
   });
 
   it('leaves validation failures unsent and does not call a provider', async () => {
