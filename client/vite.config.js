@@ -95,6 +95,18 @@ function buildStamp() {
 const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
 const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
 
+// The API sees Vite's loopback connection, not the browser's. Replace
+// caller-supplied provenance, including duplicate headers; unknown socket
+// peers must never become an implicit local caller. `proxyReqWs` covers a
+// websocket upgrade, which never fires `proxyReq`.
+function markProxyClientAddress(proxy) {
+  const mark = (proxyReq, req) => {
+    proxyReq.setHeader(DEV_PROXY_CLIENT_ADDRESS_HEADER, req.socket?.remoteAddress || 'unknown');
+  };
+  proxy.on('proxyReq', mark);
+  proxy.on('proxyReqWs', mark);
+}
+
 // Dev proxies for the same-origin Eidoverse iframe. Root routes only forward
 // while the API host is active; `/node_modules/` + `/shared/` keep a Referer
 // bypass so Vite's own dependency graph is not stolen.
@@ -189,14 +201,7 @@ export default defineConfig(({ command, mode }) => {
           target: API_TARGET,
           changeOrigin: true,
           secure: false,
-          configure(proxy) {
-            proxy.on('proxyReq', (proxyReq, req) => {
-              // The API sees Vite's loopback connection, not the browser's.
-              // Replace caller-supplied provenance, including duplicate headers;
-              // unknown socket peers must never become an implicit local caller.
-              proxyReq.setHeader(DEV_PROXY_CLIENT_ADDRESS_HEADER, req.socket?.remoteAddress || 'unknown');
-            });
-          }
+          configure: markProxyClientAddress
         },
         // Every `/data/**` asset mount at once, instead of a hand-maintained
         // list that silently fell behind the server's (see docs/PORTS.md:
@@ -212,11 +217,15 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           secure: false
         },
+        // The socket carries host-control events (shell, iTerm2, app updates)
+        // gated on a local caller, so its handshake needs the same marker —
+        // on both the polling requests and the websocket upgrade (#8708).
         '/socket.io': {
           target: API_TARGET,
           changeOrigin: true,
           ws: true,
-          secure: false
+          secure: false,
+          configure: markProxyClientAddress
         },
         ...eidoverseDevProxies(API_TARGET),
       }

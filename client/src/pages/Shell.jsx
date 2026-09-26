@@ -45,6 +45,7 @@ function PortosShellView() {
   const {
     terminalRef,
     connected,
+    hostControlForbidden,
     sessions,
     activeSessionId,
     interactiveCount,
@@ -296,6 +297,12 @@ function PortosShellView() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {hostControlForbidden && (
+        <div role="alert" className="shrink-0 px-3 py-2 rounded-lg border border-port-warning/40 bg-port-warning/10 text-sm text-port-warning">
+          The shell only runs for a local connection while no instance password is set. Set an instance password in Settings to use the shell remotely.
         </div>
       )}
 
