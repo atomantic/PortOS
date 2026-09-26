@@ -1,3 +1,4 @@
+import http from 'node:http';
 import https from 'node:https';
 import { once } from 'node:events';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -227,6 +228,86 @@ describe('peerHttpClient', () => {
       await peerFetch('http://peer.example.com/api/instances/peers/announce', {}, peer);
       expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('X-PortOS-Peer-Sync-Token');
     } finally { vi.unstubAllGlobals(); }
+  });
+
+  describe('peer credentials at the transport boundary', () => {
+    const peer = { syncSecret: 'synthetic-pair-secret-32-characters-long', peerAuthAccepted: true };
+    let servers;
+
+    beforeEach(() => {
+      servers = [];
+      selfInstanceId = 'self-instance-id';
+      __resetSelfInstanceIdForTests();
+    });
+
+    afterEach(async () => {
+      await Promise.all(servers.map((server) => new Promise((resolve) => {
+        server.close(resolve);
+        server.closeAllConnections();
+      })));
+      __resetSelfInstanceIdForTests();
+    });
+
+    const serve = async (handler) => {
+      const server = http.createServer(handler);
+      servers.push(server);
+      server.listen(0, '127.0.0.1');
+      await once(server, 'listening');
+      return `http://127.0.0.1:${server.address().port}`;
+    };
+
+    it.each([
+      [302, '/api/system/health/details'],
+      [307, '/api/peer-sync/record'],
+      [302, '/data/images/example.png'],
+    ])('refuses %s redirects from %s even when the caller opts into following', async (status, path) => {
+      let targetRequests = 0;
+      let sourceRequests = 0;
+      const target = await serve((_req, res) => { targetRequests++; res.end('unexpected'); });
+      const source = await serve((req, res) => {
+        sourceRequests++;
+        expect(req.headers['x-portos-peer-auth']).toBe(derivePeerAuthToken(peer.syncSecret, 'self-instance-id'));
+        expect(req.headers['x-portos-instance-id']).toBe('self-instance-id');
+        res.writeHead(status, { location: `${target}${path}` });
+        res.end();
+      });
+      await expect(peerFetch(`${source}${path}`, { redirect: 'follow' }, peer)).rejects.toThrow();
+      expect(sourceRequests).toBe(1);
+      expect(targetRequests).toBe(0);
+    });
+
+    it('preserves pair credentials on direct HTTP and HTTPS requests', async () => {
+      const headers = [];
+      const handler = (req, res) => { headers.push(req.headers); res.end('ok'); };
+      const httpUrl = await serve(handler);
+      const tls = await startHttpsServer(handler);
+      try {
+        for (const url of [httpUrl, tls.url]) {
+          const response = await peerFetch(`${url}/api/system/health/details`, {}, peer);
+          expect(await response.text()).toBe('ok');
+        }
+        expect(headers).toHaveLength(2);
+        for (const received of headers) {
+          expect(received['x-portos-peer-auth']).toBe(derivePeerAuthToken(peer.syncSecret, 'self-instance-id'));
+          expect(received['x-portos-instance-id']).toBe('self-instance-id');
+        }
+      } finally { await tls.close(); }
+    });
+
+    it('returns an HTTPS redirect as non-OK without reaching its target', async () => {
+      let targetRequests = 0;
+      const target = await serve((_req, res) => { targetRequests++; res.end('unexpected'); });
+      const tls = await startHttpsServer((_req, res) => {
+        res.writeHead(307, { location: target });
+        res.end();
+      });
+      try {
+        const response = await peerFetch(`${tls.url}/api/peer-sync/record`, { redirect: 'follow' }, peer);
+        expect(response.ok).toBe(false);
+        expect(response.status).toBe(307);
+        expect(targetRequests).toBe(0);
+      } finally { await tls.close(); }
+    });
   });
 
   describe('peerFetch over HTTPS', () => {

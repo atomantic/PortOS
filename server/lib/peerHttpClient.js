@@ -113,7 +113,8 @@ export async function peerFetch(url, options = {}, peer = null) {
     ? { 'X-PortOS-Peer-Sync-Token': peer.syncSecret } : {};
   const finalOptions = {
     ...options,
-    ...(Object.keys(syncHeaders).length ? { redirect: 'error' } : {}),
+    // Peer credentials and sender identity must stay at the configured destination.
+    redirect: 'error',
     headers: {
       ...dropOverridden({
         ...(selfId ? { [PEER_INSTANCE_HEADER]: selfId } : {}),
