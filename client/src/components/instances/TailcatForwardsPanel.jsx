@@ -44,9 +44,9 @@ export default function TailcatForwardsPanel({ onChange, peerIds, renderPanel = 
     });
   }, [forwards, peerIdSet]);
 
-  const retry = async (id, remotePort) => {
+  const retry = async (id, remotePort, tcAddress) => {
     setBusyId(id);
-    const peer = await retryTailcatForward(id, remotePort ? { remotePort } : {}).catch(() => null);
+    const peer = await retryTailcatForward(id, { ...(remotePort ? { remotePort } : {}), ...(tcAddress ? { tcAddress } : {}) }).catch(() => null);
     setBusyId(null);
     // Refetch rather than guess: status, liveness and the failure text are all
     // derived server-side, and a local guess would misreport a failed retry.
@@ -88,7 +88,7 @@ export default function TailcatForwardsPanel({ onChange, peerIds, renderPanel = 
             <TailcatForwardStatus
               forward={forward}
               busy={busyId === forward.id}
-              onRetry={(remotePort) => retry(forward.id, remotePort)}
+              onRetry={(remotePort, tcAddress) => retry(forward.id, remotePort, tcAddress)}
               onForget={() => forget(forward.id)}
             />
           </li>

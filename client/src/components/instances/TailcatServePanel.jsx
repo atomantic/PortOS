@@ -1,5 +1,5 @@
 /**
- * Machine-local Tailcat serve status — start/stop PortOS API :5555 over
+ * Machine-local Tailcat serve status — start/stop the isolated PortOS ingress over
  * tailcat, and Copy the tc… address for the other node to Dial-them.
  *
  * The full address is returned by the serve status API on purpose (our own
@@ -77,6 +77,18 @@ export default function TailcatServePanel({ onChange, compact = false }) {
                   ? <RefreshCw size={11} className={busy ? 'animate-spin' : ''} />
                   : <Play size={11} />}
                 {busy ? 'Working...' : (status?.status === 'failed' || status?.enabled ? 'Retry' : 'Start serve')}
+              </button>
+            )}
+            {status?.live && (
+              <button
+                type="button"
+                onClick={() => run(() => retryTailcatServe(), 'Tailcat serve restarted')}
+                disabled={busy}
+                title="Restart the serving process using the saved key"
+                className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white disabled:opacity-50 border border-port-border rounded px-2 py-1 transition-colors"
+              >
+                <RefreshCw size={11} className={busy ? 'animate-spin' : ''} />
+                {busy ? 'Working...' : 'Restart serve'}
               </button>
             )}
             {status?.live && (

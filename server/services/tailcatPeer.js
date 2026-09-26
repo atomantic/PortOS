@@ -607,8 +607,9 @@ async function startAndRegister({
     const detail = child.tailcatRuntimeError?.message || unreachable;
     throw new ServerError(
       `tailcat is forwarding 127.0.0.1:${localPort} but the tunnel could not reach the remote — ${detail}. `
-      + 'Check that the remote is still serving its tailcat address, and that a local firewall is not '
-      + 'blocking the `tailcat` binary itself.',
+      + `On the remote, check that the PortOS ingress on :${remotePort} responds and restart Tailcat serve `
+      + 'using its saved key, then retry this forward. If it still fails, compare Tailcat versions on both '
+      + 'ends and check whether a firewall blocks the `tailcat` binary.',
       { status: 502, code: 'TAILCAT_TUNNEL_UNREACHABLE' }
     );
   }
@@ -684,6 +685,7 @@ export function retryTailcatForward(id, options = {}) {
 
 async function retryForward(id, {
   remotePort,
+  tcAddress,
   ensureInstalled = ensureTailcatInstalled,
   primeDerpMap = primeDerpMapCache,
   allocatePort = allocateLocalPort,
@@ -699,13 +701,25 @@ async function retryForward(id, {
   const entry = entries.find((f) => f.id === id);
   if (!entry) throw new ServerError('Tailcat forward not found', { status: 404 });
 
+  const patch = {};
   if (remotePort !== undefined) {
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
       throw new ServerError('Invalid remote Tailcat port', { status: 400, code: 'TAILCAT_BAD_PORT' });
     }
-    const patched = await patchForwardEntry(entry.id, { remotePort });
-    if (!patched) throw new ServerError('Could not update Tailcat remote port', { status: 503 });
-    entry.remotePort = remotePort;
+    patch.remotePort = remotePort;
+  }
+  if (tcAddress !== undefined) {
+    if (!isValidTcAddress(tcAddress)) {
+      throw new ServerError('Invalid Tailcat address', { status: 400, code: 'TAILCAT_BAD_ADDRESS' });
+    }
+    patch.tcAddress = tcAddress.trim();
+  }
+  if (Object.keys(patch).length) {
+    // Keep the replacement machine-local and retryable even if its first dial fails.
+    // Never recreate the peer: credentials, pairing and sync choices belong to it.
+    const patched = await patchForwardEntry(entry.id, patch);
+    if (!patched) throw new ServerError('Could not update Tailcat forward', { status: 503 });
+    Object.assign(entry, patch);
   }
 
   // A live child on a stale mapping would keep the port and mask the retry.

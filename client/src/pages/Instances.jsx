@@ -1273,11 +1273,11 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
     }
   };
 
-  const handleForwardRetry = async (remotePort) => {
+  const handleForwardRetry = async (remotePort, tcAddress) => {
     const forwardId = peer.tailcatForward?.id;
     if (!forwardId) return;
     setForwardBusy(true);
-    const updated = await retryTailcatForward(forwardId, remotePort ? { remotePort } : {}).catch(() => null);
+    const updated = await retryTailcatForward(forwardId, { ...(remotePort ? { remotePort } : {}), ...(tcAddress ? { tcAddress } : {}) }).catch(() => null);
     setForwardBusy(false);
     onRefresh();
     if (!updated) return;

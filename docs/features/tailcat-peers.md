@@ -254,8 +254,8 @@ that started working again goes quiet — a latched "no route" would be the same
 lie as a permanently green "running", pointing the other way.
 
 **When an add reports the tunnel could not reach the remote, or a live forward
-shows `no route`,** the tunnel — not PortOS — is what to look at. The
-usual cause on macOS is a local network filter (Little Snitch and friends)
+shows `no route`,** check both the remote ingress and the tunnel. One possible
+cause on macOS is a local network filter (Little Snitch and friends)
 denying the `tailcat` binary itself: `tailcat forward --verbose` then logs a
 relay connect that dies the instant it is established, while `curl` to the same
 relay from the same machine succeeds.
@@ -272,6 +272,32 @@ reaches the remote — which is also why the far side shows no activity. Allow
 the `tailcat` binary outbound in the filter, then Retry the forward. If outbound
 allow-listing is impractical on this host, switch to **They dial us**: serve
 here and have the sandbox (or other good initiator) Dial them toward this node.
+
+### Restoring a lost connection
+
+A running Tailcat process proves neither that the tunnel works nor that the
+remote PortOS ingress is listening. Recover in this order:
+
+1. On the remote machine, confirm that PortOS answers on its isolated ingress
+   `:5565`, using the install's HTTP/HTTPS mode. A healthy main API on `:5555`
+   alone does not establish that the ingress is ready.
+2. In the remote **Tailcat serve (this node)** panel, use **Restart serve** even
+   if the process still says **serving**. Restart uses the saved key and keeps
+   restore-on-boot enabled. Do not generate a replacement key as a restart step.
+3. On the dialing machine, use **Retry** on the saved forward. PortOS verifies
+   an HTTP response through the tunnel, then immediately probes the peer rather
+   than waiting for its previous failure backoff (which can reach 24 hours).
+   If relay selection changed the address, use **Replace remote address** on that
+   same forward and paste the new address copied privately from the remote. This
+   preserves the peer, credentials and pairing; it does not require Forget/Add.
+4. Check the peer's new health result. A reachable peer asking for credentials
+   needs pairing/authentication; another tunnel timeout needs further transport
+   diagnosis. Compare versions, the served port and saved address, then inspect
+   relay/firewall diagnostics. A ping alone does not verify TCP forwarding.
+
+The local Retry action cannot restart an unreachable remote process. Use the
+remote machine's own UI or an already authorized out-of-band management channel.
+Keep the existing private access boundary and dedicated ingress when recovering.
 
 ### The DERP map has to be reachable — by Go
 
@@ -364,6 +390,38 @@ tailcat forward <tcADDR> 15555:5565
 - [PORTS.md](../PORTS.md) — `TAILCAT_FORWARD` / `15555`
 - [tailscale/tailcat](https://github.com/tailscale/tailcat) — CLI reference
 
+
+### Separate authentication failures from relay TLS failures
+
+The public health probe and Tailcat relay handshake do not require a paired
+PortOS credential. A 401 or 403 response proves the tunnel carried HTTP; resolve
+that response through the instance credential / pair-secret workflow. A saved
+peer without a pair secret can remain unable to sync even after transport is
+restored. Do not remove authentication or point Tailcat at the main API port to
+work around a relay timeout.
+
+A relay timeout alone does not prove that a hosting provider banned Tailcat.
+Compare the same public relay URL from both endpoints, retaining certificate
+verification and the hostname, then repeat a bounded TLS comparison:
+
+```sh
+curl --connect-timeout 5 --max-time 10 -v https://<relay-host>/derp/probe
+curl --connect-timeout 5 --max-time 10 -v --curves X25519 https://<relay-host>/derp/probe
+```
+
+Some network paths fail with the larger post-quantum ClientHello while the same
+host succeeds with classic X25519. Go documents this compatibility failure and
+the diagnostic `GODEBUG=tlsmlkem=0` switch in its
+[GODEBUG guidance](https://go.dev/doc/godebug). A successful relay connection
+under that setting is useful evidence, but is not an end-to-end health check:
+both the serve and forward must reach the relay. Inspect verbose connection
+traces instead of inferring the failure stage from zero-valued curl timings.
+
+Keep this a bounded diagnostic. Do not automatically persist a cryptographic
+fallback, disable certificate verification, change firewall rules, or declare
+a provider policy change from timeouts. A permanent compatibility setting is a
+separate operator decision; the underlying path or middlebox defect remains
+unidentified until additional network evidence establishes it.
 
 ## Code ownership
 

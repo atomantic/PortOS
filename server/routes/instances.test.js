@@ -30,6 +30,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
   getPeers: vi.fn(),
+  probePeer: vi.fn(),
 }));
 // This suite's routes/instances.js import pulls getSelf/updateSelf from the
 // identity leaf (#6836) — double it too so an untested route (e.g. GET /
@@ -344,13 +345,40 @@ describe('saved tailcat forward routes', () => {
     expect(res.body).toEqual({ forwards: rows });
   });
 
-  it('retries a saved forward and sanitizes the resulting peer', async () => {
+  it('probes a repaired forward immediately instead of returning stale offline backoff', async () => {
     const peer = { id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15556 };
     retryTailcatForward.mockResolvedValue(peer);
+    const recovered = { ...peer, status: 'online', consecutiveFailures: 0, nextProbeAt: null };
+    instances.probePeer.mockResolvedValue(recovered);
     const res = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry');
     expect(res.status).toBe(200);
     expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1', {});
-    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
+    expect(instances.probePeer).toHaveBeenCalledWith(peer);
+    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(recovered);
+    expect(res.body).toEqual(recovered);
+  });
+
+  it('keeps a reachable but unpaired peer distinct from a recovered peer', async () => {
+    const peer = { id: 'peer-example', transport: 'tailcat', port: 15555 };
+    retryTailcatForward.mockResolvedValue(peer);
+    instances.probePeer.mockResolvedValue({ ...peer, status: 'offline', authRequired: true });
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ authRequired: true, status: 'offline' });
+  });
+
+  it('validates replacement capabilities before restarting a saved forward', async () => {
+    const tcAddress = 'tcEXAMPLE' + 'A'.repeat(40);
+    const peer = { id: 'peer-example', port: 15555 };
+    retryTailcatForward.mockResolvedValue(peer);
+    instances.probePeer.mockResolvedValue(peer);
+    const ok = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry').send({ tcAddress });
+    expect(ok.status).toBe(200);
+    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1', { tcAddress });
+    retryTailcatForward.mockClear();
+    const bad = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry').send({ tcAddress: 'x'.repeat(30) });
+    expect(bad.status).toBe(400);
+    expect(retryTailcatForward).not.toHaveBeenCalled();
   });
 
   it('forgets a saved forward', async () => {

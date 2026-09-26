@@ -289,9 +289,15 @@ router.get('/peers/tailcat/forwards', asyncHandler(async (_req, res) => {
 // using the stored capability, registering its peer if the original add never got
 // that far.
 router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) => {
-  const data = validateRequest(z.object({ remotePort: z.number().int().min(1).max(65535).optional() }), req.body || {});
+  const data = validateRequest(z.object({
+    remotePort: z.number().int().min(1).max(65535).optional(),
+    tcAddress: z.string().trim().min(24).max(2048).refine(tailcatPeer.isValidTcAddress, 'Invalid Tailcat address').optional(),
+  }), req.body || {});
   const peer = await tailcatPeer.retryTailcatForward(req.params.id, data);
-  res.json(instances.sanitizePeerForClient(peer));
+  // A repaired tunnel must not leave the peer in yesterday's probe backoff.
+  // Probe also distinguishes a usable tunnel from missing peer credentials.
+  const probed = await instances.probePeer(peer);
+  res.json(instances.sanitizePeerForClient(probed || peer));
 }));
 
 // DELETE /api/instances/peers/tailcat/forwards/:id — stop the forward, drop the

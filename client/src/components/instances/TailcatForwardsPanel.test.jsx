@@ -137,3 +137,19 @@ it('updates the remote port only when the operator chooses the upgraded ingress'
   await user.click(await screen.findByRole('button', { name: 'Retry on :5565' }));
   await waitFor(() => expect(retryTailcatForward).toHaveBeenCalledWith(failedForward.id, { remotePort: 5565 }));
 });
+
+it('replaces a stale address on the existing forward without revealing the stored capability', async () => {
+  getTailcatForwards.mockResolvedValue({ forwards: [failedForward] });
+  retryTailcatForward.mockResolvedValue({ id: 'peer-example', port: 15555 });
+  const user = userEvent.setup();
+  render(<TailcatForwardsPanel />);
+  await user.click(await screen.findByRole('button', { name: 'Replace remote address' }));
+  const input = screen.getByLabelText('New remote Tailcat address');
+  expect(input).toHaveValue('');
+  expect(input).toHaveAttribute('type', 'password');
+  const tcAddress = 'tcEXAMPLE' + 'B'.repeat(40);
+  await user.type(input, tcAddress);
+  await user.click(screen.getByRole('button', { name: 'Save address & retry' }));
+  await waitFor(() => expect(retryTailcatForward).toHaveBeenCalledWith(failedForward.id, { tcAddress }));
+  expect(screen.queryByLabelText('New remote Tailcat address')).not.toBeInTheDocument();
+});
