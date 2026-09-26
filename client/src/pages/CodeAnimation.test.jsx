@@ -142,10 +142,10 @@ describe('Code Animation page', () => {
     getCodeAnimationJob.mockResolvedValue(completedJob);
     await emitSocket('code-animation:changed', { id: 'job-1' });
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Example animation/ })).toHaveTextContent('Completed');
     await userEvent.setup().click(screen.getByRole('button', { name: 'Preview without audio' }));
-    expect(screen.getByTitle('Code animation preview')).toHaveAttribute('srcdoc', expect.stringContaining('Finished animation'));
+    expect(await screen.findByTitle('Code animation preview')).toHaveAttribute('srcdoc', expect.stringContaining('Finished animation'));
 
     // Terminal records still reconcile: a missing output can be discovered later.
     getCodeAnimationJob.mockResolvedValue({ ...completedJob, status: 'failed', error: 'Output missing', html: null });
@@ -182,7 +182,7 @@ describe('Code Animation page', () => {
     getCodeAnimationJob.mockResolvedValue(completedJob);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Retry job status' }));
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry job status' })).not.toBeInTheDocument();
   });
 
@@ -195,7 +195,7 @@ describe('Code Animation page', () => {
       total: 1, counts: { running: 1, completed: 0 }, nextCursor: null });
     const view = await renderPage('/code-animation/job-1');
     await userEvent.setup().click(screen.getByRole('link', { name: /Second animation/ }));
-    expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
+    await waitFor(() => expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation'));
     await act(async () => resolveFirst(completedJob));
     expect(screen.getByLabelText(/^title/i)).toHaveValue('Second animation');
     expect(screen.queryByRole('button', { name: 'Run with audio' })).not.toBeInTheDocument();
