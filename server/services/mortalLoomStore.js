@@ -12,6 +12,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
+import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspaceEvents.js';
 import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
@@ -204,7 +205,51 @@ async function materializeNow(path) {
 let listenerAttached = false;
 let didInitialPin = false;
 
+// One server watcher for external iCloud changes, including atomic replacement
+// and recovery after transient unreadability; never one poll per browser.
+let watchedPath = null;
+let storeWatchTimer = null;
+let watchGeneration = 0;
+function configureStoreWatcher(settings) {
+  const path = settings?.mortalloom?.enabled ? normalizePath(settings.mortalloom.path) : null;
+  if (path === watchedPath) return;
+  if (storeWatchTimer) clearInterval(storeWatchTimer);
+  storeWatchTimer = null;
+  watchedPath = path;
+  const generation = ++watchGeneration;
+  if (!path) return;
+  let previous = null;
+  let pending = false;
+  let dirty = false;
+  const refresh = async () => {
+    if (pending) { dirty = true; return; }
+    pending = true;
+    try {
+      do {
+        dirty = false;
+        const result = await readStoreAtPathResult(path);
+        if (generation !== watchGeneration) return;
+        // Retain the last good snapshot through eviction/read failures.
+        if (result.ok) {
+          invalidateMortalLoomChanges(previous, result.store);
+          previous = structuredClone(result.store);
+        }
+      } while (dirty);
+    } finally {
+      pending = false;
+    }
+  };
+  const changed = () => refresh().catch(err => console.error(`❌ MortalLoom change watcher failed: ${err.message}`));
+  storeWatchTimer = setInterval(changed, 10_000);
+  storeWatchTimer.unref?.();
+  changed();
+}
+
 export function _resetMortalLoomInitForTest() {
+  if (storeWatchTimer) clearInterval(storeWatchTimer);
+  storeWatchTimer = null;
+  watchedPath = null;
+  watchGeneration += 1;
   listenerAttached = false;
   didInitialPin = false;
   lastPinnedPath = null;
@@ -227,6 +272,11 @@ export async function initMortalLoomStore() {
   // the durable half of this hook.
   if (!listenerAttached) {
     settingsEvents.on('settings:updated', (settings) => {
+      const nextPath = settings?.mortalloom?.enabled ? normalizePath(settings.mortalloom.path) : null;
+      if (nextPath !== watchedPath) {
+        configureStoreWatcher(settings);
+        invalidateMeatspace(['overview', 'alcohol', 'body', 'blood', 'epigenetic', 'eyes', 'calendar']);
+      }
       if (!settings?.mortalloom?.enabled) {
         // Disable clears the dedup cache so a future re-enable (even with the
         // same path) triggers another materialize attempt — otherwise toggling
@@ -249,6 +299,7 @@ export async function initMortalLoomStore() {
   // and could half-fail (first succeeds, second hits a transient and skips
   // the boot pin even though sync was confirmed enabled).
   const s = await getSettings();
+  configureStoreWatcher(s);
   if (s?.mortalloom?.enabled) {
     pinAgainstEviction(normalizePath(s.mortalloom.path));
   }
@@ -446,8 +497,10 @@ export async function updateStore(mutator) {
   }
   const base = store || {};
   for (const k of ARRAY_KEYS) if (!Array.isArray(base[k])) base[k] = [];
+  const before = structuredClone(base);
   const result = await mutator(base);
   await writeStoreAtPath(path, base);
+  invalidateMortalLoomChanges(before, base);
   return result;
 }
 

@@ -23,6 +23,7 @@
  * caller that COUNTS these entries can't report a fake 0 (#2726).
  */
 
+import { invalidateMeatspace } from './meatspaceEvents.js';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
@@ -38,6 +39,9 @@ export const queueDailyLogWrite = createFileWriteQueue();
 // Fresh object per call — callers mutate the log they get back (entry push,
 // lastEntryDate stamp) before writing it, so a shared constant would leak state.
 const emptyDailyLog = () => ({ entries: [], lastEntryDate: null });
+const resourceSnapshot = (entries, key) => JSON.stringify(
+  entries?.filter(entry => entry[key]).map(entry => ({ date: entry.date, value: entry[key] }))
+);
 
 /**
  * Read the local `daily-log.json` mirror, without consulting MortalLoom.
@@ -97,6 +101,8 @@ export async function loadMeatspaceDailyLog({ strict = false, label = 'MeatSpace
 export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
   return queueDailyLogWrite(async () => {
     const log = await readLocalDailyLog({ strict: true, label });
+    const beforeAlcohol = resourceSnapshot(log.entries, 'alcohol');
+    const beforeBody = resourceSnapshot(log.entries, 'body');
     const result = await mutatorFn(log);
     if (result === null) return result;
     if (Array.isArray(log?.entries)) {
@@ -105,6 +111,11 @@ export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
     }
     await ensureDir(PATHS.meatspace);
     await atomicWrite(DAILY_LOG_FILE, log);
+    invalidateMeatspace([
+      'overview',
+      ...(beforeAlcohol !== resourceSnapshot(log.entries, 'alcohol') ? ['alcohol'] : []),
+      ...(beforeBody !== resourceSnapshot(log.entries, 'body') ? ['body'] : []),
+    ]);
     return result !== undefined ? result : log;
   });
 }

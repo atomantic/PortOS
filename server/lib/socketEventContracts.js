@@ -59,6 +59,12 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate operational goal progress after learning statistics persist.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'meatspace:changed': {
+    direction: 'server-to-client',
+    summary: 'Overview resource invalidation after persisted local or mirrored health changes.',
+    payloadSchema: { type: 'object', required: ['resources'], additionalProperties: false,
+      properties: { resources: { type: 'array', items: { type: 'string', enum: ['overview', 'alcohol', 'body', 'healthBody', 'blood', 'epigenetic', 'eyes', 'calendar'] } } } },
+  },
   'portos:auto-update:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate updater status after runtime, configuration or external git ref changes.',

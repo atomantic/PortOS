@@ -1,3 +1,4 @@
+import { invalidateMeatspace } from '../meatspaceEvents.js';
 import { getGenomeSummary } from '../genome.js';
 import {
   GOALS_FILE,
@@ -78,6 +79,7 @@ export async function deriveLongevity(birthDate) {
   };
 
   await saveJSON(LONGEVITY_FILE, longevity);
+  invalidateMeatspace(['overview', 'calendar']);
   const markerCount = Object.keys(longevityMarkers).length + Object.keys(cardiovascularMarkers).length;
   console.log(`🧬 Longevity derived: ${lifeExpectancy.adjusted}y (${markerCount} markers, confidence: ${confidence})`);
 

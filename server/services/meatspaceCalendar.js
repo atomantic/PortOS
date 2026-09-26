@@ -6,6 +6,7 @@
  * based on birth date and life expectancy.
  */
 
+import { invalidateMeatspace } from './meatspaceEvents.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -191,6 +192,7 @@ async function loadActivities() {
 async function saveActivities(data) {
   await ensureDir(MEATSPACE_DIR);
   await atomicWrite(ACTIVITIES_FILE, data);
+  invalidateMeatspace(['calendar']);
 }
 
 // === Default Activities ===
@@ -224,6 +226,7 @@ async function loadEvents() {
 async function saveEvents(data) {
   await ensureDir(MEATSPACE_DIR);
   await atomicWrite(EVENTS_FILE, data);
+  invalidateMeatspace(['calendar']);
 }
 
 export async function getLifeEvents() {

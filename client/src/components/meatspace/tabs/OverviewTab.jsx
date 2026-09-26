@@ -1,11 +1,10 @@
-import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import DeathClockCountdown from '../../DeathClockCountdown';
 import ProvenanceChip from '../../ui/ProvenanceChip';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import { formatWeight, formatPercent, formatDateShort, formatCount } from '../../../utils/formatters';
 
@@ -148,41 +147,25 @@ function riskColor(level) {
   return 'text-port-error';
 }
 
+const OVERVIEW_EVENTS = ['meatspace:changed'];
+const fetchHealthBody = () => api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']);
+function useOverviewResource(resource, fetchResource) {
+  return useSocketResource(fetchResource, {
+    events: OVERVIEW_EVENTS,
+    matchesEvent: payload => payload?.resources?.includes(resource),
+  });
+}
+
 export default function OverviewTab() {
-  const [data, setData] = useState(null);
-  const [alcohol, setAlcohol] = useState(null);
-  const [body, setBody] = useState(null);
-  const [healthBody, setHealthBody] = useState(null);
-  const [blood, setBlood] = useState(null);
-  const [epigenetic, setEpigenetic] = useState(null);
-  const [eyes, setEyes] = useState(null);
-  const [calendar, setCalendar] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading } = useOverviewResource('overview', api.getMeatspaceOverview);
+  const { data: alcohol } = useOverviewResource('alcohol', api.getAlcoholSummary);
+  const { data: body } = useOverviewResource('body', api.getBodyHistory);
+  const { data: healthBody } = useOverviewResource('healthBody', fetchHealthBody);
+  const { data: blood } = useOverviewResource('blood', api.getBloodTests);
+  const { data: epigenetic } = useOverviewResource('epigenetic', api.getEpigeneticTests);
+  const { data: eyes } = useOverviewResource('eyes', api.getEyeExams);
+  const { data: calendar } = useOverviewResource('calendar', api.getLifeCalendar);
   const navigate = useNavigate();
-
-  const fetchData = useCallback(async () => {
-    const [overview, alc, bod, bld, epi, eye, hBody, cal] = await Promise.all([
-      api.getMeatspaceOverview().catch(() => null),
-      api.getAlcoholSummary().catch(() => null),
-      api.getBodyHistory().catch(() => null),
-      api.getBloodTests().catch(() => null),
-      api.getEpigeneticTests().catch(() => null),
-      api.getEyeExams().catch(() => null),
-      api.getLatestHealthMetrics(['body_mass', 'body_fat_percentage', 'lean_body_mass']).catch(() => null),
-      api.getLifeCalendar().catch(() => null),
-    ]);
-    setData(overview);
-    setAlcohol(alc);
-    setBody(bod);
-    setHealthBody(hBody);
-    setBlood(bld);
-    setEpigenetic(epi);
-    setEyes(eye);
-    setCalendar(cal);
-    setLoading(false);
-  }, []);
-
-  useAutoRefetch(fetchData, 60_000, { pollOnly: true });
 
   if (loading) {
     return (

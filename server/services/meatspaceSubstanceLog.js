@@ -1,5 +1,6 @@
 /** Shared event-log workflow for MeatSpace substance records. */
 import { join } from 'path';
+import { meatspaceEvents } from './meatspaceEvents.js';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
 import { loadMeatspaceDailyLog, mutateDailyLog, newDailyLogEvent, stampDailyLogEventEdit, tombstoneDailyLogEvent } from './meatspaceDailyLog.js';
 import { isMortalLoomEnabled, mlPush, mlPatchById, mlRemoveById, mlIdAtDateIndex } from './mortalLoomStore.js';
@@ -10,7 +11,11 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
   const itemName = key === 'alcohol' ? 'drink' : 'item';
   let averageCache = null;
   let averageCacheAt = 0;
-  const invalidate = () => { averageCache = null; };
+  let cacheRevision = 0;
+  const invalidate = () => { averageCache = null; cacheRevision += 1; };
+  meatspaceEvents.on('changed', ({ resources }) => {
+    if (resources.includes('alcohol')) invalidate();
+  });
   const recalc = (entry) => {
     entry[key][totalField] = Math.round(entry[key][itemsField].reduce((sum, item) => sum + computeTotal(item), 0) * 100) / 100;
   };
@@ -22,6 +27,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
   async function summary() {
     const now = Date.now();
     if (averageCache && now - averageCacheAt < 5 * 60 * 1000) return averageCache;
+    const revision = cacheRevision;
     const [log, config] = await Promise.all([loadDailyLog(), summaryConfig?.()]);
     const entries = log.entries || [];
     const averages = computeAverages(entries, config);
@@ -31,9 +37,12 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     const weekAgoStr = getDateString(weekAgo);
     const recentEntries = entries.filter(e => e.date >= weekAgoStr && e.date <= today && e[key]?.[itemsField]?.length > 0)
       .sort((a, b) => b.date.localeCompare(a.date));
-    averageCache = { ...averages, recentEntries };
-    averageCacheAt = now;
-    return averageCache;
+    const result = { ...averages, recentEntries };
+    if (revision === cacheRevision) {
+      averageCache = result;
+      averageCacheAt = now;
+    }
+    return result;
   }
 
   async function daily(from, to, options) {

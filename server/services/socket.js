@@ -241,6 +241,7 @@ function setupEventForwarding() {
   setupAgentEventForwarding();
   setupBrainEventForwarding();
   setupDigitalTwinEventForwarding();
+  meatspaceEvents.on('changed', payload => ioInstance?.emit('meatspace:changed', payload));
   setupMoltworldWsEventForwarding();
   setupMoltworldQueueEventForwarding();
   setupInstanceEventForwarding();
