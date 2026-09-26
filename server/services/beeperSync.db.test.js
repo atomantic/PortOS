@@ -155,6 +155,28 @@ afterAll(async () => {
 });
 
 describe.skipIf(!runDb)('beeperSync against Postgres', () => {
+  it('persists account continuation across sweeps and resets it at end of list', async () => {
+    const visits = [];
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/v1/accounts') return jsonResponse(ACCOUNTS);
+      if (parsed.pathname === '/v1/bridges') return jsonResponse(BRIDGES);
+      if (parsed.pathname === '/v1/chats') {
+        const page = Number(parsed.searchParams.get('cursor') || 1);
+        visits.push(page);
+        return jsonResponse({ items: [], hasMore: page < 21, oldestCursor: String(page + 1) });
+      }
+      throw new Error('Unexpected endpoint');
+    }));
+    expect(await runBeeperSweep()).toMatchObject({ unfinishedAccounts: 1, enumerationComplete: false });
+    const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [ACCOUNT_ID]);
+    expect(checkpoint.rows[0].chat_cursor).toBe('21');
+    expect(await runBeeperSweep()).toMatchObject({ unfinishedAccounts: 0, enumerationComplete: true });
+    expect(visits.slice(20)).toEqual([1, 21]);
+    const completed = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [ACCOUNT_ID]);
+    expect(completed.rows[0].chat_cursor).toBeNull();
+  });
+
   it('writes account, conversation, message, attachment and cursor rows in one sweep', async () => {
     installFetch({
       chats: { items: [chatFixture('2026-09-02T10:00:00.000Z')], hasMore: false },

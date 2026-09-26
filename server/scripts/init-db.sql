@@ -1732,6 +1732,7 @@ CREATE TABLE IF NOT EXISTS beeper_accounts (
   status TEXT NOT NULL DEFAULT '',
   bridge_id TEXT NOT NULL DEFAULT '',
   last_seen_at TIMESTAMPTZ,
+  chat_cursor TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
