@@ -17,10 +17,13 @@
  */
 
 import { randomUUID } from 'crypto';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
+import { anyAbortSignal } from '../../lib/requestAbort.js';
+import { describeFetchError } from '../../lib/fetchErrorChain.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
@@ -51,7 +54,8 @@ const FAL_POLL_INTERVAL_MS = 3000;
 // additional attempts — on the same FAL_POLL_INTERVAL_MS cadence, never
 // resubmitting the paid generation — before the run is abandoned (#8340).
 const FAL_MAX_STATUS_RETRIES = 2;
-// Bounds the WHOLE download — headers and every byte of the video — now that
+const FAL_MAX_READ_RETRIES = 2;
+// Bounds completed-result retrieval, backoff, and the WHOLE download — headers and every byte of the video — now that
 // `fetchWithTimeout` holds its deadline through body consumption. It used to
 // bound only the headers, which left the multi-MB transfer itself with no
 // ceiling: a stalled body pinned the media job in `running` until the queue
@@ -120,6 +124,7 @@ export const cancel = (jobId) => {
   const entry = activeRequests.get(jobId);
   if (!entry) return false;
   entry.aborted = true;
+  entry.controller.abort();
   cancelFalRequest(entry);
   return true;
 };
@@ -172,15 +177,39 @@ async function pollFalStatus({ statusUrl, apiKey }) {
   return res.json();
 }
 
-async function fetchFalResult({ responseUrl, apiKey }) {
-  const res = await fetchWithTimeout(responseUrl, {
-    headers: { Authorization: `Key ${apiKey}` },
-  }, FAL_POLL_TIMEOUT_MS);
-  const payload = await res.json().catch(() => null);
-  if (!res.ok || !payload) {
-    throw new ServerError('fal.ai did not return a usable result', { status: 502, code: 'FAL_RESULT_FAILED' });
+// Retry only reads of the already-paid render, including body consumption.
+// Schema/JSON errors and permanent HTTP failures must not enter this loop.
+async function readCompletedRender(url, { apiKey, signal, deadline, video = false }) {
+  for (let attempt = 0; ; attempt += 1) {
+    signal.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error('fal.ai retrieval deadline exceeded');
+    let response;
+    try {
+      response = await fetchWithTimeout(url, {
+        ...(apiKey ? { headers: { Authorization: `Key ${apiKey}` } } : {}),
+        signal,
+      }, Math.min(remaining, video ? FAL_DOWNLOAD_TIMEOUT_MS : FAL_POLL_TIMEOUT_MS));
+      if (!response.ok) {
+        const error = new Error(`fal.ai ${video ? 'video download' : 'result retrieval'} failed: HTTP ${response.status}`);
+        error.transientRead = response.status === 408 || response.status === 429 || (response.status >= 500 && response.status <= 599);
+        throw error;
+      }
+      const value = await (video ? response.arrayBuffer() : response.json());
+      signal.throwIfAborted();
+      return value;
+    } catch (err) {
+      // Release error responses without waiting for an error body to download.
+      // A rejected consumer has already released its fetch deadline.
+      if (response?.body && !response.bodyUsed) void response.body.cancel().catch(() => {});
+      signal.throwIfAborted();
+      if (err instanceof SyntaxError) throw new Error('fal.ai did not return valid result JSON');
+      const transient = err.transientRead ?? (err.name === 'AbortError' || err.name === 'TimeoutError' ||
+        /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|EAI_AGAIN|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT)|fetch failed|network error|socket hang up/i.test(describeFetchError(err)));
+      if (!transient || attempt >= FAL_MAX_READ_RETRIES) throw err;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * (2 ** attempt), Math.max(0, deadline - Date.now()))));
+    }
   }
-  return payload;
 }
 
 export async function generateVideo({
@@ -247,7 +276,7 @@ export async function generateVideo({
 
 async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta }) {
   const entry = {
-    apiKey, aborted: false, cancelUrl: null, canceledRemote: false, remoteTerminal: false,
+    apiKey, controller: new AbortController(), aborted: false, cancelUrl: null, canceledRemote: false, remoteTerminal: false,
   };
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
@@ -297,19 +326,23 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
       return finalizeJobFailure(job, jobId, null, `fal.ai did not finish within ${Math.round(FAL_RENDER_TIMEOUT_MS / 1000)}s`);
     }
 
-    const result = await fetchFalResult({ responseUrl, apiKey });
-    const videoUrl = result?.video?.url || result?.video_url || result?.output?.video?.url;
-    if (!videoUrl) {
-      return finalizeJobFailure(job, jobId, null, 'fal.ai completed but returned no video URL');
-    }
-
-    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
-    const videoRes = await fetchWithTimeout(videoUrl, {}, FAL_DOWNLOAD_TIMEOUT_MS);
-    if (!videoRes.ok) {
-      return finalizeJobFailure(job, jobId, null, `fal.ai video download failed: HTTP ${videoRes.status}`);
-    }
-    const buffer = Buffer.from(await videoRes.arrayBuffer());
+    const buffer = await withAbortTimeout(FAL_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
+      const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
+      const retrievalDeadline = Date.now() + FAL_DOWNLOAD_TIMEOUT_MS;
+      const result = await readCompletedRender(responseUrl, { apiKey, signal, deadline: retrievalDeadline });
+      const videoUrl = result?.video?.url || result?.video_url || result?.output?.video?.url;
+      if (typeof videoUrl !== 'string' || !videoUrl.trim()) {
+        throw new Error('fal.ai completed but returned no video URL');
+      }
+      emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
+      return Buffer.from(await readCompletedRender(videoUrl, { signal, deadline: retrievalDeadline, video: true }));
+    });
+    if (entry.aborted) return finalizeCanceled(job, jobId);
     await writeFile(outputPath, buffer);
+    if (entry.aborted) {
+      await unlink(outputPath);
+      return finalizeCanceled(job, jobId);
+    }
 
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
@@ -330,6 +363,7 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     // client never gets a terminal frame. Force past the idempotence guard,
     // same as videoGen/grok.js's post-exit catch and reactor.js's catch-all (#6831).
     await cancelFalRequest(entry);
+    if (entry.aborted) return finalizeCanceled(job, jobId);
     finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`, { force: true });
   }
 }
