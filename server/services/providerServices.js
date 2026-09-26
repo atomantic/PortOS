@@ -12,11 +12,9 @@ import {
   takenServiceSlugs,
   toServiceDto,
 } from '../lib/providerServiceInstances.js';
-import { requireToolkit } from '../lib/aiToolkitState.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import {
-  connectionFanout,
   findConnectionByRef,
   rematerializeDerivedPresets,
   requireProviderGraph,
@@ -82,21 +80,19 @@ async function listByProbe(connection, definition, { env, probe }) {
 
 /**
  * Ask the program that signs in. `ok: false` — an uninstalled binary, a
- * signed-out CLI, a refused probe — is a failure with its reason, never an
- * empty catalog: `refreshHarnessModels` already refuses to report a blank
- * listing as "zero models", and this keeps that refusal.
+ * signed-out CLI, a refused probe, a harness with no lister — is a failure
+ * with its reason, never an empty catalog: `refreshHarnessModels` already
+ * refuses to report a blank listing as "zero models", and this keeps that
+ * refusal.
  *
- * A harness with no `models` verb (Codex lists through `codex app-server`)
- * falls back to a bound route's toolkit lister, so its derived presets can
- * still pick up new models. Any other refusal stays a refusal.
+ * Every `catalog.strategy: 'harness'` definition now names a harness that can
+ * actually enumerate its own models (`modelsArgs` or the JSON-RPC `listModels`
+ * hook Codex uses — `services/harnesses.js`, #8497); there is no longer a
+ * bound-route fallback to a toolkit lister for one that cannot.
  */
-async function listByHarness(connection, definition, graph, { harnessModels, routeModels }) {
+async function listByHarness(definition, { harnessModels }) {
   const result = await harnessModels(definition.harnessOnly);
   if (result?.ok) return { refreshed: true, models: result.models || [] };
-  for (const route of result?.noLister ? connectionFanout(graph, connection.id).routes : []) {
-    const models = await routeModels(route.providerId).catch(() => null);
-    if (Array.isArray(models) && models.length > 0) return { refreshed: true, models };
-  }
   return { refreshed: false, error: result?.reason || `${definition.label} could not list its models` };
 }
 
@@ -105,13 +101,13 @@ async function listByHarness(connection, definition, graph, { harnessModels, rou
  * has nothing to ask: the instance's declared list IS the catalog, re-stamped
  * as known.
  */
-async function listByStrategy(connection, definition, graph, deps) {
+async function listByStrategy(connection, definition, deps) {
   switch (definition.catalog.strategy) {
     case 'probe':
     case 'daemon':
       return listByProbe(connection, definition, deps);
     case 'harness':
-      return listByHarness(connection, definition, graph, deps);
+      return listByHarness(definition, deps);
     case 'static':
       return { refreshed: true, models: connection.catalog?.models || [] };
     default:
@@ -131,8 +127,6 @@ const defaultDeps = () => ({
     const runtime = PROVIDER_RUNTIMES.find((row) => row.vendor === harnessId || row.id === harnessId)?.id ?? harnessId;
     return refreshHarnessModels(runtime);
   },
-  // Probe-only: the answer lands in the instance catalog, never on the record.
-  routeModels: (providerId) => requireToolkit().services.providers.fetchProviderModels(providerId),
   now: () => new Date().toISOString(),
 });
 
@@ -245,7 +239,7 @@ export async function updateService(ref, input) {
  * route model list is touched.
  */
 export function refreshServiceCatalog(ref, deps = {}) {
-  const { env, probe, harnessModels, routeModels, now } = { ...defaultDeps(), ...deps };
+  const { env, probe, harnessModels, now } = { ...defaultDeps(), ...deps };
   return serializeProviderGraph(async () => {
     requireProviderGraph();
     const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
@@ -256,7 +250,7 @@ export function refreshServiceCatalog(ref, deps = {}) {
         { status: 409, code: 'SERVICE_DEFINITION_UNKNOWN' });
     }
 
-    const outcome = await listByStrategy(connection, definition, graph, { env, probe, harnessModels, routeModels })
+    const outcome = await listByStrategy(connection, definition, { env, probe, harnessModels })
       .catch((err) => ({ refreshed: false, error: err }));
     const catalog = nextConnectionCatalog(connection.catalog, {
       ...outcome,

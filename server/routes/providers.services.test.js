@@ -305,17 +305,23 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     expect(ok.body.service.catalog).toMatchObject({ state: 'known', models: ['claude-a', 'claude-b'] });
   });
 
-  it('falls back to a bound route\'s own lister when the harness has no models command', async () => {
+  // Codex's row now has its own lister (`listModels`, driving `codex
+  // app-server` — services/harnesses.js #8497), so `listByHarness` no longer
+  // falls back to a bound route's toolkit lister for a harness that refuses
+  // with `noLister`. A harness with no lister at all just fails, as any other
+  // refusal does.
+  it('does not fall back to a bound route\'s own lister when the harness has no models command', async () => {
     const withRoute = graphFixture();
     withRoute.bindings.push({ id: '99999999-9999-4999-8999-999999999999', revision: 1, connectionId: CLAUDE_SUB, harnessId: 'claude', variantKey: 'default', label: 'Claude', enabled: true, selectedModels: [] });
     withRoute.routes.push({ providerId: 'example-claude-tui', bindingId: '99999999-9999-4999-8999-999999999999' });
     store.readGraph.mockResolvedValue(withRoute);
     harnessModels.mockResolvedValue({ ok: false, reason: 'Claude Code has no command for listing its models.', noLister: true, models: [], updated: [] });
-    providerService.fetchProviderModels.mockResolvedValue(['claude-new', 'claude-example']);
 
     const res = await request(app()).post('/api/providers/services/claude-subscription/refresh-catalog');
-    expect(providerService.fetchProviderModels).toHaveBeenCalledWith('example-claude-tui');
-    expect(res.body.service.catalog).toMatchObject({ state: 'known', models: ['claude-new', 'claude-example'] });
+    expect(providerService.fetchProviderModels).not.toHaveBeenCalled();
+    expect(res.body.service.catalog).toMatchObject({
+      state: 'failed', models: ['claude-example'], error: 'Claude Code has no command for listing its models.',
+    });
   });
 
   it('refreshes a derived preset through its service catalog, never onto the record alone', async () => {

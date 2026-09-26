@@ -22,6 +22,18 @@ const providerService = vi.hoisted(() => ({
 }));
 vi.mock('./providers.js', () => providerService);
 
+// Defaults to `false` so every existing test (none of which seeds a
+// structurally-derived-preset record) keeps exercising the plain write path.
+const providerGraph = vi.hoisted(() => ({ providerGraphEnabled: vi.fn(() => false) }));
+vi.mock('./providerGraph.js', () => providerGraph);
+
+// Dynamically imported only on the derived-preset path (`applyHarnessCatalog`)
+// — see `services/providerGraph.js` "Import scoping" precedent.
+const providerServices = vi.hoisted(() => ({
+  refreshServiceCatalog: vi.fn(async () => ({ service: { catalog: { state: 'known', models: [] } } })),
+}));
+vi.mock('./providerServices.js', () => providerServices);
+
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import {
   __resetLatestVersionCache,
@@ -55,6 +67,9 @@ beforeEach(() => {
   providerService.listProviders.mockResolvedValue(Object.values(providers));
   providerService.updateProvider.mockClear();
   opencodeCatalog.primeOpencodeCatalogCache.mockClear();
+  providerGraph.providerGraphEnabled.mockReturnValue(false);
+  providerServices.refreshServiceCatalog.mockClear();
+  providerServices.refreshServiceCatalog.mockResolvedValue({ service: { catalog: { state: 'known', models: [] } } });
 });
 
 // `usesHarnessCatalog` keys on the ABSENCE of a backend marker, so the class it
@@ -85,6 +100,11 @@ describe('the shipped records a harness refresh may rewrite', () => {
       // `openchamber-cli`, whose `models` subcommand prints its runtime's
       // SETTINGS rather than a catalog, so its row declares no `modelsArgs`.
       'antigravity-cli', 'antigravity-tui',
+      // Codex has no `modelsArgs` — its lister is the `listModels` hook that
+      // drives `codex app-server`'s JSON-RPC handshake instead (#8497). Its
+      // `-ollama`/`-lmstudio` siblings carry a local-runtime marker and stay
+      // correctly absent.
+      'codex', 'codex-tui',
       'cursor-cli', 'cursor-tui',
       'grok-cli', 'grok-tui',
       // Kilo serves whatever the user's own `/connect` credentials reach, which
@@ -479,5 +499,126 @@ describe('refreshHarnessModels', () => {
     expect(missing.reason).toMatch(/not installed/i);
 
     expect((await refreshHarnessModels('not-a-harness')).ok).toBe(false);
+  });
+
+  // Codex has no `models` subcommand — its row declares `listModels` instead,
+  // which drives `codex app-server`'s JSON-RPC handshake (#8497). Injected here
+  // so the suite never spawns a real process.
+  describe('a harness whose row declares listModels (Codex)', () => {
+    it('lists through the injected hook instead of modelsArgs, with bare ids and no namespace filter', async () => {
+      providerService.listProviders.mockResolvedValue([
+        { id: 'codex', type: 'cli', command: 'codex', models: ['gpt-5.6-terra'], defaultModel: 'gpt-5.6-terra' },
+      ]);
+      const listModels = vi.fn(async ({ probeAs, resolvedCommand, timeoutMs }) => {
+        expect(probeAs).toBe(null);
+        expect(resolvedCommand).toBe('/example/codex');
+        expect(timeoutMs).toBeGreaterThan(0);
+        return ['gpt-6-astra', 'gpt-6-sol'];
+      });
+
+      const result = await refreshHarnessModels('codex', { run: vi.fn(async () => '0.50.0'), listModels, ...found });
+
+      expect(result.ok).toBe(true);
+      expect(result.models).toEqual(['gpt-6-astra', 'gpt-6-sol']);
+      expect(result.updated).toEqual(['codex']);
+      expect(listModels).toHaveBeenCalledTimes(1);
+      const [, patch] = providerService.updateProvider.mock.calls[0];
+      expect(patch.models).toEqual(['gpt-6-astra', 'gpt-6-sol']);
+    });
+
+    it('surfaces the hook’s own failure as this bucket’s reason', async () => {
+      providerService.listProviders.mockResolvedValue([
+        { id: 'codex', type: 'cli', command: 'codex', models: [], defaultModel: null },
+      ]);
+      const listModels = vi.fn(async () => {
+        throw new Error("'codex app-server' exited prematurely with code 1");
+      });
+
+      const result = await refreshHarnessModels('codex', { run: vi.fn(async () => '0.50.0'), listModels, ...found });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('exited prematurely');
+      expect(providerService.updateProvider).not.toHaveBeenCalled();
+    });
+
+    it('still refuses with no lister when neither modelsArgs nor listModels is supplied', async () => {
+      // Claude Code's row declares neither — unaffected by adding Codex's hook.
+      const result = await refreshHarnessModels('claude', { run: vi.fn(async () => '2.1.259'), ...found });
+      expect(result.ok).toBe(false);
+      expect(result.noLister).toBe(true);
+    });
+  });
+});
+
+// A DERIVED preset's `models` IS its service's catalog narrowed (#7565): the
+// Harnesses page's bulk refresh has no single record to special-case the way
+// the provider card's own button does, so `applyHarnessCatalog` must skip the
+// raw write itself and refresh the service instead (#8497).
+describe('applyHarnessCatalog — derived presets', () => {
+  const derivedPreset = (overrides) => ({
+    type: 'cli', command: 'opencode', models: [], harnessId: 'opencode', method: 'cli', serviceId: 'opencode-zen', ...overrides,
+  });
+
+  it('never PATCHes a derived preset directly — refreshes its service catalog with the already-fetched models', async () => {
+    providerGraph.providerGraphEnabled.mockReturnValue(true);
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([derivedPreset({ id: 'opencode-zen-derived' })]);
+
+    const result = await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(result.ok).toBe(true);
+    expect(providerService.updateProvider).not.toHaveBeenCalled();
+    expect(providerServices.refreshServiceCatalog).toHaveBeenCalledTimes(1);
+    const [serviceId, deps] = providerServices.refreshServiceCatalog.mock.calls[0];
+    expect(serviceId).toBe('opencode-zen');
+    // The injected `harnessModels` answers with the catalog THIS call already
+    // fetched — the service refresh must not re-spawn the CLI (which would
+    // also recurse straight back into `refreshHarnessModels`).
+    await expect(deps.harnessModels()).resolves.toEqual({
+      ok: true, models: ['opencode/big-pickle', 'opencode/mimo-v2.5-free'],
+    });
+    expect(result.updated).toEqual(['opencode-zen-derived']);
+  });
+
+  it('refreshes one service once even when several of its presets share it', async () => {
+    providerGraph.providerGraphEnabled.mockReturnValue(true);
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      derivedPreset({ id: 'preset-a', method: 'cli' }),
+      derivedPreset({ id: 'preset-b', type: 'tui', method: 'tui' }),
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(providerServices.refreshServiceCatalog).toHaveBeenCalledTimes(1);
+    expect(result.updated.sort()).toEqual(['preset-a', 'preset-b']);
+  });
+
+  it('does not report a service as updated when its catalog refresh failed', async () => {
+    providerGraph.providerGraphEnabled.mockReturnValue(true);
+    providerServices.refreshServiceCatalog.mockResolvedValue({ service: { catalog: { state: 'failed', error: 'boom' } } });
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([derivedPreset({ id: 'preset-a' })]);
+
+    const result = await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(result.updated).toEqual([]);
+  });
+
+  it('falls back to the plain write when the provider graph is disabled', async () => {
+    // No live graph means no service behind the record to refresh — the shape
+    // alone is not enough; write it directly, same as before this change.
+    providerGraph.providerGraphEnabled.mockReturnValue(false);
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      derivedPreset({ id: 'preset-a', models: ['opencode/stale'], defaultModel: 'opencode/stale' }),
+    ]);
+
+    await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(providerServices.refreshServiceCatalog).not.toHaveBeenCalled();
+    expect(providerService.updateProvider).toHaveBeenCalledWith('preset-a', expect.objectContaining({
+      models: ['opencode/big-pickle', 'opencode/mimo-v2.5-free'],
+    }));
   });
 });

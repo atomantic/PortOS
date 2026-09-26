@@ -111,6 +111,27 @@ const RUNTIME_ROWS = [
     install: { kind: 'npm', package: '@openai/codex@latest' },
     selfUpdate: ['update'],
     docsUrl: 'https://developers.openai.com/codex/cli',
+    // Codex has no `models` subcommand — its catalog lives behind the
+    // `codex app-server` JSON-RPC handshake, which the toolkit already speaks
+    // for a provider's own "Refresh models" button
+    // (`_fetchCodexModels`/`internal/codexModelListProbe.js`). `listModels` is
+    // the harness-table alternative to `modelsArgs` for exactly this shape: a
+    // lister that cannot be driven by a bare argv + stdout capture (#8497).
+    listModels: async ({ probeAs, resolvedCommand, env, timeoutMs }) => {
+      const [{ resolveCliSpawn }, { probeCodexModelsViaAppServer }, { prepareWindowsSafeSpawn, resolveWindowsExecutable }] = await Promise.all([
+        import('../lib/credentialBootstrap.js'),
+        import('../lib/aiToolkit/internal/codexModelListProbe.js'),
+        import('../lib/aiToolkit/internal/windowsSafeSpawn.js'),
+      ]);
+      const spawned = resolveCliSpawn(probeAs, resolvedCommand, ['app-server'], env);
+      const isWin32 = process.platform === 'win32';
+      const resolvedBin = resolveWindowsExecutable(spawned.command, isWin32, env) || spawned.command;
+      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, spawned.args, isWin32);
+      // No toolkit `provider` record at this layer — the harness probe runs
+      // under the ambient/bootstrap `env` already resolved above, with no
+      // per-record `envVars` overlay to merge.
+      return probeCodexModelsViaAppServer(command, args, null, { timeoutMs, label: `'${spawned.command} ${spawned.args.join(' ')}'` });
+    },
   },
   {
     vendor: 'opencode',
@@ -197,10 +218,18 @@ const vendorRow = (vendorId) => {
  * an install goes stale with no visible way to refresh it. `npmPackage` is
  * present only for `npm`-kind rows, and it is what makes a row REMOVABLE: a
  * script-installed binary has no vendor-published uninstall PortOS can run.
+ *
+ * `listModels` is the alternative to `modelsArgs` for a harness whose catalog
+ * cannot be read from a single argv + stdout capture (Codex's lives behind an
+ * `app-server` JSON-RPC handshake). `refreshHarnessModels` calls it with the
+ * resolved probe context (`{ probeAs, resolvedCommand, env, timeoutMs }`)
+ * instead of spawning `[...modelsArgs]` through the generic `run` probe; a row
+ * declares at most one of the two.
  */
 export const PROVIDER_RUNTIMES = Object.freeze(RUNTIME_ROWS.map((row) => Object.freeze({
   selfUpdate: null,
   modelsArgs: null,
+  listModels: null,
   ...row,
   // The accepted binary spellings come from the VENDOR row, the same list
   // `matchCommand` and the runner's allowlist read — a card looks its runtime up
@@ -287,7 +316,7 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
     // button per row instead of keeping its own copy of this table.
     updatable: Boolean(runtime.selfUpdate) || (kind === 'npm' && Boolean(toolPath)),
     removable: Boolean(runtime.npmPackage) && Boolean(toolPath),
-    listsModels: Boolean(runtime.modelsArgs),
+    listsModels: Boolean(runtime.modelsArgs || runtime.listModels),
   };
 }
 
