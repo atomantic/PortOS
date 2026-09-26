@@ -1,3 +1,4 @@
+import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { EventEmitter } from 'events';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,18 +43,22 @@ class FakeWorker extends EventEmitter {
 }
 
 beforeEach(() => {
+  usageBackfillEvents.removeAllListeners();
   FakeWorker.instances = [];
   __resetHistoricalUsageBackfillForTests();
 });
 
 describe('historical usage backfill job', () => {
   it('runs scanning off-thread and exposes progress through status', async () => {
+    const updates = [];
+    usageBackfillEvents.on('updated', () => updates.push(getHistoricalUsageBackfillStatus()));
     const started = await startHistoricalUsageBackfill({
       runsDir: '/example/runs',
       home: '/example/home',
       WorkerClass: FakeWorker
     });
     expect(started.status).toBe('running');
+    expect(updates).toHaveLength(1);
     expect(FakeWorker.instances).toHaveLength(1);
     const worker = FakeWorker.instances[0];
     expect(worker.options.workerData).toMatchObject({
@@ -77,6 +82,10 @@ describe('historical usage backfill job', () => {
       found: 1
     }));
 
+    expect(updates.at(-1)).toMatchObject({ status: 'running', processed: 2 });
+    const { applyHistoricalUsageCorrections } = await import('./usage.js');
+    let finishWrite;
+    applyHistoricalUsageCorrections.mockImplementationOnce(() => new Promise(resolve => { finishWrite = resolve; }));
     worker.emit('message', {
       type: 'complete',
       result: {
@@ -85,11 +94,25 @@ describe('historical usage backfill job', () => {
         corrections: [{ runId: 'run-example-1', metadataPath: '/example/metadata.json' }]
       }
     });
+    await vi.waitFor(() => expect(finishWrite).toBeTypeOf('function'));
+    expect(updates.at(-1).status).toBe('running');
+    finishWrite({ corrected: 1, correctedRunIds: ['run-example-1'] });
     await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({
       status: 'complete',
       corrected: 1,
       processed: 5,
       total: 5
     }));
+    expect(updates.at(-1)).toMatchObject({ status: 'complete', corrected: 1 });
   });
+});
+
+it('notifies clients when the worker fails', async () => {
+  const updated = vi.fn();
+  usageBackfillEvents.on('updated', updated);
+  await startHistoricalUsageBackfill({ WorkerClass: FakeWorker, providers: [] });
+  updated.mockClear();
+  FakeWorker.instances[0].emit('error', new Error('Example worker failure'));
+  expect(updated).toHaveBeenCalledWith({});
+  expect(getHistoricalUsageBackfillStatus()).toMatchObject({ status: 'error', error: 'Example worker failure' });
 });

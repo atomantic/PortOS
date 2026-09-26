@@ -57,6 +57,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'usage-backfill:updated': {
+    direction: 'server-to-client',
+    summary: 'Invalidate historical usage backfill status after progress or a durable terminal transition.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'cos:day:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate UTC-day aggregates when the current activity-calendar day expires.',

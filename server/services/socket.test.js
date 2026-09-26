@@ -7,6 +7,7 @@ import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './s
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
+import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -155,6 +156,7 @@ describe('socket.js — initSocket', () => {
     meatspaceEvents.removeAllListeners();
     modelLifecycleEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
+    usageBackfillEvents.removeAllListeners();
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
@@ -193,6 +195,12 @@ describe('socket.js — initSocket', () => {
       ['image-to-3d:changed', { id: 'example-image-model' }],
       ['threejs-model:changed', { id: 'example-procedural-model' }],
     ]);
+  });
+
+  it('forwards historical usage progress without worker details', () => {
+    io.emitted.length = 0;
+    usageBackfillEvents.emit('updated', { metadataPath: '/example/private-run.json' });
+    expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
   });
 
   it('forwards quota completion without leaking source data', () => {
