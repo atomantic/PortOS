@@ -291,7 +291,7 @@ describe('selection detail identity', () => {
   it('removes previous body, tags and dates while another record loads or fails', async () => {
     let rejectNext;
     api.getBrainIdea.mockResolvedValue({ content: 'Alpha private body', tags: ['alpha-tag'], createdAt: '2026-01-02' });
-    api.getBrainGoal.mockImplementation(() => new Promise((resolve, reject) => { rejectNext = reject; }));
+    api.getBrainGoal.mockImplementation(() => new Promise((_resolve, reject) => { rejectNext = reject; }));
     await renderGraph();
     await act(async () => { sceneElement.props.onSelect(GRAPH.nodes[0]); });
     expect(screen.getByText('Alpha private body')).toBeInTheDocument();
