@@ -216,6 +216,21 @@ export function useImageGenPageRuntime() {
     () => listMediaJobs({ kind: 'image' }),
     { events: IMAGE_QUEUE_EVENTS },
   );
+  const previousQueueRef = useRef(null);
+  useEffect(() => {
+    if (!queueJobs) return;
+    const previous = previousQueueRef.current;
+    previousQueueRef.current = queueJobs;
+    if (!previous) return;
+    const activeIds = new Set(queueJobs
+      .filter((job) => job.status === 'queued' || job.status === 'running')
+      .map((job) => job.id));
+    // Recover gallery output when a terminal event was missed while offline.
+    // Compare identities, not just counts: another enqueue can replace a job.
+    if (previous.some((job) => ['queued', 'running'].includes(job.status) && !activeIds.has(job.id))) {
+      gallery.refreshRecent();
+    }
+  }, [queueJobs, gallery.refreshRecent]);
   const pendingQueued = Math.max(0, (queueJobs || [])
     .filter((job) => job.status === 'queued' || job.status === 'running').length - (generating ? 1 : 0));
   const rememberQueuedJob = (ack) => {

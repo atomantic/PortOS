@@ -59,8 +59,10 @@ describe('Image Gen queue events', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
     expect(state.listMediaJobs).toHaveBeenCalledTimes(2);
     state.listMediaJobs.mockResolvedValue([]);
+    const galleryReads = state.listImageGalleryPage.mock.calls.length;
     await emit('connect');
     expect(state.listMediaJobs).toHaveBeenCalledTimes(3);
+    expect(state.listImageGalleryPage.mock.calls.length).toBeGreaterThan(galleryReads);
     expect(screen.queryByText('+1 queued')).not.toBeInTheDocument();
 
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
