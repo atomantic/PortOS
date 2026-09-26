@@ -85,6 +85,24 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 
+  'agent-processes:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Subscribe to shared agent process snapshots while the page is mounted.',
+    payloadSchema: { type: 'null' },
+  },
+  'agent-processes:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release agent process snapshots; the last subscriber stops host scans.',
+    payloadSchema: { type: 'null' },
+  },
+  'agent-processes:changed': {
+    direction: 'server-to-client',
+    summary: 'Agent process snapshot after process or resource usage changes.',
+    payloadSchema: {
+      type: 'object', required: ['agents'],
+      properties: { agents: { type: 'array', items: { type: 'object' } } },
+    },
+  },
   'digital-twin:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Digital Twin status/settings after persistence or completed peer sync; contains no personal data.',

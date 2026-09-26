@@ -99,8 +99,8 @@ async function executeIteration(loopId) {
     .catch(() => ({ provider: null }));
   if (!provider) {
     const msg = 'No AI provider available';
-    loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: msg, timestamp: Date.now() });
     active.running = false;
+    loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: msg, timestamp: Date.now() });
     console.error(`❌ Loop ${id}: ${msg}`);
     return;
   }
@@ -147,8 +147,6 @@ async function executeIteration(loopId) {
     active.running = false;
     active.runId = null;
 
-    loopEvents.emit('iteration:complete', { id, ...iterResult });
-
     const outputPath = join(LOOPS_OUTPUT_DIR, `${id}-${iterationNum}.txt`);
     // atomicWrite (not a bare writeFile, which is no longer imported) — a bare
     // writeFile here throws ReferenceError synchronously, before .catch() can
@@ -159,6 +157,10 @@ async function executeIteration(loopId) {
       lastRun: Date.now(),
       iterationCount: active.iterationCount,
       lastExitCode: metadata.exitCode
+    }).finally(() => {
+      // Notify after persistence settles, including failures: live execution
+      // has ended either way, and consumers must leave the running state.
+      loopEvents.emit('iteration:complete', { id, ...iterResult });
     });
 
     console.log(`🔄 Loop ${id} iteration ${iterationNum} complete (${provider.name}, exit ${metadata.exitCode}, ${outputLines.length} lines)`);
