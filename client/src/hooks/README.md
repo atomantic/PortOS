@@ -270,3 +270,5 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePagedCollection` | `usePagedCollection(fetchPage, { enabled })` — bounded cursor pages, deduplication by id, single-flight loading, abort/stale-query protection, retry, reset, and local mutation via setItems. | Growing cursor-based collections; pair with `InfiniteScrollFooter`. |
 
 | `useGoalOrganize` / `useGoalCreate` | Shared goal suggestion preview, explicit apply, and guarded create flows for both Goals views. | Goals List and Tree views. |
+
+| `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |

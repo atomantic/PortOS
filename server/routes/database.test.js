@@ -29,6 +29,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 vi.mock('../lib/db.js', () => ({
+  POOL_CONFIG: { host: 'localhost', port: 5432, user: 'example_role', database: 'example_db', password: 'example_password' },
   checkHealth: vi.fn(async () => ({ healthy: true })),
   query: vi.fn(async () => ({ rows: [] })),
 }));
@@ -54,6 +55,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   };
 });
 
+import { POOL_CONFIG } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough, Readable } from 'stream';
@@ -550,5 +552,98 @@ describe('POST /api/database/destroy', () => {
       expect(res.body.error).toMatch(/cannot verify/i);
       expect(execFile).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+
+describe('POST /api/database/sync endpoint safety', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    POOL_CONFIG.host = 'localhost';
+    POOL_CONFIG.port = 5432;
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ['docker', 5432, '127.0.0.1'],
+    ['native', 5561, '::1'],
+    ['native', 5432, 'db.example.com'],
+  ])('refuses saved %s with a mismatched running endpoint', async (mode, port, host) => {
+    Object.assign(POOL_CONFIG, { port, host });
+    // Environment drift must not override the pool captured at startup.
+    vi.stubEnv('PGPORT', mode === 'docker' ? '5561' : '5432');
+    mockExecFile([{ exitCode: 0, stdout: `Current mode: ${mode}` }]);
+    const res = await request(makeApp()).post('/api/database/sync').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/restart before syncing/);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { exitCode: 1, stdout: 'Current mode: native', stderr: 'failed' },
+    { exitCode: 0, stdout: 'Current mode: unknown' },
+    { exitCode: 0, stdout: '' },
+  ])('refuses an unsuccessful or unknown status probe: %j', async (response) => {
+    mockExecFile([response]);
+    const res = await request(makeApp()).post('/api/database/sync').send({});
+    expect(res.status).toBe(409);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([['native', 5432, '5561'], ['docker', 5561, '5432']])(
+    'pins %s export and import to distinct endpoints with configured credentials',
+    async (mode, port, targetPort) => {
+      POOL_CONFIG.port = port;
+      const mkdir = vi.spyOn(await import('fs'), 'mkdirSync').mockImplementation(() => undefined);
+      createReadStream.mockImplementationOnce(() => Readable.from(['SELECT 1;\n']));
+      execFile.mockImplementation((_cmd, args, _opts, callback) => {
+        callback(null, args.includes('status') ? `Current mode: ${mode}` : '1', '');
+      });
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.stdin.resume();
+      child.stdin.on('finish', () => child.emit('close', 0));
+      spawn.mockReturnValue(child);
+      try {
+        const res = await request(makeApp()).post('/api/database/sync').send({});
+        expect(res.status).toBe(200);
+        const dump = execFile.mock.calls.find(([cmd]) => cmd === 'pg_dump');
+        expect(dump[1]).toEqual(expect.arrayContaining(['-h', 'localhost', '-p', String(port), '-U', 'example_role', '-d', 'example_db']));
+        expect(dump[2].env).toMatchObject({ PGPORT: String(port), PGPASSWORD: 'example_password' });
+        expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining(['-p', targetPort, '-U', 'example_role', '-d', 'example_db']));
+        expect(spawn.mock.calls[0][2].env).toMatchObject({ PGPORT: targetPort, PGPASSWORD: 'example_password' });
+        expect(execFile.mock.calls.filter(([, args]) => args.includes('export'))).toHaveLength(0);
+      } finally {
+        mkdir.mockRestore();
+      }
+    }
+  );
+
+  it('rejects competing mutations while sync is pending and releases after failure', async () => {
+    let finishProbe;
+    execFile.mockImplementation((_cmd, _args, _opts, callback) => { finishProbe = callback; });
+    const app = makeApp();
+    const pending = request(app).post('/api/database/sync').send({}).then(res => res);
+    await vi.waitFor(() => expect(finishProbe).toBeTypeOf('function'));
+    for (const [route, body] of [
+      ['switch', { target: 'docker', migrate: false }],
+      ['destroy', { backend: 'docker' }],
+      ['sync', {}],
+    ]) {
+      const res = await request(app).post(`/api/database/${route}`).send(body);
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/in progress/);
+    }
+    expect(execFile).toHaveBeenCalledTimes(1);
+    finishProbe(new Error('probe failed'), '', 'probe failed');
+    expect((await pending).status).toBe(409);
+    mockExecFile([{ exitCode: 0, stdout: 'Current mode: native' }]);
+    const res = await request(app).post('/api/database/destroy').send({ backend: 'docker' });
+    expect(res.status).toBe(200);
   });
 });

@@ -251,3 +251,5 @@ export * from './useSocketResource.js';
 
 export * from './useProcessSnapshot.js';
 export * from './useFableLoomRun.js';
+
+export * from './useModelLifecycle.js';

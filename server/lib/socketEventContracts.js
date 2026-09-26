@@ -325,6 +325,16 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       }
     }
   }),
+  'image-to-3d:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate one model after a persisted lifecycle change, including progress and deletion.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  },
+  'threejs-model:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate one model after a persisted lifecycle change, including progress and deletion.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  },
   'shell:attach': input(shellAttachSchema, 'Attach this socket to an existing terminal session.'),
   'shell:cd': input(shellCdSchema, 'Change an existing terminal session directory.'),
   'shell:input': input(shellInputSchema, 'Write bytes to an existing terminal session.'),
