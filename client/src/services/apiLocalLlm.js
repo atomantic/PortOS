@@ -261,9 +261,9 @@ export const migrateLocalLlmBackend = (to, mode = 'link') =>
 // Used by the Memory Management panel to show what's eating space before
 // kicking off a big diffusion render. `options` lets the panel pass
 // `{ silent: true }` so its own catch handler / useAsyncAction wrapper
-// owns the toast — without it apiCore double-toasts on every 5s poll.
-export const getLoadedLlmModels = (options) =>
-  request('/local-llm/loaded', options);
+// owns the toast when a status read fails.
+export const getLoadedLlmModels = ({ fresh = false, ...options } = {}) =>
+  request(`/local-llm/loaded${fresh ? '?fresh=1' : ''}`, options);
 
 // Force a local backend to evict a model immediately.
 export const unloadOllamaModel = (modelId, options) =>

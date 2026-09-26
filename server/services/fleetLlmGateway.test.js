@@ -105,7 +105,8 @@ describe('inbound usage accounting', () => {
 
   it('records a completed generation with the model asked for and the tokens the reply reported', async () => {
     const usage = ledgerDouble();
-    const { post, received, gateway } = await setup({ usage });
+    const changes = [];
+    const { post, received, gateway } = await setup({ usage, onChanged: () => changes.push({ queue: gateway.status(), completed: usage.closed.length }) });
     const pending = post(undefined, JSON.stringify({ model: 'qwen3.8-27b', messages: [] }));
     await vi.waitFor(() => expect(received).toHaveLength(1));
     expect(usage.openCount()).toBe(1);
@@ -119,6 +120,11 @@ describe('inbound usage accounting', () => {
       usage: { promptTokens: 12, completionTokens: 34 },
     });
     expect(usage.closed[0].handle.path).toBe('/v1/chat/completions');
+    await vi.waitFor(() => expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ queue: expect.objectContaining({ queued: 1 }) }),
+      expect.objectContaining({ queue: expect.objectContaining({ active: 1 }) }),
+      expect.objectContaining({ queue: expect.objectContaining({ active: 0 }), completed: 1 }),
+    ])));
     await vi.waitFor(() => expect(gateway.status().active).toBe(0));
   });
 

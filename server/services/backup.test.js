@@ -2201,11 +2201,15 @@ describe('getState and saveState', () => {
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these
 // is a data-loss-adjacent contract, not a style nit (issue #3917).
+vi.mock('./cosState.js', () => ({ withLiveCosRestore: vi.fn(fn => fn()) }));
+import { withLiveCosRestore } from './cosState.js';
+
 describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () => {
   beforeEach(() => {
     spawn.mockReset();
     reloadSettings.mockClear();
     invalidateBrainCaches.mockClear();
+    withLiveCosRestore.mockClear();
   });
 
   // Drive a mocked rsync to a clean exit so restoreSnapshot resolves.
@@ -2311,6 +2315,22 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
     it('echoes the subdirFilter back in the result', async () => {
       await expect(runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' }))
         .resolves.toMatchObject({ subdirFilter: 'brain' });
+    });
+  });
+
+  describe('CoS restore ownership boundary', () => {
+    it.each([undefined, 'cos', 'cos/', 'cos/config.json', 'cos/state.json'])('holds the boundary for affected live scope %s', async subdirFilter => {
+      await runRestore('/dest', 'snap-1', { dryRun: false, subdirFilter });
+      expect(withLiveCosRestore).toHaveBeenCalledTimes(1);
+    });
+    it.each([{ dryRun: true }, { dryRun: false, subdirFilter: 'images' }, { dryRun: false, subdirFilter: 'cos/agents' }])('leaves unaffected scope alone: %j', async options => {
+      await runRestore('/dest', 'snap-1', options);
+      expect(withLiveCosRestore).not.toHaveBeenCalled();
+    });
+    it('refuses unsafe CoS restore before rsync', async () => {
+      withLiveCosRestore.mockRejectedValueOnce(new Error('Stop CoS before restoring'));
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false, subdirFilter: 'cos' })).rejects.toThrow('Stop CoS');
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 

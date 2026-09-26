@@ -1,3 +1,4 @@
+import { invalidateModelObservation } from './modelObservation.js';
 /**
  * Compatibility shim for PortOS services that import from providerStatus.js.
  *
@@ -17,6 +18,7 @@ let boundStatusEvents = null;
 
 const forwardStatusChanged = (data) => {
   providerStatusEvents.emit('status:changed', data);
+  invalidateModelObservation('provider-status');
 };
 
 function getProviderStatusService() {

@@ -1,3 +1,6 @@
+import socket from '../../services/socket';
+vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
+const socketEvent = event => { for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({}); };
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
@@ -85,6 +88,20 @@ describe('MemoryManagement', () => {
     expect(screen.getByText('newer-model')).toBeInTheDocument();
     });
 
+  it('does not let a pre-unload socket read resurrect the model', async () => {
+    render(<MemoryManagement />);
+    expect(await screen.findByText('example/lmstudio-model')).toBeInTheDocument();
+    let resolveOld;
+    getLoadedLlmModels.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    act(() => socketEvent('loaded-models:changed'));
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+    getLoadedLlmModels.mockResolvedValue({ ollama: [], lmstudio: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Unload example/lmstudio-model' }));
+    await waitFor(() => expect(screen.queryByText('example/lmstudio-model')).not.toBeInTheDocument());
+    await act(async () => resolveOld({ ollama: [], lmstudio: [{ id: 'example/lmstudio-model' }] }));
+    expect(screen.queryByText('example/lmstudio-model')).not.toBeInTheDocument();
+  });
+
   it('hides the unavailability banner for a user-disabled backend', async () => {
        // A backend the user marked disabled opts out of the availability nag. Its
        // failed residency still lands in unavailableSources (the "Free everything"
@@ -110,29 +127,33 @@ describe('MemoryManagement', () => {
     expect(screen.queryByText(/full unified memory is available/i)).not.toBeInTheDocument();
         });
 
-  // #5697 — this poll used to be a raw `useEffect` + `setInterval`, so it kept
-  // probing the local LLM / TTS / voice status endpoints every 5s from a tab
-  // nobody was looking at. It is the unconditional (always-`enabled`) half of
-  // the migration; MediaJobsQueue covers the gated half.
-  describe('hidden-tab polling', () => {
+  describe('socket reconciliation', () => {
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); });
 
-    it('pauses the residency poll while the tab is hidden and re-fires on return', async () => {
+    it('updates on events, reconnect and tab show without any timer-driven fetch', async () => {
       render(<MemoryManagement />);
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
 
-      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
       expect(getLoadedLlmModels).toHaveBeenCalledTimes(1);
+      getLoadedLlmModels.mockResolvedValue({ ollama: [], lmstudio: [{ id: 'event-model' }] });
+      await act(async () => { socketEvent('loaded-models:changed'); });
+      expect(screen.getByText('event-model')).toBeInTheDocument();
+      await act(async () => { socketEvent('connect'); });
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(3);
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(3);
 
       visibility.mockReturnValue('visible');
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'));
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(getLoadedLlmModels).toHaveBeenCalledTimes(2);
+      expect(getLoadedLlmModels).toHaveBeenCalledTimes(4);
       visibility.mockRestore();
     });
   });

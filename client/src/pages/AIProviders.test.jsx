@@ -1,3 +1,5 @@
+import socket from '../services/socket';
+const socketEvent = event => { for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({}); };
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -64,8 +66,10 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 vi.mock('../services/socket', () => ({
   default: {
+    emit: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
+    emit: vi.fn(),
   },
 }));
 vi.mock('../hooks/useLocalModels', () => ({
@@ -2372,4 +2376,39 @@ describe('default provider helper and card highlight', () => {
     fireEvent.click(within(helper).getByRole('button', { name: /Jump to card/ }));
     expect(scrollSpy).toHaveBeenCalled();
   });
+});
+
+
+it('shares readiness subscriptions and reconciles events, reconnect and tab show without polling', async () => {
+  vi.clearAllMocks();
+  api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+  api.getApps.mockResolvedValue([]);
+  api.getProviderStatuses.mockResolvedValue({ providers: {} });
+  api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+  api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+
+  await renderPage();
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  try {
+    const count = api.getProviderReadiness.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(api.getProviderReadiness).toHaveBeenCalledTimes(count);
+    api.getProviderReadiness.mockRejectedValueOnce(new Error('unavailable'));
+    await act(async () => { socketEvent('provider-readiness:changed'); });
+    expect(screen.getByText(/Provider readiness status unavailable/)).toBeInTheDocument();
+    expect(api.getProviderReadiness).toHaveBeenCalledTimes(count + 1);
+    await act(async () => { socketEvent('connect'); });
+    expect(api.getProviderReadiness).toHaveBeenCalledTimes(count + 2);
+    expect(screen.queryByText(/Provider readiness status unavailable/)).not.toBeInTheDocument();
+    visibility.mockReturnValue('hidden');
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    visibility.mockReturnValue('visible');
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(api.getProviderReadiness).toHaveBeenCalledTimes(count + 3);
+    expect(socket.emit).toHaveBeenCalledWith('provider-readiness:subscribe');
+  } finally {
+    visibility.mockRestore();
+    vi.useRealTimers();
+  }
 });

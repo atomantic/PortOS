@@ -1,3 +1,4 @@
+import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 /**
  * Local LLM Routes
  *
@@ -116,6 +117,7 @@ const jevHeadStore = () => import('../services/jevHeads.js')
 const jevTrainer = () => import('../services/jevTraining.js')
 
 const router = Router()
+router.use(observeModelMutations('loaded-models', 'provider-readiness'));
 const layaService = () => import('../services/layaMlx.js')
 
 router.get('/laya-mlx/status', asyncHandler(async (_req, res) => {
@@ -634,7 +636,7 @@ router.post('/migrate', asyncHandler(async (req, res) => {
 // reclaimed a model it can't even see. The `disabled` field names the backends
 // the user opted out of availability warnings for, so the panel stays quiet
 // about them WITHOUT weakening that cleanup guard.
-router.get('/loaded', asyncHandler(async (_req, res) => {
+const loadedObservation = observeModelResource('loaded-models', async () => {
   const settings = await getSettings().catch(() => ({}))
   const ollamaDisabled = Boolean(settings.localLlm?.ollama?.disabled)
   const lmStudioDisabled = Boolean(settings.localLlm?.lmstudio?.disabled)
@@ -650,7 +652,10 @@ router.get('/loaded', asyncHandler(async (_req, res) => {
      ...(ollamaDisabled ? ['ollama'] : []),
      ...(lmStudioDisabled ? ['lmstudio'] : []),
    ]
-  res.json({ ollama, lmstudio, sourceErrors, disabled })
+  return { ollama, lmstudio, sourceErrors, disabled }
+}, 2000);
+router.get('/loaded', asyncHandler(async (req, res) => {
+  res.json(await loadedObservation.read({ fresh: req.query.fresh === '1' }));
 }))
 
 // POST /api/local-llm/unload — body: { backend: 'ollama', modelId }.

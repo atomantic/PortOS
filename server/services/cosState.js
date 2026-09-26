@@ -22,6 +22,8 @@ import {
   createDefaultPersistentMindThinkingPresets,
   normalizePersistentMindThinkingPresets,
 } from '../lib/persistentMindThinkingPresets.js';
+import { cosEvents } from './cosEvents.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
@@ -267,6 +269,21 @@ async function recoverFromUnreadableState(content) {
 // In-memory config cache. Every mutation goes through `withConfigLock` +
 // `saveConfig`, so the cache stays consistent.
 let configCache = null;
+// Enumerable symbols survive a caller's shallow copy but never reach JSON.
+// Reject delayed writeback of a pre-restore read, even if queued afterwards.
+const RESTORE_GENERATION = Symbol('cosRestoreGeneration');
+let restoreGeneration = 0;
+function stampGeneration(value) {
+  value[RESTORE_GENERATION] = restoreGeneration;
+  return value;
+}
+function assertCurrentGeneration(value) {
+  if (value[RESTORE_GENERATION] !== undefined && value[RESTORE_GENERATION] !== restoreGeneration) {
+    throw new ServerError('CoS files were restored. Read the current state before retrying this change.', {
+      status: 409, code: 'COS_RESTORE_STALE_WRITE',
+    });
+  }
+}
 
 /**
  * Read the raw persisted config object, and say where it came from.
@@ -306,7 +323,7 @@ export async function loadConfig() {
   if (configCache) return configCache;
   await ensureDirectories();
   const { config, fromConfigFile } = await readPersistedConfig();
-  configCache = mergeStoredConfig(config);
+  configCache = stampGeneration(mergeStoredConfig(config));
   // Recovering settings out of a legacy state.json is a READ; nothing has
   // written them to their own file yet. `saveState` strips `config` from
   // state.json on the very next runtime write, so leaving the recovery in
@@ -327,7 +344,8 @@ export async function loadConfig() {
  */
 export async function saveConfig(config) {
   await ensureDirectories();
-  configCache = config;
+  assertCurrentGeneration(config);
+  configCache = stampGeneration(config);
   if (stateCache) stateCache.config = config;
   await atomicWrite(CONFIG_FILE, config);
   return config;
@@ -372,7 +390,7 @@ export async function loadState() {
 
   if (!existsSync(STATE_FILE)) {
     stateCache = Object.assign(structuredClone(DEFAULT_STATE), { config });
-    return stateCache;
+    return stampGeneration(stateCache);
   }
 
   const content = await readFile(STATE_FILE, 'utf-8');
@@ -380,7 +398,7 @@ export async function loadState() {
 
   if (!state) {
     stateCache = Object.assign(await recoverFromUnreadableState(content), { config });
-    return stateCache;
+    return stampGeneration(stateCache);
   }
 
   stateCache = {
@@ -394,7 +412,7 @@ export async function loadState() {
     persistentMind: normalizePersistentMindState(state.persistentMind),
     agents: state.agents ?? {}
   };
-  return stateCache;
+  return stampGeneration(stateCache);
 }
 
 // Read the persisted state for safety checks, bypassing both the cache and
@@ -444,12 +462,56 @@ export async function readAgentsStateForSafetyCheck() {
  */
 export async function saveState(state) {
   await ensureDirectories();
+  assertCurrentGeneration(state);
   state.config = await loadConfig();
-  stateCache = state;
+  stateCache = stampGeneration(state);
   // Config lives in its own file; never re-serialize it onto the hot path.
   const persisted = { ...state };
   delete persisted.config;
   await atomicWrite(STATE_FILE, persisted);
+}
+
+/**
+ * Drain config, then runtime mutations and keep both queues until transfer and
+ * reload settle. This order matches config changes that consult runtime state;
+ * never acquire the config queue from inside the state queue.
+ * Callers must read their mutation's pre-image INSIDE its respective queue.
+ */
+export function withLiveCosRestore(transfer) {
+  return withConfigLock(() => withStateLock(async () => {
+    const persisted = await readStateForSafetyCheck();
+    const states = [stateCache, persisted.state].filter(Boolean);
+    const unsafe = !persisted.trusted || isDaemonRunning() || states.some(state =>
+      state.running || state.persistentMind?.started || state.persistentMind?.activeTurn
+      || (state.agents != null && !isPlainObject(state.agents))
+      || Object.values(state.agents ?? {}).some(agent =>
+        !['completed', 'failed', 'cancelled'].includes(agent?.status)));
+    if (unsafe) {
+      throw new ServerError('Stop the CoS daemon and Persistent Mind, and finish or stop active agents before restoring CoS files. Repair unreadable CoS state before retrying.', {
+        status: 409, code: 'COS_RESTORE_BUSY',
+      });
+    }
+
+    const [result] = await Promise.allSettled([Promise.resolve().then(transfer)]);
+    restoreGeneration += 1;
+    configCache = null;
+    stateCache = null;
+    const [reload] = await Promise.allSettled([loadState().then(state => {
+      cosEvents.emit('config:changed', state.config);
+    })]);
+    if (result.status === 'rejected') {
+      if (reload.status === 'rejected') {
+        const error = new Error(`${result.reason.message}. CoS cache reload failed: ${reload.reason.message}. Restart PortOS before using CoS.`, { cause: result.reason });
+        if (result.reason.code) error.code = result.reason.code;
+        throw error;
+      }
+      throw result.reason;
+    }
+    if (reload.status === 'rejected') {
+      throw new Error(`CoS cache reload failed: ${reload.reason.message}. Restart PortOS before using CoS.`, { cause: reload.reason });
+    }
+    return result.value;
+  }));
 }
 
 // Resolve a single domain's autonomy mode (off | dry-run | execute) without

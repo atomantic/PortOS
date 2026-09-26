@@ -236,7 +236,7 @@ export const getCodexModels = (options = {}) => {
   return request(`/providers/codex/models${fresh ? '?fresh=1' : ''}`, rest);
 };
 
-export const getFleetLlmHost = (options) => request('/providers/fleet-host', options);
+export const getFleetLlmHost = ({ refresh = false, ...options } = {}) => request(`/providers/fleet-host${refresh ? '?fresh=1' : ''}`, options);
 export const revealFleetLlmHostKey = (options) => request('/providers/fleet-host/key', { method: 'POST', ...options });
 export const getFleetLlmHostUsage = (options) => request('/providers/fleet-host/usage', options);
 export const stopFleetLlmHost = (options) => request('/providers/fleet-host/stop', { method: 'POST', ...options });

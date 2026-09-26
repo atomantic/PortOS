@@ -44,6 +44,22 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'fleet-host:subscribe': {
+    direction: 'client-to-server', summary: 'Observe local fleet host readiness while this operator socket is subscribed.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:unsubscribe': {
+    direction: 'client-to-server', summary: 'Release this operator socket; stop external probes after the last subscriber leaves.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:changed': {
+    direction: 'server-to-client', summary: 'Local host readiness or setup changed; no credentials or records.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'fleet-host:usage:changed': {
+    direction: 'server-to-client', summary: 'Local queue or usage ledger changed; read the authenticated usage report.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'reference-sheet:changed': {
     direction: 'server-to-client',
     summary: 'Correlated sheet publication outcome after the image copy and character pointer write finish.',
@@ -205,6 +221,81 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'browser:unsubscribe': {
     direction: 'client-to-server',
     summary: 'Release browser observation; the last subscriber stops the observer.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'loaded-models:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Start shared observation while a viewer is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'loaded-models:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release observation; the last viewer stops sampling.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'loaded-models:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared sample changed or failed; reconcile through the existing status endpoint.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'voice-readiness:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Start shared observation while a viewer is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'voice-readiness:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release observation; the last viewer stops sampling.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'voice-readiness:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared sample changed or failed; reconcile through the existing status endpoint.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-readiness:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Start shared observation while a viewer is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-readiness:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release observation; the last viewer stops sampling.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-readiness:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared sample changed or failed; reconcile through the existing status endpoint.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-status:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Start shared observation while a viewer is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-status:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release observation; the last viewer stops sampling.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'provider-status:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared sample changed or failed; reconcile through the existing status endpoint.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'codex-account:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Start shared observation while a viewer is mounted.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'codex-account:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Release observation; the last viewer stops sampling.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'codex-account:changed': {
+    direction: 'server-to-client',
+    summary: 'Shared sample changed or failed; reconcile through the existing status endpoint.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   'readiness:subscribe': {
