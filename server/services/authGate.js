@@ -13,7 +13,9 @@ import {
   isPeerBasicBootstrapRequest,
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
-import { hostControlBodyKeys, isHostControlRoute } from '../lib/hostControlRoutes.js';
+import {
+  changedHostControlSettingsPaths, hostControlBodyKeys, hostControlSettingsPathsIn, isHostControlRoute,
+} from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
@@ -267,10 +269,18 @@ export const hostControlRouteGate = (req, res, next) => (
 
 // The body-slice twin, mounted right after the JSON parser: the two
 // polymorphic policy stores (PUT /api/settings, PUT /api/cos/config) are
-// gated only when the body names a key that changes execution policy.
-export const hostControlBodyGate = (req, res, next) => (
-  hostControlBodyKeys(req.method, req.path, req.body).length > 0 ? requireHostControl(req, res, next) : next()
-);
+// gated only when the body names a key that changes execution policy, or
+// changes the stored value of a nested settings key that picks an executable
+// (HOST_CONTROL_SETTINGS_PATHS). The settings read is skipped when the caller
+// already holds host control, since the answer could not change.
+export const hostControlBodyGate = async (req, res, next) => {
+  if (hostControlBodyKeys(req.method, req.path, req.body).length > 0) return requireHostControl(req, res, next);
+  const named = hostControlSettingsPathsIn(req.method, req.path, req.body);
+  if (named.length === 0
+    || hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  const changed = changedHostControlSettingsPaths(named, req.body, await getSettings());
+  return changed.length > 0 ? requireHostControl(req, res, next) : next();
+};
 
 // The socket twin of requireHostControl on a password-free install, for the
 // per-event re-check in socket.js (with a password set, that re-check already

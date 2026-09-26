@@ -43,7 +43,10 @@
  *     AI assignments and credentials (they choose among configured providers
  *     or store a key). The `PUT /api/settings` and `PUT /api/cos/config`
  *     slices that change execution policy are gated per request body — see
- *     HOST_CONTROL_SETTINGS_SLICES and HOST_CONTROL_OPEN_COS_CONFIG_KEYS.
+ *     HOST_CONTROL_SETTINGS_SLICES and HOST_CONTROL_OPEN_COS_CONFIG_KEYS —
+ *     and so are the nested settings keys that pick an executable or disarm
+ *     a shell guard (HOST_CONTROL_SETTINGS_PATHS), but only when the body
+ *     CHANGES the stored value (#8751).
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -51,6 +54,7 @@
  * listed handler by a spelling this list does not match.
  */
 
+import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
@@ -228,6 +232,26 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
 ]);
 
 /**
+ * Nested `PUT /api/settings` keys, as dotted paths, that choose a binary
+ * PortOS spawns (the image-gen CLIs and the Python interpreter every local
+ * media lane runs) or turn the Layered Intelligence `cmd` sources into a
+ * full shell (#8751). Their parent slices stay open, so each is gated per
+ * CHANGED value rather than per presence: the Image Gen tab resends the whole
+ * slice, stored paths included, on every save, and a remote caller changing
+ * only an aspect ratio must still be able to save it. A body that omits or
+ * clears one (`''`, `null`, `false`) reverts it to the built-in default —
+ * the shallow settings merge drops an omitted key, and every reader treats a
+ * cleared value as unset — so neither is gated.
+ */
+export const HOST_CONTROL_SETTINGS_PATHS = Object.freeze([
+  'imageGen.agy.agyPath',
+  'imageGen.codex.codexPath',
+  'imageGen.grok.grokPath',
+  'imageGen.local.pythonPath',
+  'layeredIntelligence.trustShellSources',
+]);
+
+/**
  * The only `PUT /api/cos/config` keys a remote caller on a password-free
  * install may change. Nearly all of CoS config is execution policy (autonomy,
  * concurrency, MCP server commands, the Persistent Mind's capabilities), so
@@ -271,6 +295,29 @@ export const hostControlBodyKeys = (method, path, body) => {
   const verb = method.toUpperCase();
   return COMPILED_BODY_ROUTES.find((entry) => entry.method === verb && entry.pattern.test(path))?.pick(body) ?? [];
 };
+
+const valueAt = (object, path) => path.split('.').reduce(
+  (node, key) => (isPlainObject(node) && Object.hasOwn(node, key) ? node[key] : undefined),
+  object,
+);
+
+// Each listed key's readers fall back to the built-in default on any of these.
+const isUnset = (value) => value === undefined || value === null || value === '' || value === false;
+
+const SETTINGS_WRITE = compileRoute('PUT /api/settings');
+
+/** The HOST_CONTROL_SETTINGS_PATHS a `method path` body sets to a non-default value, for `PUT /api/settings`; [] elsewhere. */
+export const hostControlSettingsPathsIn = (method, path, body) => (
+  typeof method === 'string' && typeof path === 'string'
+  && method.toUpperCase() === SETTINGS_WRITE.method && SETTINGS_WRITE.pattern.test(path)
+    ? HOST_CONTROL_SETTINGS_PATHS.filter((key) => !isUnset(valueAt(body, key)))
+    : []
+);
+
+/** Of `paths`, the ones whose value in `body` differs from the stored `current` settings. */
+export const changedHostControlSettingsPaths = (paths, body, current) => (
+  paths.filter((key) => !Object.is(valueAt(body, key), valueAt(current, key)))
+);
 
 /** The HOST_CONTROL_ROUTES entry that `method path` (an Express `req.method` / `req.path`) matches, or null. */
 export const hostControlRouteFor = (method, path) => {
