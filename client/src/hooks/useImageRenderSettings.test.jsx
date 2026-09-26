@@ -15,6 +15,7 @@ const UNRESOLVED = {
   ...IMAGE_RENDER_KNOB_DEFAULTS,
   mode: 'local',
   modelId: LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  inheritedBackend: true,
   cloudModel: null,
 };
 
@@ -51,16 +52,17 @@ describe('useImageRenderSettings', () => {
       },
     };
 
-    it('takes the local model from the install pin, not the pipeline form', async () => {
+    it('retains the install preference for legacy runtime probes', async () => {
       getSettings.mockResolvedValue({ ...PIPELINE_FORM, imageGen: { local: { modelId: 'flux2-klein-9b' } } });
       const { result } = renderHook(() => useImageRenderSettings({ target: 'deck' }));
       await waitFor(() => expect(result.current.imageCfg.modelId).toBe('flux2-klein-9b'));
     });
 
-    it('falls back to the shipped local default when the install pins no model', async () => {
+    it('marks the shipped fallback as inherited', async () => {
       getSettings.mockResolvedValue(PIPELINE_FORM);
       const { result } = renderHook(() => useImageRenderSettings({ target: 'deck' }));
       await waitFor(() => expect(result.current.imageCfg.modelId).toBe(LOCAL_IMAGEGEN_DEFAULT_MODEL));
+      expect(result.current.imageCfg.inheritedBackend).toBe(true);
     });
 
     it('takes the backend from the install-wide mode, not the pipeline form', async () => {

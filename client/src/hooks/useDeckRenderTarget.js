@@ -38,7 +38,8 @@ export default function useDeckRenderTarget(deck) {
   // otherwise have to be added to each. Empty until the fetch lands, which is
   // also how a caller knows not to claim anything about the render yet.
   const summary = resolved
-    ? [modeLabel(imageCfg.mode), imageCfg.cloudModel || imageCfg.modelId, `${size.width}×${size.height}`].filter(Boolean).join(' · ')
+    ? [modeLabel(imageCfg.mode), imageCfg.mode === IMAGE_GEN_MODE.LOCAL && imageCfg.inheritedBackend
+      ? 'Inherited local model' : imageCfg.cloudModel || imageCfg.modelId, `${size.width}×${size.height}`].filter(Boolean).join(' · ')
     : '';
 
   return { backends, size, summary, localRuntime, blocked };

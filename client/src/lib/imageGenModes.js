@@ -38,6 +38,8 @@ import {
   normalizeRenderPinValue,
 } from '../../../server/lib/renderTargets.js';
 import {
+  resolveRenderPins,
+  resolveRenderTargetPins,
   imageModeCandidates,
   isModeUsable,
   pickUsableMode,
@@ -115,6 +117,7 @@ export {
   // `server/lib/renderModeLadder.js` for the fall-through semantics (a pin is
   // a preference, not a guarantee) and the candidate-order contract.
   imageModeCandidates,
+  resolveRenderTargetPins,
   isModeUsable,
   pickUsableMode,
   renderTargetDefaults,
@@ -227,30 +230,20 @@ export function localModelSelectOptions(models, pinned, fallbackId = LOCAL_IMAGE
  * first, which for every surface is: the record's own pin (`recordRenderPin`'s
  * `imageMode`/`imageModelId`), then the target's `renderTargetPin(settings, target)`.
  *
- * Why the client resolves this at all: single-image render call sites (a
- * universe cast reference, the base-style probe) send `mode` EXPLICITLY, and an
- * explicit mode outranks every pin on the server ladder — so a universe pinned
- * to agy rendered its cast on whatever the install-wide default resolved to
- * (codex, on a codex-enabled install) until the client folded the pin in itself.
- *
- * `availableBackends` (the `deriveAvailableBackends` shape) is a client-side
- * usability gate with no server counterpart: a pin naming a backend this install
- * no longer has enabled falls through to the next rung rather than queueing a
- * job that can only 400. Pass `null` when the backend list isn't loaded yet —
- * an empty array means "loaded, nothing enabled" and suppresses every pin.
+ * This is a compatibility wrapper over the shared pure pin resolver. Model
+ * inheritance follows lower pins on the same usable backend. The optional
+ * backend list gates previews; null means the list has not loaded yet.
  *
  * @param {Array<object|null>} sources - Pin sources, highest priority first.
  * @param {Array<{id:string}>|null} [availableBackends] - Enabled backends, or null.
  * @returns {{mode: string|null, modelId: string|null}} The first usable pin.
  */
 export function renderPinLadder(sources, availableBackends = null) {
-  for (const source of sources) {
-    const mode = normalizeRenderPinValue(source?.imageMode);
-    if (!mode) continue;
-    if (Array.isArray(availableBackends) && !availableBackends.some((b) => b.id === mode)) continue;
-    return { mode, modelId: normalizeRenderPinValue(source?.imageModelId) };
-  }
-  return { mode: null, modelId: null };
+  const { mode, modelId } = resolveRenderPins(sources, {
+    usable: (candidate) => !Array.isArray(availableBackends)
+      || availableBackends.some((backend) => backend.id === candidate),
+  });
+  return { mode, modelId };
 }
 
 /**
