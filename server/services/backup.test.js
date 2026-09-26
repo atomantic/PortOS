@@ -66,10 +66,10 @@ vi.mock('./backupDatabaseReset.js', () => ({
 }));
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 // restorePostgres lazily imports the orchestrator to rewind peer cursors (#8710).
+const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn().mockResolvedValue(2));
 vi.mock('./syncOrchestrator.js', () => ({
-  rewindPostgresSyncCursors: vi.fn().mockResolvedValue(2),
+  rewindPostgresSyncCursors,
 }));
-import { rewindPostgresSyncCursors } from './syncOrchestrator.js';
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.

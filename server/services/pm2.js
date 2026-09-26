@@ -1,4 +1,3 @@
-import { noteReadinessChanged } from './readinessNotify.js';
 import pm2 from 'pm2';
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
@@ -21,14 +20,22 @@ const cacheKey = (pm2Home) => pm2Home || '_default';
 
 // Track PM2 read failures per home so we log only on state change or reason change
 const jlistFailureState = new Map(); // home -> { lastError: string }
+let readinessChangedLoader;
+
+function notifyReadinessChanged(kind) {
+  readinessChangedLoader ??= import('./readinessNotify.js').then(({ noteReadinessChanged }) => noteReadinessChanged);
+  void readinessChangedLoader
+    .then(noteReadinessChanged => noteReadinessChanged(kind))
+    .catch(error => console.error(`❌ Readiness invalidation failed: ${error.message}`));
+}
 
 /**
  * Invalidate the jlist TTL cache (e.g. after mutations like start/stop/delete).
  * @param {string|null} [pm2Home=null]
  */
 export function clearJlistCache(pm2Home = null) {
-  noteReadinessChanged('health');
-  noteReadinessChanged('capabilities');
+  notifyReadinessChanged('health');
+  notifyReadinessChanged('capabilities');
   if (pm2Home !== undefined && pm2Home !== null) {
     jlistCache.delete(cacheKey(pm2Home));
   } else {
