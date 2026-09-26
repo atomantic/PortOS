@@ -55,7 +55,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   };
 });
 
-import { POOL_CONFIG } from '../lib/db.js';
+import { POOL_CONFIG, query, checkHealth } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough, Readable } from 'stream';
@@ -100,6 +100,25 @@ describe('database route boundary', () => {
     expect(source).toContain("from '../services/dbAdmin.js'");
     expect(source).not.toMatch(/childProcess|from 'fs'|from 'fs\/promises'|from '\.\.\/lib\/db\.js'/);
     expect(source).not.toMatch(/\b(?:execFile|spawn|query|mkdirSync|createReadStream)\s*\(/);
+  });
+});
+
+// Regression: an API migration must not start the unfenced snapshot/cutover,
+// even for an older client that still exposes the migration button.
+describe('database migration admission', () => {
+  it.each([['docker', true], ['native', true], ['docker', false], ['native', false]])('refuses repeated cutovers to %s (migrate=%s) without side effects', async (target, migrate) => {
+    vi.clearAllMocks();
+    const app = makeApp();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await request(app).post('/api/database/switch').send({ target, migrate });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('DATABASE_CUTOVER_UNAVAILABLE');
+      expect(res.body.error).toMatch(/coordinated shutdown and restart/);
+    }
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
   });
 });
 

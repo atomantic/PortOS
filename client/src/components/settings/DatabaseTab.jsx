@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount } from '../../utils/formatters';
 import {
-  getDatabaseStatus, switchDatabase, setupNativeDatabase, exportDatabase, fixDatabase,
+  getDatabaseStatus, setupNativeDatabase, exportDatabase, fixDatabase,
   syncDatabase, startDatabase, stopDatabase, destroyDatabase
 } from '../../services/api';
 import socket from '../../services/socket';
@@ -99,35 +99,6 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
         {/* Non-active backend actions */}
         {!isActive && (data?.installed || data?.configured) && (
           <>
-            {/* Migrate & switch to this backend */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'migrate',
-                label: `Migrate to ${displayLabel} and switch?`,
-                detail: `Exports data from ${activeLabel}, imports into ${displayLabel}, and makes ${displayLabel} the active backend.`,
-                action: () => runAction(`migrate-${backend}`, () => switchDatabase(backend, true), `Migrated to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
-            >
-              <ArrowRightLeft size={12} />
-              Migrate to {displayLabel}
-            </button>
-
-            {/* Switch without migration */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'switch',
-                label: `Switch to ${displayLabel} without migrating data?`,
-                action: () => runAction(`switch-${backend}`, () => switchDatabase(backend, false), `Switched to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
-            >
-              <ArrowRightLeft size={12} />
-              Switch
-            </button>
-
             {/* Sync data from active into this backend */}
             <button
               onClick={() => setConfirmAction({
@@ -275,6 +246,12 @@ export function DatabaseTab() {
                 exportDatabase={exportDatabase}
               />
             </div>
+
+            <p className="text-sm text-port-warning">
+              Database migration and switching are temporarily unavailable to protect writes made while PortOS is running.
+              Keep using the current backend until a coordinated shutdown and restart is available.
+              Backups remain available.
+            </p>
 
             {/* Progress indicator */}
             {progressMsg && (

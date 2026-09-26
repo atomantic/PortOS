@@ -225,47 +225,15 @@ export async function getStatus() {
 }
 
 /**
- * Switch database backends, optionally migrating data first.
+ * Backend changes require a coordinated stop and verified restart. Neither a
+ * snapshot nor a mode-only switch can rebind this process's existing pool.
  */
-async function switchDatabaseImpl({ target, migrate }, io) {
-  const emit = (event, data) => io?.emit('database:progress', { event, ...data });
-
-  if (migrate) {
-    emit('start', { message: `Migrating data to ${target}...` });
-    const result = await runDbScript(['migrate']);
-    if (result.exitCode !== 0) {
-      emit('error', { message: 'Migration failed' });
-      throw new ServerError('Migration failed', {
-        status: 500,
-        context: { details: result.stderr || result.stdout }
-      });
-    }
-    emit('complete', { message: `Migration to ${target} complete` });
-    return { success: true, output: result.stdout };
-  }
-
-  // Just switch mode without migrating
-  emit('start', { message: `Switching to ${target}...` });
-  const switchResult = await runDbScript([target === 'docker' ? 'use-docker' : 'use-native']);
-  if (switchResult.exitCode !== 0) {
-    emit('error', { message: 'Switch failed' });
-    throw new ServerError('Switch failed', {
-      status: 500,
-      context: { details: switchResult.stderr || switchResult.stdout }
-    });
-  }
-
-  const startResult = await runDbScript(['start']);
-  if (startResult.exitCode !== 0) {
-    emit('error', { message: `Failed to start ${target} database` });
-    throw new ServerError(`Failed to start ${target} database`, {
-      status: 500,
-      context: { details: startResult.stderr || startResult.stdout }
-    });
-  }
-
-  emit('complete', { message: `Switched to ${target}` });
-  return { success: true, output: switchResult.stdout + '\n' + startResult.stdout };
+async function switchDatabaseImpl() {
+  // Re-enable only with the durable, verified offline cutover in #8805.
+  throw new ServerError(
+    'Database migration and switching are temporarily unavailable: a coordinated shutdown and restart is required to preserve writes. Keep using the current backend; backups remain available.',
+    { status: 409, code: 'DATABASE_CUTOVER_UNAVAILABLE' }
+  );
 }
 
 const pgUser = POOL_CONFIG.user;

@@ -15,9 +15,9 @@
 #   stop         Stop the database
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
-#   use-docker   Switch to Docker mode
-#   use-native   Switch to native mode
-#   migrate      Export from current mode, import to the other
+#   use-docker   Unavailable pending coordinated offline cutover
+#   use-native   Unavailable pending coordinated offline cutover
+#   migrate      Unavailable pending coordinated offline cutover
 #   export       Export database to a SQL dump file
 #   import       Import a SQL dump file into the database
 #   logs         Show database logs
@@ -45,16 +45,6 @@ warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 err()  { echo -e "${RED}❌ $1${NC}"; }
 info() { echo -e "${BLUE}🗄️  $1${NC}"; }
 
-# Portable in-place sed helper (works with BSD and GNU sed)
-inplace_sed() {
-  local script="$1"
-  local file="$2"
-  local tmp
-  tmp="$(mktemp "${file}.XXXXXX")" || return 1
-  sed "$script" "$file" >"$tmp"
-  mv "$tmp" "$file"
-}
-
 # Detect current mode from .env or default to docker
 get_mode() {
   if [ -f "$ENV_FILE" ]; then
@@ -78,23 +68,6 @@ get_port() {
 }
 
 PGPORT=$(get_port)
-
-# Set mode in .env
-set_mode() {
-  local mode="$1"
-  if [ -f "$ENV_FILE" ]; then
-    if grep -q '^PGMODE=' "$ENV_FILE"; then
-      inplace_sed "s/^PGMODE=.*/PGMODE=$mode/" "$ENV_FILE"
-    else
-      echo "PGMODE=$mode" >> "$ENV_FILE"
-    fi
-  else
-    echo "PGMODE=$mode" > "$ENV_FILE"
-  fi
-  # Update PGPORT to match mode
-  PGPORT=$([ "$mode" = "native" ] && echo "5432" || echo "5561")
-  log "Mode set to: $mode (port $PGPORT)"
-}
 
 # Check if Docker PostgreSQL is running
 docker_running() {
@@ -504,16 +477,12 @@ cmd_setup_native() {
   PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 --single-transaction -f "$ROOT_DIR/server/scripts/init-db.sql"
   log "Schema applied"
 
-  # Step 6: Switch mode to native
-  set_mode native
-
   echo ""
   log "Native PostgreSQL is ready!"
   info "Using system PostgreSQL on port $PGPORT"
   info "Database: $PGDATABASE (user: $PGUSER)"
-  info "Setup selected native mode; Docker data has not been migrated."
-  warn "Running 'scripts/db.sh migrate' now would copy native data OVER Docker data."
-  info "Before moving Docker data to native, see docs/STORAGE.md#moving-between-docker-and-native."
+  info "Provisioning only: the selected mode is unchanged; Docker data has not been migrated."
+  info "Coordinated backend migration is not yet available. Keep using the current backend."
 }
 
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
@@ -607,146 +576,13 @@ cmd_import() {
   log "Import complete"
 }
 
-# Import a dump into a specific target using Docker's pg17 psql when available.
-# This avoids version-mismatch issues when the host psql is older than the dump format.
-import_to_target() {
-  local dumpfile="$1"
-  local target_port="$2"
-
-  # Strip pg17-only features for compat with older psql
-  local filtered
-  filtered="$(sed -e '/^\\restrict /d' -e '/^\\unrestrict /d' -e '/^SET transaction_timeout/d' "$dumpfile")"
-
-  # Prefer Docker's pg17 psql to avoid version mismatch with host psql
-  if docker_running; then
-    echo "$filtered" | docker exec -i -e PGPASSWORD="$PGPASSWORD" portos-db \
-      psql -h host.docker.internal -p "$target_port" -U "$PGUSER" -d "$PGDATABASE" \
-      -v ON_ERROR_STOP=1 --single-transaction
-  else
-    echo "$filtered" | PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$target_port" -U "$PGUSER" -d "$PGDATABASE" \
-      -v ON_ERROR_STOP=1 --single-transaction
-  fi
-}
-
-# Migrate data between Docker and native
+# Do not snapshot and change mode while PortOS can still accept writes.
+# A process-list probe is not a writer fence. The recoverable coordinator in
+# #8805 must own admission, explicit endpoints and verified restart first.
 cmd_migrate() {
-  local current_mode
-  current_mode=$(get_mode)
-  local target_mode
-
-  if [ "$current_mode" = "docker" ]; then
-    target_mode="native"
-  else
-    target_mode="docker"
-  fi
-
-  info "Migrating data from $current_mode to $target_mode..."
-
-  # Verify source is running
-  if ! run_psql -c "SELECT 1" >/dev/null 2>&1; then
-    err "Source database ($current_mode) is not running on port $PGPORT"
-    echo "  Start it first: scripts/db.sh start"
-    exit 1
-  fi
-
-  # Count source records
-  local count
-  count=$(run_psql -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
-  info "Source has $count memories"
-
-  # Export from source
-  # Abort before touching the target or the mode when the export fails (#8781)
-  local dumpfile
-  if ! dumpfile=$(cmd_export "migrate-$(date +%Y%m%d-%H%M%S)") || [ ! -f "$dumpfile" ]; then
-    err "Export from $current_mode failed — migration aborted; $target_mode was not modified and mode remains $current_mode"
-    exit 1
-  fi
-
-  # Determine target port
-  local target_port
-  target_port=$([ "$target_mode" = "native" ] && echo "5432" || echo "5561")
-
-  # Ensure target is running (keep source running too — they use different ports)
-  if [ "$target_mode" = "native" ]; then
-    # Ensure native pg is up (don't stop Docker — we need its pg17 psql)
-    if ! pg_isready -h "$PGHOST" -p "$target_port" >/dev/null 2>&1; then
-      start_native
-    fi
-  else
-    # Start Docker if not running
-    if ! docker_running; then
-      require_docker_compose
-      cd "$ROOT_DIR"
-      docker compose up -d db
-      info "Waiting for Docker PostgreSQL..."
-      for i in $(seq 1 30); do
-        if docker compose exec -T db pg_isready -U "$PGUSER" >/dev/null 2>&1; then break; fi
-        sleep 1
-      done
-    fi
-  fi
-
-  # Restore mode on failure or interruption
-  _migrate_cleanup() {
-    warn "Migration aborted — restoring mode to $current_mode"
-    set_mode "$current_mode"
-  }
-  trap '_migrate_cleanup' ERR INT TERM
-
-  # Import into target
-  info "Importing into $target_mode (port $target_port)..."
-  import_to_target "$dumpfile" "$target_port"
-
-  # Switch mode to target
-  set_mode "$target_mode"
-  PGPORT=$(get_port)
-
-  # Clear traps after successful import
-  trap - ERR INT TERM
-
-  # Stop the old source if desired (both can coexist, but stop to save resources)
-  if [ "$current_mode" = "docker" ]; then
-    info "Stopping Docker..."
-    stop_docker
-  fi
-
-  # Verify
-  local new_count
-  new_count=$(run_psql -tAc "SELECT count(*) FROM memories" 2>/dev/null || echo "0")
-
-  echo ""
-  log "Migration complete!"
-  info "Source ($current_mode): $count memories"
-  info "Target ($target_mode): $new_count memories"
-  info "Dump saved: $dumpfile"
-}
-
-# Use Docker mode
-cmd_use_docker() {
-  set_mode docker
-  info "Switched to Docker mode (port 5561). Run 'scripts/db.sh start' to start."
-}
-
-# Use native mode
-cmd_use_native() {
-  if ! has_native_pg; then
-    err "Native PostgreSQL not installed. Run: scripts/db.sh setup-native"
-    exit 1
-  fi
-  # Verify system pg is reachable
-  if ! pg_isready -h "$PGHOST" -p 5432 >/dev/null 2>&1; then
-    warn "System PostgreSQL not running on port 5432"
-    echo "  Start it: brew services start postgresql@17"
-  fi
-  # Best-effort stop of Docker DB container
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    (
-      cd "$ROOT_DIR"
-      docker compose stop db >/dev/null 2>&1 || true
-    )
-  fi
-  set_mode native
-  info "Switched to native mode (port 5432). Run 'scripts/db.sh start' to start."
+  err "Database migration and switching are temporarily unavailable: coordinated shutdown and restart are required to preserve writes." >&2
+  echo "Keep using the current backend. Backups remain available via scripts/db.sh export." >&2
+  return 1
 }
 
 # Show logs
@@ -787,10 +623,10 @@ Commands:
   logs           Tail database logs
 
   setup-native   Detect/install PostgreSQL, create portos database
-  use-docker     Switch to Docker mode (port 5561)
-  use-native     Switch to native/system mode (port 5432)
+  use-docker     Unavailable pending coordinated offline cutover
+  use-native     Unavailable pending coordinated offline cutover
 
-  migrate        Export from current mode, import to the other
+  migrate        Unavailable pending coordinated offline cutover
   export [label] Export database to data/db-dumps/
   import <file>  Import a SQL dump file
 
@@ -808,8 +644,8 @@ case "${1:-help}" in
   stop)         cmd_stop ;;
   fix)          cmd_fix ;;
   setup-native) cmd_setup_native ;;
-  use-docker)   cmd_use_docker ;;
-  use-native)   cmd_use_native ;;
+  use-docker)   cmd_migrate ;;
+  use-native)   cmd_migrate ;;
   migrate)      cmd_migrate ;;
   export)       cmd_export "${2:-}" ;;
   import)       cmd_import "${2:?Usage: scripts/db.sh import <file>}" ;;
