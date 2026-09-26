@@ -304,16 +304,30 @@ describe('gateOnDatabase', () => {
   });
 
   it('refuses to start when the DB is unreachable and no escape hatch is set', async () => {
-    const onUnbootable = vi.fn();
-    const result = await gateOnDatabase({
-      checkHealth: vi.fn(async () => ({ connected: false, error: 'ECONNREFUSED' })),
-      ensureSchema: vi.fn(),
-      escapeHatch: false,
-      onUnbootable
-    });
-    expect(result).toEqual({ dbReady: false });
-    expect(onUnbootable).toHaveBeenCalledTimes(1);
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL is required but unreachable'));
+    vi.useFakeTimers();
+    try {
+      let timeMs = 0;
+      const sleep = vi.fn(async (ms) => {
+        timeMs += ms;
+        vi.advanceTimersByTime(ms);
+      });
+      const now = () => timeMs;
+      const onUnbootable = vi.fn();
+      const result = await gateOnDatabase({
+        checkHealth: vi.fn(async () => ({ connected: false, error: 'ECONNREFUSED' })),
+        ensureSchema: vi.fn(),
+        escapeHatch: false,
+        onUnbootable,
+        sleep,
+        now,
+        retryWindowMs: 120000
+      });
+      expect(result).toEqual({ dbReady: false });
+      expect(onUnbootable).toHaveBeenCalledTimes(1);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL is required but unreachable'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls through the failed upgrade of an uninitialized DB to the fail-fast', async () => {
@@ -341,6 +355,134 @@ describe('gateOnDatabase', () => {
     expect(result).toEqual({ dbReady: false });
     expect(onUnbootable).not.toHaveBeenCalled();
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('booting via escape hatch'));
+  });
+
+  it('retries with exponential backoff when DB is unreachable, succeeds on 3rd attempt', async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, step } = createRecorder();
+      const healthy = { connected: true, hasSchema: true, hasCatalogSchema: true };
+      // Unreachable on probes 1 & 2, healthy on probe 3.
+      const probes = [
+        { connected: false, error: 'ECONNREFUSED' },
+        { connected: false, error: 'ECONNREFUSED' },
+        healthy
+      ];
+      let timeMs = 0;
+      const sleep = vi.fn(async (ms) => {
+        timeMs += ms;
+        vi.advanceTimersByTime(ms);
+      });
+      const now = () => timeMs;
+
+      const result = await gateOnDatabase({
+        checkHealth: step('checkHealth', async () => Promise.resolve(probes.shift())),
+        ensureSchema: step('ensureSchema', () => Promise.resolve()),
+        escapeHatch: false,
+        onUnbootable: vi.fn(),
+        sleep,
+        now,
+        retryWindowMs: 120000
+      });
+
+      expect(result).toEqual({ dbReady: true });
+      expect(calls).toEqual(['checkHealth', 'checkHealth', 'checkHealth']);
+      // Logged two retry attempts (before probes 2 and 3).
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL unreachable — retrying in 1s'));
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL unreachable — retrying in 2s'));
+      // Total elapsed time: 1s + 2s = 3s.
+      expect(timeMs).toBe(3000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('exits after retrying for the full window when DB stays unreachable', async () => {
+    vi.useFakeTimers();
+    try {
+      let timeMs = 0;
+      const sleep = vi.fn(async (ms) => {
+        timeMs += ms;
+        vi.advanceTimersByTime(ms);
+      });
+      const now = () => timeMs;
+      const onUnbootable = vi.fn();
+
+      await gateOnDatabase({
+        checkHealth: vi.fn(async () => ({ connected: false, error: 'ECONNREFUSED' })),
+        ensureSchema: vi.fn(),
+        escapeHatch: false,
+        onUnbootable,
+        sleep,
+        now,
+        retryWindowMs: 6000 // Small window for testing: 1s + 2s + 4s = 7s > 6s, so it stops at 6s.
+      });
+
+      expect(onUnbootable).toHaveBeenCalledTimes(1);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('PostgreSQL is required but unreachable'));
+      // Elapsed time should be close to the window (6s), plus the final check after window expiry.
+      expect(timeMs).toBeGreaterThanOrEqual(6000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('skips retry and fails immediately when DB is unreachable and escape hatch is set', async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn();
+      const onUnbootable = vi.fn();
+      const result = await gateOnDatabase({
+        checkHealth: vi.fn(async () => ({ connected: false, error: 'ECONNREFUSED' })),
+        ensureSchema: vi.fn(),
+        escapeHatch: true,
+        onUnbootable,
+        sleep
+      });
+
+      expect(result).toEqual({ dbReady: false });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(onUnbootable).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('booting via escape hatch'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still fails fast when DB is reachable but schema is missing, even after retry attempts', async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, step } = createRecorder();
+      let timeMs = 0;
+      const sleep = vi.fn(async (ms) => {
+        timeMs += ms;
+        vi.advanceTimersByTime(ms);
+      });
+      const now = () => timeMs;
+      const onUnbootable = vi.fn();
+
+      await gateOnDatabase({
+        checkHealth: step('checkHealth', async () =>
+          Promise.resolve({ connected: true, hasSchema: false, hasCatalogSchema: false })
+        ),
+        ensureSchema: step('ensureSchema', async () => {
+          throw new Error('base tables missing');
+        }),
+        escapeHatch: false,
+        onUnbootable,
+        sleep,
+        now,
+        retryWindowMs: 120000
+      });
+
+      // Only one probe (no retry because DB is connected). No re-check after ensureSchema fails.
+      expect(calls).toEqual(['checkHealth', 'ensureSchema']);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(onUnbootable).toHaveBeenCalledTimes(1);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Schema upgrade on boot failed'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

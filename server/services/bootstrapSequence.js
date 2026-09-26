@@ -156,17 +156,45 @@ export const armCommissionScheduler = ({
  * the creative-catalog schema are required — the catalog has no file-backed
  * equivalent.
  *
+ * When the DB is unreachable (health.connected === false), retry with capped
+ * exponential backoff (1 s → 2 s → 4 s … capped at 10 s) for up to 120 s before
+ * giving up. This handles transient DB delays on host reboot or slow Postgres
+ * startup. The schema-missing path (connected but incomplete schema) still fails
+ * immediately — that is a setup error, not a transient one.
+ *
  * `escapeHatch` (MEMORY_BACKEND=file / NODE_ENV=test, dev+test only) downgrades
- * the fail-fast to a warning. `onUnbootable` defaults to exiting the process;
- * it is injected so the gate can be exercised without killing the test runner.
+ * the fail-fast to a warning and skips retry. `onUnbootable` defaults to exiting
+ * the process; it is injected so the gate can be exercised without killing the
+ * test runner. `sleep`, `now`, and `retryWindowMs` are injected for testing.
  */
 export const gateOnDatabase = async ({
   checkHealth,
   ensureSchema,
   escapeHatch,
-  onUnbootable = () => process.exit(1)
+  onUnbootable = () => process.exit(1),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+  retryWindowMs = 120000
 }) => {
   let health = await checkHealth();
+
+  // Retry if unreachable. Keep schema-missing path fail-fast (it's a setup error).
+  if (!health.connected && !escapeHatch) {
+    const deadline = now() + retryWindowMs;
+    let delayMs = 1000;
+    let attempt = 1;
+    while (now() < deadline) {
+      console.log(`⏳ PostgreSQL unreachable — retrying in ${Math.floor(delayMs / 1000)}s (attempt ${attempt})`);
+      await sleep(delayMs);
+      health = await checkHealth();
+      if (health.connected) break;
+      // Exponential backoff, capped at 10s.
+      delayMs = Math.min(delayMs * 2, 10000);
+      attempt += 1;
+    }
+  }
+
+  // If connected, try to upgrade an incomplete schema.
   if (health.connected && (!health.hasSchema || !health.hasCatalogSchema)) {
     // try/catch is appropriate here: this runs outside the request lifecycle, so
     // an uncaught throw would crash boot. A truly uninitialized DB (base tables
@@ -178,6 +206,7 @@ export const gateOnDatabase = async ({
       console.error(`🗄️  Schema upgrade on boot failed: ${err.message}`);
     }
   }
+
   const dbReady = Boolean(health.connected && health.hasSchema && health.hasCatalogSchema);
   if (!escapeHatch && !dbReady) {
     const reason = health.connected ? 'required schema missing' : `unreachable (${health.error || 'connection failed'})`;
