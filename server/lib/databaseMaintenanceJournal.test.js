@@ -66,7 +66,7 @@ describe('persistent database maintenance boundary', () => {
         j.transition(${JSON.stringify(operation.id)}, ${JSON.stringify(token)}, ${JSON.stringify(stage)}, ${JSON.stringify(next)});`);
       expect(result.status, result.stderr).toBe(0);
       expect(journal.read()).toEqual({ ...operation, stage: next });
-      expect(() => journal.transition(operation.id, token, stage, next)).toThrow();
+      expect(journal.transition(operation.id, token, stage, next)).toEqual({ ...operation, stage: next });
       expect(() => journal.assertAdmission()).toThrow();
       stage = next;
     }
@@ -86,9 +86,29 @@ describe('persistent database maintenance boundary', () => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' });
       child.once('close', code => resolve(code));
     });
-    expect((await Promise.all([run(), run()])).sort()).toEqual([0, 1]);
+    expect((await Promise.all([run(), run()])).sort()).toEqual([0, 0]);
     expect(journal.read()).toEqual({ ...operation, stage: 'quiescing' });
     expect(() => journal.assertAdmission()).toThrow();
+  });
+
+  it('recovers unpublished temporary bytes and acknowledged publications without regressing later stages', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const active = join(data, 'database-maintenance');
+    // A process killed while preparing its unique file leaves no visible stage.
+    writeFileSync(join(active, 'publication-interrupted.pending'), '{');
+    expect(journal.read()).toEqual(operation);
+    journal.transition(operation.id, token, 'accepted', 'quiescing');
+    // A restarted caller with the same durable ownership can confirm the write.
+    expect(journal.transition(operation.id, token, 'accepted', 'quiescing').stage).toBe('quiescing');
+    journal.transition(operation.id, token, 'quiescing', 'exporting');
+    expect(() => journal.transition(operation.id, token, 'accepted', 'quiescing')).toThrow();
+    expect(journal.read().stage).toBe('exporting');
+    expect(() => journal.assertAdmission()).toThrow();
+    const publication = join(active, 'published-quiescing.json');
+    writeFileSync(publication, JSON.stringify({ ...operation, stage: 'quiescing', target: source }));
+    expect(() => journal.read()).toThrow();
+    expect(journal.isFenced()).toBe(true);
   });
 
   it('preserves the fence and prior stage after interrupted stage publication', () => {
