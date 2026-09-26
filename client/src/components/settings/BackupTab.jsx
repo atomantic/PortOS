@@ -344,6 +344,8 @@ export function BackupTab() {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
     } else if (result.reason === 'restore_schema_reconciliation') {
       toast.error('The database dump was applied, but schema recovery is incomplete. It was not rolled back. Restart PortOS to retry recovery; if it still fails, check the server logs and repair the database before continuing.', { duration: Infinity });
+    } else if (result.reason === 'restore_sync_resync') {
+      toast.error('The database dump was applied, but peer sync could not be reset. Memories and Catalog records pulled from peers after this snapshot may stay missing; check the server logs and repeat the restore.', { duration: Infinity });
     } else {
       toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
     }

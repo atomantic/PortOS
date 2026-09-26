@@ -65,6 +65,11 @@ vi.mock('./backupDatabaseReset.js', () => ({
   getDatabaseResetPlan: async () => ({ preflight: 'SELECT 1', reset: 'RESET_APPROVED_SCHEMA' }),
 }));
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
+// restorePostgres lazily imports the orchestrator to rewind peer cursors (#8710).
+vi.mock('./syncOrchestrator.js', () => ({
+  rewindPostgresSyncCursors: vi.fn().mockResolvedValue(2),
+}));
+import { rewindPostgresSyncCursors } from './syncOrchestrator.js';
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
@@ -1168,7 +1173,7 @@ describe('restorePostgres', () => {
     });
     try {
       const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
       const [bin, args, opts] = spawn.mock.calls[0];
       expect(bin).toBe('psql');
       expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
@@ -1246,6 +1251,62 @@ describe('restorePostgres', () => {
     expect(result.error).toContain('not rolled back');
     expect(result.error).toContain('Restart PortOS');
     if (phase === 'schema') expect(runDbMigrations).not.toHaveBeenCalled();
+    expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+  });
+
+  // #8710: a restore must not leave peers skipping rows in either direction.
+  describe('federation resync', () => {
+    const setvalCalls = () => query.mock.calls.filter(([sql]) => sql.includes('setval'));
+    const captureCalls = () => query.mock.calls.filter(([sql]) => sql.includes('FROM pg_sequences') && !sql.includes('setval'));
+    beforeEach(() => {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+      mockLegacyDumpRead();
+      query.mockImplementation(async (sql) => (sql.includes('FROM pg_sequences') && !sql.includes('setval')
+        ? { rows: [{ sequencename: 'memories_sync_feed_seq', last_value: '1000000000000500' }] }
+        : { rows: [] }));
+    });
+    afterEach(() => query.mockReset().mockResolvedValue({ rows: [] }));
+
+    const runRestore = async ({ exitCode = 0 } = {}) => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await flush();
+      proc.emit('close', exitCode);
+      return pending;
+    };
+
+    it('floors feed sequences at their pre-replay value and rewinds peer cursors after reconciliation', async () => {
+      const result = await runRestore();
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
+      // Captured inside maintenance, before psql replays the dump.
+      expect(captureCalls()).toHaveLength(1);
+      expect(captureCalls()[0][1][0]).toContain('catalog_ingredients_sync_feed_seq');
+      expect(query.mock.invocationCallOrder.at(-2)).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+      // Floored after schema recovery (which recreates missing sequences).
+      expect(setvalCalls()).toHaveLength(1);
+      expect(setvalCalls()[0][0]).toContain('GREATEST');
+      expect(setvalCalls()[0][1]).toEqual([['memories_sync_feed_seq'], ['1000000000000500']]);
+      expect(query.mock.invocationCallOrder.at(-1)).toBeGreaterThan(runDbMigrations.mock.invocationCallOrder[0]);
+      expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
+    });
+
+    it('changes neither sequences nor cursors on dry-run, replay failure, or reconciliation failure', async () => {
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun: true })).toMatchObject({ status: 'ok', dryRun: true });
+      expect(await runRestore({ exitCode: 1 })).toMatchObject({ status: 'failed', reason: 'restore_error' });
+      spawn.mockClear();
+      runDbMigrations.mockRejectedValueOnce(new Error('upgrade failed'));
+      expect(await runRestore()).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation' });
+      expect(setvalCalls()).toHaveLength(0);
+      expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+    });
+
+    it('reports an applied dump whose peer resync failed', async () => {
+      rewindPostgresSyncCursors.mockRejectedValueOnce(new Error('disk full'));
+      const result = await runRestore();
+      expect(result).toMatchObject({ status: 'failed', reason: 'restore_sync_resync' });
+      expect(result.error).toContain('dump was applied');
+    });
   });
 
   // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest

@@ -1,5 +1,5 @@
 /** Real clean-dump restore regressions. Only guarded test databases. */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,16 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
+import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
+import { rewindPostgresSyncCursors } from './syncOrchestrator.js';
+
+// The real rewind rewrites this install's data/instances_sync_cursors.json.
+vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors: vi.fn(async () => 0) }));
+
+const feedSequenceValues = async () => Object.fromEntries((await query(
+  'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
+  [syncFeedTables.map(syncFeedSequenceName)],
+)).rows.map(({ sequencename, v }) => [sequencename, v]));
 
 const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
@@ -75,7 +85,17 @@ describe.skipIf(!ready)('restore older database schema', () => {
     // A simpler approved additive table holds post-snapshot rows to prove a
     // full replacement, independently of Beeper's account/conversation graph.
     await query("INSERT INTO app_quality_measurements VALUES ('restore-probe', 'test', 'agent', NOW(), '{}')");
+    // Feed positions handed out after the dump must never be reissued (#8710).
+    await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 5)");
+    const feedBefore = await feedSequenceValues();
     expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
+    expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
+    const feedAfter = await feedSequenceValues();
+    for (const [name, value] of Object.entries(feedBefore)) {
+      if (value !== null) expect(BigInt(feedAfter[name])).toBeGreaterThanOrEqual(BigInt(value));
+    }
+    const next = (await query("SELECT nextval('memories_sync_feed_seq')::text AS v")).rows[0].v;
+    expect(BigInt(next)).toBeGreaterThan(BigInt(feedBefore.memories_sync_feed_seq));
     expect(await listFolders()).toContainEqual(folder);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Snapshot person' }]);
     expect((await query("SELECT id FROM tribe_people WHERE id = '00000000-0000-4000-8000-000000000863'")).rowCount).toBe(0);
@@ -94,7 +114,9 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await writeFile(join(invalidDir, 'portos-db.sql'), `${await readFile(dumpPath, 'utf8')}\nTHIS IS INVALID SQL;\n`);
     await query("UPDATE tribe_people SET name = 'Must survive failure' WHERE id = $1", [personId]);
     const before = (await query("SELECT oid FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass ORDER BY oid")).rows;
+    const rewindsBefore = rewindPostgresSyncCursors.mock.calls.length;
     expect(await restore(false, 'invalid-sql')).toMatchObject({ status: 'failed', reason: 'restore_error' });
+    expect(rewindPostgresSyncCursors).toHaveBeenCalledTimes(rewindsBefore);
     expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Must survive failure' }]);
     expect((await query("SELECT oid FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass ORDER BY oid")).rows).toEqual(before);
     // The maintenance gate must have released on the replay error.

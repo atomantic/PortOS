@@ -93,6 +93,31 @@ async function withCursors(fn) {
   });
 }
 
+// Bumped by every rewind. A sync cycle that read its cursors under an older
+// generation pulled against the pre-restore database, so its advanced
+// memory/Catalog cursors must not overwrite the rewind.
+let postgresCursorGeneration = 0;
+
+/**
+ * Rewind every peer's PostgreSQL delta cursors (memory + Catalog) to the start
+ * after a database restore discarded rows those cursors had already passed
+ * (#8710). The next sync replays each peer's streams through the idempotent
+ * LWW / ON CONFLICT apply paths. Only these two streams have no reconcile
+ * to fall back on; brain cursors and snapshot checksums are left alone.
+ * @returns {Promise<number>} peers rewound
+ */
+export async function rewindPostgresSyncCursors() {
+  return withCursors((cursors) => {
+    postgresCursorGeneration += 1;
+    const peers = Object.values(cursors).filter(isPlainObjectShallow);
+    for (const cursor of peers) {
+      cursor.memorySeq = '0';
+      cursor.catalogSeqs = Object.fromEntries(CATALOG_CURSOR_KINDS.map((kind) => [kind, '0']));
+    }
+    return peers.length;
+  });
+}
+
 // --- Peer fetch helper ---
 
 // Every outbound hop goes through `peerFetch` so it carries
@@ -812,7 +837,9 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
 
     // Read cursor snapshot outside lock so network I/O doesn't block other peers
     // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
+    let cursorGeneration;
     const cursor = await readCursors((cursors) => {
+      cursorGeneration = postgresCursorGeneration;
       const raw = { ...(cursors[peerId] || {}) };
       return detectCursorReset(raw, peer);
     });
@@ -905,11 +932,14 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
           cursors[peerId].brainChecksumTypes = brainResult.brainChecksumTypes;
         }
       }
-      if (memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
+      // A DB restore rewound the Postgres cursors mid-cycle: this cycle's
+      // positions describe rows the restore discarded, so keep the rewind.
+      const postgresCursorsCurrent = cursorGeneration === postgresCursorGeneration;
+      if (postgresCursorsCurrent && memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
       // Persist the per-kind catalog cursor only when the drain wasn't blocked
       // by a schema gap — a blocked cycle leaves the prior cursor so we re-try
       // the same window after the sender upgrades (mirrors the snapshot path).
-      if (categories.catalog && !catalogResult.blockedBySchema && isPlainObjectShallow(catalogResult.catalogSeqs)) {
+      if (postgresCursorsCurrent && categories.catalog && !catalogResult.blockedBySchema && isPlainObjectShallow(catalogResult.catalogSeqs)) {
         cursors[peerId].catalogSeqs = catalogResult.catalogSeqs;
       }
       if (!cursors[peerId].checksums) cursors[peerId].checksums = {};

@@ -19,6 +19,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
@@ -1485,7 +1486,9 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation'|'restore_sync_resync', error? }
+ * A successful real restore also carries `syncCursorsRewound` (peer count);
+ * see resyncFederationAfterRestore.
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -1546,6 +1549,8 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
 
   return withDatabaseMaintenance(async () => {
+    // Read before the replay rewinds them to the dump's values.
+    const feedPositions = await captureSyncFeedPositions();
     const pgHost = process.env.PGHOST || 'localhost';
     const pgPort = process.env.PGPORT || '5432';
     const pgDb = process.env.PGDATABASE || 'portos';
@@ -1615,8 +1620,65 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
         error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
       };
     }
-    return replay;
+    // Still inside maintenance, so no sync apply or feed write can interleave
+    // between the restored rows and the federation repair.
+    const resync = await resyncFederationAfterRestore(feedPositions).then(
+      (syncCursorsRewound) => ({ syncCursorsRewound }),
+      (err) => ({ err }),
+    );
+    if (resync.err) {
+      console.error(`❌ DB restore federation resync failed: ${resync.err.message}`);
+      return {
+        status: 'failed',
+        reason: 'restore_sync_resync',
+        error: 'The database dump was applied, but peer sync could not be reset. Federated memories and Catalog records pulled after this snapshot may stay missing until the restore is repeated.',
+      };
+    }
+    return { ...replay, syncCursorsRewound: resync.syncCursorsRewound };
   });
+}
+
+// Feed sequences present before the replay (a pre-#8315 install has none).
+// pg_sequences reports a NULL last_value for a never-drawn sequence, which
+// holds no position worth preserving.
+async function captureSyncFeedPositions() {
+  const { rows } = await query(
+    `SELECT sequencename, last_value::text AS last_value FROM pg_sequences
+      WHERE schemaname = current_schema() AND sequencename = ANY($1::text[]) AND last_value IS NOT NULL`,
+    [syncFeedTables.map(syncFeedSequenceName)],
+  );
+  return rows;
+}
+
+/**
+ * Repair both directions of peer sync after a dump replay (#8710).
+ *
+ * Outbound: the dump `setval`s each feed sequence back to the dump's maximum,
+ * so new rows would reuse positions peers already passed and never be pulled.
+ * Floor every sequence at its pre-restore value so post-restore positions land
+ * above any cursor a peer holds.
+ *
+ * Inbound: our per-peer memory/Catalog cursors still point past rows the
+ * restore discarded. Rewind them so the next sync replays each peer's streams
+ * through the idempotent LWW / ON CONFLICT apply paths.
+ * @param {Array<{sequencename: string, last_value: string}>} feedPositions
+ * @returns {Promise<number>} peers whose cursors were rewound
+ */
+async function resyncFederationAfterRestore(feedPositions) {
+  if (feedPositions.length) {
+    // GREATEST ignores the NULL of a sequence the dump left undrawn.
+    await query(
+      `SELECT setval(format('%I', s.sequencename)::regclass, GREATEST(c.captured::bigint, s.last_value))
+        FROM pg_sequences s
+        JOIN unnest($1::text[], $2::text[]) AS c(name, captured) ON c.name = s.sequencename
+        WHERE s.schemaname = current_schema()`,
+      [feedPositions.map((p) => p.sequencename), feedPositions.map((p) => p.last_value)],
+    );
+  }
+  const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+  const peers = await rewindPostgresSyncCursors();
+  console.log(`🔄 DB restore: floored ${feedPositions.length} sync feed sequences, rewound memory/Catalog cursors for ${peers} peers`);
+  return peers;
 }
 
 /**

@@ -96,17 +96,20 @@ After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore 
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish; dry-run performs neither replay nor schema changes.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
-| `{ status: 'ok', dryRun, sizeBytes, tableCount }` | Dry-run report, or a successful real restore |
+| `{ status: 'ok', dryRun, sizeBytes, tableCount }` | Dry-run report, or a successful real restore (which adds `syncCursorsRewound`, the number of peers rewound) |
 | `{ status: 'skipped', reason: 'no_dump' }` | No `portos-db.sql` in the snapshot (or 0 bytes) |
 | `{ status: 'skipped', reason: 'not_configured' }` | Real restore requested but Postgres is unreachable — refuses to half-restore |
 | `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
+| `{ status: 'failed', reason: 'restore_sync_resync', error }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) |
+
+**Peer sync repair (#8710).** Memories and the seven Catalog tables federate through per-stream feed positions. A restore breaks both directions: this install's per-peer pull cursors (`data/instances_sync_cursors.json`) still point past rows the restore discarded, and the dump rewinds each `<table>_sync_feed_seq`, so new rows would reuse positions peers have already passed. Inside the maintenance window, the restore records each feed sequence before replay. After reconciliation, it sets each sequence back to at least that value and rewinds every peer's `memorySeq` and `catalogSeqs` to `0`. Brain cursors and snapshot checksums are left alone. The next sync replays each peer's streams through the idempotent last-writer-wins apply paths. A sync already in flight during the restore does not save its pre-restore cursor positions. Dry-run and failed restores change neither cursors nor sequences.
 
 On schema-reconciliation failure, restart PortOS to retry its schema upgrades and pending migrations. If recovery still fails, inspect the server logs and repair the database before continuing to use affected features. Reconciliation can partially apply upgrades; it is separate from the completed replay transaction.
 
