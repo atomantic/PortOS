@@ -69,7 +69,7 @@ import {
   withBaseHashFlushBatch,
   maybeJournalBeforeOverwrite,
 } from '../../lib/conflictJournal.js';
-import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
+import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
 import { getAbilityAdapter } from './abilityAdapters.js';
 import { normalizeMusicTasteConfig, sanitizeMusicTasteRecipe, renderMusicTasteRecipePrompt } from './musicTasteRecipe.js';
@@ -826,6 +826,7 @@ export async function recordCommissionRun(id, runEntry) {
     };
     const runs = [...(current.runs || []), run].slice(-MAX_PERSISTED_RUNS);
     await store.writeRaw(id, { ...current, runs, updatedAt: new Date().toISOString() });
+    emitRecordInvalidated(CREATIVE_COMMISSION_KIND, id);
     return run;
   });
 }
@@ -869,6 +870,7 @@ export async function recordCommissionMusicOutput(id, runId, output) {
     const runs = [...current.runs];
     runs[index] = { ...runs[index], musicOutput };
     await store.writeRaw(id, { ...current, runs, updatedAt: new Date().toISOString() });
+    emitRecordInvalidated(CREATIVE_COMMISSION_KIND, id);
     return runs[index];
   });
 }
@@ -913,6 +915,7 @@ export async function submitCommissionFeedback(id, input) {
     tags: input?.tags,
   });
   if (!rec) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
+  emitRecordInvalidated(CREATIVE_COMMISSION_KIND, id);
   commission.feedback = await listFeedbackForCommission(id).catch(() => []);
   return commission;
 }
@@ -997,6 +1000,7 @@ export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 
         await maybeJournalBeforeOverwrite({ kind: CREATIVE_COMMISSION_KIND, id: next.id, local, remote: next, source });
       }
       await store.writeRaw(id, next);
+      emitRecordInvalidated(CREATIVE_COMMISSION_KIND, id);
       await setSyncBaseHash(CREATIVE_COMMISSION_KIND, next.id, contentHashForRecord(CREATIVE_COMMISSION_KIND, next));
       if (next.deleted === true && local?.deleted !== true) newlyDeleted.push(id);
       return true;

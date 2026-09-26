@@ -25,7 +25,7 @@
  */
 
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
-import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
+import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
 import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
@@ -174,7 +174,11 @@ export async function updateScene(id, sceneId, patch) {
 
 /** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
 export async function mergeProjectsFromSync(remoteProjects, options = {}) {
-  return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);
+  const result = await (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);
+  if (result.applied) {
+    for (const project of remoteProjects) emitRecordInvalidated('creativeDirectorProject', project?.id);
+  }
+  return result;
 }
 
 /** Hard-remove project tombstones older than the cutoff (called by tombstone GC). */
@@ -183,11 +187,15 @@ export async function pruneTombstonedProjects(olderThanMs) {
 }
 
 export async function recordRun(id, runEntry) {
-  return (await selectBackend()).recordRun(id, runEntry);
+  const result = await (await selectBackend()).recordRun(id, runEntry);
+  if (result) emitRecordInvalidated('creativeDirectorProject', id);
+  return result;
 }
 
 export async function updateRun(id, runId, patch) {
-  return (await selectBackend()).updateRun(id, runId, patch);
+  const result = await (await selectBackend()).updateRun(id, runId, patch);
+  if (result) emitRecordInvalidated('creativeDirectorProject', id);
+  return result;
 }
 
 /** Atomic Video owner/review mutations share the owning backend's write boundary. */

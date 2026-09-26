@@ -190,7 +190,7 @@ router.post('/:id/stop', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const result = await stopProject(project.id, { reason: 'Stopped by user' });
-  res.json(result);
+  res.json({ ...result, project: await getProject(project.id) });
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
@@ -443,7 +443,7 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
   // agent (treatment / evaluate) or kick off a render directly. The route
   // returns immediately; the UI's polling reflects state changes.
   startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD start failed: ${e.message}`));
-  res.json({ ok: true });
+  res.json({ ok: true, project: await getProject(project.id) });
 }));
 
 // User-callable: pause. Stops the server from auto-enqueueing follow-up
@@ -489,7 +489,7 @@ router.post('/:id/resume', asyncHandler(async (req, res) => {
   // reporting the stop the user just undid.
   await updateProject(project.id, { status: restored, failureReason: null });
   startCreativeDirectorProject(project.id).catch((e) => console.log(`⚠️ CD resume failed: ${e.message}`));
-  res.json({ ok: true });
+  res.json({ ok: true, project: await getProject(project.id) });
 }));
 
 export default router;

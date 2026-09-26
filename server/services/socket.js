@@ -1,3 +1,4 @@
+import { recordEvents } from './sharing/recordEvents.js';
 import { cosEvents } from './cosEvents.js';
 import { toAgentListItem } from '../lib/cosAgentListProjection.js';
 import { appsEvents } from './apps.js';
@@ -237,9 +238,27 @@ function setupEventForwarding() {
   setupPersistentMindEventForwarding();
   setupCallStateEventForwarding();
   setupBeeperEventForwarding();
+  setupRecordEventForwarding();
 }
 
 let persistentMindEventForwardingSetup = false;
+// Bounded invalidations only: records remain behind their existing HTTP gates.
+let recordEventForwardingSetup = false;
+function setupRecordEventForwarding() {
+  if (recordEventForwardingSetup) return;
+  recordEventForwardingSetup = true;
+  const forward = ({ recordKind, recordId }) => {
+    if (recordKind === 'creativeDirectorProject') {
+      ioInstance?.emit('creative-director:project:changed', { id: recordId });
+    } else if (recordKind === 'creativeCommission') {
+      ioInstance?.emit('commission:changed', { id: recordId });
+    }
+  };
+  recordEvents.on('updated', forward);
+  recordEvents.on('deleted', forward);
+  recordEvents.on('invalidated', forward);
+}
+
 function setupPersistentMindEventForwarding() {
   if (persistentMindEventForwardingSetup) return;
   persistentMindEventForwardingSetup = true;

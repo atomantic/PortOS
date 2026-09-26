@@ -22,6 +22,12 @@ export function emitRecordUpdated(recordKind, recordId) {
   recordEvents.emit('updated', { recordKind, recordId });
 }
 
+/** UI-only invalidation after persistence; does not enqueue a federation push. */
+export function emitRecordInvalidated(recordKind, recordId) {
+  if (!recordKind || !recordId) return;
+  recordEvents.emit('invalidated', { recordKind, recordId });
+}
+
 /** Local deletion of a subscribed record auto-unsubscribes via the listener. */
 export function emitRecordDeleted(recordKind, recordId) {
   if (!recordKind || !recordId) return;

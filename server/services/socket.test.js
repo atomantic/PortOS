@@ -1,3 +1,4 @@
+import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { authEvents } from './auth.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -169,6 +170,20 @@ describe('socket.js — initSocket', () => {
     vi.mocked(registerVoiceHandlers).mockClear();
     io = makeIo();
     initSocket(io);
+  });
+
+  it('forwards bounded project and commission invalidations from structural and local-only writes', () => {
+    emitRecordUpdated('creativeDirectorProject', 'cd-example');
+    emitRecordDeleted('creativeDirectorProject', 'cd-example');
+    emitRecordInvalidated('creativeDirectorProject', 'cd-example');
+    emitRecordInvalidated('creativeCommission', 'cc-example');
+    emitRecordUpdated('unrelated', 'example');
+    expect(io.emitted.filter(([name]) => name === 'creative-director:project:changed')).toEqual(
+      Array.from({ length: 3 }, () => ['creative-director:project:changed', { id: 'cd-example' }]),
+    );
+    expect(io.emitted.filter(([name]) => name === 'commission:changed')).toEqual([
+      ['commission:changed', { id: 'cc-example' }],
+    ]);
   });
 
   it('sends compact task invalidations to opted-in pages while preserving legacy subscribers', () => {

@@ -439,11 +439,13 @@ describe('creativeDirector routes', () => {
 
   describe('POST /:id/start', () => {
     it('flips draft → planning and triggers the orchestrator', async () => {
-      cdService.getProject.mockResolvedValueOnce({ id: 'cd-1', name: 'A', status: 'draft' });
+      cdService.getProject.mockResolvedValueOnce({ id: 'cd-1', name: 'A', status: 'draft' })
+        .mockResolvedValue({ id: 'cd-1', name: 'A', status: 'planning' });
       cdService.updateProject.mockResolvedValue({});
       const r = await request(app).post('/api/creative-director/cd-1/start');
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
+      expect(r.body.project).toMatchObject({ id: 'cd-1', status: 'planning' });
       expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'planning' });
       expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });

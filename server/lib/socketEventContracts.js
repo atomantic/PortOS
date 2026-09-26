@@ -37,6 +37,16 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
   },
 
+  'creative-director:project:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'A Creative Director project changed after persistence; fetch only a referenced project.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  }),
+  'commission:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'A creative commission changed after persistence.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  }),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
