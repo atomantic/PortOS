@@ -4,7 +4,6 @@ import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { resolveInstallRoot, isWorktreeRoot } from '../server/lib/dataRoot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { writeJsonAtomic } from './migrations/_lib.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Prefer an explicit PORTOS_DATA_ROOT env var over the executing-file location
@@ -127,6 +126,15 @@ export async function runMigrations({
 
   const files = await scanMigrationFiles(migrationsDir);
 
+  // The migration helper also carries prompt-drift and provider-seed
+  // machinery. Boot/status callers import this runner widely, but only an
+  // actual migration write needs the atomic writer, so keep that subtree off
+  // the runner's normal static closure.
+  const persistAppliedList = async () => {
+    const { writeJsonAtomic } = await import('./migrations/_lib.js');
+    await writeJsonAtomic(appliedFile, applied);
+  };
+
   // Disarm EVERY pending purge migration up front, not as each is reached in
   // the run loop: if this rebuilt-from-empty run aborted on an earlier
   // throwing migration (the documented repair-and-reboot flow), the partial
@@ -143,7 +151,7 @@ export async function runMigrations({
       applied.push(file);
       disarmed++;
     }
-    if (disarmed > 0) await writeJsonAtomic(appliedFile, applied);
+    if (disarmed > 0) await persistAppliedList();
   }
 
   let ran = 0;
@@ -159,7 +167,7 @@ export async function runMigrations({
     console.log(`🔄 Running migration: ${file}`);
     await migration.up({ rootDir, migrationsDir });
     applied.push(file);
-    await writeJsonAtomic(appliedFile, applied);
+    await persistAppliedList();
     ran++;
     console.log(`✅ Migration applied: ${file}`);
   }
