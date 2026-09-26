@@ -1,3 +1,4 @@
+import { noteReadinessChanged } from './readinessNotify.js';
 /**
  * Server boot orchestration.
  *
@@ -292,6 +293,8 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // the pins that NEWLY went stale (#7328). allSettled, not all: neither
       // consumer may skip or fail the other.
       onProvidersSaved: () => Promise.allSettled([
+        // Covers direct toolkit route writes as well as service-shim callers.
+        noteReadinessChanged(),
         onProvidersSavedForGraph(),
         reportRetiredModelPins(),
       ]),
