@@ -1,3 +1,4 @@
+import { notifyProviderQuotaUpdated } from './providerQuotaEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { existsSync, lstatSync, readlinkSync, readFileSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';
@@ -199,6 +200,7 @@ export function parseUsageOutput(text, { now = Date.now(), timezone } = {}) {
 const CACHE_KEY = 'claude-code-usage';
 const usageCache = createStaleWhileRevalidate({
   ttlMs: CACHE_TTL_MS,
+  onSettled: notifyProviderQuotaUpdated,
   isComplete: (data) => data.limits.length > 0,
 });
 

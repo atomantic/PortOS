@@ -32,9 +32,9 @@ export default function DeckLlmPinPicker({ pin, onChange, label = 'Prompt model'
   }, [loading, providers, pinProvider, pinModel, pinEffort, setSelectedProviderId, setSelectedModel]);
 
   const emit = (next) => onChange?.({
-    providerId: next.providerId ?? selectedProviderId,
-    model: next.model ?? selectedModel,
-    effort: next.effort ?? effort,
+    providerId: (next.providerId ?? selectedProviderId) || null,
+    model: (next.model ?? selectedModel) || null,
+    effort: (next.effort ?? effort) || null,
   });
 
   return (

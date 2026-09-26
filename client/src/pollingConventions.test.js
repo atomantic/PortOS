@@ -76,7 +76,6 @@ const ALLOWED = {
   'src/components/writers-room/ExercisePanel.jsx': 'elapsed-time clock tick; no I/O',
   'src/components/writers-room/WorkEditor.jsx': 'elapsed-time clock for the analysis-run banner; no I/O',
   'src/pages/Ambient.jsx': 'wall clock; no I/O',
-  'src/pages/ThreejsModelDetail.jsx': 'bounded in-flight poll pool with a per-tick AbortController — useAutoRefetch does not model either',
 };
 
 const scannedFiles = () => trackedSourceFiles(CLIENT_ROOT)

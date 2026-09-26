@@ -7,7 +7,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
 import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { useQuotaPendingPoll } from '../hooks/useQuotaPendingPoll';
+import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
@@ -148,9 +148,8 @@ function ProviderQuotaSection() {
     });
   }, []);
 
-  // Cards still being scraped come back `pending`; the shared hook re-asks
-  // until the readings land. See hooks/useQuotaPendingPoll.js.
-  useQuotaPendingPoll(load, quotas);
+  // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
+  useQuotaUpdates(load);
 
   return (
     <div className="space-y-3">

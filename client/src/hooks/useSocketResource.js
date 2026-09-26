@@ -8,13 +8,16 @@ const visible = () => document.visibilityState !== 'hidden';
 /**
  * Read once, then reconcile a resource on room events, reconnect and tab show.
  * Omit namespace for globally broadcast events. fetchFn receives
- * { reconcile, events: [{ event, payload }] } for targeted invalidation reads.
+ * { reconcile, events: [{ event, payload }], signal } for targeted invalidation reads.
+ * Set immediate=false when the caller already owns its entry read.
  * Keep events stable (module-level). fetchFn returns data without setting state.
  * resourceKey cancels old reads; updateData applies mutation responses and
  * prevents an older in-flight read from overwriting them. enabled=false releases
  * subscriptions and cancels reads for closed or otherwise inactive consumers.
+ * Optional requestTimeoutMs bounds a read; navigation/unmount aborts its signal
+ * even without a timeout.
  */
-export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare, enabled = true }) {
+export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare, enabled = true, requestTimeoutMs, immediate = true }) {
   const [state, setState] = useState({ key: resourceKey, data: null, loading: true, error: null });
   const fetchRef = useRef(fetchFn);
   const matchesRef = useRef(matchesEvent);
@@ -33,6 +36,7 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
     if (!enabled) return;
     let disposed = false;
     let pending = null;
+    let activeRequest = null;
     let dirty = false;
     let revision = 0;
     let reconcile = false;
@@ -51,10 +55,19 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
         do {
           dirty = false;
           const started = revision;
-          const request = { reconcile, events: invalidations };
+          const abortController = new AbortController();
+          activeRequest = abortController;
+          const request = { reconcile, events: invalidations, signal: abortController.signal };
+          const timeout = requestTimeoutMs
+            ? setTimeout(() => abortController.abort(), requestTimeoutMs) : null;
+          const aborted = new Promise((_, reject) => {
+            abortController.signal.addEventListener('abort', () => reject(
+              new DOMException('Resource read canceled or timed out', 'AbortError')
+            ), { once: true });
+          });
           reconcile = false;
           invalidations = [];
-          await Promise.resolve().then(() => fetchRef.current(request)).then(data => {
+          await Promise.race([Promise.resolve().then(() => fetchRef.current(request)), aborted]).then(data => {
             if (!disposed && started === revision) {
               setState(previous => ({
                 key: resourceKey,
@@ -67,6 +80,8 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
               setState(previous => ({ ...previous, loading: false, error }));
             }
           });
+          clearTimeout(timeout);
+          activeRequest = null;
         } while (dirty && !disposed && visible());
         pending = null;
       });
@@ -92,14 +107,15 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
     // reconcile through useSocketSubscription, so never attach both paths.
     const reconnect = () => { if (visible()) read(); };
     if (!namespace) socket.on('connect', reconnect);
-    if (visible()) read();
+    if (immediate && visible()) read();
     return () => {
       disposed = true;
+      activeRequest?.abort();
       controller.current = null;
       for (const [event, handler] of handlers) socket.off(event, handler);
       if (!namespace) socket.off('connect', reconnect);
     };
-  }, [namespace, events, resourceKey, enabled]);
+  }, [namespace, events, resourceKey, enabled, requestTimeoutMs, immediate]);
 
   const lastVisibility = useRef(document.visibilityState);
   useVisibilityEvent(state => {

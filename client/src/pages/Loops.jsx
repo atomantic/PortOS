@@ -365,7 +365,11 @@ export default function Loops() {
   const handleAction = async (action, id) => {
     const entry = ACTION_MAP[action];
     if (!entry) return;
-    await entry.fn(id).catch(() => {});
+    try {
+      await entry.fn(id);
+    } catch {
+      return;
+    }
     toast.success(entry.msg);
   };
 

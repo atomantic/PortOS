@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import socket from '../services/socket';
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('events');
+  return { default: new EventEmitter() };
+});
+afterEach(() => vi.useRealTimers());
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -41,6 +47,22 @@ beforeEach(() => {
 });
 
 describe('UsagePage subscription savings', () => {
+  it('updates quota cards on completion without recurring fetches', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
+    api.getProviderUsage.mockResolvedValue({ providers: [{
+      family: 'claude', label: 'Claude Code', supported: true,
+      limits: [{ key: 'week', label: 'Updated window', percentUsed: 73, percentRemaining: 27 }],
+    }] });
+    await act(async () => { socket.emit('provider-quota:updated', {}); });
+    expect(await screen.findByText('Updated window')).toBeInTheDocument();
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(2);
+    expect(api.getProviderUsage).toHaveBeenLastCalledWith({ refresh: false });
+  });
+
   const savings = {
     range: { start: '2026-02-01', end: '2026-02-07', days: 7 },
     configured: false,

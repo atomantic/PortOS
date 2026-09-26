@@ -12,7 +12,7 @@ export const getImageTo3dModel = (id, options) =>
   request(`/image-to-3d/models/${encodeURIComponent(id)}`, options);
 
 // Create a record from a gallery image; the server kicks off the on-device render
-// immediately (status → generating), so poll getImageTo3dModel until ready/failed.
+// immediately (status → generating), with image-to-3d:changed invalidations until ready/failed.
 export const createImageTo3dModel = (input, options) =>
   request('/image-to-3d/models', {
     method: 'POST',
