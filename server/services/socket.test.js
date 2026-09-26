@@ -1,4 +1,5 @@
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
+import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { authEvents } from './auth.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -184,6 +185,25 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted.filter(([name]) => name === 'commission:changed')).toEqual([
       ['commission:changed', { id: 'cc-example' }],
     ]);
+  });
+
+  it('delivers FableLoom snapshots only to subscribed operator views', () => {
+    const viewer = makeSocket('loom-viewer');
+    const peer = makeSocket('peer-relay');
+    createdSockets.push(viewer, peer);
+    io.connect(viewer); io.connect(peer);
+    viewer.handlers['fableloom:subscribe']();
+    const run = { id: 'run-example', loomId: 'loom-example', revision: 1 };
+    fableLoomRunEvents.emit('editorial', run);
+    fableLoomRunEvents.emit('production', run);
+    expect(viewer.emitted).toContainEqual(['fableloom:editorial:run', run]);
+    expect(viewer.emitted).toContainEqual(['fableloom:production:run', run]);
+    expect(peer.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
+    expect(io.emitted.some(([name]) => name.startsWith('fableloom:'))).toBe(false);
+    viewer.handlers['fableloom:unsubscribe']();
+    const count = viewer.emitted.length;
+    fableLoomRunEvents.emit('editorial', run);
+    expect(viewer.emitted).toHaveLength(count);
   });
 
   it('sends compact task invalidations to opted-in pages while preserving legacy subscribers', () => {

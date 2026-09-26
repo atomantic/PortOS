@@ -170,6 +170,9 @@ export const startLoomEpisodeProductionBatch = (id, episodeId, body = {}, option
     method: 'POST', body: JSON.stringify(body), ...options,
   });
 
+export const getLoomEpisodeProductionBatchStatus = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/production/batch'), options);
+
 export const getLoomEpisodeProductionBatch = (id, episodeId, runId, options = {}) =>
   request(episodePath(id, episodeId, `/production/batch/${encodeURIComponent(runId)}`), options);
 

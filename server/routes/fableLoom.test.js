@@ -48,6 +48,7 @@ vi.mock('../services/fableLoom/index.js', () => ({
   startEpisodeProductionBatch: vi.fn(),
   startFalVideoAutomation: vi.fn(),
   getEpisodeProductionBatch: vi.fn(),
+  getLatestEpisodeProductionBatch: vi.fn(),
   cancelEpisodeProductionBatch: vi.fn(),
   resumeEpisodeProductionBatch: vi.fn(),
   reviewEpisodeContinuity: vi.fn(),
@@ -554,6 +555,15 @@ describe('FableLoom routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.mode).toBe('current_canon');
       expect(fableLoom.planEpisodeProduction).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
+    });
+
+    it('reattaches the latest scoped run without starting production', async () => {
+      fableLoom.getLatestEpisodeProductionBatch.mockReturnValueOnce(null);
+      const res = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ run: null });
+      expect(fableLoom.getLatestEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1');
+      expect(fableLoom.startEpisodeProductionBatch).not.toHaveBeenCalled();
     });
 
     it('POST /:id/episodes/:episodeId/production/batch starts a batch run', async () => {

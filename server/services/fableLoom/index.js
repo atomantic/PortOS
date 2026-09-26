@@ -114,6 +114,7 @@ export {
 export {
   cancelEpisodeProductionBatch,
   getEpisodeProductionBatch,
+  getLatestEpisodeProductionBatch,
   planEpisodeProduction,
   reviewEpisodeContinuity,
   resumeEpisodeProductionBatch,

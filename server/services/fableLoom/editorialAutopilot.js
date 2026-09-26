@@ -8,6 +8,7 @@
  * the loom writes themselves remain durable.
  */
 
+import { fableLoomRunEvents } from './runEvents.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { LOOM_LIMITS } from '../../lib/fableLoomLimits.js';
@@ -53,7 +54,8 @@ const cleanStaleRuns = () => {
 };
 
 const touch = (run, patch = {}) => {
-  Object.assign(run, patch, { updatedAt: nowIso() });
+  Object.assign(run, patch, { updatedAt: nowIso(), revision: (run.revision || 0) + 1 });
+  fableLoomRunEvents.emit('editorial', structuredClone(publicFableLoomEditorialAutopilot(run)));
   return run;
 };
 
@@ -431,6 +433,7 @@ export async function startFableLoomEditorialAutopilot(loomId, {
   };
   runs.set(run.id, run);
   latestRunByLoom.set(loomId, run.id);
+  touch(run);
   void (mode === 'planning' ? runPlanning(run) : runRound(run, ''))
     .catch((error) => (run.cancelRequested ? finishCanceled(run) : finishFailed(run, error)))
     .catch((error) => {

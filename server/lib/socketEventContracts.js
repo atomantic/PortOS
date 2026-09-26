@@ -25,6 +25,24 @@ const input = (schema, summary) => Object.freeze({
   payloadSchema: zodToOpenApiSchema(schema),
 });
 
+const loomRunSnapshot = (production) => Object.freeze({
+  direction: 'server-to-client',
+  summary: 'Revisioned public FableLoom run snapshot after an authoritative transition; no runtime handles.',
+  payloadSchema: {
+    type: 'object',
+    required: ['id', 'loomId', 'status', 'revision', 'createdAt', 'updatedAt', ...(production ? ['episodeId', 'attempt', 'assets', 'summary'] : [])],
+    properties: {
+      id: { type: 'string' },
+      loomId: { type: 'string' },
+      ...(production ? { episodeId: { type: 'string' }, attempt: { type: 'integer' }, assets: { type: 'array', items: { type: 'object' } }, summary: { type: 'object' } } : {}),
+      status: { type: 'string', enum: production ? ['in_progress', 'completed', 'failed', 'canceled'] : ['running', 'canceling', 'completed', 'paused', 'failed', 'canceled'] },
+      revision: { type: 'integer' },
+      createdAt: { type: 'string' },
+      updatedAt: { type: 'string' },
+    },
+  },
+});
+
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'brain:changed': {
     direction: 'server-to-client',
@@ -47,6 +65,8 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'A creative commission changed after persistence.',
     payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   }),
+  'fableloom:editorial:run': loomRunSnapshot(false),
+  'fableloom:production:run': loomRunSnapshot(true),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
