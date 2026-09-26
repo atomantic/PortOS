@@ -519,6 +519,14 @@ app.use(errorMiddleware);
 // its own catch; nothing downstream depends on when it lands.
 getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed: ${err.message}`));
 
+// Install shutdown handlers before advertising readiness to the smoke parent.
+registerShutdownHandlers({ io, httpServer, localHttpServer });
+if (isSmokeBoot() && process.send) {
+  httpServer.once('listening', () => {
+    process.send({ type: 'portos:smoke-ready' });
+  });
+}
+
 // Post-route boot: background service inits + schedulers, then the ordered
 // instance/sync/media-queue/DB chain that ends in httpServer.listen(). Not
 // awaited — boot proceeds in the background and any fatal step exits the
@@ -531,4 +539,3 @@ if (!isSmokeBoot()) {
   import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
     .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
 }
-registerShutdownHandlers({ io, httpServer, localHttpServer });

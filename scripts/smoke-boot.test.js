@@ -5,11 +5,12 @@
  * the disposable root is seeded like a fresh install, resolvable from a
  * worktree, and never left behind by a failed setup.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildSmokeEnv, createSmokeRoot, SMOKE_DATABASE } from './smoke-boot.js';
+import { buildSmokeEnv, createSmokeRoot, monitorSmokeChild, SMOKE_DATABASE } from './smoke-boot.js';
 import { DATA_ROOT_ENV, resolveInstallRoot } from '../server/lib/dataRoot.js';
 
 const scratch = [];
@@ -93,5 +94,96 @@ describe('createSmokeRoot', () => {
     const tmpBase = tempDir('portos-smoke-base-');
     expect(() => createSmokeRoot({ codeRoot, tmpBase })).toThrow();
     expect(readdirSync(tmpBase)).toEqual([]);
+  });
+});
+
+describe('smoke child lifecycle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const start = () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter();
+    child.pid = 123;
+    child.kill = vi.fn();
+    const result = monitorSmokeChild(child, {
+      startupMs: 1000, windowMs: 100, shutdownMs: 200, postKillMs: 50
+    });
+    const ready = () => child.emit('message', { type: 'portos:smoke-ready' });
+    return { child, result, ready };
+  };
+
+  it('lets slow startup finish before timing survival and requires clean shutdown', async () => {
+    const { child, result, ready } = start();
+    child.emit('message', { type: 'unrelated' });
+    vi.advanceTimersByTime(900);
+    expect(child.kill).not.toHaveBeenCalled();
+    ready();
+    vi.advanceTimersByTime(99);
+    ready(); // Duplicate readiness cannot extend the window.
+    expect(child.kill).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    child.emit('exit', 0, null);
+    expect(await result).toEqual({ ok: true, error: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('fails a never-ready child even when timeout cleanup exits cleanly', async () => {
+    const { child, result, ready } = start();
+    vi.advanceTimersByTime(1000);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    ready(); // Late readiness cannot erase the startup timeout.
+    child.emit('exit', 0, null);
+    expect(await result).toMatchObject({ ok: false, error: expect.stringContaining('did not become ready') });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['startup', 'survival'])('fails an unexpected zero exit during %s immediately', async (phase) => {
+    const { child, result, ready } = start();
+    if (phase === 'survival') ready();
+    child.emit('exit', 0, null);
+    expect(await result).toMatchObject({ ok: false, error: expect.stringContaining(phase) });
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([[1, null], [null, 'SIGTERM']])('rejects abnormal shutdown (code %s, signal %s)', async (code, signal) => {
+    const { child, result, ready } = start();
+    ready();
+    vi.advanceTimersByTime(100);
+    child.emit('exit', code, signal);
+    expect(await result).toMatchObject({ ok: false, error: expect.stringContaining('shutdown') });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([true, false])('fails forced cleanup whether SIGKILL produces an exit event (%s)', async (exits) => {
+    const { child, result, ready } = start();
+    ready();
+    vi.advanceTimersByTime(300);
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    if (exits) child.emit('exit', null, 'SIGKILL');
+    else vi.advanceTimersByTime(50);
+    expect(await result).toMatchObject({ ok: false, error: expect.stringContaining('SIGKILL') });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('reports spawn failure without waiting for a nonexistent child', async () => {
+    const { child, result } = start();
+    delete child.pid;
+    child.emit('error', new Error('spawn failed'));
+    expect(await result).toMatchObject({ ok: false, error: 'Child process error: spawn failed' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds cleanup after a signal error without treating it as success', async () => {
+    const { child, result, ready } = start();
+    ready();
+    vi.advanceTimersByTime(100);
+    child.emit('error', new Error('signal failed'));
+    vi.advanceTimersByTime(250);
+    expect(await result).toMatchObject({ ok: false, error: 'Child process error: signal failed' });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
