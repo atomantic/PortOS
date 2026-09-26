@@ -8,6 +8,7 @@ import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
+import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -155,6 +156,7 @@ describe('socket.js — initSocket', () => {
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
     modelLifecycleEvents.removeAllListeners();
+    layaMlxEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
     usageBackfillEvents.removeAllListeners();
   });
@@ -201,6 +203,12 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     usageBackfillEvents.emit('updated', { metadataPath: '/example/private-run.json' });
     expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
+  });
+
+  it('forwards Laya status without experiment content', () => {
+    io.emitted.length = 0;
+    layaMlxEvents.emit('updated', { premise: 'Example private experiment' });
+    expect(io.emitted).toEqual([['laya:status', {}]]);
   });
 
   it('forwards quota completion without leaking source data', () => {

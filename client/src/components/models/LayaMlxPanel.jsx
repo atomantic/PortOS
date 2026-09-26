@@ -1,8 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useState } from 'react';
 import { getLayaStatus, installLaya, scoreLaya, updateInstanceFeature } from '../../services/api';
 import { publishInstanceFeatures, useInstanceFeatures } from '../../hooks/useInstanceFeatures';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatCount, formatPercent } from '../../utils/formatters';
+
+const STATUS_EVENTS = ['laya:status'];
+const readStatus = () => getLayaStatus({ silent: true });
 
 const ERRORS = {
   'laya-unsupported': 'Laya-MLX requires Apple Silicon and macOS 14 or newer. Jev remains available on other platforms.',
@@ -20,8 +23,6 @@ const errorLabel = code => Object.hasOwn(ERRORS, code) ? ERRORS[code] : 'Laya co
 export default function LayaMlxPanel() {
   const { features, error: featureError } = useInstanceFeatures();
   const feature = features?.find(item => item.id === 'laya-mlx');
-  const statusGeneration = useRef(0);
-  const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [premise, setPremise] = useState('');
@@ -29,13 +30,7 @@ export default function LayaMlxPanel() {
   const [optionsText, setOptionsText] = useState('');
   const [margin, setMargin] = useState('0.15');
   const [result, setResult] = useState(null);
-  const load = useCallback(() => {
-    const requested = ++statusGeneration.current;
-    return getLayaStatus({ silent: true }).then(value => {
-      if (statusGeneration.current === requested) setStatus(value);
-    });
-  }, []);
-  const { error: statusError, refetch } = useAutoRefetch(load, 5000, { enabled: !busy });
+  const { data: status, error: statusError, refetch, updateData: setStatus } = useSocketResource(readStatus, { events: STATUS_EVENTS });
   const options = optionsText.split('\n').map(value => value.trim()).filter(Boolean);
   const valid = premise.trim() && instructions.trim() && options.length >= 2 && options.length <= 12
     && new Set(options).size === options.length && options.every(option => option.length <= 200)
@@ -50,8 +45,9 @@ export default function LayaMlxPanel() {
   const install = () => run(() => installLaya({ silent: true }).then(value => {
     if (!value.ok) setError(errorLabel(value.code));
     else {
-      statusGeneration.current += 1;
       setStatus(previous => ({ ...previous, installing: true, installError: null }));
+      // Installation can finish before its acceptance response arrives.
+      refetch();
     }
   }));
   const score = () => run(() => {

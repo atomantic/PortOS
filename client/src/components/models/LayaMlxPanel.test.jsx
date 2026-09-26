@@ -1,9 +1,15 @@
-import { beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 const mocks = vi.hoisted(() => ({ status: vi.fn(), install: vi.fn(), score: vi.fn(), toggle: vi.fn(), publish: vi.fn(), enabled: true }));
 vi.mock('../../services/api', () => ({ getLayaStatus: mocks.status, installLaya: mocks.install, scoreLaya: mocks.score, updateInstanceFeature: mocks.toggle }));
 vi.mock('../../hooks/useInstanceFeatures', () => ({ publishInstanceFeatures: mocks.publish, useInstanceFeatures: () => ({ features: [{ id: 'laya-mlx', enabled: mocks.enabled }] }) }));
+vi.mock('../../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+import socket from '../../services/socket';
 import LayaMlxPanel from './LayaMlxPanel';
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 beforeEach(() => {
   vi.clearAllMocks(); mocks.enabled = true;
   mocks.status.mockResolvedValue({ supported: true, ready: true });
@@ -39,4 +45,50 @@ it('explains unsupported hardware without offering installation or scoring', asy
   await screen.findByText(/Jev remains available on other platforms/);
   expect(screen.getByRole('button', { name: 'Install Laya-MLX' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Enable experiments' })).toBeDisabled();
+});
+
+it('updates from status events without polling and reconciles once on reconnect and tab show', async () => {
+  vi.useFakeTimers();
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  const view = render(<LayaMlxPanel />);
+  await act(async () => {});
+  expect(screen.getByText(/Runtime: installed/)).toBeInTheDocument();
+  expect(mocks.status).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+  expect(mocks.status).toHaveBeenCalledTimes(1);
+  mocks.status.mockResolvedValue({ supported: true, installing: true, stage: 'model' });
+  await act(async () => { socket.emit('laya:status', {}); });
+  expect(screen.getByText('Runtime: installing (model). Experiments: enabled.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Installing…' })).toBeDisabled();
+  mocks.status.mockResolvedValue({ supported: true, installError: 'laya-install-model-failed' });
+  await act(async () => { socket.emit('laya:status', {}); });
+  expect(screen.getByRole('alert')).toHaveTextContent('pinned model download failed');
+  mocks.status.mockResolvedValue({ supported: true, ready: true });
+  await act(async () => { socket.emit('connect'); });
+  expect(mocks.status).toHaveBeenCalledTimes(4);
+  expect(screen.getByText(/Runtime: installed/)).toBeInTheDocument();
+  visibility.mockReturnValue('hidden');
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  await act(async () => { socket.emit('laya:status', {}); socket.emit('connect'); });
+  expect(mocks.status).toHaveBeenCalledTimes(4);
+  visibility.mockReturnValue('visible');
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(mocks.status).toHaveBeenCalledTimes(5);
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(mocks.status).toHaveBeenCalledTimes(5);
+  view.unmount();
+  await act(async () => { socket.emit('laya:status', {}); socket.emit('connect'); });
+  expect(mocks.status).toHaveBeenCalledTimes(5);
+});
+it('reconciles completion that arrives before the install acceptance response', async () => {
+  let accept;
+  mocks.install.mockReturnValue(new Promise(resolve => { accept = resolve; }));
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Runtime: installed/);
+  fireEvent.click(screen.getByRole('button', { name: 'Repair Laya-MLX' }));
+  await act(async () => { socket.emit('laya:status', {}); });
+  await act(async () => { accept({ ok: true, installing: true }); });
+  expect(screen.getByText(/Runtime: installed/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Repair Laya-MLX' })).toBeEnabled();
+  expect(mocks.status).toHaveBeenCalledTimes(3);
 });
