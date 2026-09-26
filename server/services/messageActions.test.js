@@ -13,10 +13,10 @@ const message = { id: 'requested', subject: 'Status update', from: { name: 'Exam
 
 // Execute the actual CDP script against a synthetic provider DOM, including the
 // production field reader, click, and confirmation loop. No mailbox/network I/O.
-function mailbox(records, { remove = true, scroll = false, missingControl = false } = {}) {
+function mailbox(records, { remove = true, scroll = false, missingControl = false, pageScroll = false } = {}) {
   const attr = values => ({ getAttribute: name => values[name] ?? null });
   const span = (text, title) => ({ ...attr({ title }), textContent: text });
-  const list = { isConnected: true, parentElement: null, scrollHeight: scroll ? 100 : 0, clientHeight: 0 };
+  const list = { ...attr({}), isConnected: true, parentElement: pageScroll ? { scrollHeight: 100, clientHeight: 10 } : null, scrollHeight: scroll ? 100 : 0, clientHeight: 0 };
   const clicked = [];
   let visible;
   visible = records.map((record, index) => {
@@ -58,6 +58,11 @@ for (const provider of ['gmail', 'outlook']) describe(`${provider} browser ident
     const clicked = mailbox([{ ...message, subject: 'Re: Status update' }, { ...message, from: { ...message.from, email: 'other@example.com' } }, message]);
     await executeAction(accountId, message.id, 'archive');
     expect(clicked).toEqual([{ index: 2, label: 'Archive' }]);
+  });
+  it('allows a complete non-scrolling inbox inside a scrollable page', async () => {
+    const clicked = mailbox([message], { pageScroll: true });
+    await executeAction(accountId, message.id, 'archive');
+    expect(clicked).toEqual([{ index: 0, label: 'Archive' }]);
   });
   it('matches a cached ISO timestamp to an equivalent complete provider timestamp', async () => {
     mocks.message.mockResolvedValue({ ...message, date: '2026-09-26T10:30:00.000Z' });

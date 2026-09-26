@@ -106,10 +106,10 @@ async function actOnMessageRow(provider, identity, action, readOutlookRow) {
   // A virtualized/scrolling list cannot establish legacy uniqueness outside the
   // rendered window. A fresh sync may supply an ID; otherwise use the provider UI.
   if (!identity.providerRowId) {
-    for (let node = list; node; node = node.parentElement) {
-      if (node.scrollHeight > node.clientHeight) return conflict();
-    }
-    if (rows().some(row => Number(row.getAttribute('aria-setsize')) > rows().length)) return conflict();
+    const visibleCount = rows().length;
+    if (list.scrollHeight > list.clientHeight
+      || Number(list.getAttribute('aria-rowcount')) > visibleCount
+      || rows().some(row => Number(row.getAttribute('aria-setsize')) > visibleCount)) return conflict();
   }
   const candidates = rows().filter(matches);
   if (candidates.length !== 1) return conflict();
