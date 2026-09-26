@@ -11,7 +11,6 @@ import socket from '../../services/socket';
 import { createAppLaunchVideo, getAppLaunchVideos } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { trackAudioUrl } from '../../services/apiTracks';
-import { enabledProcessProviderFilter } from '../../utils/providers';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';

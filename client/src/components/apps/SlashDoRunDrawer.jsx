@@ -10,7 +10,6 @@ import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../l
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../hooks/useCodeReviewDefaults';
 import useClaimReviewers from '../../hooks/useClaimReviewers';
 import ClaimReviewerSource from './ClaimReviewerSource';
-import { enabledProcessProviderFilter } from '../../utils/providers';
 import WorkItemPicker from './WorkItemPicker';
 import * as api from '../../services/api';
 
