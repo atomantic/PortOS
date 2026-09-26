@@ -87,17 +87,17 @@ export async function executeAction(accountId, messageId, action) {
     await executeGmailApiAction(message, action);
   } else if (account.type === 'outlook') {
     const page = await ensureProviderPage(account.type);
-    console.log(`📧 ${action} message "${message.subject}" via ${account.type} browser`);
+    console.log(`📧 ${action} message ${message.id} via ${account.type} browser`);
     await executeOutlookAction(page, message.subject || '', action);
   } else if (account.type === 'gmail') {
     // Fallback to browser if no apiId
     const page = await ensureProviderPage(account.type);
-    console.log(`📧 ${action} message "${message.subject}" via gmail browser`);
+    console.log(`📧 ${action} message ${message.id} via gmail browser`);
     const script = buildGmailActionScript((message.subject || '').replace(/'/g, "\\'").replace(/\n/g, ' '), action);
     const result = await evaluateOnPage(page, script);
     if (!result || result.error) {
       if (result?.notInInbox) {
-        console.log(`📧 "${message.subject}" not found in inbox, cleaning up local cache`);
+        console.log(`📧 ${message.id} not found in inbox, cleaning up local cache`);
       } else {
         throw new Error(result?.error || `${action} failed`);
       }
@@ -118,7 +118,7 @@ export async function executeAction(accountId, messageId, action) {
   }
 
   await removeFromCache(accountId, messageId);
-  console.log(`📧 ${action} complete for "${message.subject}"`);
+  console.log(`📧 ${action} complete for ${message.id}`);
 
   return { success: true, action, messageId };
 }
@@ -138,14 +138,14 @@ async function executeGmailApiAction(message, action) {
 
   if (action === 'delete') {
     await gmailClient.users.messages.trash({ userId: 'me', id: message.apiId });
-    console.log(`📧 Gmail API: trashed "${message.subject}"`);
+    console.log(`📧 Gmail API: trashed ${message.id}`);
   } else if (action === 'archive') {
     await gmailClient.users.messages.modify({
       userId: 'me',
       id: message.apiId,
       requestBody: { removeLabelIds: ['INBOX'] }
     });
-    console.log(`📧 Gmail API: archived "${message.subject}"`);
+    console.log(`📧 Gmail API: archived ${message.id}`);
   }
 }
 
@@ -188,7 +188,7 @@ async function executeOutlookAction(page, subject, action) {
   const selectResult = await evaluateOnPage(page, selectScript);
   if (!selectResult || selectResult.error) {
     if (selectResult?.notInInbox) {
-      console.log(`📧 "${subject}" not found in inbox, cleaning up local cache`);
+      console.log(`📧 Message not found in inbox, cleaning up local cache`);
       return;
     }
     throw new Error(selectResult?.error || 'Failed to select message');

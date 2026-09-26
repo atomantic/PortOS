@@ -69,7 +69,7 @@ export async function createDraft(data) {
     };
     drafts.push(draft);
     await saveDrafts(drafts);
-    console.log(`📝 Message draft created: "${draft.subject}" via ${draft.sendVia}`);
+    console.log(`📝 Message draft created: ${draft.id} via ${draft.sendVia}`);
     return draft;
   });
 }
