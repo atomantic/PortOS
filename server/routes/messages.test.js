@@ -4,7 +4,7 @@ import { request } from '../lib/testHelper.js';
 import messagesRoutes from './messages.js';
 
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
-import { generateReplyBody } from '../services/messageEvaluator.js';
+import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 const observeError = () => {};
 beforeAll(() => errorEvents.on('error', observeError));
@@ -24,6 +24,7 @@ vi.mock('../services/messageSync.js', () => ({
   syncAccount: vi.fn(),
   getSyncStatus: vi.fn(),
   getMessages: vi.fn(),
+  updateMessageEvaluations: vi.fn(),
   getMessage: vi.fn(),
   getThread: vi.fn(),
   refreshMessage: vi.fn(),
@@ -80,6 +81,47 @@ describe('Messages Routes', () => {
     app.use(express.json());
     app.use('/api/messages', messagesRoutes);
     vi.clearAllMocks();
+  });
+
+  describe('POST /api/messages/evaluate', () => {
+    it('uses a bounded pending selection and persists evaluations', async () => {
+      const messages = Array.from({ length: 20 }, (_, i) => ({ id: `message-${i}` }));
+      messageSync.getMessages.mockResolvedValue({ messages, total: 51 });
+      const evaluations = Object.fromEntries(messages.map(m => [m.id, { score: 1 }]));
+      evaluateMessages.mockResolvedValue({ evaluations });
+      const response = await request(app).post('/api/messages/evaluate').send({});
+      expect(response.status).toBe(200);
+      expect(messageSync.getMessages).toHaveBeenCalledWith({ unevaluatedOnly: true, limit: 20 });
+      expect(evaluateMessages).toHaveBeenCalledWith(messages);
+      expect(messageSync.updateMessageEvaluations).toHaveBeenCalledWith(evaluations);
+      expect(response.body).toEqual({ evaluations, missingMessageIds: [] });
+    });
+
+    it('selects explicit IDs before pagination and reports missing IDs', async () => {
+      const messages = [{ id: 'message-100' }];
+      messageSync.getMessages.mockResolvedValue({ messages, total: 1 });
+      evaluateMessages.mockResolvedValue({ evaluations: { 'message-100': { score: 1 } } });
+      const messageIds = ['message-100', 'absent'];
+      const response = await request(app).post('/api/messages/evaluate').send({ accountId: VALID_UUID, messageIds });
+      expect(messageSync.getMessages).toHaveBeenCalledWith({ accountId: VALID_UUID, messageIds, unevaluatedOnly: false, limit: 100 });
+      expect(evaluateMessages).toHaveBeenCalledWith(messages);
+      expect(response.body.missingMessageIds).toEqual(['absent']);
+    });
+
+    it('reports an entirely missing selection without calling a provider', async () => {
+      messageSync.getMessages.mockResolvedValue({ messages: [], total: 0 });
+      const response = await request(app).post('/api/messages/evaluate').send({ messageIds: ['absent'] });
+      expect(response.body).toEqual({ evaluations: {}, missingMessageIds: ['absent'] });
+      expect(evaluateMessages).not.toHaveBeenCalled();
+    });
+
+    it.each([{ accountId: 'invalid' }, { accountId: 4 }, { messageIds: 'message-1' }, { messageIds: [] }, { messageIds: [' '] }, { messageIds: [4] }, { messageIds: Array(101).fill('id') }])('rejects invalid selection %j before provider work', async body => {
+      const response = await request(app).post('/api/messages/evaluate').send(body);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBeDefined();
+      expect(messageSync.getMessages).not.toHaveBeenCalled();
+      expect(evaluateMessages).not.toHaveBeenCalled();
+    });
   });
 
   // === Account Routes ===

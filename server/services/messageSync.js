@@ -27,8 +27,10 @@ function queueAccountWrite(accountId, work) {
 }
 
 const MESSAGE_SEARCH_FIELDS = ['subject', 'from.name', 'from.email', 'bodyText'];
-function filterBySearch(messages, search) {
-  return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS);
+function filterMessages(messages, { search, unevaluatedOnly, messageIds }) {
+  const ids = messageIds ? new Set(messageIds) : null;
+  return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS)
+    .filter(message => (!unevaluatedOnly || !message.evaluation) && (!ids || ids.has(message.id)));
 }
 
 /**
@@ -47,7 +49,7 @@ function filterBySearch(messages, search) {
  * Pure helper (no I/O) so the paging math is unit-testable; the caller loads the
  * caches.
  */
-export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 } = {}) {
+export function aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit = 50, offset = 0 } = {}) {
   const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
   const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 50;
   const perAccountCap = safeOffset + safeLimit;
@@ -55,7 +57,7 @@ export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 
   let total = 0;
   const heads = [];
   for (const { id, cache } of caches) {
-    const filtered = filterBySearch(cache.messages, search);
+    const filtered = filterMessages(cache.messages, { search, unevaluatedOnly, messageIds });
     total += filtered.length;
     if (perAccountCap === 0) continue;
     const top = [...filtered]
@@ -87,12 +89,12 @@ async function saveCache(accountId, cache) {
 }
 
 export async function getMessages(options = {}) {
-  const { accountId, search, limit = 50, offset = 0 } = options;
+  const { accountId, search, unevaluatedOnly, messageIds, limit = 50, offset = 0 } = options;
   // If specific account, just load that cache
   if (accountId) {
     const cache = await loadCache(accountId);
     let messages = cache.messages.map(m => ({ ...m, accountId: m.accountId || accountId }));
-    messages = filterBySearch(messages, search);
+    messages = filterMessages(messages, { search, unevaluatedOnly, messageIds });
     return {
       messages: messages.sort((a, b) => safeDate(b.date) - safeDate(a.date)).slice(offset, offset + limit),
       total: messages.length
@@ -114,7 +116,7 @@ export async function getMessages(options = {}) {
   );
   // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
   // of spreading + globally sorting every message across every account (#2540).
-  return aggregatePagedMessages(caches, { search, limit, offset });
+  return aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit, offset });
 }
 
 export async function deleteCache(accountId) {
