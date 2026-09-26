@@ -6,6 +6,8 @@ export const createMessageAccount = (data, options = {}) => request('/messages/a
 export const updateMessageAccount = (id, data, options = {}) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
+// Returns evaluations plus missingMessageIds for explicit requests (1–100 IDs).
+// Default requests evaluate at most 20 pending messages; accountId is optional.
 export const evaluateMessages = (data = {}, options = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getMessageInbox = (params = {}, options = {}) => {
   const qs = new URLSearchParams();
