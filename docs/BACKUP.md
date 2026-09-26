@@ -168,3 +168,18 @@ Schema reconciliation follows the commit; a reconciliation failure explicitly
 reports that replay committed and recovery still needs attention. Application
 database operations drain before reset; new operations receive a temporary
 maintenance error until replay and reconciliation finish (including failures).
+
+### Restoring CoS files in a running server
+
+A full live file restore or selective `cos` restore requires the CoS daemon and
+Persistent Mind to be stopped and active agents to be finished or stopped. The
+server rejects unsafe or unreadable ownership state before rsync starts, with
+`COS_RESTORE_BUSY`. Pausing the daemon alone is insufficient.
+
+The restore drains configuration writes, then runtime-state writes, and holds
+both queues through the transfer and cache reload. Both CoS caches are reloaded
+and the normal configuration-change event is emitted even after a partial rsync
+failure. Subsequent partial settings saves preserve restored fields. Transfer
+errors still report that files may have been overwritten; a cache-reload failure
+requires restarting PortOS before using CoS. Dry runs and selective restores
+outside the CoS state/config scope do not acquire this boundary.
