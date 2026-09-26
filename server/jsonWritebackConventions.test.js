@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { scanJsonWriteback, reconcileJsonWriteback } from './test/jsonWritebackScan.js';
+import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile } from './test/jsonWritebackScan.js';
 import { JSON_WRITEBACK_EXCEPTIONS } from './test/jsonWritebackExceptions.js';
 
 function sourceFiles(directory, prefix = '') {
@@ -17,8 +17,11 @@ function sourceFiles(directory, prefix = '') {
 // base. Existing exceptions must disappear when their source pair disappears.
 it('classifies every same-path non-strict service read/write pair with no stale exceptions', () => {
   const root = fileURLToPath(new URL('./services/', import.meta.url));
-  const candidates = sourceFiles(root).flatMap(file =>
-    scanJsonWriteback(readFileSync(join(root, file), 'utf8')).candidates.map(path => `${file} :: ${path}`));
+  const candidates = sourceFiles(root).flatMap(file => {
+    const source = readFileSync(join(root, file), 'utf8');
+    if (!mayReadJsonFile(source)) return [];
+    return scanJsonWriteback(source).candidates.map(path => `${file} :: ${path}`);
+  });
   const result = reconcileJsonWriteback(candidates, JSON_WRITEBACK_EXCEPTIONS);
   expect(result, 'Use strict reads or document the actual lifecycle in test/jsonWritebackExceptions.js; remove stale entries.').toEqual({ unclassified: [], stale: [] });
   expect(new Set(JSON_WRITEBACK_EXCEPTIONS.map(entry => entry.key)).size).toBe(JSON_WRITEBACK_EXCEPTIONS.length);
@@ -26,6 +29,22 @@ it('classifies every same-path non-strict service read/write pair with no stale 
 }, 15_000);
 
 describe('syntax scanner regression contracts', () => {
+  it('skips only sources that cannot reference a JSON read helper', () => {
+    expect(mayReadJsonFile('atomicWrite(A, {});')).toBe(false);
+    const sources = [
+      "import { readJSONFile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
+      "import { readJSONFileStrict as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});",
+      String.raw`import { readJSON\u0046ile as read } from './fileUtils.js'; read(A, {}); atomicWrite(A, {});`,
+    ];
+    for (const source of sources) {
+      expect(mayReadJsonFile(source)).toBe(true);
+      expect(scanJsonWriteback(source)).toEqual(source.includes('Strict')
+        ? { candidates: [], strict: ['A'] } : { candidates: ['A'], strict: [] });
+    }
+    // The standalone scanner must still parse irrelevant modules and reject
+    // invalid syntax; the optimization belongs solely at the tree caller.
+    expect(() => scanJsonWriteback('const =')).toThrow();
+  });
   it('finds new pairs with nested arguments, comments and quote/whitespace differences', () => {
     const source = `
       import { readJSONFile as read, atomicWrite as write } from './fileUtils.js';
