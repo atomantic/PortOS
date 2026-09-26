@@ -1,3 +1,4 @@
+import { jevEvents } from './jevEvents.js';
 /**
  * The trained-head store, and the one thing it exists to enforce.
  *
@@ -186,4 +187,22 @@ describe('on-disk layout', () => {
     const written = JSON.parse(await readFile(join(jevHeadsDir(), 'scope-adherence.json'), 'utf8'));
     expect(written.decisionId).toBe('scope-adherence');
   });
+});
+
+it('announces readable head changes after persistence, never rejected adoption', async () => {
+  const snapshots = [];
+  const changed = () => snapshots.push(describeJevHeads());
+  jevEvents.on('heads', changed);
+  try {
+    await saveCandidateJevHead('scope-adherence', head());
+    expect((await snapshots[0]).heads.map(row => row.adopted)).toEqual([false]);
+    await adoptJevHead('scope-adherence');
+    expect((await snapshots[1]).heads.map(row => row.adopted)).toEqual([true]);
+    await discardJevHead('scope-adherence', { candidate: false });
+    expect((await snapshots[2]).heads).toEqual([]);
+    await adoptJevHead('scope-adherence');
+    expect(snapshots).toHaveLength(3);
+  } finally {
+    jevEvents.off('heads', changed);
+  }
 });

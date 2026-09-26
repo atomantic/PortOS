@@ -192,6 +192,9 @@ describe('scoreHypotheses', () => {
 describe('idle unload', () => {
   it('reaps the sidecar after the idle window, and only after it', async () => {
     makeInstalled();
+    const { jevEvents } = await import('./jevEvents.js');
+    const states = [];
+    jevEvents.on('status', () => states.push(jev.isJevSidecarRunning()));
     const child = fakeChild();
     spawn.mockReturnValue(child);
     vi.stubGlobal('fetch', vi.fn(async (url) => (String(url).endsWith('/health') ? healthOk : scoreOk([
@@ -207,6 +210,7 @@ describe('idle unload', () => {
     vi.advanceTimersByTime(1);
     expect(child.killed).toBe(true);
     expect(jev.isJevSidecarRunning()).toBe(false);
+    expect(states).toEqual([true, false]);
   });
 });
 
@@ -252,4 +256,27 @@ describe('buildJevEnv', () => {
       'HF_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'PYTHONPATH',
     ]));
   });
+});
+
+it('notifies a failed install and an unexpected resident process exit', async () => {
+  const { jevEvents } = await import('./jevEvents.js');
+  const changed = vi.fn();
+  jevEvents.on('status', changed);
+  existsSync.mockReturnValue(false);
+  findCachedRepoFiles.mockResolvedValue(null);
+  expect((await jev.installJev()).ok).toBe(false);
+  expect(changed).toHaveBeenCalledWith({});
+
+  makeInstalled();
+  const child = fakeChild();
+  spawn.mockReturnValue(child);
+  vi.stubGlobal('fetch', vi.fn(async (url) => String(url).endsWith('/health') ? healthOk : scoreOk([
+    { hypothesis: 'a', entailment: 0.9, contradiction: 0, neutral: 0.1 },
+    { hypothesis: 'b', entailment: 0.1, contradiction: 0, neutral: 0.9 },
+  ])));
+  await jev.scoreHypotheses({ premise: 'p', hypotheses: ['a', 'b'] });
+  changed.mockClear();
+  child.emitClose(1);
+  expect(jev.isJevSidecarRunning()).toBe(false);
+  expect(changed).toHaveBeenCalledExactlyOnceWith({});
 });

@@ -21,6 +21,7 @@
  * AGENTS.md.
  */
 
+import { notifyJevChanged } from './jevEvents.js';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -320,6 +321,7 @@ export function installJev({ onEvent } = {}) {
     .finally(() => {
       installKill = null;
       installInFlight = null;
+      notifyJevChanged('status');
     });
   return installInFlight;
 }
@@ -352,6 +354,7 @@ export function stopJevSidecar() {
   for (const proc of [running?.proc, starting]) {
     if (proc && proc.exitCode === null && !proc.killed) proc.kill('SIGTERM');
   }
+  if (running !== null || starting !== null) notifyJevChanged('status');
   return running !== null || starting !== null;
 }
 
@@ -423,7 +426,11 @@ async function startSidecar() {
   proc.on('close', (code) => {
     exited = true;
     if (startingProc === proc) startingProc = null;
-    if (sidecar?.proc === proc) { sidecar = null; clearIdleTimer(); }
+    if (sidecar?.proc === proc) {
+      sidecar = null;
+      clearIdleTimer();
+      notifyJevChanged('status');
+    }
     if (code) console.error(`❌ jev sidecar exited with code ${code}`);
   });
   // Drained, never retained: a dependency exception can carry the premise or a
@@ -441,6 +448,7 @@ async function startSidecar() {
       startingProc = null;
       sidecar = { proc, device: typeof health.device === 'string' ? health.device : null };
       armIdleReaper();
+      notifyJevChanged('status');
       console.log(`🧮 jev sidecar ready on 127.0.0.1:${PORTS.JEV} (${sidecar.device || 'unknown device'})`);
       return { ok: true };
     }

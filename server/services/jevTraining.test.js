@@ -1,3 +1,4 @@
+import { jevEvents } from './jevEvents.js';
 /**
  * The training run's boundaries.
  *
@@ -153,6 +154,9 @@ describe('trainScopeAdherenceHead', () => {
         reached();
       });
     });
+    const states = [];
+    const changed = () => states.push(isJevTrainingRunning());
+    jevEvents.on('heads', changed);
     const first = trainScopeAdherenceHead();
     const second = trainScopeAdherenceHead();
     await spawned;
@@ -161,6 +165,8 @@ describe('trainScopeAdherenceHead', () => {
     await Promise.all([first, second]);
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(isJevTrainingRunning()).toBe(false);
+    jevEvents.off('heads', changed);
+    expect(states).toEqual([true, false]);
   });
 
   it('reports the trainer\'s own code rather than collapsing every failure into one', async () => {

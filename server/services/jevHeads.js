@@ -36,6 +36,7 @@
  * covers the path, and `sharing/jevNeverFederates.test.js` is the guard.
  */
 
+import { notifyJevChanged } from './jevEvents.js';
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
@@ -154,6 +155,7 @@ export async function saveCandidateJevHead(decisionId, raw) {
   if (!isHeadCompatible(parsed.head, JEV_MODEL)) return failure('jev-head-revision-mismatch');
   await ensureDir(jevHeadsDir());
   await atomicWrite(headPath(decisionId, { candidate: true }), parsed.head);
+  notifyJevChanged('heads');
   return { ok: true, head: parsed.head };
 }
 
@@ -179,6 +181,7 @@ export async function adoptJevHead(decisionId) {
   // states, with no way to tell which one is answering.
   await unlink(headPath(decisionId, { candidate: true })).catch(() => null);
   resetJevHeadCache();
+  notifyJevChanged('heads');
   return { ok: true, head };
 }
 
@@ -193,5 +196,6 @@ export async function discardJevHead(decisionId, { candidate = true } = {}) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return failure('jev-head-invalid');
   const removed = await unlink(headPath(decisionId, { candidate })).then(() => true, () => false);
   resetJevHeadCache();
+  if (removed) notifyJevChanged('heads');
   return { ok: true, removed };
 }

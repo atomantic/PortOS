@@ -1,3 +1,4 @@
+import { jevEvents } from './jevEvents.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
@@ -159,6 +160,7 @@ describe('socket.js — initSocket', () => {
     modelLifecycleEvents.removeAllListeners();
     eidoverseWorldEvents.removeAllListeners();
     layaMlxEvents.removeAllListeners();
+    jevEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
     usageBackfillEvents.removeAllListeners();
   });
@@ -217,6 +219,14 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     eidoverseWorldEvents.emit('updated', { world: 'Example private world' });
     expect(io.emitted).toEqual([['eidoverse:projection', {}]]);
+  });
+
+  it('forwards JEV resource invalidations without private scorer data', () => {
+    io.emitted.length = 0;
+    for (const resource of ['status', 'stats', 'heads']) {
+      jevEvents.emit(resource, { premise: 'Example private input', corpus: ['Example row'] });
+    }
+    expect(io.emitted).toEqual([['jev:status', {}], ['jev:stats', {}], ['jev:heads', {}]]);
   });
 
   it('forwards Laya status without experiment content', () => {
