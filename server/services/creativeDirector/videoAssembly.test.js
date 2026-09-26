@@ -147,3 +147,21 @@ it('mutes a selected shot in the real cut while retaining the next shot audio', 
   expect(await rms(1)).toBeLessThan(0.0001);
   expect(await rms(4)).toBeGreaterThan(0.01);
 }, 30000);
+
+// Regression: the second accepted shot wins even though the old 2.5s seek is in shot one.
+it('uses the highest-scoring accepted scene midpoint on a three-scene timeline', async context => {
+  requireFfmpeg(context);
+  state.project.targetDurationSeconds = 9;
+  state.project.videoDraft.durationRange = { min: 9, max: 10 };
+  state.project.treatment.scenes = [0, 1, 0].map((clip, order) => ({
+    ...state.project.treatment.scenes[clip], sceneId: `shot-${order}`, order,
+    evaluation: { score: [0.2, 0.9, 0.3][order] },
+  }));
+  state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
+  await runVideoAssembly('example-video');
+  expect(state.project.failureReason).toBeNull();
+  const final = state.history.find(item => item.id === state.project.finalVideoId);
+  const { stdout } = await exec(ffmpeg, ['-v', 'error', '-i', join(state.root, 'thumbnails', final.thumbnail), '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { encoding: 'buffer' });
+  expect(stdout[2]).toBeGreaterThan(200);
+  expect(stdout[0]).toBeLessThan(30);
+}, 30000);

@@ -389,7 +389,11 @@ export async function renderMusicVideo(projectId) {
         // releases the slot.
         try {
           job.status = 'complete';
-          const thumb = await generateThumbnail(outputPath, jobId);
+          const section = (project.audioAnalysis?.sections || [])
+            .filter(section => Number.isFinite(section.energy) && section.startSec >= 0 && section.endSec > section.startSec && section.startSec < totalDuration)
+            .sort((a, b) => b.energy - a.energy || a.startSec - b.startSec)[0];
+          const atSec = section ? (section.startSec + Math.min(section.endSec, totalDuration)) / 2 : undefined;
+          const thumb = await generateThumbnail(outputPath, jobId, { atSec });
           const meta = {
             id: jobId,
             prompt: `Music Video: ${project.name}`,

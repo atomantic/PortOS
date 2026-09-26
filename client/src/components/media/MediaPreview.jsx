@@ -3,7 +3,7 @@ import MediaLightbox from './MediaLightbox';
 import { getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import useImageVariants from '../../hooks/useImageVariants';
-import { updateImagePrompt, updateVideoPrompt } from '../../services/apiImageVideo';
+import { updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
 // page repeated by hand: open/close, prev/next nav, and the annotation
@@ -22,9 +22,11 @@ export default function MediaPreview({
   annotations,
   updateAnnotation,
   onPromptSaved,
+  onPosterSaved,
   ...handlers
 }) {
   const [promptOverride, setPromptOverride] = useState(null);
+  const [posterOverride, setPosterOverride] = useState(null);
   const navProps = useMemo(
     () => getMediaNavProps(items, preview, setPreview),
     [items, preview, setPreview]
@@ -35,9 +37,10 @@ export default function MediaPreview({
   // has one). This is keyed to the media identity, never to the selection
   // itself, so the URL remains the source of truth for which item is open.
   useEffect(() => {
+    setPosterOverride(current => current?.key === preview?.key ? current : null);
     setPromptOverride((current) => current?.key === preview?.key ? current : null);
   }, [preview?.key]);
-  const displayedPreview = useMemo(() => {
+  const promptedPreview = useMemo(() => {
     if (!preview || promptOverride?.key !== preview.key) return preview;
     const prompt = promptOverride.prompt;
     return {
@@ -46,6 +49,16 @@ export default function MediaPreview({
       raw: preview.raw ? { ...preview.raw, prompt: prompt === '(no prompt)' ? '' : prompt } : preview.raw,
     };
   }, [preview, promptOverride]);
+  const displayedPreview = posterOverride?.key === promptedPreview?.key && promptedPreview
+    ? { ...promptedPreview, ...posterOverride.patch, raw: { ...promptedPreview.raw, ...posterOverride.patch.raw } } : promptedPreview;
+  const savePoster = useCallback(async (item, atSec) => {
+    const result = await updateVideoPoster(item.id, atSec, { silent: true });
+    const patch = { posterSec: result.posterSec, previewUrl: `/data/video-thumbnails/${result.thumbnail}`,
+      raw: { thumbnail: result.thumbnail, posterSec: result.posterSec } };
+    setPosterOverride({ key: item.key, patch });
+    onPosterSaved?.(item, result);
+    return result;
+  }, [onPosterSaved]);
   // Original-vs-cleaned toggle, computed over the UNION of the host's items
   // and the image's fetched lineage — neither source alone is complete. The
   // host list misses a copy it never held (see useImageVariants), while the
@@ -119,6 +132,7 @@ export default function MediaPreview({
       annotation={annotations?.[preview?.key] ?? null}
       onAnnotationChange={preview && updateAnnotation ? (patch) => updateAnnotation(preview.key, patch) : undefined}
       onPromptChange={savePrompt}
+      onPosterChange={savePoster}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}

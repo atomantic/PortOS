@@ -5,6 +5,8 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { DEFAULT_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 
+const updateVideoPoster = vi.hoisted(() => vi.fn());
+vi.mock('../services/videoGen/poster.js', () => ({ updateVideoPoster, createSharingCopy: vi.fn() }));
 const compiledVisual = vi.hoisted(() => ({
   version: 1, compilerVersion: '1.0.0', status: 'locked', assets: [], adapters: [], omitted: [], warnings: [],
 }));
@@ -354,6 +356,20 @@ describe('isAudioMime', () => {
 });
 
 describe('videoGen routes', () => {
+  it('validates poster edits and allows an explicit reset', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    updateVideoPoster.mockResolvedValue({ id, thumbnail: 'poster.jpg', posterSec: 12.4 });
+    const saved = await request(app).patch(`/api/video-gen/history/${id}/poster`).send({ atSec: 12.4 });
+    expect(saved.status).toBe(200);
+    expect(saved.body.posterSec).toBe(12.4);
+    expect(updateVideoPoster).toHaveBeenCalledWith(id, 12.4);
+    const reset = await request(app).patch(`/api/video-gen/history/${id}/poster`).send({ atSec: null });
+    expect(reset.status).toBe(200);
+    expect(updateVideoPoster).toHaveBeenCalledWith(id, null);
+    for (const body of [{}, { atSec: '12.4' }]) {
+      expect((await request(app).patch(`/api/video-gen/history/${id}/poster`).send(body)).status).toBe(400);
+    }
+  });
   let app;
   beforeEach(() => {
     loraCapability.capable = false;

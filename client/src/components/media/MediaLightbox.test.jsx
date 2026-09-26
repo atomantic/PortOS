@@ -335,3 +335,16 @@ describe('MediaLightbox compact preview item', () => {
     expect(screen.getByRole('button', { name: 'Refine Prompt' })).toBeInTheDocument();
   });
 });
+
+ it('saves the current playhead, resets the poster, and offers a sharing copy', async () => {
+  HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue();
+  const onPosterChange = vi.fn().mockResolvedValue({});
+  render(<MediaLightbox item={videoItem} onClose={() => {}} onPosterChange={onPosterChange} />);
+  videoEl().currentTime = 12.4;
+  fireEvent.click(screen.getByRole('button', { name: 'Use this frame as poster' }));
+  await waitFor(() => expect(onPosterChange).toHaveBeenCalledWith(videoItem, 12.4));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Reset poster' })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Reset poster' }));
+  await waitFor(() => expect(onPosterChange).toHaveBeenCalledWith(videoItem, null));
+  expect(screen.getByRole('link', { name: 'Download for sharing' })).toHaveAttribute('href', '/api/video-gen/history/abc/sharing-download');
+});

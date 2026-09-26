@@ -123,6 +123,7 @@ export function normalizeVideo(v) {
   return {
     kind: 'video',
     key: `video:${v.id}`,
+    posterSec: v.posterSec ?? null,
     id: v.id,
     filename: v.filename,
     previewUrl: v.thumbnail ? `/data/video-thumbnails/${v.thumbnail}` : null,

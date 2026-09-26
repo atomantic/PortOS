@@ -119,6 +119,7 @@ export default function MediaLightbox({
   onAnnotationChange,
   onPromptChange,
   onPromptAnalysis,
+  onPosterChange,
   variantGroup = null,
   onSelectVariant,
 }) {
@@ -451,6 +452,8 @@ export default function MediaLightbox({
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
             onPromptChange={item.compact ? undefined : onPromptChange}
+            onPosterChange={onPosterChange}
+            getPlayhead={() => videoRef.current?.currentTime ?? 0}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
           />
@@ -492,10 +495,18 @@ function SettingsPane({
   item, meta, isVideo,
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
-  annotation, onAnnotationChange, onPromptChange,
+  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead,
   variantGroup, onSelectVariant,
 }) {
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
+  const [posterSaving, setPosterSaving] = useState(false);
+  const [posterError, setPosterError] = useState(null);
+  const savePoster = async atSec => {
+    if (posterSaving) return;
+    setPosterSaving(true);
+    setPosterError(null);
+    await onPosterChange(item, atSec).catch(error => setPosterError(error.message)).finally(() => setPosterSaving(false));
+  };
   const [cleaning, setCleaning] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [lightRegenerating, setLightRegenerating] = useState(false);
@@ -953,6 +964,19 @@ function SettingsPane({
           >
             <ImageIcon className="w-3.5 h-3.5" /> Continue
           </button>
+        )}
+        {isVideo && onPosterChange && (
+          <div className="w-full flex flex-wrap gap-2">
+            <button type="button" disabled={posterSaving} onClick={() => savePoster(getPlayhead())}
+              className="min-h-[44px] px-2 rounded bg-port-border text-white disabled:opacity-50">Use this frame as poster</button>
+            <button type="button" disabled={posterSaving} onClick={() => savePoster(null)}
+              className="min-h-[44px] px-2 rounded bg-port-border text-white disabled:opacity-50">Reset poster</button>
+            {posterError && <p role="alert" className="text-port-error">{posterError}</p>}
+          </div>
+        )}
+        {isVideo && item.id && item.previewUrl && (
+          <a href={`/api/video-gen/history/${encodeURIComponent(item.id)}/sharing-download`} download
+            className="min-h-[44px] flex items-center px-2 rounded bg-port-border text-white">Download for sharing</a>
         )}
         <AddToCollectionMenu item={item} size="md" />
         <PinToMoodBoardMenu item={item} size="md" />

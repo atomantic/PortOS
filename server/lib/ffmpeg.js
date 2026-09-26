@@ -200,7 +200,7 @@ const probeDurationSeconds = async (videoPath) => {
 };
 export const probeVideoDuration = probeDurationSeconds;
 
-export const generateThumbnail = async (videoPath, jobId) => {
+export const generateThumbnail = async (videoPath, jobId, { atSec } = {}) => {
   await ensureDir(PATHS.videoThumbnails);
   const thumbFilename = `${jobId}.jpg`;
   const thumbPath = join(PATHS.videoThumbnails, thumbFilename);
@@ -211,10 +211,14 @@ export const generateThumbnail = async (videoPath, jobId) => {
   // longer clips (Extend mode, 10s+) 2.5s is still past the LTX fade-in
   // and not at an unreliable boundary. For short clips (<2s) seek to the
   // actual midpoint. Fall back to 1s when ffprobe is unavailable.
-  const seekSec = duration ? Math.min(2.5, Math.max(0.5, duration / 2)) : 1.0;
+  const stream = Number.isFinite(atSec) && duration ? await probeVideoStreamInfo(videoPath) : null;
+  const lastFrameSec = duration ? Math.max(0, duration - (stream?.fps > 0 ? 1 / stream.fps : 0.001)) : atSec;
+  const seekSec = Number.isFinite(atSec)
+    ? Math.max(0, Math.min(atSec, lastFrameSec))
+    : duration ? Math.min(2.5, Math.max(0.5, duration / 2)) : 1.0;
   const result = await runFfmpegProcess({
     bin: ffmpeg,
-    args: ['-ss', seekSec.toFixed(2), '-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath],
+    args: ['-ss', seekSec.toFixed(Number.isFinite(atSec) ? 6 : 2), '-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath],
     stderrTailBytes: 0,
   });
   if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
