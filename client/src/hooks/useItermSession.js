@@ -147,8 +147,10 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       // connection drops, and the URL must survive that. The next list
       // decides — re-attach if it is back, fall back if it is really gone.
     };
-    const handleError = ({ id, error }) => {
-      if (id !== pendingRef.current.target && id !== attachedIdRef.current) return;
+    const handleError = ({ id, error, code }) => {
+      // A host-control refusal (#8708) may answer the uncorrelated list request.
+      const refused = code === 'HOST_CONTROL_FORBIDDEN';
+      if (!refused && id !== pendingRef.current.target && id !== attachedIdRef.current) return;
       if (id === pendingRef.current.target) setPending(null);
       termRef.current?.writeln(`\r\n\x1b[31m[Error: ${error}]\x1b[0m`);
     };

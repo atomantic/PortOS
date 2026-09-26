@@ -5,6 +5,7 @@ import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { request } from '../lib/testHelper.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -651,6 +652,23 @@ describe('host-control authority', () => {
     expect(peer.called).toBe(false);
     expect(peer.res.statusCode).toBe(403);
     expect(peer.res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+  });
+
+  // The socket twin (#8708): locality is recorded at the handshake from the
+  // connection's own address, so a forged loopback dev-proxy marker on a
+  // remote connection grants nothing, and a gate-less socket fails closed.
+  it('records socket host-control locality at the handshake, never from a forged marker', async () => {
+    const { socketAuthGate, socketHasHostControl } = await import('./authGate.js');
+    const handshake = async (address, headers = {}) => {
+      const socket = { handshake: { address, headers } };
+      await new Promise((resolve) => socketAuthGate(socket, resolve));
+      return socketHasHostControl(socket);
+    };
+    expect(await handshake('127.0.0.1')).toBe(true);
+    expect(await handshake('::1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' })).toBe(true);
+    expect(await handshake('::1', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' })).toBe(false);
+    expect(await handshake('192.0.2.10', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' })).toBe(false);
+    expect(socketHasHostControl({ handshake: { address: '127.0.0.1' } })).toBe(false);
   });
 });
 

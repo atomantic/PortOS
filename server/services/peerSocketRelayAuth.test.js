@@ -18,6 +18,7 @@ import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
 const { tempRoot, makeProxy, cleanup: cleanupDataRoot } = mockPathsDataRoot({ prefix: 'portos-peer-relay-auth-' });
 
@@ -60,6 +61,8 @@ let httpServer;
 let ioServer;
 let port;
 let clients = [];
+// Host-control handlers the stand-ins below actually reached (#8708).
+let reached = [];
 
 const startServer = async () => {
   const { socketAuthGate } = await import('./authGate.js');
@@ -74,6 +77,15 @@ const startServer = async () => {
     // never actually reached by a peer-authenticated socket once the auth
     // middleware above disconnects it first.
     socket.on('shell:list', () => socket.emit('shell:sessions', { sessions: [] }));
+    // Stand-ins for the host-control handlers (server/sockets/shell.js,
+    // iterm.js, apps.js): record that the handler ran, which the gate must
+    // prevent for a caller without host-control authority.
+    socket.on('shell:start', (options) => {
+      reached.push(['shell:start', options?.initialCommand]);
+      socket.emit('shell:started', { sessionId: 'example-session' });
+    });
+    socket.on('iterm:input', () => reached.push(['iterm:input']));
+    socket.on('app:update', () => reached.push(['app:update']));
   });
   await new Promise((resolve) => httpServer.listen(0, resolve));
   port = httpServer.address().port;
@@ -82,6 +94,7 @@ const startServer = async () => {
 const stopServer = async () => {
   for (const client of clients) client.close();
   clients = [];
+  reached = [];
   await new Promise((resolve) => ioServer.close(resolve));
   await new Promise((resolve) => httpServer.close(resolve));
 };
@@ -97,6 +110,10 @@ const connectClient = (extraHeaders) => {
   return client;
 };
 
+afterAll(() => {
+  cleanupDataRoot();
+});
+
 const waitFor = (emitter, event) => new Promise((resolve) => emitter.once(event, resolve));
 
 describe('peer socket relay stays connected through cos:subscribe on a password-gated peer (#8386)', () => {
@@ -108,10 +125,6 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
 
   afterEach(async () => {
     await stopServer();
-  });
-
-  afterAll(() => {
-    cleanupDataRoot();
   });
 
   it('a peer-token-authenticated socket survives cos:subscribe but is disconnected by a shell:* event', async () => {
@@ -167,5 +180,80 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     const client = connectClient({});
     const err = await waitFor(client, 'connect_error');
     expect(err.data?.code).toBe('AUTH_REQUIRED');
+  });
+});
+
+describe('host-control socket events need operator authority (#8708)', () => {
+  const REMOTE_VIA_DEV_PROXY = { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10' };
+
+  beforeEach(async () => {
+    vi.resetModules();
+    resetSettings();
+    instanceRegistry.data = { self: null, peers: [] };
+  });
+
+  afterEach(async () => {
+    await stopServer();
+  });
+
+  it('auth off: a remote caller is refused every host-control event and runs nothing', async () => {
+    await startServer();
+    const client = connectClient(REMOTE_VIA_DEV_PROXY);
+    await waitFor(client, 'connect');
+
+    const shellRefused = waitFor(client, 'shell:error');
+    client.emit('shell:start', { initialCommand: 'echo example' });
+    expect(await shellRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
+
+    const itermRefused = waitFor(client, 'iterm:error');
+    client.emit('iterm:input', { id: 'example-iterm', data: 'ls\r' });
+    expect(await itermRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', id: 'example-iterm' });
+
+    const updateRefused = waitFor(client, 'app:update:error');
+    client.emit('app:update', { appId: 'example-app' });
+    expect(await updateRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', appId: 'example-app' });
+
+    // Read-only subscriptions stay open, and the refusals did not disconnect.
+    const subscribed = waitFor(client, 'cos:subscribed');
+    client.emit('cos:subscribe');
+    await subscribed;
+    expect(client.connected).toBe(true);
+    expect(reached).toEqual([]);
+  });
+
+  it('auth off: a local caller, direct or through the dev proxy, keeps the shell', async () => {
+    await startServer();
+    for (const headers of [{}, { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }]) {
+      const client = connectClient(headers);
+      await waitFor(client, 'connect');
+      const started = waitFor(client, 'shell:started');
+      client.emit('shell:start', { initialCommand: 'echo example' });
+      await started;
+    }
+    expect(reached).toEqual([['shell:start', 'echo example'], ['shell:start', 'echo example']]);
+  });
+
+  it('auth on: a session socket keeps the shell; a remote connection does not change that', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'instance-secret' });
+    await startServer();
+    const client = connectClient({ cookie: `portos_auth=${token}`, ...REMOTE_VIA_DEV_PROXY });
+    await waitFor(client, 'connect');
+    const started = waitFor(client, 'shell:started');
+    client.emit('shell:start', {});
+    await started;
+    expect(reached).toEqual([['shell:start', undefined]]);
+  });
+
+  it('auth on: a Basic-authenticated relay socket never reaches a host-control handler', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'instance-secret' });
+    await startServer();
+    const client = connectClient({ Authorization: `Basic ${Buffer.from(':instance-secret').toString('base64')}` });
+    await waitFor(client, 'connect');
+    const disconnected = waitFor(client, 'disconnect');
+    client.emit('shell:start', { initialCommand: 'echo example' });
+    await disconnected;
+    expect(reached).toEqual([]);
   });
 });

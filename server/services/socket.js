@@ -61,6 +61,7 @@ import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
 import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
@@ -133,13 +134,40 @@ function registerSubscriber(socket, namespace, set) {
 // mutating or host-affecting event here.
 const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe']);
 
+// Events that execute on the host — an interactive PTY, keystrokes into the
+// user's live iTerm2 sessions, or git/npm/PM2/deploy runs in a managed app's
+// directory. They need the same operator authority as the HTTP
+// requireHostControl routes (#8226): on a password-free install a remote
+// LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
+// is included by prefix; read-only subscriptions stay open to remote sockets.
+const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start']);
+const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:'];
+const isHostControlSocketEvent = (event) => typeof event === 'string'
+  && (HOST_CONTROL_SOCKET_EVENTS.has(event) || HOST_CONTROL_SOCKET_PREFIXES.some((prefix) => event.startsWith(prefix)));
+
+// A refusal goes out on the error event the event's own client already
+// listens on, so the waiting UI settles instead of hanging.
+const hostControlRefusal = (event, payload) => {
+  const refusal = { code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE, message: HOST_CONTROL_FORBIDDEN_MESSAGE };
+  if (event.startsWith('shell:')) return ['shell:error', { ...refusal, sessionId: payload?.sessionId }];
+  if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
+  if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
+  return [`${event}:error`, { ...refusal, appId: payload?.appId }];
+};
+
 function registerAuthHandlers(socket, _io) {
   // Per-event auth re-check: the handshake gate only runs once at connection
-  // time, so every inbound event re-verifies an enabled session.
+  // time, so every inbound event re-verifies an enabled session. With auth
+  // off, host-control events still need a local connection.
   if (typeof socket.use === 'function') {
-    socket.use(async ([event, ..._args], next) => {
+    socket.use(async ([event, payload], next) => {
       try {
-        if (!(await isAuthEnabled())) return next();
+        if (!(await isAuthEnabled())) {
+          if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
+          console.warn(`⛔ Refused host-control socket event ${event} from a non-local connection`);
+          socket.emit(...hostControlRefusal(event, payload));
+          return;
+        }
         if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();
         const peerAuthMethod = socket.data?.portosAuthMethod;
         if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {

@@ -220,24 +220,41 @@ const isLoopbackAddress = (value) => {
   return address === '::1' || (isIP(address) === 4 && address.startsWith('127.'));
 };
 
-// Host execution needs operator authority: a peer's credential — the scoped
-// peer token or the legacy Basic password — never qualifies.
-// Mount after authGate: missing context fails closed. Password-free installs
-// require loopback socket peers, including the dev proxy caller. Neither req.ip
-// nor the machine-local warning acknowledgement can grant authority.
-export const requireHostControl = (req, res, next) => {
-  const auth = req.portosAuthContext;
-  const proxyClient = req.headers[DEV_PROXY_CLIENT_ADDRESS_HEADER];
-  // Only restrict an actual loopback connection with the dev proxy's marker.
-  // A direct remote caller cannot gain authority by forging a loopback header.
-  const loopback = isLoopbackAddress(req.socket?.remoteAddress)
+// A loopback connection, restricted further when it carries the dev proxy's
+// client-address marker: Vite proxies every browser from its own loopback
+// socket, so the marker's address is the real caller. A direct remote caller
+// cannot gain authority by forging a loopback marker — its connection address
+// is not loopback to begin with.
+const isLocalConnection = (remoteAddress, headers) => {
+  const proxyClient = headers?.[DEV_PROXY_CLIENT_ADDRESS_HEADER];
+  return isLoopbackAddress(remoteAddress)
     && (proxyClient === undefined || isLoopbackAddress(proxyClient));
-  if ((auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
-    || (auth?.enabled === false && loopback)) return next();
-  sendErrorResponse(res, new ServerError('Host commands require an operator session, or a local connection when no password is set.', {
+};
+
+// Host execution needs operator authority: a peer's credential — the scoped
+// peer token or the legacy Basic password — never qualifies. Password-free
+// installs require a local connection (see isLocalConnection). Neither req.ip
+// nor the machine-local warning acknowledgement can grant authority.
+const hasHostControl = (auth, localConnection) =>
+  (auth?.enabled === true && auth.authenticated === true && auth.method === 'session')
+  || (auth?.enabled === false && localConnection === true);
+
+export const HOST_CONTROL_FORBIDDEN_MESSAGE = 'Host control requires an operator session, or a local connection when no password is set. Set an instance password to use it remotely.';
+
+// Mount after authGate: missing context fails closed.
+export const requireHostControl = (req, res, next) => {
+  if (hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));
 };
+
+// The socket twin of requireHostControl on a password-free install, for the
+// per-event re-check in socket.js (with a password set, that re-check already
+// admits only a verified session to host-control events). Locality is
+// recorded at the handshake by socketAuthGate; a socket that never passed the
+// gate carries none and fails closed.
+export const socketHasHostControl = (socket) => hasHostControl({ enabled: false }, socket.data?.portosLocalConnection);
 
 // Socket.IO middleware. Run after a successful HTTP-side handshake — same
 // `req.headers.cookie` is available on `socket.handshake.headers`. When auth
@@ -259,6 +276,8 @@ const markAuthMethod = (socket, method) => {
 };
 
 export const socketAuthGate = async (socket, next) => {
+  if (!socket.data) socket.data = {};
+  socket.data.portosLocalConnection = isLocalConnection(socket.handshake?.address, socket.handshake?.headers);
   const enabled = await isAuthEnabled();
   if (!enabled) return next();
   const fakeReq = { headers: socket.handshake?.headers || {} };
