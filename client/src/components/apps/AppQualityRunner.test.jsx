@@ -1,6 +1,22 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { beforeEach, expect, it, vi } from 'vitest';
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    handlers,
+    emit: vi.fn(),
+    on: (event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    },
+    off: (event, handler) => handlers.get(event)?.delete(handler),
+    fire: (event, data) => { for (const handler of handlers.get(event) || []) handler(data); },
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socket }));
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../test/enabledBarrier.js';
@@ -171,4 +187,64 @@ it('offers every enabled process provider regardless of subscription family, and
   expect(filter({ id: 'opencode-tui', enabled: true, type: 'tui' })).toBe(true);
   expect(filter({ id: 'codex', enabled: true, type: 'cli' })).toBe(true);
   expect(filter({ id: 'opencode-tui', enabled: false, type: 'tui' })).toBe(false);
+});
+
+it('refreshes matching maintenance events and recovers once per reconnect/reshow without polling', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  const view = render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await act(async () => {});
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
+
+  getMaintenanceRuns.mockResolvedValue({ runs: [{ id: 'run-push', appId: app.id, status: 'running', steps: [] }] });
+  await act(async () => socket.fire('cos:maintenance:updated', { appId: 'another-app' }));
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(1);
+  await act(async () => socket.fire('cos:maintenance:updated', { appId: app.id }));
+  expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(2);
+
+  await act(async () => socket.fire('connect'));
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(3);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    socket.fire('cos:maintenance:updated', { appId: app.id });
+    socket.fire('connect');
+  });
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(3);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(4);
+  view.unmount();
+  await act(async () => socket.fire('cos:maintenance:updated', { appId: app.id }));
+  expect(getMaintenanceRuns).toHaveBeenCalledTimes(4);
+  expect(socket.emit).toHaveBeenCalledWith('cos:unsubscribe');
+});
+
+it('discards a previous app read when the selected app changes', async () => {
+  let resolveOld;
+  getMaintenanceRuns.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+  const view = render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await act(async () => {});
+  const nextApp = { ...app, id: 'app-2' };
+  getMaintenanceRuns.mockResolvedValue({ runs: [{ id: 'new-app-run', appId: nextApp.id, status: 'stopped', steps: [], reason: 'Current app result' }] });
+  view.rerender(<MemoryRouter><AppQualityRunner app={nextApp} /></MemoryRouter>);
+  await act(async () => {});
+  await act(async () => resolveOld({ runs: [{ id: 'old-app-run', appId: app.id, status: 'running', steps: [], reason: 'Obsolete app result' }] }));
+  expect(screen.getByText('Current app result', { selector: 'p.break-words' })).toBeInTheDocument();
+  expect(screen.queryByText('Obsolete app result')).not.toBeInTheDocument();
+});
+
+it('keeps a start response when an older status request resolves afterwards', async () => {
+  let resolveRead;
+  getMaintenanceRuns.mockImplementationOnce(() => new Promise(resolve => { resolveRead = resolve; }));
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'started', appId: app.id, status: 'running', steps: [] } });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await act(async () => {});
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Run 2 checks now' })));
+  expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
+  await act(async () => resolveRead({ runs: [] }));
+  expect(screen.getByRole('button', { name: 'Stop remaining checks' })).toBeInTheDocument();
 });
