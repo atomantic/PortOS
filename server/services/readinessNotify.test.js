@@ -13,7 +13,7 @@ import { getCapabilitiesSnapshot } from './capabilitiesSnapshot.js';
 import { settingsEvents } from './settings.js';
 import { cosEvents } from './cosEvents.js';
 import {
-  armReadinessWatchers, registerReadinessSocket, resetReadinessForTests,
+  armReadinessWatchers, registerReadinessSocket, __resetReadinessForTests,
   READINESS_OBSERVE_MS, READINESS_COALESCE_MS,
 } from './readinessNotify.js';
 
@@ -30,7 +30,7 @@ beforeEach(() => {
   getSystemHealthSnapshot.mockResolvedValue({ overallHealth: 'healthy', timestamp: 'one', system: { uptime: 1 } });
   getCapabilitiesSnapshot.mockResolvedValue({ summary: { overall: 'ok' }, timestamp: 'one' });
 });
-afterEach(() => { resetReadinessForTests(); vi.useRealTimers(); });
+afterEach(() => { __resetReadinessForTests(); vi.useRealTimers(); });
 
 describe('shared readiness subscription', () => {
   it('shares one observer, ignores clock-only changes and stops after the last unsubscribe', async () => {
@@ -78,7 +78,7 @@ describe('shared readiness subscription', () => {
     getCapabilitiesSnapshot.mockResolvedValue({ summary: { overall: 'ok' } });
     await vi.advanceTimersByTimeAsync(READINESS_OBSERVE_MS);
     expect(a.socket.emit).toHaveBeenCalledExactlyOnceWith('capabilities:changed', {});
-    resetReadinessForTests();
+    __resetReadinessForTests();
     expect(settingsEvents.listenerCount('settings:updated')).toBe(0);
     expect(cosEvents.listenerCount('health:check')).toBe(0);
   });

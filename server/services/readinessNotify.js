@@ -137,7 +137,7 @@ export async function armReadinessWatchers() {
   }
 }
 
-export function resetReadinessForTests() {
+export function __resetReadinessForTests() {
   subscribers.clear();
   stopObservation();
   stopWatchers?.();
