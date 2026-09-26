@@ -405,19 +405,16 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
 // issue-claiming task type here rather than OR-ing literals across components.
 export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
 
-// Swarm fan-out (taskMetadata.swarmCount). Mirrors slashdo `/do:next --swarm=<N>`
-// (clamped 1..6; bare --swarm = 3). 0 = off (single issue per run, the default);
-// 2..6 = claim & ship that many independent issues in parallel. Server-side
-// SWARM_COUNT_MIN/MAX (cosValidation.js) enforce the same 2..6 range. Exposed on
-// the same forge-issue task types as the author filter.
+// Scheduled claim swarm fan-out (taskMetadata.swarmCount). 0 = off;
+// 2..12 = parallel workers, matching SWARM_COUNT_MIN/MAX in cosValidation.js.
+// Exposed on the same forge-issue task types as the author filter.
 export const SWARM_TASK_TYPES = ISSUE_AUTHOR_FILTER_TASK_TYPES;
 export const SWARM_COUNT_OPTIONS = [
   { value: 0, label: 'Off (one issue per run)', description: 'Claim and ship a single issue per scheduled run (default)' },
-  { value: 2, label: '2 in parallel', description: 'Claim and ship up to 2 independent issues per run, merges serialized' },
-  { value: 3, label: '3 in parallel', description: 'Claim and ship up to 3 independent issues per run, merges serialized' },
-  { value: 4, label: '4 in parallel', description: 'Claim and ship up to 4 independent issues per run, merges serialized' },
-  { value: 5, label: '5 in parallel', description: 'Claim and ship up to 5 independent issues per run, merges serialized' },
-  { value: 6, label: '6 in parallel', description: 'Claim and ship up to 6 independent issues per run, merges serialized' }
+  ...Array.from({ length: 11 }, (_, index) => {
+    const value = index + 2;
+    return { value, label: `${value} in parallel`, description: `Claim and ship up to ${value} independent issues per run, merges serialized` };
+  })
 ];
 
 // branch-reconcile coordinator batch size (taskMetadata.branchesPerAgent).

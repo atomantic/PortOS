@@ -167,7 +167,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
 
   const handleSwarmCountChange = async (value) => {
     setUpdating(true);
-    // 0 = off, 2..6 = swarm size (server keeps both; 1/out-of-range are dropped).
+    // 0 = off, 2..12 = swarm size (server keeps both; 1/out-of-range are dropped).
     // taskMetadata is replaced wholesale server-side, so spread the existing keys.
     await onUpdate(taskType, {
       taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
