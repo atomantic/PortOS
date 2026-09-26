@@ -152,9 +152,14 @@ export function topTrackCounts(entries, limit = 10) {
 // shapes: sync's `trackId`, import's `trackUri`, then isrc, then title —
 // falling to dedupeKey only as a last resort (per-play, so it never collapses
 // repeats, which is the safe direction). Using trackUri keeps two different
-// imported tracks that share a title from collapsing into one "repeat".
+// imported tracks that share a title from collapsing into one "repeat". A bare
+// sync ID is namespaced as a track URI so a live play and an imported play of
+// the same track share one key; episode URIs keep their own namespace (#8767).
 function listenNoveltyKey(ev) {
-  return ev?.metadata?.trackId || ev?.metadata?.trackUri || ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
+  if (ev?.metadata?.trackUri) return String(ev.metadata.trackUri);
+  const trackId = ev?.metadata?.trackId;
+  if (trackId) return String(trackId).startsWith('spotify:') ? String(trackId) : `spotify:track:${trackId}`;
+  return ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
 }
 function watchNoveltyKey(ev) {
   return ev?.metadata?.videoId || ev?.url || ev?.title || ev?.dedupeKey || '';
