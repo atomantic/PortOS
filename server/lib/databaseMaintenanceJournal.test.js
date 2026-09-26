@@ -52,6 +52,55 @@ describe('persistent database maintenance boundary', () => {
     expect(journal.read()).toEqual(record);
   });
 
+  it('fences cancellation and competing coordinators through every durable stage', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    expect(() => journal.acquireCoordinator(operation.id)).toThrow();
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(() => journal.transition(operation.id, 'wrong', 'accepted', 'quiescing')).toThrow();
+    expect(() => journal.transition(operation.id, token, 'accepted', 'importing')).toThrow();
+    let stage = 'accepted';
+    for (const next of ['quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified']) {
+      const result = node(`import {createDatabaseMaintenanceJournal} from ${JSON.stringify(moduleUrl)};
+        const j=createDatabaseMaintenanceJournal(${JSON.stringify(data)});
+        j.transition(${JSON.stringify(operation.id)}, ${JSON.stringify(token)}, ${JSON.stringify(stage)}, ${JSON.stringify(next)});`);
+      expect(result.status, result.stderr).toBe(0);
+      expect(journal.read()).toEqual({ ...operation, stage: next });
+      expect(() => journal.transition(operation.id, token, stage, next)).toThrow();
+      expect(() => journal.assertAdmission()).toThrow();
+      stage = next;
+    }
+    // Even verified is evidence, not permission to reopen writers. The future
+    // coordinator must separately prove boot identity before releasing the fence.
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+  });
+
+  it('publishes a stage once when two processes share the coordinator token', async () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const code = `import { createDatabaseMaintenanceJournal } from ${JSON.stringify(moduleUrl)};
+      const j = createDatabaseMaintenanceJournal(${JSON.stringify(data)});
+      try { j.transition(${JSON.stringify(operation.id)}, ${JSON.stringify(token)}, 'accepted', 'quiescing'); }
+      catch { process.exitCode = 1; }`;
+    const run = () => new Promise(resolve => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' });
+      child.once('close', code => resolve(code));
+    });
+    expect((await Promise.all([run(), run()])).sort()).toEqual([0, 1]);
+    expect(journal.read()).toEqual({ ...operation, stage: 'quiescing' });
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
+  it('preserves the fence and prior stage after interrupted stage publication', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    writeFileSync(join(data, 'database-maintenance', 'stage-accepted.claim'), '{}');
+    expect(() => journal.transition(operation.id, token, 'accepted', 'quiescing')).toThrow();
+    expect(journal.read()).toEqual(operation);
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(journal.isFenced()).toBe(true);
+  });
+
   it('blocks a fresh database process, boot graphs, and agent admission while preserving journal identity', () => {
     const operation = journal.begin({ source, target });
     // No real pg connection is possible, even if an admission regression occurs.
