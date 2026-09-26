@@ -1696,4 +1696,54 @@ describe('syncOrchestrator', () => {
       expect(instanceEvents.removeListener).toHaveBeenCalledWith('peer:online', expect.any(Function));
     });
   });
+
+  // #8710: a DB restore discards rows the memory/Catalog cursors already passed.
+  describe('rewindPostgresSyncCursors', () => {
+    const ZERO_CATALOG = { scraps: '0', ingredients: '0', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' };
+    let store;
+    beforeEach(() => {
+      store = {
+        'peer-inst-1': {
+          brainSeq: 42, memorySeq: '1000000000000050',
+          catalogSeqs: { ...ZERO_CATALOG, ingredients: '1000000000000009' },
+          checksums: { goals: 'g1' }, brainChecksum: 'b1', lastSyncAt: '2026-01-01T00:00:00.000Z',
+        },
+        'peer-inst-2': { memorySeq: '1000000000000007' },
+      };
+      readJSONFile.mockImplementation(async () => structuredClone(store));
+      atomicWrite.mockImplementation(async (path, payload) => {
+        if (String(path).includes('instances_sync_cursors')) store = structuredClone(payload);
+      });
+    });
+
+    it('zeroes memory and every Catalog kind for every peer, leaving brain and checksum state', async () => {
+      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      expect(await rewindPostgresSyncCursors()).toBe(2);
+      expect(store['peer-inst-1']).toEqual({
+        brainSeq: 42, memorySeq: '0', catalogSeqs: ZERO_CATALOG,
+        checksums: { goals: 'g1' }, brainChecksum: 'b1', lastSyncAt: '2026-01-01T00:00:00.000Z',
+      });
+      expect(store['peer-inst-2']).toEqual({ memorySeq: '0', catalogSeqs: ZERO_CATALOG });
+    });
+
+    it('keeps the rewind when a sync that read cursors before it finishes afterwards', async () => {
+      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      const peer = { ...mockPeer, syncCategories: { memory: true } };
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/memory/sync')) {
+          // The restore completes while this pull is on the wire.
+          await rewindPostgresSyncCursors();
+          return { ok: true, json: async () => ({ memories: [{ id: 'm1' }], maxSequence: '1000000000000060', hasMore: false }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+      applyMemoryChanges.mockResolvedValue({ inserted: 1, updated: 0 });
+
+      await syncWithPeer(peer);
+
+      expect(mockFetch.mock.calls.some(([url]) => url.includes('since=1000000000000050'))).toBe(true);
+      expect(store['peer-inst-1'].memorySeq).toBe('0');
+      expect(store['peer-inst-1'].catalogSeqs).toEqual(ZERO_CATALOG);
+    });
+  });
 });
