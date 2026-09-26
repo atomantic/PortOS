@@ -10,10 +10,10 @@ import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
-import { rewindPostgresSyncCursors } from './syncOrchestrator.js';
 
 // The real rewind rewrites this install's data/instances_sync_cursors.json.
-vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors: vi.fn(async () => 0) }));
+const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors }));
 
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',

@@ -1,15 +1,19 @@
-import { getRunningAgents } from '../services/agents.js';
-
 // External CLI processes have no push API. All mounted viewers share one
 // non-overlapping host scan; snapshots avoid a second probe per browser.
 const subscribers = new Set();
 let run = null;
+let runningAgentsLoader;
+
+const loadRunningAgents = () => {
+  runningAgentsLoader ??= import('../services/agents.js').then(({ getRunningAgents }) => getRunningAgents);
+  return runningAgentsLoader;
+};
 
 function start() {
   if (run) return;
   const owner = { timer: null, signature: null, agents: null };
   run = owner;
-  const tick = () => getRunningAgents().then(agents => {
+  const tick = () => loadRunningAgents().then(getRunningAgents => getRunningAgents()).then(agents => {
     if (run !== owner) return;
     // Unix start time is derived from elapsed seconds and jitters per scan.
     // Keep elapsed runtime in the frame so the page clock remains current.

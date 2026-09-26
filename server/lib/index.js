@@ -727,6 +727,7 @@ export * from './openchamber.js';
 
 export * from './layaMlx.js';
 export * from './layeredIntelligenceSources.js';
+export * from './layeredIntelligenceSourceKeys.js';
 
 export * from './persistentMindMaintainer.js';
 

@@ -15,7 +15,6 @@ import { notifyAppsChanged } from '../../services/apps.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../../services/appIconDetect.js';
 import { loadApp, pathExists } from './shared.js';
-import { appIconQuerySchema, validateRequest } from '../../lib/validation.js';
 
 const router = Router();
 const rasterIconCache = new Map();
@@ -40,6 +39,7 @@ const getRasterIcon = (appId, iconPath, iconStat, size, iconData) => {
 // GET /api/apps/:id/icon - Serve the app's detected icon image
 router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+  const { appIconQuerySchema, validateRequest } = await import('../../lib/validation.js');
   const { size } = validateRequest(appIconQuerySchema, req.query);
 
   // Use stored appIconPath, or detect on-the-fly. Stored SVGs that embed an

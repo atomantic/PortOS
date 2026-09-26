@@ -13,7 +13,7 @@ export const gitDeleteBranchBodySchema = z.object({
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
-import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSources.js';
+import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';

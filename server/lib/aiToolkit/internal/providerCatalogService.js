@@ -13,8 +13,6 @@ import { providerModeGroups } from './providerModes.js';
 import { ollamaRefreshGroupKey, resolveModelFetcher } from './modelFetchers.js';
 import { modelCatalogUpdate, parseModelCatalog, toModelCatalog } from './modelCatalog.js';
 import { CLAUDE_CATALOG_SUBPATH, catalogAge, claudeConfigDir, selectCatalogModels } from './claudeCodeCatalog.js';
-import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from './windowsSafeSpawn.js';
-import { probeCodexModelsViaAppServer } from './codexModelListProbe.js';
 
 function resolveProbeSpawn(provider, defaultBin, args) {
   const spawned = composeBootstrapSpawn(provider, provider?.command || defaultBin, args);
@@ -74,6 +72,7 @@ export function createProviderCatalogService({
         if (!commandPath) return { success: false, error: `Command '${probeCommand}' not found in PATH` };
 
         const searchEnv = { ...process.env, ...provider.envVars };
+        const { prepareWindowsSafeSpawn, resolveWindowsExecutable } = await import('./windowsSafeSpawn.js');
         const invokePath = (isWin32 && resolveWindowsExecutable(provider.command, isWin32, searchEnv)) || commandPath;
         let everSpawned = false;
         const tryVersion = async (flag) => {
@@ -328,6 +327,7 @@ export function createProviderCatalogService({
     async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
       const spawned = resolveProbeSpawn(provider, defaultBin, listArgs);
       const probe = spawned.label;
+      const { prepareWindowsSafeSpawn } = await import('./windowsSafeSpawn.js');
       const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
@@ -357,6 +357,10 @@ export function createProviderCatalogService({
     },
 
     async _fetchCodexModels(provider) {
+      const [{ prepareWindowsSafeSpawn, resolveWindowsExecutable }, { probeCodexModelsViaAppServer }] = await Promise.all([
+        import('./windowsSafeSpawn.js'),
+        import('./codexModelListProbe.js'),
+      ]);
       const spawned = resolveProbeSpawn(provider, 'codex', ['app-server']);
       // Only needed here for the Windows shim search — `probeCodexModelsViaAppServer`
       // rebuilds the same merge itself from `provider.envVars` before spawning.
@@ -424,6 +428,7 @@ export function createProviderCatalogService({
 
     async _claudeCliVersion(provider) {
       const spawned = resolveProbeSpawn(provider, 'claude', ['--version']);
+      const { prepareWindowsSafeSpawn } = await import('./windowsSafeSpawn.js');
       const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 10000,
