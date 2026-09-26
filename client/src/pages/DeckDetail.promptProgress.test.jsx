@@ -91,9 +91,15 @@ describe('DeckDetail prompt progress', () => {
     await act(async () => { firstSource.onopen?.(); });
     expect(api.generateDeckPrompts).toHaveBeenCalledTimes(1);
     await emit(firstSource, { type: 'start', requested: 24, chunks: 2 });
-    await emit(firstSource, { type: 'chunk', written: 12, requested: 24, chunk: 1, chunks: 2 });
+    await emit(firstSource, { type: 'batch-start', written: 0, requested: 24, chunk: 1, chunks: 2 });
+    expect(screen.getByRole('status')).toHaveTextContent('Waiting for the AI · 0 of 24 prompts saved · batch 1 of 2');
+    await emit(firstSource, { type: 'activity', written: 0, requested: 24, chunk: 1, chunks: 2 });
+    expect(screen.getByRole('status')).toHaveTextContent('AI is responding · 0 of 24 prompts saved · batch 1 of 2');
+    await emit(firstSource, { type: 'chunk', written: 16, cardsWritten: 16, requested: 24, chunk: 1, chunks: 2 });
+    expect(screen.getByRole('status')).toHaveTextContent('Saved 16 prompts · 16 of 24 · batch 1 of 2');
     await waitFor(() => expect(api.getDeck).toHaveBeenCalledTimes(2));
-    await emit(firstSource, { type: 'chunk', written: 24, requested: 24, chunk: 2, chunks: 2 });
+    await emit(firstSource, { type: 'batch-start', written: 16, requested: 24, chunk: 2, chunks: 2 });
+    await emit(firstSource, { type: 'chunk', written: 24, cardsWritten: 8, requested: 24, chunk: 2, chunks: 2 });
     await waitFor(() => expect(api.getDeck).toHaveBeenCalledTimes(3));
     await emit(firstSource, { type: 'complete', written: 24, requested: 24 });
     await act(async () => { firstRun.resolve({ deck, written: 24, cast: 0 }); });
@@ -104,7 +110,8 @@ describe('DeckDetail prompt progress', () => {
     await act(async () => { secondSource.onopen?.(); });
     expect(api.generateDeckPrompts).toHaveBeenCalledTimes(2);
     await emit(secondSource, { type: 'start', requested: 12, chunks: 1 });
-    await emit(secondSource, { type: 'chunk', written: 12, requested: 12, chunk: 1, chunks: 1 });
+    await emit(secondSource, { type: 'batch-start', written: 0, requested: 12, chunk: 1, chunks: 1 });
+    await emit(secondSource, { type: 'chunk', written: 12, cardsWritten: 12, requested: 12, chunk: 1, chunks: 1 });
     await waitFor(() => expect(api.getDeck).toHaveBeenCalledTimes(4));
     await emit(secondSource, { type: 'complete', written: 12, requested: 12 });
     await act(async () => { secondRun.resolve({ deck, written: 12, cast: 0 }); });

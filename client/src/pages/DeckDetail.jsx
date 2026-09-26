@@ -205,6 +205,7 @@ function DeckEditor({ id }) {
     const latest = promptFrames[promptFrames.length - 1];
     if (latest?.type !== 'chunk' || promptFrames.length <= lastChunkSeen.current) return undefined;
     lastChunkSeen.current = promptFrames.length;
+    if (Number.isFinite(latest.cardsWritten) && latest.cardsWritten === 0) return undefined;
     let active = true;
     getDeck(id, { silent: true }).then((data) => {
       if (active && mountedRef.current && data) setDeck(data);
@@ -217,7 +218,8 @@ function DeckEditor({ id }) {
   // Null when idle — the step note then falls back to the deck counts.
   const generatingStatus = useMemo(() => {
     if (!generating) return null;
-    let phaseLabel = null;
+    let phaseLabel = 'Writing prompts…';
+    let batchState = null;
     let written = null;
     let requested = null;
     let chunk = null;
@@ -227,17 +229,35 @@ function DeckEditor({ id }) {
       else if (f?.type === 'start') {
         if (Number.isFinite(f.requested)) requested = f.requested;
         if (Number.isFinite(f.chunks)) chunks = f.chunks;
+        phaseLabel = `Preparing ${requested || 0} prompts in ${chunks || 0} batches…`;
+        batchState = null;
+      } else if (f?.type === 'batch-start' || f?.type === 'activity') {
+        if (Number.isFinite(f.written)) written = f.written;
+        if (Number.isFinite(f.requested)) requested = f.requested;
+        if (Number.isFinite(f.chunk)) chunk = f.chunk;
+        if (Number.isFinite(f.chunks)) chunks = f.chunks;
+        batchState = f.type;
       } else if (f?.type === 'chunk') {
         if (Number.isFinite(f.written)) written = f.written;
         if (Number.isFinite(f.requested)) requested = f.requested;
         if (Number.isFinite(f.chunk)) chunk = f.chunk;
         if (Number.isFinite(f.chunks)) chunks = f.chunks;
+        batchState = 'saved';
       }
     }
     // Casting runs before the first prompt chunk — name the phase, not a 0/N.
-    if (written === null && phaseLabel) return phaseLabel;
+    if (chunk === null && phaseLabel !== 'Writing prompts…') return phaseLabel;
     if (written === null || requested === null) return 'Writing prompts…';
     const batch = chunk !== null && chunks !== null ? ` · batch ${chunk} of ${chunks}` : '';
+    if (batchState === 'batch-start') return `Waiting for the AI · ${written} of ${requested} prompts saved${batch}`;
+    if (batchState === 'activity') return `AI is responding · ${written} of ${requested} prompts saved${batch}`;
+    if (batchState === 'saved') {
+      const latest = promptFrames[promptFrames.length - 1];
+      const added = Number.isFinite(latest?.cardsWritten) ? latest.cardsWritten : null;
+      return added === 0
+        ? `Batch finished with no usable prompts · ${written} of ${requested} saved${batch}`
+        : `${added === null ? 'Batch saved' : `Saved ${added} prompts`} · ${written} of ${requested}${batch}`;
+    }
     return `Writing prompts… ${written} of ${requested}${batch}`;
   }, [generating, promptFrames]);
 

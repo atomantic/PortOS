@@ -25,9 +25,9 @@ import {
 } from '../lib/deckTemplates.js';
 import { DECK_CARD_PROMPT_MAX } from '../lib/deckValidation.js';
 
-// Small enough that one bad string can't sink a long response; a 79-card
-// tarot deck is seven calls.
-export const PROMPTS_PER_CALL = 12;
+// Keep each response bounded while amortizing the full-roster context over
+// fewer sequential calls; a 79-card tarot deck is five calls.
+export const PROMPTS_PER_CALL = 16;
 const CANON_KINDS = Object.freeze([
   { field: 'characters', kind: 'character', header: 'CHARACTERS' },
   { field: 'places', kind: 'place', header: 'PLACES' },
@@ -185,14 +185,22 @@ export function salvagePromptPairs(text) {
   return pairs.length ? { prompts: pairs } : null;
 }
 
-const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null }) => {
+const runJson = async ({ provider, selectedModel, effort, prompt, source, shapePredicate, what, salvage = null, onActivity = null }) => {
   const { runPromptThroughProvider } = await promptRunner();
   let result;
+  let activityReported = false;
   try {
     result = await runPromptThroughProvider({
       provider, model: selectedModel, effort: effort || undefined, prompt, source,
       responseSchema: shapePredicate,
       repair: jsonRepair({ shapePredicate, salvage }),
+      // Progress is observational. Never send provider output text over the
+      // deck progress stream; the caller only learns that output has started.
+      ...(onActivity ? { onData: () => {
+        if (activityReported) return;
+        activityReported = true;
+        onActivity?.();
+      } } : {}),
     });
   } catch (err) {
     if (err?.schemaFailure) throw invalidJson(what, { lastError: err, lastPreview: '' });
@@ -234,14 +242,24 @@ export async function castDeckFromUniverse({ deck, cards, universe, providerId, 
 /**
  * @returns {Promise<{ prompts: [{ cardId, prompt }], llm }>}
  */
-export async function generateDeckCardPrompts({ deck, roster, targets, universe = null, providerId, model, effort, onChunk = null } = {}) {
+export async function generateDeckCardPrompts({
+  deck, roster, targets, universe = null, providerId, model, effort,
+  onBatchStart = null, onActivity = null, onChunk = null,
+} = {}) {
   const { resolveProviderAndModel, assertProvider } = await promptRunner();
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   assertProvider(provider, noProvider());
   const prompts = [];
   let llm = null;
+  const chunks = Math.ceil(targets.length / PROMPTS_PER_CALL);
   for (let i = 0; i < targets.length; i += PROMPTS_PER_CALL) {
     const chunk = targets.slice(i, i + PROMPTS_PER_CALL);
+    const chunkNumber = Math.floor(i / PROMPTS_PER_CALL) + 1;
+    await onBatchStart?.({
+      chunk: chunkNumber,
+      chunks,
+      requested: targets.length,
+    });
     const { value, llm: ran } = await runJson({
       provider, selectedModel, effort,
       prompt: buildCardPromptsPrompt({ deck, roster, targets: chunk, universe }),
@@ -249,6 +267,7 @@ export async function generateDeckCardPrompts({ deck, roster, targets, universe 
       shapePredicate: (o) => o && Array.isArray(o.prompts),
       what: 'card prompts',
       salvage: salvagePromptPairs,
+      onActivity: () => onActivity?.({ chunk: chunkNumber, chunks, requested: targets.length }),
     });
     llm = ran;
     const byKey = new Map(chunk.map((c) => [c.key, c]));
@@ -259,8 +278,13 @@ export async function generateDeckCardPrompts({ deck, roster, targets, universe 
       if (card && prompt) written.push({ cardId: card.id, prompt });
     }
     prompts.push(...written);
-    // Let the caller persist each chunk as it lands.
-    if (onChunk && written.length) await onChunk(written);
+    // Let the caller persist and report each completed provider call, including
+    // a valid response that contained no usable prompts.
+    await onChunk?.(written, {
+      chunk: chunkNumber,
+      chunks,
+      requested: targets.length,
+    });
   }
   console.log(`🃏 deck prompts "${deck.name}": ${prompts.length}/${targets.length} cards written`);
   return { prompts, llm };
