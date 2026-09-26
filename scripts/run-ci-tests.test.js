@@ -171,6 +171,14 @@ describe('planCrashRetry', () => {
     });
   });
 
+  it('removes reporter color resets from the retry filename', () => {
+    expect(planCrashRetry('server', '\u001b[31m' + CRASH_OUTPUT + '\u001b[39m')).toEqual({
+      retry: true,
+      relPath: 'server/services/sprites/importer.test.js',
+      selector: './services/sprites/importer.test.js',
+    });
+  });
+
   it('declines to retry a crash reported in the other workspace', () => {
     // A server-shard crash never gets replayed as a client-scoped selector.
     expect(planCrashRetry('client', CRASH_OUTPUT)).toEqual({
@@ -207,6 +215,12 @@ describe('hasOtherTestFailures', () => {
     expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace(
       'Tests  15077 passed', 'Tests  15076 passed | 1 failed',
     ))).toBe(true);
+  });
+
+  it('parses colored summaries without masking assertion failures', () => {
+    const colored = CLEAN_RUN_SUMMARY.replace(/(\d+ (?:passed|error))/g, '\u001b[32m$1\u001b[39m');
+    expect(hasOtherTestFailures(colored)).toBe(false);
+    expect(hasOtherTestFailures(colored.replace('798 passed', '797 passed | \u001b[31m1 failed'))).toBe(true);
   });
 
   it('reads true when a second, unrelated unhandled error shares the run with the crash', () => {
