@@ -313,7 +313,7 @@ function CostReportTable({ report }) {
       <div className="hidden sm:block overflow-x-auto">
         <table className="w-full text-sm min-w-[680px]">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b border-port-border">
+            <tr className="text-left text-xs text-gray-400 border-b border-port-border">
               <th className="py-2 pr-2 font-medium">Provider / Model</th>
               <th className="py-2 px-2 font-medium text-right">Sessions</th>
               <th className="py-2 px-2 font-medium text-right">Tokens In</th>
