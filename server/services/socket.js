@@ -792,6 +792,9 @@ function setupMediaGenEventForwarding() {
   mediaJobEvents.on('changed', () => {
     ioInstance?.emit('media-jobs:changed', {});
   });
+  trainingEvents.on('dataset:changed', ({ datasetId }) => {
+    ioInstance?.emit('training:dataset:changed', { datasetId });
+  });
   trainingEvents.on('checkpoints:changed', ({ runId }) => {
     ioInstance?.emit('training:checkpoints:changed', { runId });
   });

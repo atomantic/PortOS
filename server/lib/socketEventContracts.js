@@ -219,6 +219,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'training:dataset:changed': {
+    direction: 'server-to-client',
+    summary: 'Dataset changes were persisted; reread this dataset.',
+    payloadSchema: { type: 'object', properties: { datasetId: { type: 'string' } }, required: ['datasetId'], additionalProperties: false },
+  },
   'training:checkpoints:changed': {
     direction: 'server-to-client',
     summary: 'Training checkpoints or samples were persisted; reread this run.',

@@ -20,7 +20,7 @@ import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import { IMAGE_ACCEPT } from '../utils/fileUpload';
 import Modal from '../components/ui/Modal';
-import { useAutoRefetch } from '../hooks/useAutoRefetch.js';
+import { useSocketResource } from '../hooks/useSocketResource.js';
 import { useSseProgress } from '../hooks/useSseProgress';
 import DatasetImageGrid from '../components/loraTraining/DatasetImageGrid';
 import GenerateBatchDialog from '../components/loraTraining/GenerateBatchDialog';
@@ -46,6 +46,8 @@ import {
   stripLoraDatasetSharedCaptionFragments,
   getUniverse,
 } from '../services/api';
+
+const DATASET_EVENTS = ['training:dataset:changed'];
 
 const SUBJECT_TYPE_LABEL = { characters: 'Character', objects: 'Object', places: 'Place' };
 const subjectKind = (dataset) => dataset?.character?.entryKind || 'characters';
@@ -200,8 +202,11 @@ export default function LoraDatasetDetail({ recordId }) {
   // `/models/training/:recordId`; `:datasetId` is the fallback for a direct mount.
   const params = useParams();
   const datasetId = recordId ?? params.datasetId;
-  const [dataset, setDataset] = useState(null);
-  const [loadError, setLoadError] = useState(null);
+  const { data: dataset, updateData: setDataset, error, refetch: refresh } = useSocketResource(
+    () => getLoraDataset(datasetId),
+    { events: DATASET_EVENTS, resourceKey: datasetId, matchesEvent: payload => payload?.datasetId === datasetId },
+  );
+  const loadError = error?.message;
   const [subject, setSubject] = useState(null);
   const [variationAxes, setVariationAxes] = useState(null);
   const [triggerDraft, setTriggerDraft] = useState(null);
@@ -222,12 +227,6 @@ export default function LoraDatasetDetail({ recordId }) {
   // unsaved caption drafts the rewrite superseded — otherwise a stale draft
   // blur-saves the old text back, undoing the strip.
   const [captionDraftResetToken, setCaptionDraftResetToken] = useState(0);
-
-  const refresh = useCallback(() => getLoraDataset(datasetId)
-    .then((d) => { setDataset(d); return d; })
-    .catch((err) => { setLoadError(err?.message || 'Dataset not found'); return null; }), [datasetId]);
-
-  useEffect(() => { refresh(); }, [refresh]);
 
   // Pull the live canon subject once for variation-axis options + sheet link.
   useEffect(() => {
@@ -295,9 +294,7 @@ export default function LoraDatasetDetail({ recordId }) {
     }
   };
 
-  // Poll while any image renders — the server heals stuck images on read.
   const renderingCount = readiness.rendering;
-  useAutoRefetch(refresh, 5000, { enabled: renderingCount > 0, immediate: false, pollOnly: true });
 
   // Caption-run SSE — refetch on terminal so captions land in the grid, and
   // surface failures the run reported. The server emits per-image `error`

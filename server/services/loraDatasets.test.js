@@ -4,6 +4,7 @@ import { writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
+import { trainingEvents } from './loraTraining/events.js';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'lora-datasets-test-'));
@@ -310,10 +311,17 @@ describe('reconcileRenderingImages', () => {
     const id = await seedRendering('job-1');
     mkdirSync(join(TEST_DATA_ROOT, 'images'), { recursive: true });
     await makePng(join(TEST_DATA_ROOT, 'images', 'job-1.png'));
+    const persisted = [];
+    trainingEvents.once('dataset:changed', ({ datasetId }) => {
+      persisted.push(getDataset(datasetId));
+      expect(existsSync(datasetImagePath(datasetId, 'img-r.png'))).toBe(true);
+    });
     const out = await reconcileRenderingImages(id, {
       jobLookup: () => ({ status: 'completed', result: { filename: 'job-1.png' } }),
     });
     expect(out.images[0].status).toBe('ready');
+    expect(persisted).toHaveLength(1);
+    expect((await persisted[0]).images[0].status).toBe('ready');
     expect(existsSync(datasetImagePath(id, 'img-r.png'))).toBe(true);
   });
 
