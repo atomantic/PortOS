@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { appLaunchVideoRequestSchema, validateRequest } from '../../lib/validation.js';
-import { createCosTaskSchema } from '../../lib/cosValidation.js';
+import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideo.js';
@@ -14,7 +14,7 @@ const router = Router();
 // The agent pin shares every manual dispatch's provider/model/effort vocabulary.
 // It picks WHO runs the task, so it stays out of the prompt's creative options.
 const launchVideoTaskSchema = appLaunchVideoRequestSchema
-  .extend(createCosTaskSchema.pick({ provider: true, model: true, effort: true }).shape);
+  .extend(pullRequestProviderOverrideSchema.shape);
 // Enough history to browse every recent take without turning the media store
 // into an unbounded per-app export.
 const LAUNCH_VIDEO_LIST_LIMIT = 50;
@@ -54,8 +54,8 @@ router.get('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   const { loadHistory } = await import('../../services/videoGen/history.js');
   // Bounded projection of the existing media store, not a new run database.
   const videos = (await loadHistory()).filter(item => item.launchVideo?.appId === req.loadedApp.id)
-    .slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(({ id, filename, thumbnail, createdAt, durationSec, width, height, launchVideo }) => ({
-      id, filename, thumbnail, createdAt, durationSec, width, height, caption: launchVideo.caption,
+    .slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(({ id, filename, thumbnail, createdAt, durationSec, launchVideo }) => ({
+      id, filename, thumbnail, createdAt, durationSec, caption: launchVideo.caption,
     }));
   res.json({ videos });
 }));

@@ -64,12 +64,12 @@ describe('user-triggered launch videos', () => {
   it('returns a bounded app-only result projection and propagates storage failure', async () => {
     loadHistory.mockResolvedValue([
       { id: 'other', launchVideo: { appId: 'other' } },
-      ...Array.from({ length: 52 }, (_, n) => ({ id: `video-${n}`, filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, width: 1920, height: 1080, prompt: 'not projected', launchVideo: { appId: 'example', caption: 'A clear plan.' } })),
+      ...Array.from({ length: 52 }, (_, n) => ({ id: `video-${n}`, filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, prompt: 'not projected', launchVideo: { appId: 'example', caption: 'A clear plan.' } })),
     ]);
     const response = await request(app).get('/api/apps/example/launch-videos');
     expect(response.status).toBe(200);
     expect(response.body.videos).toHaveLength(50);
-    expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, width: 1920, height: 1080, caption: 'A clear plan.' });
+    expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, caption: 'A clear plan.' });
     loadHistory.mockRejectedValue(new Error('Storage unavailable'));
     expect((await request(app).get('/api/apps/example/launch-videos')).status).toBe(500);
   });
