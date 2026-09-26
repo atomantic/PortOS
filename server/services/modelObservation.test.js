@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { observeModelResource, registerModelObservationSocket, resetModelObservationsForTests } from './modelObservation.js';
+import { observeModelResource, registerModelObservationSocket, __resetModelObservationsForTests } from './modelObservation.js';
 
 function viewer() {
   const socket = new EventEmitter();
@@ -14,7 +14,7 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 
 describe('shared model observations through socket subscriptions and HTTP reads', () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => { resetModelObservationsForTests(); vi.useRealTimers(); });
+  afterEach(() => { __resetModelObservationsForTests(); vi.useRealTimers(); });
 
   it('shares one external sample across viewers and stops after the final disconnect', async () => {
     const probe = vi.fn().mockResolvedValue({ ollama: [] });
@@ -71,6 +71,24 @@ describe('shared model observations through socket subscriptions and HTTP reads'
     await expect(read).resolves.toEqual({ ollama: [] });
     expect(probe).toHaveBeenCalledTimes(2);
     expect(socket.frames).toEqual([{}]);
+  });
+
+  it('upgrades a pending cache-backed read when a caller requests a fresh account sample', async () => {
+    let resolveCached;
+    const probe = vi.fn().mockImplementationOnce(() => new Promise(resolve => { resolveCached = resolve; }))
+      .mockResolvedValue({ status: 'ready' });
+    const resource = observeModelResource('codex-account', probe);
+    const normal = resource.read();
+    await flush();
+    expect(probe).toHaveBeenLastCalledWith({ fresh: false });
+    const fresh = resource.read({ fresh: true });
+    const otherViewer = resource.read({ fresh: true });
+    resolveCached({ status: 'signed-out' });
+    await expect(normal).resolves.toEqual({ status: 'ready' });
+    await expect(fresh).resolves.toEqual({ status: 'ready' });
+    await expect(otherViewer).resolves.toEqual({ status: 'ready' });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(probe).toHaveBeenLastCalledWith({ fresh: true });
   });
 
   it('does not restart observation when the last viewer leaves during a read', async () => {

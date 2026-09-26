@@ -13,6 +13,7 @@ export function observeModelResource(namespace, probe, intervalMs = 20_000) {
   const subscribers = groups.get(namespace) ?? new Set();
   groups.set(namespace, subscribers);
   let pending = null;
+  let pendingFresh = false;
   let sample = null;
   let sampled = false;
   let revision = 0;
@@ -35,10 +36,19 @@ export function observeModelResource(namespace, probe, intervalMs = 20_000) {
     timer.unref?.();
   };
   const read = ({ fresh = false } = {}) => {
-    if (pending) return pending;
+    if (pending) {
+      // A forced reconcile must not inherit a cache-backed probe already in
+      // flight (notably the account read immediately following sign-in).
+      if (fresh && !pendingFresh) {
+        pendingFresh = true;
+        revision += 1;
+      }
+      return pending;
+    }
     if (!fresh && subscribers.size && sampled && Date.now() - sampledAt < intervalMs) {
       return sample.error ? Promise.reject(sample.error) : Promise.resolve(sample.value);
     }
+    pendingFresh = fresh;
     pending = Promise.resolve().then(async () => {
       let result;
       let started;
@@ -46,7 +56,7 @@ export function observeModelResource(namespace, probe, intervalMs = 20_000) {
       // Every waiter gets the post-mutation sample, never the discarded result.
       do {
         started = revision;
-        result = await Promise.resolve().then(() => probe({ fresh })).then(value => ({ value }), error => ({ error }));
+        result = await Promise.resolve().then(() => probe({ fresh: pendingFresh })).then(value => ({ value }), error => ({ error }));
       } while (started !== revision);
       const nextSignature = result.error ? 'probe-unavailable' : signature(result.value);
       sample = result;
@@ -119,7 +129,7 @@ export function observeModelMutations(...namespaces) {
   };
 }
 
-export function resetModelObservationsForTests() {
+export function __resetModelObservationsForTests() {
   for (const resource of resources.values()) resource.stop();
   resources.clear();
   groups.clear();
