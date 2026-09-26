@@ -46,7 +46,7 @@ vi.mock('./settings.js', async () => {
   }) };
 });
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
-vi.mock('./digital-twin-meta.js', () => ({ loadMeta: async () => ({}), saveMeta: vi.fn() }));
+vi.mock('./digital-twin-meta.js', () => ({ loadMeta: async () => ({}), saveMeta: vi.fn(), digitalTwinEvents: { emit: vi.fn() } }));
 vi.mock('./taste-questionnaire.js', () => ({ invalidateTasteProfileCache: vi.fn() }));
 
 import { PATHS } from '../lib/fileUtils.js';
