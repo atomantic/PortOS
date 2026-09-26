@@ -18,8 +18,7 @@
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
  *     annotate execution, never start it; task reorder/refresh/enhance,
  *     templates, challenge and goal-fidelity reports — records and LLM text
- *     only, and sub-agents call the latter from loopback anyway; job toggle —
- *     arms a job the operator authored through the gated create/update routes.
+ *     only, and sub-agents call the latter from loopback anyway.
  *   - standardize/analyze — reads the repo; `apply` and `backup` are gated.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
@@ -77,6 +76,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/agents/:id/btw',
   'POST /api/cos/jobs',
   'PUT /api/cos/jobs/:id',
+  // Toggle arms an existing job, shell jobs included, for its next run.
+  'POST /api/cos/jobs/:id/toggle',
   'POST /api/cos/jobs/:id/trigger',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
