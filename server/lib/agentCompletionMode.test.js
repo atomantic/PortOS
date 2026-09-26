@@ -82,6 +82,7 @@ describe('resolveCompletionMode', () => {
       resolveCompletionMode({ isReviewLoopFollowUp: true }),
       resolveCompletionMode({ slashdoCommand: 'release' }),
       resolveCompletionMode({ slashdoCommand: 'better' }),
+      resolveCompletionMode({ taskHookType: 'branch-reconcile' }),
       resolveCompletionMode({ isTui: true, canRunSlashCommands: false }),
       resolveCompletionMode({ isTui: true }),
       resolveCompletionMode({ worktreeInfo: wt, willOpenPR: false }),

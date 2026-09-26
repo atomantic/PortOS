@@ -23,6 +23,8 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
 
 const AUDIT_FLOW_GUIDANCE = 'Follow the bundled Better audit workflow through remediation, verification, PR publication, and cleanup. You own delivery: open the category PRs and merge into the repository default branch when current-head CI and configured reviews pass. If no external reviewers are configured, complete the internal review and merge after CI passes. This launch authorizes that merge by default; honor explicit --scan-only, --no-merge, and read-only constraints. Use plain git and the forge CLI when slash commands are unavailable. Do not stop at local commits or hand publication back to PortOS. A clean audit needs no PR. If any required gate is unavailable or fails, retain the work and report INCOMPLETE with the PR or branch and first unverified checkpoint.';
 
+const RECONCILE_FLOW_GUIDANCE = 'Follow the branch reconciliation task above for the named branches only, including its branch allowlist, author checks, review-only and superseded no-mutation rules, configured reviews, current-head CI, and merge gates. The task owns any authorized commit, push, PR creation, merge, and cleanup of those branches. There is no implicit commit, push, or merge-back of the coordinator checkout. Report each verified outcome or the retained branch and first unverified checkpoint before signaling completion.';
+
 const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
 
 /**
@@ -124,6 +126,7 @@ export function buildCompletionGuidelineBullet({
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => REASONING_ONLY_BULLET,
     [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
     [COMPLETION_MODES.AUDIT_FLOW]: () => AUDIT_FLOW_GUIDANCE,
+    [COMPLETION_MODES.RECONCILE_FLOW]: () => RECONCILE_FLOW_GUIDANCE,
     [COMPLETION_MODES.RELEASE_FLOW]: () => RELEASE_FLOW_GUIDANCE,
     [COMPLETION_MODES.READ_ONLY]: () => '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.',
     // A PR follow-up already carries its own PRIMARY OBJECTIVE section with the
@@ -167,6 +170,7 @@ const NO_COMMIT_TARGET_MODES = new Set([
   COMPLETION_MODES.ACTION_OUTPUT,
   COMPLETION_MODES.DISCARD_WORKTREE,
   COMPLETION_MODES.CLAIM_FLOW,
+  COMPLETION_MODES.RECONCILE_FLOW,
   COMPLETION_MODES.RELEASE_FLOW,
   COMPLETION_MODES.AUDIT_FLOW,
   COMPLETION_MODES.READ_ONLY,
@@ -233,6 +237,10 @@ export function buildFallbackCompletionInstructions({
     [COMPLETION_MODES.AUDIT_FLOW]: () => ({
       step4: AUDIT_FLOW_GUIDANCE,
       gitHygiene: `- ${AUDIT_FLOW_GUIDANCE}`,
+    }),
+    [COMPLETION_MODES.RECONCILE_FLOW]: () => ({
+      step4: RECONCILE_FLOW_GUIDANCE,
+      gitHygiene: `- ${RECONCILE_FLOW_GUIDANCE}`,
     }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => ({
       step4: RELEASE_FLOW_GUIDANCE,
@@ -430,6 +438,17 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   );
 }
 
+export function buildReconcileFlowCompletionSection({ sentinelPath } = {}) {
+  return [
+    '## Branch Reconciliation Handoff',
+    RECONCILE_FLOW_GUIDANCE,
+    '',
+    'After the scoped reconciliation reaches its final outcome, write the completion sentinel and stop:',
+    '',
+    ...buildSentinelWriteSteps(1, sentinelPath, '   ## Reconciliation outcome\n   <verified branch outcomes and PR URLs, or INCOMPLETE with the first unverified checkpoint>'),
+  ].join('\n');
+}
+
 /** The release procedure is the deliverable; the sentinel only records its verified outcome. */
 export function buildReleaseFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
   const lines = ['## Release Workflow Handoff', RELEASE_FLOW_GUIDANCE];
@@ -597,6 +616,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  */
 export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
   if (mode === COMPLETION_MODES.AUDIT_FLOW) return AUDIT_FLOW_GUIDANCE;
+  if (mode === COMPLETION_MODES.RECONCILE_FLOW) return RECONCILE_FLOW_GUIDANCE;
   if (mode === COMPLETION_MODES.RELEASE_FLOW) return RELEASE_FLOW_GUIDANCE;
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
