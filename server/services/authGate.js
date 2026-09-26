@@ -13,6 +13,7 @@ import {
   isPeerBasicBootstrapRequest,
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
+import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
@@ -255,6 +256,14 @@ export const requireHostControl = (req, res, next) => {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));
 };
+
+// Applies requireHostControl to every route in the audited
+// HOST_CONTROL_ROUTES list (lib/hostControlRoutes.js). Mounted once, right
+// after authGate, so the list — not each route file — is the one place that
+// says which HTTP routes execute on the host.
+export const hostControlRouteGate = (req, res, next) => (
+  isHostControlRoute(req.method, req.path) ? requireHostControl(req, res, next) : next()
+);
 
 // The socket twin of requireHostControl on a password-free install, for the
 // per-event re-check in socket.js (with a password set, that re-check already

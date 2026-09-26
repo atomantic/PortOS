@@ -86,6 +86,8 @@ const startServer = async () => {
     });
     socket.on('iterm:input', () => reached.push(['iterm:input']));
     socket.on('app:update', () => reached.push(['app:update']));
+    // Stand-in for socket.js's error:recover, which queues a recovery agent (#8716).
+    socket.on('error:recover', () => reached.push(['error:recover']));
   });
   await new Promise((resolve) => httpServer.listen(0, resolve));
   port = httpServer.address().port;
@@ -212,6 +214,10 @@ describe('host-control socket events need operator authority (#8708)', () => {
     const updateRefused = waitFor(client, 'app:update:error');
     client.emit('app:update', { appId: 'example-app' });
     expect(await updateRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', appId: 'example-app' });
+
+    const recoverRefused = waitFor(client, 'error:recover:error');
+    client.emit('error:recover', { code: 'EXAMPLE_ERROR' });
+    expect(await recoverRefused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
 
     // Read-only subscriptions stay open, and the refusals did not disconnect.
     const subscribed = waitFor(client, 'cos:subscribed');

@@ -12,7 +12,7 @@
  * assert a PERSISTED row rather than a mock call.
  */
 
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -74,6 +74,7 @@ import { getAssignableInstances } from '../services/instances.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import cosTaskRoutes from './cosTaskRoutes.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { listUserActions } from '../services/userActions.js';
 import { __resetInvestigationCircuit } from '../services/investigationTaskProducer.js';
 import { clientInvestigationFingerprint } from '../lib/investigationTasks.js';
@@ -558,5 +559,63 @@ describe('POST /api/cos/goal-fidelity/false-positive', () => {
     const res = await post({ gap: 'other' });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ queued: false, reason: expect.stringContaining('disabled') });
+  });
+});
+
+describe('host-control gate on CoS task queueing (#8716)', () => {
+  // The real authGate over the temp data root: no password until a case sets one.
+  const buildGatedApp = (remoteAddress) => {
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use('/api/cos', cosTaskRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+
+  afterEach(async () => {
+    rmSync(join(tempRoot, 'settings.json'), { force: true });
+    rmSync(join(tempRoot, 'auth-sessions.json'), { force: true });
+  });
+
+  it('refuses a remote password-free caller without queueing or spawning a task', async () => {
+    const remote = buildGatedApp('192.0.2.10');
+    for (const [path, body] of [['/api/cos/tasks', { description: 'run a shell command' }], ['/api/cos/tasks/task-1/spawn', {}], ['/api/cos/tasks/task-1/approve', {}]]) {
+      const res = await request(remote).post(path).send(body);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(cos.addTask).not.toHaveBeenCalled();
+    expect(cos.forceSpawnTask).not.toHaveBeenCalled();
+    expect(cos.approveTask).not.toHaveBeenCalled();
+  });
+
+  it('keeps a local password-free caller able to queue a task', async () => {
+    const res = await request(buildGatedApp('127.0.0.1')).post('/api/cos/tasks').send({ description: 'local work' });
+    expect(res.status).toBe(200);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('with a password set, Basic credentials are refused and an operator session is not', async () => {
+    const auth = await import('../services/auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'example-instance-password' });
+    const remote = buildGatedApp('192.0.2.10');
+    const basic = await request(remote).post('/api/cos/tasks')
+      .set('Authorization', `Basic ${Buffer.from(':example-instance-password').toString('base64')}`)
+      .send({ description: 'peer work' });
+    expect(basic.status).toBe(403);
+    expect(basic.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(cos.addTask).not.toHaveBeenCalled();
+
+    const session = await request(remote).post('/api/cos/tasks')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ description: 'operator work' });
+    expect(session.status).toBe(200);
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
   });
 });

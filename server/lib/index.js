@@ -605,6 +605,7 @@ export * from './viteAllowedHosts.js';
 export * from './apiAccessPolicy.js';
 export * from './apiCatalog.js';
 export * from './apiRouteGraph.js';
+export * from './hostControlRoutes.js';
 export * from './socketEventCatalog.js';
 export * from './sourceScan.js';
 export * from './apiOperationContracts.js';
