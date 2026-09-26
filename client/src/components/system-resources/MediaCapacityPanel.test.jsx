@@ -1,6 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+
+const socket = vi.hoisted(() => {
+  const listeners = new Map();
+  return {
+    emit: vi.fn(),
+    on: vi.fn((event, listener) => {
+      if (!listeners.has(event)) listeners.set(event, new Set());
+      listeners.get(event).add(listener);
+    }),
+    off: vi.fn((event, listener) => listeners.get(event)?.delete(listener)),
+    receive: (event, payload) => {
+      for (const listener of listeners.get(event) ?? []) listener(payload);
+    },
+    listenerCount: (event) => listeners.get(event)?.size ?? 0,
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socket }));
 
 const api = vi.hoisted(() => ({ getInstances: vi.fn() }));
 vi.mock('../../services/api.js', () => api);
@@ -48,6 +65,10 @@ const renderPanel = (props = {}) => render(
 );
 
 describe('MediaCapacityPanel', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     api.getInstances.mockResolvedValue({ peers: [] });
@@ -178,42 +199,74 @@ describe('MediaCapacityPanel', () => {
     expect(screen.queryByText('ready')).not.toBeInTheDocument();
   });
 
-  // The panel's whole job is to say what is usable *now* — a mount-only read
-  // froze every peer at its mount-time reading for as long as the page stayed
-  // open.
-  it('re-reads the peer list on the poll interval', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      api.getInstances.mockResolvedValue({ peers: [] });
-      renderPanel();
-      await act(async () => {});
-      await screen.findByText(/No peer is enabled as a media provider/);
+  it('applies pushed peer snapshots without polling and releases its subscription on unmount', async () => {
+    vi.useFakeTimers();
+    const view = renderPanel();
+    await act(async () => {});
+    expect(api.getInstances).toHaveBeenCalledTimes(1);
+    expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
+    expect(screen.getByText(/No peer is enabled as a media provider/)).toBeInTheDocument();
 
-      api.getInstances.mockResolvedValue({ peers: [providerPeer()] });
-      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    await act(async () => { socket.receive('instances:peers:updated', [providerPeer()]); });
+    expect(screen.getByText('render-box')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(api.getInstances).toHaveBeenCalledTimes(1);
 
-      expect(await screen.findByText('render-box')).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+    await act(async () => { socket.receive('instances:peers:updated', []); });
+    expect(screen.queryByText('render-box')).not.toBeInTheDocument();
+    view.unmount();
+    expect(socket.emit).toHaveBeenCalledWith('instances:unsubscribe');
+    expect(socket.listenerCount('instances:peers:updated')).toBe(0);
+    expect(socket.listenerCount('connect')).toBe(0);
+    await act(async () => {
+      socket.receive('connect');
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(api.getInstances).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the last known peers when a later refresh fails', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      api.getInstances.mockResolvedValue({ peers: [providerPeer()] });
-      renderPanel();
-      await act(async () => {});
-      await screen.findByText('render-box');
+  it('reconciles once per reconnect or tab re-show and preserves peers when that read fails', async () => {
+    api.getInstances.mockResolvedValue({ peers: [providerPeer()] });
+    renderPanel();
+    expect(await screen.findByText('render-box')).toBeInTheDocument();
 
-      api.getInstances.mockRejectedValue(new Error('offline'));
-      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    api.getInstances.mockRejectedValue(new Error('offline'));
+    await act(async () => { socket.receive('connect'); });
+    expect(api.getInstances).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/Showing the last known snapshot/i)).toBeInTheDocument();
+    expect(screen.getByText('render-box')).toBeInTheDocument();
 
-      expect(await screen.findByText(/Showing the last known snapshot/i)).toBeInTheDocument();
-      // The peer we already know about stays on screen rather than vanishing.
-      expect(screen.getByText('render-box')).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+    const visibility = vi.spyOn(document, 'visibilityState', 'get');
+    visibility.mockReturnValue('hidden');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getInstances).toHaveBeenCalledTimes(2);
+
+    api.getInstances.mockResolvedValue({ peers: [] });
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(api.getInstances).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText('render-box')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Showing the last known snapshot/i)).not.toBeInTheDocument();
+  });
+
+  it('does not let an older HTTP response replace a pushed snapshot', async () => {
+    let finish;
+    api.getInstances.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    renderPanel();
+    await act(async () => { socket.receive('instances:peers:updated', [providerPeer()]); });
+    expect(screen.getByText('render-box')).toBeInTheDocument();
+    await act(async () => { finish({ peers: [] }); });
+    expect(screen.getByText('render-box')).toBeInTheDocument();
+  });
+
+  it('ignores malformed pushes and recovers a failed initial read from a valid snapshot', async () => {
+    api.getInstances.mockRejectedValue(new Error('offline'));
+    renderPanel();
+    expect(await screen.findByText(/provider readiness is unknown/i)).toBeInTheDocument();
+    await act(async () => { socket.receive('instances:peers:updated', { peers: [] }); });
+    expect(screen.getByText(/provider readiness is unknown/i)).toBeInTheDocument();
+    await act(async () => { socket.receive('instances:peers:updated', [providerPeer()]); });
+    expect(screen.getByText('render-box')).toBeInTheDocument();
+    expect(screen.queryByText(/provider readiness is unknown/i)).not.toBeInTheDocument();
   });
 });
