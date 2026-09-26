@@ -112,7 +112,9 @@ function briefContext(commission, leadSentence, { styleSource } = {}) {
       commission?.generation,
     ),
   };
-  if (brief.constraints?.universeId) constraints.universeId = brief.constraints.universeId;
+  // A universe deleted since the commission was configured is dropped from the
+  // scope (styleSource.js reports it), so the planner never targets it.
+  if (brief.constraints?.universeId && !styleSource?.universeMissing) constraints.universeId = brief.constraints.universeId;
   if (brief.constraints?.seriesId) constraints.seriesId = brief.constraints.seriesId;
   // The RESOLVED board (an explicit pick, or the universe's linked one) — the
   // stored choice may be the follow-the-universe sentinel.
@@ -291,7 +293,7 @@ const seriesAdapter = {
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission, options = {}) {
     const count = genValue(commission, 'episodeCount');
-    const hasUniverse = !!commission?.brief?.constraints?.universeId;
+    const hasUniverse = !!commission?.brief?.constraints?.universeId && !options.styleSource?.universeMissing;
     const scope = hasUniverse
       ? 'Create the series within the provided universe (see constraints).'
       : 'Invent a fitting universe context for the series.';

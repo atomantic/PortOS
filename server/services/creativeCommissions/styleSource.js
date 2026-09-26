@@ -70,8 +70,11 @@ function renderCommissionStyleSource({ universe = null, board = null, images = [
 
 /**
  * Resolve a commission's configured universe / mood board. Returns null when
- * neither is configured (or both were deleted), else
- * `{ universeId, universeName, moodBoardId, moodBoardName, text }`.
+ * neither is configured, else
+ * `{ universeId, universeName, moodBoardId, moodBoardName, universeMissing, text }`.
+ * `universeMissing` is true when the configured universe no longer exists, so
+ * the directive drops it from the planner's scope instead of pointing a series
+ * at a deleted universe.
  */
 export async function resolveCommissionStyleSource(commission) {
   const constraints = commission?.brief?.constraints || {};
@@ -92,13 +95,15 @@ export async function resolveCommissionStyleSource(commission) {
       noBoard,
     )
     : noBoard;
-  if (!universe && !board) return null;
+  const universeMissing = !!universeId && !universe;
+  if (!universe && !board && !universeMissing) return null;
   const text = renderCommissionStyleSource({ universe, board, images: [...universeImages, ...boardImages] });
   return {
     universeId: universe ? universeId : null,
     universeName: universe?.name || null,
     moodBoardId: board ? moodBoardId : null,
     moodBoardName: board?.name || null,
+    universeMissing,
     text,
   };
 }

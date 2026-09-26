@@ -73,7 +73,8 @@ describe('resolveCommissionStyleSource', () => {
 
     resolveUniverseMock.mockRejectedValueOnce(notFound());
     resolveBoardMock.mockRejectedValueOnce(notFound());
-    expect(await resolveCommissionStyleSource(commission({ universeId: 'gone', moodBoardId: 'gone' }))).toBeNull();
+    expect(await resolveCommissionStyleSource(commission({ universeId: 'gone', moodBoardId: 'gone' })))
+      .toMatchObject({ universeId: null, moodBoardId: null, universeMissing: true, text: '' });
 
     resolveUniverseMock.mockRejectedValueOnce(new Error('connection refused'));
     await expect(resolveCommissionStyleSource(commission({ universeId: 'u1' }))).rejects.toThrow('connection refused');

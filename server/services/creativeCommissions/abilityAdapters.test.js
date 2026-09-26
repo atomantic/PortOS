@@ -133,6 +133,15 @@ describe('buildCommissionDirective — video (unchanged brief/feedback fold)', (
     expect(directive.constraints).toMatchObject({ universeId: 'u1', moodBoardId: 'b1' });
   });
 
+  it('drops a deleted universe from the planner scope', () => {
+    const directive = buildCommissionDirective(
+      { targetAbility: 'series', brief: { intent: 'a harbor saga', constraints: { universeId: 'gone' } } },
+      { styleSource: { text: '', universeMissing: true } },
+    );
+    expect(directive.constraints).not.toHaveProperty('universeId');
+    expect(directive.goal).toContain('Invent a fitting universe context');
+  });
+
   it('uses the install default model when choosing model-specific guidance', () => {
     const directive = buildCommissionDirective(
       { targetAbility: 'video', brief: { intent: 'a quiet harbor' } },
