@@ -1084,23 +1084,37 @@ describe('generateChainedVideo — model-aware ETA geometry', () => {
     settingsState.acceptedModelTerms = [H3_TERMS];
     const outerJobId = randomUUID();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    let outerCompleted = false;
-    videoGenEvents.on('completed', (event) => {
-      if (event.generationId === outerJobId) outerCompleted = true;
+    let onCompleted;
+    let onFailed;
+    const settled = new Promise((resolve) => {
+      onCompleted = (event) => {
+        if (event.generationId === outerJobId) resolve({ status: 'completed' });
+      };
+      onFailed = (event) => {
+        if (event.generationId === outerJobId) resolve({ status: 'failed', error: event.error });
+      };
+      videoGenEvents.on('completed', onCompleted);
+      videoGenEvents.on('failed', onFailed);
     });
 
-    await generateChainedVideo({
-      chunks: 2,
-      jobId: outerJobId,
-      pythonPath: '/usr/bin/python3',
-      modelId: 'minimax_h3_8bit',
-      prompt: 'test prompt',
-      mode: 'text',
-    });
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('2 chunks, eta=20s (measured, n=1)'));
-    await vi.waitFor(() => expect(outerCompleted).toBe(true));
-    videoGenEvents.removeAllListeners('completed');
-    logSpy.mockRestore();
+    try {
+      await generateChainedVideo({
+        chunks: 2,
+        jobId: outerJobId,
+        pythonPath: '/usr/bin/python3',
+        modelId: 'minimax_h3_8bit',
+        prompt: 'test prompt',
+        mode: 'text',
+      });
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('2 chunks, eta=20s (measured, n=1)'));
+      // Await the terminal event under the test's own deadline. vi.waitFor's
+      // separate one-second deadline can expire before the chain finishes.
+      expect(await settled).toEqual({ status: 'completed' });
+    } finally {
+      videoGenEvents.off('completed', onCompleted);
+      videoGenEvents.off('failed', onFailed);
+      logSpy.mockRestore();
+    }
   });
 });
 

@@ -248,14 +248,26 @@ d="$1"; shift
 // the job lives, so a throw AFTER a successful launch (a faulting
 // `WaitForExit`, a sharing violation on the pid write) would fail on its own
 // error write and never reach the sentinel — leaving the tailer polling
-// forever, `executeUpdate`'s promise unsettled, and the update lock wedged
-// until its 30-minute stale timeout. Before the launch nothing holds the log,
-// so a launch failure is reported there where the caller's stderr stream sees
-// it; after it, the error goes to a file of its own.
+// forever. Bootstrap diagnostics use their own file, independent of those
+// locks, and never include raw exception text.
+// Only fixed stage names and numeric HRESULTs reach diagnostics. PowerShell
+// exception text can embed commands, credentials and user-specific paths.
+const WINDOWS_BOOTSTRAP_DIAGNOSTIC = `
+function Write-BootstrapStage($stage, $errorCode = 0) {
+  [System.IO.File]::WriteAllText($diagnosticFile, "$stage hresult=$errorCode")
+}
+`;
+
 const WINDOWS_SUPERVISOR = `$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$diagnosticFile = Join-Path $dir 'supervisor-bootstrap.log'
+${WINDOWS_BOOTSTRAP_DIAGNOSTIC}
 $started = $false
+function Test-LaunchCancelled {
+  return (!(Test-Path -LiteralPath $dir) -or (Test-Path -LiteralPath (Join-Path $dir 'launch-cancelled')))
+}
 try {
   $ErrorActionPreference = 'Stop'
+  Write-BootstrapStage 'reading-job'
   $job = Get-Content -LiteralPath (Join-Path $dir 'job.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   $params = @{
     FilePath               = $job.bin
@@ -266,10 +278,24 @@ try {
   }
   if ($job.arguments) { $params.ArgumentList = $job.arguments }
   if ($job.cwd) { $params.WorkingDirectory = $job.cwd }
+  if (Test-LaunchCancelled) {
+    Write-BootstrapStage 'cancelled'
+    [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1')
+    exit 1
+  }
+  Write-BootstrapStage 'starting-job'
   $p = Start-Process @params
   $started = $true
   $null = $p.Handle
   [System.IO.File]::WriteAllText((Join-Path $dir 'pid'), "$($p.Id)")
+  Write-BootstrapStage 'pid-written'
+  # A timed-out caller can remove its control directory before this cold
+  # supervisor starts. Check throughout the handoff so late children are reaped.
+  while (!$p.WaitForExit(250)) {
+    if (Test-LaunchCancelled) {
+      & taskkill /pid $p.Id /T /F 2>$null | Out-Null
+    }
+  }
   $p.WaitForExit()
   # ExitCode is a SIGNED int, so a status at or above 0x80000000 (0xC0000005 and
   # the rest of the NTSTATUS crash codes) reads back negative. Node's own
@@ -281,9 +307,12 @@ try {
   $code = [int64]$p.ExitCode -band 0xFFFFFFFFL
   [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), "$code")
 } catch {
-  $errFile = if ($started) { 'supervisor-error.log' } else { 'stderr.log' }
-  try { [System.IO.File]::WriteAllText((Join-Path $dir $errFile), $_.Exception.ToString()) } catch { }
-  [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1')
+  $failureCode = $_.Exception.HResult
+  try { Write-BootstrapStage 'failed' $failureCode } catch { }
+  try {
+    if ($started -and !$p.HasExited) { & taskkill /pid $p.Id /T /F 2>$null | Out-Null }
+  } catch { }
+  try { [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1') } catch { }
 }
 `;
 
@@ -322,12 +351,19 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
   ]);
   const supervisorArgs = `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ${quoteWindowsArg(supervisorPath)}`;
   const startSupervisor = [
+    '$ErrorActionPreference = "Stop";',
+    `$diagnosticFile = ${quoteForShell(join(controlDir, 'launcher-bootstrap.log'), 'powershell')};`,
+    WINDOWS_BOOTSTRAP_DIAGNOSTIC,
+    'try {',
+    "Write-BootstrapStage 'starting-supervisor';",
     '$psi = New-Object System.Diagnostics.ProcessStartInfo;',
     "$psi.FileName = 'powershell';",
     `$psi.Arguments = ${quoteForShell(supervisorArgs, 'powershell')};`,
     '$psi.UseShellExecute = $false;',
     '$psi.CreateNoWindow = $true;',
-    '[void][System.Diagnostics.Process]::Start($psi)',
+    '[void][System.Diagnostics.Process]::Start($psi);',
+    "Write-BootstrapStage 'supervisor-started';",
+    "} catch { try { Write-BootstrapStage 'failed' $_.Exception.HResult } catch { }; exit 1 }",
   ].join(' ');
   return spawn('powershell', [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', startSupervisor,
@@ -338,6 +374,24 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd }) {
     cwd,
     stdio: 'ignore',
   });
+}
+
+// Read a bounded projection even if a corrupt control file contains arbitrary
+// text. Never include raw PowerShell output or exception messages in an error.
+async function readBootstrapDiagnostic(controlDir, name) {
+  const file = await open(join(controlDir, name), 'r').catch(() => null);
+  if (!file) return 'unavailable';
+  try {
+    const buffer = Buffer.alloc(256);
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+    const value = buffer.subarray(0, bytesRead).toString('utf8');
+    return /^(starting-supervisor|supervisor-started|reading-job|starting-job|pid-written|failed|cancelled) hresult=-?\d{1,11}$/.test(value)
+      ? value : 'invalid';
+  } catch {
+    return 'unreadable';
+  } finally {
+    await file.close().catch(() => {});
+  }
 }
 
 /**
@@ -507,7 +561,8 @@ export async function spawnDetached(bin, args = [], {
   // would bypass that and strand a `running` run or leak temp files. Deferred
   // so the listener is attached before it fires.
   const ensureControlDir = await ensureDir(controlDir).then(
-    () => Promise.all([pidFile, exitFile, stdoutLog, stderrLog, groupKillFile].map((f) => rm(f, { force: true }))),
+    () => Promise.all([pidFile, exitFile, stdoutLog, stderrLog, groupKillFile,
+      ...(isWindows ? ['launcher-bootstrap.log', 'supervisor-bootstrap.log', 'launcher-result.log', 'launch-cancelled'].map((name) => join(controlDir, name)) : [])].map((f) => rm(f, { force: true }))),
   ).then(
     () => (killProcessGroup ? writeFile(groupKillFile, '1') : null),
   ).then(() => null, (err) => err);
@@ -532,6 +587,7 @@ export async function spawnDetached(bin, args = [], {
   // too; route that into the same slot rather than letting it reject
   // spawnDetached, for the reason ensureControlDir above spells out.
   let launcherSpawnError = null;
+  let launcherExit = null;
   const launcher = isWindows
     ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd })
       .catch((err) => { launcherSpawnError = err; return null; })
@@ -543,6 +599,7 @@ export async function spawnDetached(bin, args = [], {
       stdio: 'ignore',
     });
   launcher?.on('error', (err) => { launcherSpawnError = err; });
+  launcher?.on('exit', (code) => { launcherExit = Number.isInteger(code) ? code : 'signal'; });
   launcher?.unref();
 
   // Tail the on-disk log files and watch for the supervisor's exit sentinel,
@@ -574,18 +631,44 @@ export async function spawnDetached(bin, args = [], {
         handle.pid = pid;
         return;
       }
+      if (isWindows && (await readFile(exitFile, 'utf8').catch(() => '')).length > 0) {
+        // A fast job can publish both files between these reads.
+        const completedPid = Number.parseInt(await readFile(pidFile, 'utf8').catch(() => ''), 10);
+        if (Number.isFinite(completedPid) && completedPid > 0) {
+          handle.pid = completedPid;
+          return;
+        }
+        launchError = new Error('Windows supervisor exited before recording a PID');
+        return;
+      }
       await sleep(pollMs);
     }
     // No PID. If the supervisor still recorded an exit status, the job ran and
     // exited (e.g. a non-existent bin → 127); route that through 'close'.
     // Otherwise it's a hard launch failure.
     const exitRaw = await readFile(exitFile, 'utf8').catch(() => '');
-    if (exitRaw.length === 0) {
+    if (exitRaw.length === 0 || isWindows) {
       launchError = new Error(`detached spawn produced no PID within ${pidTimeoutMs}ms`);
     }
   };
 
   await awaitPid();
+
+  if (isWindows && launchError) {
+    // Persist cancellation before returning or scheduling cleanup. A supervisor
+    // still cold-starting must not launch an orphan after this failed handoff.
+    await writeFile(join(controlDir, 'launch-cancelled'), '1').catch(() => {});
+    const launcherResult = launcherSpawnError
+      ? (['ENOENT', 'EACCES', 'EPERM', 'EAGAIN', 'ENOMEM'].includes(launcherSpawnError.code)
+        ? launcherSpawnError.code : 'spawn-error')
+      : (launcherExit === null ? 'pending' : String(launcherExit));
+    await writeFile(join(controlDir, 'launcher-result.log'), launcherResult).catch(() => {});
+    const [launcherStage, supervisorStage] = await Promise.all([
+      readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log'),
+      readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log'),
+    ]);
+    launchError = new Error(`detached spawn failed to acquire PID within ${pidTimeoutMs}ms; launcher=${launcherResult}; launcher-stage=${launcherStage}; supervisor-stage=${supervisorStage}`);
+  }
 
   // Kick off tailing (or the launch-failure path) AFTER returning, so the
   // caller's synchronous event listeners are wired first.

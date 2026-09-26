@@ -150,7 +150,9 @@ const readStdoutLog = (controlDir) => readFile(join(controlDir, 'stdout.log'), '
 const blockUntil = (marker) => `while [ ! -f "${marker}" ]; do sleep 0.02; done`;
 
 describe('spawnDetached', () => {
-  it('streams stdout and stderr, then closes with the exit code', async () => {
+  // Independent launches, never retries: each cold launcher must satisfy all
+  // stream and exit assertions. Windows CI exercises the handoff three times.
+  it.each(IS_POSIX ? [1] : [1, 2, 3])('streams stdout and stderr, then closes with the exit code (launch %i)', async () => {
     const controlDir = await tmpControlDir();
     // Windows CI runners occasionally take longer than the 10s production
     // default to spin up the launcher/supervisor powershell chain on a cold,
@@ -158,8 +160,8 @@ describe('spawnDetached', () => {
     // that startup cost. Give it CI headroom without touching the
     // production timeout.
     const handle = await spawnDetached(
-      'sh',
-      ['-c', 'printf "out-a\\nout-b\\n"; printf "err-1\\n" 1>&2; exit 0'],
+      process.execPath,
+      ['-e', 'process.stdout.write("out-a\\nout-b\\n"); process.stderr.write("err-1\\n");'],
       { controlDir, pollMs: 25, pidTimeoutMs: 30000 }
     );
     const getOut = collect(handle.stdout);
@@ -320,6 +322,27 @@ describe('spawnDetached', () => {
     expect(signal).toBeNull();
     expect(getOut()).toBe('a b "c"\n');
   });
+
+  it.runIf(!IS_POSIX)('reports a real supervisor bootstrap failure without private paths', async () => {
+    const controlDir = await tmpControlDir();
+    const handle = await spawnDetached('portos-nonexistent-example-command', [], { controlDir });
+    await expect(onClose(handle)).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
+    expect(await readFile(join(controlDir, 'supervisor-bootstrap.log'), 'utf8')).toMatch(/^failed hresult=-?\d+$/);
+  });
+
+  it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {
+    const controlDir = await tmpControlDir();
+    const handle = await spawnDetached(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      controlDir, pidTimeoutMs: 0,
+    });
+    await expect(onClose(handle)).rejects.toThrow(/failed to acquire PID/);
+    // Wait for the actual supervisor acknowledgement, not a guessed sleep.
+    expect(await waitUntil(async () => (
+      await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')
+    ).length > 0, { timeoutMs: 30000 })).toBe(true);
+    const pid = Number.parseInt(await readFile(join(controlDir, 'pid'), 'utf8').catch(() => ''), 10);
+    expect(Number.isFinite(pid) && isAliveForTest(pid)).toBe(false);
+  }, 45000);
 
   // The whole POINT of the Windows launcher: pm2 kills on Windows with
   // `taskkill /pid <app> /T /F`, which walks the parent tree, so a job spawned
