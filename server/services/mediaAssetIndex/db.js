@@ -215,6 +215,62 @@ export async function listMixedGalleryPage({
     counts: { image, video, all: image + video } };
 }
 
+/** Batch cover selection: membership ordinals retain stable added-at ordering.
+ * Only addressing fields cross the video-history boundary; prompts never enter SQL.
+ * Hidden assets remain eligible here, just as on the collection grid.
+ */
+export async function collectionCovers(collections, videos) {
+  const videoRows = videos.map(({ id, filename, createdAt, hidden, thumbnail }) => ({
+    id, filename, hidden, thumbnail,
+    createdAt: Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt).toISOString() : new Date(0).toISOString(),
+  }));
+  const result = await query(`WITH collections AS MATERIALIZED (
+      SELECT * FROM jsonb_to_recordset($1::jsonb) AS c(id text, "coverKey" text, keys jsonb)
+    ), memberships AS MATERIALIZED (
+      SELECT c.id, c."coverKey", k.key, k.ordinal
+      FROM collections c CROSS JOIN LATERAL jsonb_array_elements_text(c.keys) WITH ORDINALITY AS k(key, ordinal)
+    ), assets AS MATERIALIZED (
+      SELECT media_key, kind, ref, data->>'filename' AS filename, created_at,
+        COALESCE(NULLIF(data->>'path', ''), '/data/images/' || (data->>'filename')) AS cover
+      FROM media_assets WHERE kind = 'image'
+      UNION ALL
+      SELECT 'video:' || v.id, 'video', v.id, v.filename, v."createdAt"::timestamptz,
+        '/data/video-thumbnails/' || NULLIF(v.thumbnail, '')
+      FROM jsonb_to_recordset($2::jsonb) AS v(id text, filename text, "createdAt" text, thumbnail text)
+    ), covers AS (
+      SELECT DISTINCT ON (m.id) m.id, a.cover
+      FROM memberships m JOIN assets a ON a.media_key = m.key
+      WHERE a.kind = 'image' OR a.cover IS NOT NULL
+      ORDER BY m.id,
+        (CASE WHEN a.kind = CASE WHEN m."coverKey" LIKE 'image:%' THEN 'image' ELSE 'video' END
+          AND (a.ref = substring(m."coverKey" FROM length(a.kind) + 2)
+            OR a.filename = substring(m."coverKey" FROM length(a.kind) + 2)) THEN 0 ELSE 1 END),
+        m.ordinal, a.media_key
+    ), unsorted AS MATERIALIZED (
+      SELECT a.* FROM assets a WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.key = a.media_key)
+    )
+    SELECT c.id, covers.cover, NULL::bigint AS image, NULL::bigint AS video
+    FROM collections c LEFT JOIN covers ON covers.id = c.id
+    UNION ALL
+    SELECT 'unsorted',
+      (SELECT cover FROM unsorted WHERE kind = 'image' OR cover IS NOT NULL ORDER BY created_at DESC, media_key ASC LIMIT 1),
+      COUNT(*) FILTER (WHERE kind = 'image'), COUNT(*) FILTER (WHERE kind = 'video')
+    FROM unsorted`, [JSON.stringify(collections), JSON.stringify(videoRows)]);
+  return result.rows;
+}
+
+/** Picker membership only needs existence, never covers, counts or video history. */
+export async function visibleImageCollections(collections) {
+  const memberships = collections.flatMap(collection => (collection.items || [])
+    .filter(item => item.kind === 'image').map(item => ({ id: collection.id, key: `image:${item.ref}` })));
+  const result = await query(`SELECT DISTINCT m.id
+    FROM jsonb_to_recordset($1::jsonb) AS m(id text, key text)
+    JOIN media_assets a ON a.media_key = m.key
+    WHERE a.kind = 'image' AND COALESCE(a.data->>'hidden', 'false') <> 'true'`, [JSON.stringify(memberships)]);
+  const populated = new Set(result.rows.map(row => row.id));
+  return collections.filter(collection => populated.has(collection.id)).map(({ id, name }) => ({ id, name }));
+}
+
 /** Compact global picker options, independent of the loaded page/search. */
 export async function galleryFacets() {
   const fields = ['universeId', 'universeName', 'entryCategory', 'entryKind'];
