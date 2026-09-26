@@ -139,9 +139,9 @@ router.post('/logout', asyncHandler(async (req, res) => {
 router.post('/password', asyncHandler(async (req, res) => {
   const body = validateRequest(setPasswordSchema, req.body || {});
   const alreadyEnabled = await isAuthEnabled();
-  // First-time set is the ONLY public mutation here — once auth is on, the
-  // route is gated by the API auth middleware in server/index.js, so we
-  // reach this branch only with a valid session.
+  // The centralized host-control gate requires a local connection for first
+  // setup, or an operator session for rotation. setPassword additionally
+  // verifies the current password before changing an enabled configuration.
   const stale = await ownedStaleCookieNames(req);
   const { token } = await setPassword({
     newPassword: body.newPassword,

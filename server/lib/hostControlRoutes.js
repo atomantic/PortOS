@@ -58,6 +58,10 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Setting a password mints an operator session: bootstrap must be local,
+  // and rotation must already hold operator authority (#8771).
+  'POST /api/auth/password',
+
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
   'POST /api/apps',

@@ -31,6 +31,20 @@ The installer performs step 4 automatically whenever the preceding account setti
 
 Run `npm run setup:guide` at any time to print the current walkthrough and correct URL. Add `-- --summary` for one line or `-- --json` for automation. PortOS's managed browser also opens the trusted MagicDNS URL when one is provisioned rather than defaulting to localhost.
 
+## Instance password
+
+Authentication is optional and off by default. Set a strong, unique password in
+**Settings → Security** to protect the instance API and data. **First-time setup
+requires a browser on the PortOS host using a loopback URL**: use
+`http://localhost:5555` without HTTPS, the local mirror
+`http://localhost:5553` with HTTPS, or `http://localhost:5554` for the local Vite UI.
+A LAN/tailnet URL or a remote browser relayed through Vite cannot set the first
+password; the Security page displays the host-control refusal.
+
+Once configured, sign in from your other devices over the private network.
+Changing the password requires both an operator session and the current
+password, and signs out existing sessions. Peer credentials cannot change it.
+
 ## Choose an AI provider
 
 Initial setup is complete once at least one enabled provider is actually runnable. Choose one path under **AI → Providers**:
