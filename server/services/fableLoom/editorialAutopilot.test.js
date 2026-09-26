@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fableLoomRunEvents } from './runEvents.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getLoomMock = vi.hoisted(() => vi.fn(async (id) => ({ id })));
 const mutateLoomMock = vi.hoisted(() => vi.fn(async (id, mutator) => mutator({
@@ -91,6 +92,11 @@ beforeEach(() => {
   selfImproveMock.mockClear();
 });
 
+const snapshots = [];
+const recordSnapshot = run => snapshots.push(run);
+beforeEach(() => { snapshots.length = 0; fableLoomRunEvents.on('editorial', recordSnapshot); });
+afterEach(() => { fableLoomRunEvents.off('editorial', recordSnapshot); });
+
 describe('FableLoom editorial autopilot', () => {
   it('completes after one editor/reviewer round when every gate passes', async () => {
     remediateMock.mockResolvedValueOnce(remediation(true));
@@ -105,6 +111,11 @@ describe('FableLoom editorial autopilot', () => {
       status: 'completed', round: 1, maxRounds: 3, stepIndex: 2, stepCount: 6,
     });
     expect(finished.rounds).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({ id: started.id, loomId: 'loom-example', status: 'running', revision: 1 });
+    expect(snapshots.at(-1)).toMatchObject({ id: started.id, status: 'completed' });
+    expect(snapshots.every(snapshot => !('previousFindingSignature' in snapshot))).toBe(true);
+    expect(snapshots.map(snapshot => snapshot.revision)).toEqual(snapshots.map((_, index) => index + 1));
+    expect(snapshots[0].rounds).toEqual([]);
     expect(remediateMock).toHaveBeenCalledWith('loom-example', {
       providerId: 'writer', model: 'large', effort: 'high', guidance: '',
     });
@@ -176,6 +187,7 @@ describe('FableLoom editorial autopilot', () => {
     const finished = await waitForTerminal(started.id);
 
     expect(remediateMock).toHaveBeenCalledTimes(3);
+    expect(snapshots.at(-1).status).toBe('failed');
     expect(finished).toMatchObject({
       status: 'failed', round: 1, stepIndex: 1, responseCorrections: 2, invalidResponses: 3,
     });
@@ -240,6 +252,7 @@ describe('FableLoom editorial autopilot', () => {
     const started = await startFableLoomEditorialAutopilot('loom-example', { selfImprove: true });
     const finished = await waitForTerminal(started.id);
 
+    expect(snapshots.at(-1).status).toBe('failed');
     expect(finished).toMatchObject({
       status: 'failed',
       error: providerError.message,
@@ -266,6 +279,7 @@ describe('FableLoom editorial autopilot', () => {
     const started = await startFableLoomEditorialAutopilot('loom-example', { selfImprove: true });
     await vi.waitFor(() => expect(selfImproveMock).toHaveBeenCalledTimes(1));
     expect(cancelFableLoomEditorialAutopilot(started.id).status).toBe('canceling');
+    expect(snapshots.at(-1).status).toBe('canceling');
     finishDiagnosis(null);
     const finished = await waitForTerminal(started.id);
 
@@ -294,6 +308,7 @@ describe('FableLoom editorial autopilot', () => {
     });
     await vi.waitFor(() => expect(selfImproveMock).toHaveBeenCalledTimes(1));
     expect(cancelFableLoomEditorialAutopilot(started.id).status).toBe('canceling');
+    expect(snapshots.at(-1).status).toBe('canceling');
     finishDiagnosis(null);
     const finished = await waitForTerminal(started.id);
 
@@ -340,6 +355,7 @@ describe('FableLoom editorial autopilot', () => {
 
     expect(duplicate).toMatchObject({ id: started.id, alreadyRunning: true, maxRounds: 3 });
     expect(cancelFableLoomEditorialAutopilot(started.id).status).toBe('canceling');
+    expect(snapshots.at(-1).status).toBe('canceling');
     finishRemediation(remediation(true));
     const finished = await waitForTerminal(started.id);
 

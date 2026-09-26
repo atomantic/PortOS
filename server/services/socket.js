@@ -1,4 +1,5 @@
 import { recordEvents } from './sharing/recordEvents.js';
+import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
 import { toAgentListItem } from '../lib/cosAgentListProjection.js';
 import { appsEvents } from './apps.js';
@@ -62,6 +63,7 @@ const loopSubscribers = new Set();
 // liveness ONLY — see setupBeeperEventForwarding for why this may never be a
 // global emit.
 const beeperSubscribers = new Set();
+const fableLoomSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -74,7 +76,7 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, beeperSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, beeperSubscribers, fableLoomSubscribers];
 
 function broadcastToSet(set, event, data) {
   const disconnected = [];
@@ -152,6 +154,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'instances', instanceSubscribers);
   registerSubscriber(socket, 'loops', loopSubscribers);
   registerSubscriber(socket, 'beeper', beeperSubscribers);
+  registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
 }
 
 function registerErrorHandlers(socket, io) {
@@ -241,6 +244,7 @@ function setupEventForwarding() {
   setupCallStateEventForwarding();
   setupBeeperEventForwarding();
   setupRecordEventForwarding();
+  setupFableLoomRunForwarding();
 }
 
 let persistentMindEventForwardingSetup = false;
@@ -787,5 +791,17 @@ function setupMediaGenEventForwarding() {
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
     ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
+  });
+}
+
+let fableLoomRunForwardingSetup = false;
+function setupFableLoomRunForwarding() {
+  if (fableLoomRunForwardingSetup) return;
+  fableLoomRunForwardingSetup = true;
+  fableLoomRunEvents.on('editorial', run => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:editorial:run', run);
+  });
+  fableLoomRunEvents.on('production', run => {
+    broadcastToSet(fableLoomSubscribers, 'fableloom:production:run', run);
   });
 }

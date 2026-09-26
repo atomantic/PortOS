@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fableLoomRunEvents } from './runEvents.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _resetProductionBatchRuns,
   cancelEpisodeProductionBatch,
   getEpisodeProductionBatch,
+  getLatestEpisodeProductionBatch,
   planEpisodeProduction,
   reviewEpisodeContinuity,
   resumeEpisodeProductionBatch,
@@ -64,6 +66,11 @@ vi.mock('../videoGen/local.js', () => videoModelMocks);
 vi.mock('../videoGen/history.js', () => videoHistoryMocks);
 vi.mock('../mediaJobQueue/index.js', () => queueMocks);
 vi.mock('./visualConditioning.js', () => visualConditioningMocks);
+
+const snapshots = [];
+const recordSnapshot = run => snapshots.push(run);
+beforeEach(() => { snapshots.length = 0; fableLoomRunEvents.on('production', recordSnapshot); });
+afterEach(() => { fableLoomRunEvents.off('production', recordSnapshot); });
 
 describe('fableLoom production service', () => {
   const sampleLoom = {
@@ -313,6 +320,14 @@ describe('fableLoom production service', () => {
 
     const fetched = getEpisodeProductionBatch(run.id);
     expect(fetched).toEqual(run);
+    const queuedCalls = queueMocks.enqueueJob.mock.calls.length;
+    expect(getLatestEpisodeProductionBatch('loom-1', 'ep-1')).toBe(run);
+    expect(getLatestEpisodeProductionBatch('loom-1', 'other-episode')).toBeNull();
+    expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(queuedCalls);
+    expect(snapshots[0]).toMatchObject({ id: run.id, loomId: 'loom-1', episodeId: 'ep-1', revision: 1 });
+    expect(snapshots[0].summary.queued).toBe(0);
+    expect(snapshots.at(-1).summary.queued).toBeGreaterThan(0);
+    expect(snapshots.every(snapshot => !('tail' in snapshot) && !('runtime' in snapshot))).toBe(true);
   });
 
   it('queues Reactor with its compact compiled script and fails oversized scripts before queueing', async () => {
@@ -429,6 +444,7 @@ describe('fableLoom production service', () => {
     const canceled = await cancelEpisodeProductionBatch(run.id);
     expect(canceled.status).toBe('canceled');
     expect(canceled.cancelRequested).toBe(true);
+    expect(snapshots.at(-1)).toMatchObject({ status: 'canceled', cancelRequested: true });
   });
 
   it('resumes a canceled run after resetting unfinished assets', async () => {
@@ -437,6 +453,7 @@ describe('fableLoom production service', () => {
 
     const resumed = resumeEpisodeProductionBatch(run.id);
     expect(resumed.status).toBe('in_progress');
+    expect(snapshots.at(-1)).toMatchObject({ status: 'in_progress', attempt: 2 });
     expect(resumed.assets.every((asset) => !['failed', 'blocked', 'canceled'].includes(asset.status))).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(queueMocks.enqueueJob).toHaveBeenCalled();
@@ -467,6 +484,7 @@ describe('fableLoom production service', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(run.status).toBe('completed');
+    expect(snapshots.at(-1)).toMatchObject({ id: run.id, status: 'completed', summary: run.summary });
   });
 
   it('performs episodic continuity review returning structured findings', async () => {

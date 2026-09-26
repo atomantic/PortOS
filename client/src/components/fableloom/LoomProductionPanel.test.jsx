@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import LoomProductionPanel from './LoomProductionPanel';
 import * as api from '../../services/api';
+import socket from '../../services/socket';
 
 vi.mock('../../services/api');
+vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 describe('LoomProductionPanel', () => {
   const sampleLoom = { id: 'loom-1', name: 'Test Loom' };
@@ -34,9 +36,10 @@ describe('LoomProductionPanel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    api.getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run: null });
     api.planLoomEpisodeProduction.mockResolvedValue(samplePlan);
     api.startLoomEpisodeProductionBatch.mockResolvedValue({
-      id: 'batch-1',
+      id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1',
       status: 'in_progress',
       summary: { total: 6, completed: 2 },
     });
@@ -209,6 +212,37 @@ describe('LoomProductionPanel', () => {
     }));
     expect(screen.queryByText('Stale Episode 1 asset')).not.toBeInTheDocument();
     expect(screen.getByText('Episode 2 asset')).toBeInTheDocument();
+  });
+
+  it('reattaches and applies scoped batch events, refreshing once per terminal attempt without polling', async () => {
+    const run = { id: 'batch-live', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress', revision: 1, attempt: 1, summary: { total: 6, completed: 1 } };
+    api.getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run });
+    const panel = render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} />);
+    await waitFor(() => expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1));
+    const emit = payload => socket.on.mock.calls.filter(([name]) => name === 'fableloom:production:run').at(-1)[1](payload);
+    await act(async () => {});
+    vi.useFakeTimers();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    vi.useRealTimers();
+    expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenCalledTimes(1);
+    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
+    await act(async () => emit({ ...run, episodeId: 'other', status: 'completed', revision: 2 }));
+    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(1);
+    await act(async () => emit({ ...run, status: 'failed', error: 'Example render failed', revision: 2 }));
+    expect(screen.getByText(/Example render failed/)).toBeInTheDocument();
+    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
+    await act(async () => emit({ ...run, status: 'failed', revision: 3 }));
+    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(2);
+    await act(async () => emit({ ...run, attempt: 2, revision: 4 }));
+    await act(async () => emit({ ...run, attempt: 2, revision: 5, status: 'completed' }));
+    expect(api.planLoomEpisodeProduction).toHaveBeenCalledTimes(3);
+    let resolveRead;
+    api.getLoomEpisodeProductionBatchStatus.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    await act(async () => { socket.on.mock.calls.filter(([name]) => name === 'connect').at(-1)[1](); });
+    panel.rerender(<LoomProductionPanel loom={sampleLoom} episode={{ id: 'ep-2' }} />);
+    await act(async () => resolveRead({ run }));
+    expect(screen.queryByText(/Example render failed/)).not.toBeInTheDocument();
+    expect(api.getLoomEpisodeProductionBatchStatus).toHaveBeenLastCalledWith('loom-1', 'ep-2', { silent: true });
   });
 
 });

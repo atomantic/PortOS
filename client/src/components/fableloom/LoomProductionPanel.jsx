@@ -22,11 +22,11 @@ import {
   StopCircle,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch.js';
+import { useFableLoomRun } from '../../hooks/useFableLoomRun';
 import BackendChipStrip from '../media/BackendChipStrip';
 import {
   cancelLoomEpisodeProductionBatch,
-  getLoomEpisodeProductionBatch,
+  getLoomEpisodeProductionBatchStatus,
   listImageModels,
   listVideoModels,
   planLoomEpisodeProduction,
@@ -78,7 +78,6 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
   const [assetScope, setAssetScope] = useState('images');
   const [plan, setPlan] = useState(null);
   const [planKey, setPlanKey] = useState(null);
-  const [activeBatchRun, setActiveBatchRun] = useState(null);
   const savedRender = asFableLoomRenderPreferences(loom.renderSettings);
   const [imageMode, setImageMode] = useState(savedRender.imageMode);
   const [imageModel, setImageModel] = useState(savedRender.imageModel);
@@ -175,33 +174,12 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
     fetchPlan(mode);
   }, [planInputKey]);
 
-  useEffect(() => {
-    setActiveBatchRun(null);
-  }, [productionIdentity]);
-
-  // Batch run polling. Only reached while a run is in progress, so the
-  // non-null read of activeBatchRun below is guarded by `enabled`.
-  const refreshBatchRun = () => getLoomEpisodeProductionBatch(
-    activeBatchRun.loomId,
-    activeBatchRun.episodeId,
-    activeBatchRun.id,
-    { silent: true },
-  )
-    .then((updated) => {
-      if (!updated) return;
-      if (`${updated.loomId}:${updated.episodeId}` !== productionIdentityRef.current) return;
-      setActiveBatchRun(updated);
-      if (updated.status === 'completed' || updated.status === 'canceled' || updated.status === 'failed') {
-        fetchPlan(mode);
-      }
-    })
-    .catch(() => {
-      // Polling is best-effort; the next tick can reattach to the run.
-    });
-  useAutoRefetch(refreshBatchRun, 2000, {
-    enabled: activeBatchRun?.status === 'in_progress',
-    immediate: false,
-    pollOnly: true,
+  const { run: activeBatchRun, applyRun: setActiveBatchRun } = useFableLoomRun({
+    loomId: loom.id,
+    episodeId: episode.id,
+    event: 'fableloom:production:run',
+    loadRun: () => getLoomEpisodeProductionBatchStatus(loom.id, episode.id, { silent: true }).then(response => response.run),
+    onTerminal: () => fetchPlan(mode),
   });
 
   const [startBatch, startingBatch] = useAsyncAction(async () => {

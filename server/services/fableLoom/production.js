@@ -8,6 +8,7 @@
  * episode-level grouping, dependency barriers, cancellation, and resume UX.
  */
 
+import { fableLoomRunEvents } from './runEvents.js';
 import { randomInt, randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -109,6 +110,8 @@ function updateSummary(run) {
 function touchRun(run) {
   run.updatedAt = nowIso();
   updateSummary(run);
+  run.revision = (run.revision || 0) + 1;
+  fableLoomRunEvents.emit('production', structuredClone(run));
 }
 
 function cleanStaleRuns() {
@@ -1057,6 +1060,7 @@ export async function startEpisodeProductionBatch(loomId, episodeId, options = {
     createdAt,
     updatedAt: createdAt,
     cancelRequested: false,
+    attempt: 1,
     error: null,
     render,
     plan: {
@@ -1076,6 +1080,7 @@ export async function startEpisodeProductionBatch(loomId, episodeId, options = {
   updateSummary(run);
   _batchRuns.set(runId, run);
   _runRuntime.set(runId, { tail: Promise.resolve() });
+  touchRun(run);
   if (run.summary.pending === 0) {
     run.status = run.summary.failed || run.summary.blocked ? 'failed' : 'completed';
     touchRun(run);
@@ -1083,6 +1088,12 @@ export async function startEpisodeProductionBatch(loomId, episodeId, options = {
     void scheduleRun(runId, () => advanceRun(runId));
   }
   return run;
+}
+
+/** Reattach on entry/reconnect without starting provider work. */
+export function getLatestEpisodeProductionBatch(loomId, episodeId) {
+  cleanStaleRuns();
+  return [..._batchRuns.values()].reverse().find(run => run.loomId === loomId && run.episodeId === episodeId) || null;
 }
 
 /** Get the status of an ongoing or completed batch run. */
@@ -1127,6 +1138,7 @@ export function resumeEpisodeProductionBatch(runId) {
     }
   }
   run.status = 'in_progress';
+  run.attempt = (run.attempt || 1) + 1;
   run.cancelRequested = false;
   run.error = null;
   _runRuntime.set(runId, _runRuntime.get(runId) || { tail: Promise.resolve() });
