@@ -1,7 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { useAutoRefetch } from './useAutoRefetch';
+import { subscribeVisibility } from './useVisibilityEvent';
 import { ACTION_QUEUE_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events';
 
 // Shared by the bell, dashboard previews, and Actions page. These events carry
@@ -24,6 +24,7 @@ function queueStore(view) {
   let inFlight = null;
   let generation = 0;
   let refreshedAt = 0;
+  let unsubscribeVisibility = null;
   const listeners = new Set();
   const publish = (next) => {
     state = next;
@@ -56,6 +57,10 @@ function queueStore(view) {
       for (const event of EVENTS) socket.on(event, invalidate);
       window.addEventListener(ACTION_QUEUE_CHANGED, invalidate);
       window.addEventListener(INSTANCE_FEATURES_CHANGED, invalidate);
+      unsubscribeVisibility = subscribeVisibility((visibility) => {
+        if (visibility === 'visible') invalidate();
+      });
+      void refresh(true);
     }
     return () => {
       listeners.delete(notify);
@@ -64,6 +69,8 @@ function queueStore(view) {
         for (const event of EVENTS) socket.off(event, invalidate);
         window.removeEventListener(ACTION_QUEUE_CHANGED, invalidate);
         window.removeEventListener(INSTANCE_FEATURES_CHANGED, invalidate);
+        unsubscribeVisibility?.();
+        unsubscribeVisibility = null;
       }
     };
   };
@@ -72,12 +79,10 @@ function queueStore(view) {
   return store;
 }
 
-/** One snapshot per view, retained on errors; polls pause in background tabs. */
+/** One event-driven snapshot per view, retained on errors and reconciled on re-show. */
 export function useActionQueue(view = 'today') {
   const store = queueStore(view);
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
-  const refresh = useCallback(() => store.refresh(), [store]);
-  useAutoRefetch(refresh, 120000, { pollOnly: true });
   const refetch = useCallback(() => store.refresh(true), [store]);
   return { ...state, refetch };
 }

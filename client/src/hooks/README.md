@@ -19,7 +19,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useActionQueue` | Shared canonical Actions snapshot, socket invalidation, visible-tab polling and explicit stale/error state. | Bell, dashboard previews and Actions. |
+| `useActionQueue` | Shared canonical Actions snapshot, socket invalidation, reconnect/tab re-show reconciliation and explicit stale/error state. | Bell, dashboard previews and Actions. |
 | `useNotifications` | Generic toast dispatch + socket-subscribed notification list. | You need to read / dispatch the global notification stream. |
 | `useErrorNotifications` | Subscribes to server error events and shows toasts. | Wire once high in the tree to surface server errors. |
 | `useAIStatusNotifications` | Subscribes to AI operation status events. | Wire once to surface AI run lifecycle as toasts. |
