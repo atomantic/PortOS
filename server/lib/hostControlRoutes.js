@@ -173,6 +173,43 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
+
+  // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
+  // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
+  // record a preference — left open.
+  'POST /api/update/execute',
+  'POST /api/update/sync-fork',
+
+  // Brain links (#8742): git clone/pull in the linked repo, opening a host
+  // app, or queuing a CoS malware-scan/repo-study agent. `links`/`buckets`
+  // CRUD and `scan-report` only read or record; nothing runs.
+  'POST /api/brain/links/:id/clone',
+  'POST /api/brain/links/:id/pull',
+  'POST /api/brain/links/:id/open-folder',
+  'POST /api/brain/links/:id/scan',
+  'POST /api/brain/links/:id/study',
+
+  // Brain YouTube ingest (#8742): a non-empty `agentPrompt` queues a CoS task
+  // against the transcript once ingest finishes.
+  'POST /api/brain/youtube/ingest',
+
+  // Ask (#8742): promoting a turn into a Brain note/CoS task/Goal entry can
+  // queue a CoS task (`target: 'task'`). The conversation-level `/promote`
+  // only flips a 30-day-expiry exemption flag — left open.
+  'POST /api/ask/:id/turns/:turnId/promote',
+
+  // Reference repos (#8742): a check that finds new commits queues a CoS
+  // analysis agent against them. `reviewed` only advances a recorded SHA.
+  'POST /api/apps/:appId/reference-repos/:refId/check',
+
+  // Persistent Mind lifecycle (#8742): starting/waking/resuming the mind arms
+  // its own agentic loop, which can queue CoS tasks on its own initiative
+  // (services/persistentMindTaskCapability.js) without further user action —
+  // the same "arms unattended execution" reasoning as autopilot start.
+  // `pause`/`stop` only reduce execution — left open.
+  'POST /api/cos/mind/start',
+  'POST /api/cos/mind/wake',
+  'POST /api/cos/mind/resume',
 ]);
 
 /**
