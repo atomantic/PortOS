@@ -52,6 +52,7 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
   const messages = [];
   let url = baseUrl;
   let page = 0;
+  let validMembership = true;
 
   while (url && messages.length < maxMessages) {
     page++;
@@ -85,6 +86,10 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
     const items = data.value;
 
     for (const m of items) {
+      if (!m || typeof m.Id !== 'string' || !m.Id) {
+        validMembership = false;
+        continue;
+      }
       const extId = makeExternalId('ol', m.Id);
       const msg = {
         id: uuidv4(),
@@ -119,7 +124,9 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
     }
 
     // Follow @odata.nextLink for pagination
-    url = data['@odata.nextLink'] || null;
+    const nextLink = data['@odata.nextLink'];
+    if (nextLink != null && (typeof nextLink !== 'string' || !nextLink)) validMembership = false;
+    url = typeof nextLink === 'string' ? nextLink : null;
     if (messages.length >= maxMessages) break;
   }
 
@@ -129,5 +136,5 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
   }
 
   console.log(`📧 API sync complete: ${messages.length} messages fetched in ${page} page(s)`);
-  return { messages, status: 'success', syncMethod: 'api' };
+  return { messages, inboxComplete: mode === 'full' && !url && validMembership, status: 'success', syncMethod: 'api' };
 }

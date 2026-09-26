@@ -171,7 +171,8 @@ export async function syncPlaywright(account, cache, io, options = {}) {
   }
 
   console.log(`📧 Fetched detail for ${detailsFetched}/${extracted.length} conversations`);
-  return { messages, status: 'success' };
+  // A bounded DOM scrape cannot prove complete inbox membership.
+  return { messages, inboxComplete: false, status: 'success' };
 }
 
 /**

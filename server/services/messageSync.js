@@ -231,9 +231,10 @@ export async function syncAccount(accountId, io, options = {}) {
     }
     cache.messages.push(...uniqueNew);
 
-    // Reconcile: remove cached messages no longer present in inbox during full sync
+    // Only explicit, exhaustive inbox coverage authorizes membership deletion.
+    // Legacy arrays and bounded/partial successes still merge, but never prune.
     let pruned = 0;
-    if (mode === 'full' && providerStatus === 'success' && newMessages.length > 0) {
+    if (mode === 'full' && providerStatus === 'success' && providerResult?.inboxComplete === true) {
       const fetchedIds = new Set(newMessages.filter(m => m.externalId).map(m => m.externalId));
       const before = cache.messages.length;
       cache.messages = cache.messages.filter(m => !m.externalId || fetchedIds.has(m.externalId));

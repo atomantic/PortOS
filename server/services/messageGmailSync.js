@@ -259,7 +259,19 @@ export async function syncGmail(account, cache, io, options = {}) {
         maxResults,
         ...(pageToken && { pageToken }),
       });
-      return { messages: listResult.data.messages || [], nextPageToken: listResult.data.nextPageToken || null };
+      const data = listResult.data;
+      // Gmail omits messages for an empty inbox, but a missing/malformed body
+      // cannot prove that the inbox is empty.
+      if (!data || typeof data !== 'object' || Array.isArray(data)
+        || (data.messages !== undefined && !Array.isArray(data.messages))
+        || (data.nextPageToken !== undefined && typeof data.nextPageToken !== 'string')) {
+        throw new Error('Malformed Gmail message listing');
+      }
+      const listed = data.messages ?? [];
+      if (listed.some(item => !item || typeof item.id !== 'string' || !item.id)) {
+        throw new Error('Malformed Gmail message ID');
+      }
+      return { messages: listed, nextPageToken: data.nextPageToken || null };
     },
     { onProgress: (current) => io?.emit('messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
   );
@@ -289,7 +301,11 @@ export async function syncGmail(account, cache, io, options = {}) {
     ));
 
     for (let j = 0; j < results.length; j++) {
-      if (!results[j]) { detailFetchFailures++; continue; }
+      if (!results[j]?.data || results[j].data.id !== batch[j].id
+        || !Array.isArray(results[j].data.labelIds) || !results[j].data.payload) {
+        detailFetchFailures++;
+        continue;
+      }
       const data = results[j].data;
       const { id: gmailId, threadId: gmailThreadId } = batch[j];
       const headers = data.payload?.headers || [];
@@ -361,7 +377,8 @@ export async function syncGmail(account, cache, io, options = {}) {
   }
 
   console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
-  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
+  const inboxComplete = mode === 'full' && !truncated.includes(inboxQuery(mode)) && detailFetchFailures === 0;
+  return { messages: inboxMessages, inboxComplete, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
 }
 
 /**
