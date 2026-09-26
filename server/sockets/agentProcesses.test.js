@@ -29,6 +29,9 @@ it('shares scans, pushes changed snapshots, survives failures and stops after th
   getRunningAgents.mockResolvedValue([{ pid: 123, cpu: 1, runtime: 100, startTime: 1001 }]);
   await vi.advanceTimersByTimeAsync(3000);
   expect(first.emit).not.toHaveBeenCalled();
+  const late = connect();
+  expect(late.emit).toHaveBeenCalledWith('agent-processes:changed', { agents: [expect.objectContaining({ pid: 123 })] });
+  late.emit('agent-processes:unsubscribe');
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
   getRunningAgents.mockRejectedValueOnce(new Error('probe unavailable'));
   await vi.advanceTimersByTimeAsync(3000);

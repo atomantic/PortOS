@@ -7,7 +7,7 @@ let run = null;
 
 function start() {
   if (run) return;
-  const owner = { timer: null, signature: null };
+  const owner = { timer: null, signature: null, agents: null };
   run = owner;
   const tick = () => getRunningAgents().then(agents => {
     if (run !== owner) return;
@@ -16,6 +16,7 @@ function start() {
     const signature = JSON.stringify(agents.map(({ startTime, ...agent }) => agent));
     if (signature === owner.signature) return;
     owner.signature = signature;
+    owner.agents = agents;
     for (const socket of subscribers) socket.emit('agent-processes:changed', { agents });
   }).catch(err => console.error(`❌ Agent process watcher failed: ${err.message}`))
     .finally(() => {
@@ -33,7 +34,9 @@ function release(socket) {
 
 export function registerAgentProcessHandlers(socket) {
   socket.on('agent-processes:subscribe', () => {
+    if (subscribers.has(socket)) return;
     subscribers.add(socket);
+    if (run?.agents) socket.emit('agent-processes:changed', { agents: run.agents });
     start();
   });
   socket.on('agent-processes:unsubscribe', () => release(socket));
