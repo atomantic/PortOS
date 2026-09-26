@@ -311,6 +311,7 @@ export * from './schemaVersions.js';
 export * from './secretText.js';
 export * from './piiRedactionPatterns.js';
 export * from './imageClean.js';
+export * from './imageCleanDefaults.js';
 export * from './imageFrameStats.js';
 export * from './imageThumbnail.js';
 export * from './imageRgba.js';
