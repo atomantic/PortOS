@@ -85,6 +85,8 @@ let lastInstallFailure = null;
 // first-callers must produce exactly ONE process, not two competing 9 GB loads.
 let sidecar = null;
 let startInFlight = null;
+// Stop invalidates startup even before it has a child handle.
+let startGeneration = 0;
 let idleTimer = null;
 // The child between spawn and its first healthy /health. `sidecar` is not set
 // yet, so without this a stop during a cold start (an operator unload, a test
@@ -345,6 +347,7 @@ function clearIdleTimer() {
  * with no way to end it is a resource leak with a UI.
  */
 export function stopJevSidecar() {
+  startGeneration += 1;
   clearIdleTimer();
   const running = sidecar;
   const starting = startingProc;
@@ -392,10 +395,11 @@ const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.
  * concurrently — two 9 GB loads racing for the same port would leave one of
  * them bound to nothing and the other reaped by a caller that never saw it.
  */
-async function startSidecar() {
+async function startSidecar(generation) {
   const target = jevVenvSpawnTarget({ stdio: ['ignore', 'pipe', 'pipe'] });
   if (!target) return failure('jev-not-installed');
   const files = await findCachedRepoFiles(JEV_MODEL.repository, JEV_REQUIRED_FILES, { revision: JEV_MODEL.revision });
+  if (generation !== startGeneration) return failure('jev-start-failed');
   if (!files?.[0]) return failure('jev-not-installed');
   // Every required file sits in the pinned subfolder, so its parent IS the
   // directory `from_pretrained` loads.
@@ -442,8 +446,10 @@ async function startSidecar() {
   const deadline = Date.now() + JEV_START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     // `startingProc` moving off this child means a stop landed mid-start.
-    if (exited || startingProc !== proc) return failure('jev-start-failed');
+    if (exited || generation !== startGeneration || startingProc !== proc) return failure('jev-start-failed');
     const health = await probeHealth();
+    // Stop, exit, or a replacement start may have won while health was pending.
+    if (exited || generation !== startGeneration || startingProc !== proc) return failure('jev-start-failed');
     if (health) {
       startingProc = null;
       sidecar = { proc, device: typeof health.device === 'string' ? health.device : null };
@@ -464,7 +470,10 @@ function ensureSidecar() {
   // Single in-flight start. Cleared in `finally` so a failed start does not
   // pin every later caller to the same rejection.
   if (!startInFlight) {
-    startInFlight = startSidecar().finally(() => { startInFlight = null; });
+    const pending = startSidecar(startGeneration).finally(() => {
+      if (startInFlight === pending) startInFlight = null;
+    });
+    startInFlight = pending;
   }
   return startInFlight;
 }
