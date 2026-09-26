@@ -1050,15 +1050,14 @@ export function normalizeIssueExcludeLabels(list) {
   return out;
 }
 
-// claim-issue `--swarm` fan-out size. Mirrors slashdo `/do:next --swarm=<N>`,
-// which clamps N to 1..6 and treats bare `--swarm` as 3. Here a swarmCount of
+// Scheduled claim-issue swarm fan-out size. A swarmCount of
 // 0 (or absent) means swarm OFF (the default one-issue-per-run flow); a value
-// of 2..6 turns on swarm with that many parallel claim agents. 1 is collapsed
+// of 2..12 turns on swarm with that many parallel claim agents. 1 is collapsed
 // to off (a one-agent swarm is just the single-issue flow with overhead), so
 // the smallest meaningful swarm is 2. Kept here so the sanitizer and the
 // claim-issue prompt-builder agree on the vocabulary.
 export const SWARM_COUNT_MIN = 2;
-export const SWARM_COUNT_MAX = 6;
+export const SWARM_COUNT_MAX = 12;
 
 // branch-reconcile coordinator batch size. Unlike claim-issue's swarm count,
 // this is the number of already-classified branches one coordinator receives
@@ -1265,10 +1264,10 @@ export function sanitizeTaskMetadata(raw) {
     clean.issueExcludeLabels = normalizeIssueExcludeLabels(raw.issueExcludeLabels);
     hasKeys = true;
   }
-  // `swarmCount` turns claim-issue `--swarm` fan-out on (2..6 parallel agents)
+  // `swarmCount` turns claim-issue `--swarm` fan-out on (2..12 parallel agents)
   // or off. 0 is kept as an explicit "off" (so a per-app override can disable
   // swarm even when the global default has it on — `0` = off, absent = inherit);
-  // 2..6 is the swarm size. 1/non-integer/out-of-range are dropped, so a
+  // 2..12 is the swarm size. 1/non-integer/out-of-range are dropped, so a
   // hand-edited config can't smuggle in an unbounded swarm size. The prompt
   // builder treats anything below SWARM_COUNT_MIN as off (resolveSwarmBlock).
   if (Object.prototype.hasOwnProperty.call(raw, 'swarmCount')

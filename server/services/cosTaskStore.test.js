@@ -868,20 +868,20 @@ describe('cosTaskStore.addTask', () => {
 
   it('persists a manual claim swarm count through the task markdown round-trip', async () => {
     const created = await addTask({
-      description: 'Claim six independent GitHub issues for Example App',
+      description: 'Claim twelve independent GitHub issues for Example App',
       app: 'example-app',
-      swarmCount: 6,
+      swarmCount: 12,
     }, 'user');
 
-    expect(created.metadata.swarmCount).toBe(6);
+    expect(created.metadata.swarmCount).toBe(12);
     const { tasks } = await getUserTasks();
     // Scalar task metadata parses from markdown as text; the lifecycle resolver
     // normalizes it with Number() before applying the bounded thread override.
-    expect(Number(tasks.find(t => t.id === created.id).metadata.swarmCount)).toBe(6);
+    expect(Number(tasks.find(t => t.id === created.id).metadata.swarmCount)).toBe(12);
   });
 
   it('drops an out-of-range manual claim swarm count', async () => {
-    const created = await addTask({ description: 'Invalid claim swarm', swarmCount: 7 }, 'user');
+    const created = await addTask({ description: 'Invalid claim swarm', swarmCount: 13 }, 'user');
     expect(created.metadata.swarmCount).toBeUndefined();
   });
 

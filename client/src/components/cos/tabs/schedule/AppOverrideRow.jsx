@@ -89,7 +89,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
 
   // Swarm count goes as a Number: the server's sanitizer KEEPS an explicit 0
   // (how a per-app override turns swarm off even when the global default has it
-  // on) and 2..6; only 1 / out-of-range / non-integer are dropped. Inherit is
+  // on) and 2..12; only 1 / out-of-range / non-integer are dropped. Inherit is
   // the absent key, distinct from a stored 0.
   const handleSwarmCountChange = (raw) => handleOverrideChange('swarmCount', raw === '' ? '' : Number(raw));
   const handleBranchesPerAgentChange = (raw) => handleOverrideChange('branchesPerAgent', raw === '' ? '' : Number(raw));

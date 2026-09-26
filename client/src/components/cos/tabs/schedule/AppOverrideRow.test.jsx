@@ -312,3 +312,10 @@ it('allows an app to override the claim PR handoff policy', async () => {
    await act(async () => { fireEvent.change(prSelect(), { target: { value: 'review-then-merge' } }); });
    expect(onUpdate).toHaveBeenCalledWith(APP.id, 'claim-issue', expect.objectContaining({ taskMetadata: { prCompletion: 'review-then-merge' } }));
 });
+
+it('inherits a twelve-worker swarm and saves an explicit per-app count', async () => {
+  const onUpdate = renderRow({ taskType: 'claim-issue', globalTaskMetadata: { swarmCount: 12 } });
+  expect(screen.getByRole('option', { name: 'Inherit (12 in parallel)' })).toBeInTheDocument();
+  await act(async () => fireEvent.change(screen.getByLabelText('Swarm mode for Acme'), { target: { value: '12' } }));
+  expect(onUpdate).toHaveBeenCalledWith('app-1', 'claim-issue', { taskMetadata: { swarmCount: 12 } });
+});

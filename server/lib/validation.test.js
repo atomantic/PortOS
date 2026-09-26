@@ -1140,14 +1140,16 @@ describe('validation.js', () => {
         .toHaveLength(255);
     });
 
-    it('should accept swarmCount 0 + 2..6 and drop 1/out-of-range/non-integer', () => {
+    it('should accept swarmCount 0 + 2..12 and drop 1/out-of-range/non-integer', () => {
       // 0 is an explicit "off" (kept so a per-app override can disable swarm).
       expect(sanitizeTaskMetadata({ swarmCount: 0 })).toEqual({ swarmCount: 0 });
       expect(sanitizeTaskMetadata({ swarmCount: 2 })).toEqual({ swarmCount: 2 });
-      expect(sanitizeTaskMetadata({ swarmCount: 6 })).toEqual({ swarmCount: 6 });
+      for (const swarmCount of [6, 7, 12]) {
+        expect(sanitizeTaskMetadata({ swarmCount })).toEqual({ swarmCount });
+      }
       // 1 (a one-agent swarm is just the single-issue flow) and out-of-range are dropped.
       expect(sanitizeTaskMetadata({ swarmCount: 1 })).toBeNull();
-      expect(sanitizeTaskMetadata({ swarmCount: 7 })).toBeNull();
+      expect(sanitizeTaskMetadata({ swarmCount: 13 })).toBeNull();
       expect(sanitizeTaskMetadata({ swarmCount: -1 })).toBeNull();
       // Non-integers can't smuggle an unbounded swarm size.
       expect(sanitizeTaskMetadata({ swarmCount: 3.5 })).toBeNull();
