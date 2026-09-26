@@ -127,12 +127,14 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     });
 
     await waitFor(client, 'connect');
+    const subscribed = waitFor(client, 'cos:subscribed');
     client.emit('cos:subscribe');
-    await waitFor(client, 'cos:subscribed');
+    await subscribed;
     expect(client.connected).toBe(true);
 
+    const disconnected = waitFor(client, 'disconnect');
     client.emit('shell:list');
-    await waitFor(client, 'disconnect');
+    await disconnected;
     expect(client.connected).toBe(false);
   });
 
@@ -146,12 +148,14 @@ describe('peer socket relay stays connected through cos:subscribe on a password-
     });
 
     await waitFor(client, 'connect');
+    const subscribed = waitFor(client, 'cos:subscribed');
     client.emit('cos:subscribe');
-    await waitFor(client, 'cos:subscribed');
+    await subscribed;
     expect(client.connected).toBe(true);
 
+    const disconnected = waitFor(client, 'disconnect');
     client.emit('shell:list');
-    await waitFor(client, 'disconnect');
+    await disconnected;
     expect(client.connected).toBe(false);
   });
 
