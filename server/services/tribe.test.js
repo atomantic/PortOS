@@ -9,12 +9,26 @@ vi.mock('../lib/db.js', () => ({
   withTransaction: vi.fn(),
 }));
 
+// Fixed, mockable timezone for autoCreateTouchpoint's user-local-day derivation
+// (#8451) — otherwise it would read the real (or unset) `settings.json` and make
+// the last-contact-day assertions depend on this machine's configured timezone.
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles'),
+}));
+
+vi.mock('./calendarSync.js', () => ({
+  getEvent: vi.fn(),
+}));
+
 import { query, withTransaction } from '../lib/db.js';
+import { getUserTimezone } from './userTimezone.js';
+import { getEvent } from './calendarSync.js';
 import {
   listPeople,
   getPerson,
   createPerson,
   createTouchpoint,
+  createCalendarTouchpoint,
   normalizeTags,
   normalizeEmails,
   isoDate,
@@ -23,6 +37,7 @@ import {
   rowToTouchpoint,
   personCadenceStatus,
   getCareSummary,
+  autoCreateTouchpoint,
   autoLogTouchpoints,
   findDuplicateTribeIdentifiers,
   checkDuplicateTribeIdentifiers,
@@ -236,6 +251,80 @@ describe('tribe service — createTouchpoint', () => {
       expect.stringContaining('SET last_contact_on'),
       ['person-1', '2026-01-01', ''],
     );
+  });
+});
+
+describe('tribe service — createCalendarTouchpoint (#8451 UTC-offset day shift)', () => {
+  beforeEach(() => {
+    query.mockReset();
+    withTransaction.mockReset();
+    getEvent.mockReset();
+    getUserTimezone.mockClear();
+  });
+
+  it('stores the user-local day for an evening calendar event, not its UTC day', async () => {
+    getEvent.mockResolvedValue({
+      title: 'Dinner',
+      startTime: '2026-09-11T01:00:00.000Z', // 2026-09-10 18:00 America/Los_Angeles
+      endTime: '2026-09-11T02:00:00.000Z',
+    });
+    query.mockResolvedValue({ rows: [{ id: 'person-1', name: 'Example Person', ring: 'tribe', cadence_days: 45 }] });
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'touch-1', person_id: 'person-1' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    await createCalendarTouchpoint('person-1', { accountId: 'acct-1', eventId: 'evt-1' });
+
+    expect(clientQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('SET last_contact_on'),
+      ['person-1', '2026-09-10', 'Calendar'],
+    );
+  });
+});
+
+describe('tribe service — autoCreateTouchpoint (#8451 UTC-offset day shift)', () => {
+  beforeEach(() => {
+    withTransaction.mockReset();
+    getUserTimezone.mockClear();
+  });
+
+  it('advances last_contact_on to the user-LOCAL day, not the UTC day, for a late-evening instant', async () => {
+    // 2026-09-11T01:00:00Z is 2026-09-10 18:00 in America/Los_Angeles (mocked
+    // above) — an evening touchpoint that must not be dated tomorrow.
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'touch-1', person_id: 'person-1' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    await autoCreateTouchpoint('person-1', {
+      happenedAt: '2026-09-11T01:00:00.000Z',
+      source: 'calendar',
+      dedupeKey: 'cal:a:e1',
+    });
+
+    expect(clientQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('SET last_contact_on'),
+      ['person-1', '2026-09-10'],
+    );
+  });
+
+  it('stores happened_at as the full raw instant (unaffected by the local-day derivation)', async () => {
+    const clientQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'touch-1', person_id: 'person-1' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
+
+    await autoCreateTouchpoint('person-1', {
+      happenedAt: '2026-09-11T01:00:00.000Z',
+      source: 'calendar',
+      dedupeKey: 'cal:a:e1',
+    });
+
+    const [, insertParams] = clientQuery.mock.calls[0];
+    expect(insertParams[2]).toBe('2026-09-11T01:00:00.000Z'); // happened_at column
   });
 });
 

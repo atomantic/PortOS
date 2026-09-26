@@ -10,6 +10,14 @@ import { isTestRunner } from './runtimeEnv.js';
 
 const { Pool } = pg;
 
+// DATE (OID 1082) ships from node-pg as a JS `Date` at LOCAL midnight, so a caller
+// that reads it back with `toISOString().slice(0, 10)` (the ubiquitous `isoDate()`
+// pattern — see tribe.js) gets the PREVIOUS day on every server east of UTC. Return
+// the raw `YYYY-MM-DD` string Postgres sends instead: every consumer of a DATE
+// column in this codebase already accepts (or, per `asDay()` in postRunDb.js,
+// specifically tolerates) a plain day-key string (#8451).
+pg.types.setTypeParser(1082, (value) => value);
+
 if (!process.env.PGPASSWORD) {
   console.warn('⚠️ PGPASSWORD not set — using default. Set PGPASSWORD env var for production.');
 }
