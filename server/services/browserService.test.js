@@ -820,7 +820,7 @@ describe('read-only browser observation', () => {
       connected: true, pageCount: 1,
       pages: [{ title: 'Example' }], downloads: { files: [{ name: 'example.txt' }] },
     });
-    await service.deleteDownload('example.txt');
+    expect(await service.deleteDownload('example.txt')).toBe(true);
     expect(changed).toHaveBeenCalledOnce();
     pageBody = { malformed: true };
     await expect(service.getFullStatus({ strict: true })).rejects.toThrow('pages unavailable');
