@@ -1,6 +1,6 @@
 // Runs the real scripts/db.sh control flow against stubbed executables in a
-// temporary root, so a failed pg_dump is proven to stop `migrate` before any
-// import, mode change, or source shutdown (#8781). No real database is touched:
+// temporary root. Migration refuses before side effects; failed pg_dump never
+// publishes a partial export (#8781). No real database is touched:
 // every host command db.sh reaches (docker, psql, pg_dump, pg_isready, uname)
 // is a stub placed ahead of the system directories on PATH.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -98,8 +98,8 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
   const tempArtifacts = () => (existsSync(dumpDir) ? readdirSync(dumpDir).filter(f => f.startsWith('portos-export.')) : []);
   const dumps = () => (existsSync(dumpDir) ? readdirSync(dumpDir).filter(f => f.endsWith('.sql')) : []);
 
-  it.each(['partial', 'empty'])('aborts migrate on a %s failed dump before import, mode change, or shutdown', (mode) => {
-    const result = run(['migrate'], mode);
+  it.each(['partial', 'empty'])('refuses to publish a %s failed export', (mode) => {
+    const result = run(['export', 'failed'], mode);
 
     expect(result.status).not.toBe(0);
     const log = readFileSync(stubLog, 'utf8');
@@ -124,17 +124,25 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(tempArtifacts()).toEqual([]);
   });
 
-  it('imports the complete dump and switches mode once on success', () => {
-    const result = run(['migrate'], 'ok');
-
+  it('publishes a complete export without switching mode or stopping the source', () => {
+    const result = run(['export', 'complete'], 'ok');
     expect(result.status).toBe(0);
-    expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
-    const log = readFileSync(stubLog, 'utf8');
-    expect(log.match(/^IMPORT$/gm)).toHaveLength(1);
-    expect(log.match(/^SOURCE_STOP$/gm)).toHaveLength(1);
-    expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=native\n');
-    const [dump] = dumps();
-    expect(readFileSync(join(dumpDir, dump), 'utf8')).toBe(FULL_DUMP);
+    expect(readFileSync(join(dumpDir, 'portos-complete.sql'), 'utf8')).toBe(FULL_DUMP);
+    expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=docker\n');
+    expect(readFileSync(stubLog, 'utf8')).not.toMatch(/IMPORT|SOURCE_STOP/);
     expect(tempArtifacts()).toEqual([]);
+  });
+
+  it.each(['docker', 'native'])('refuses repeated %s migrations before any database command', (mode) => {
+    writeFileSync(envFile, `PGMODE=${mode}\n`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = run(['migrate'], 'ok');
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/migration is temporarily unavailable/);
+      expect(readFileSync(stubLog, 'utf8')).toBe('');
+      expect(existsSync(importLog)).toBe(false);
+      expect(existsSync(dumpDir)).toBe(false);
+      expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
+    }
   });
 });

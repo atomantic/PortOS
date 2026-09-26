@@ -99,21 +99,6 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
         {/* Non-active backend actions */}
         {!isActive && (data?.installed || data?.configured) && (
           <>
-            {/* Migrate & switch to this backend */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'migrate',
-                label: `Migrate to ${displayLabel} and switch?`,
-                detail: `Exports data from ${activeLabel}, imports into ${displayLabel}, and makes ${displayLabel} the active backend.`,
-                action: () => runAction(`migrate-${backend}`, () => switchDatabase(backend, true), `Migrated to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
-            >
-              <ArrowRightLeft size={12} />
-              Migrate to {displayLabel}
-            </button>
-
             {/* Switch without migration */}
             <button
               onClick={() => setConfirmAction({
@@ -275,6 +260,12 @@ export function DatabaseTab() {
                 exportDatabase={exportDatabase}
               />
             </div>
+
+            <p className="text-sm text-port-warning">
+              Database migration is temporarily unavailable to protect writes made while PortOS is running.
+              Keep using the current backend until a coordinated shutdown and restart is available.
+              Backups remain available.
+            </p>
 
             {/* Progress indicator */}
             {progressMsg && (

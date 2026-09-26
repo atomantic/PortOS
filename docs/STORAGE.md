@@ -203,22 +203,25 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-`scripts/db.sh migrate` exports the mode selected in the repository-root `.env`
-and imports into the other mode. The dump uses `--clean`: it **replaces the
-destination's database objects and records**, rather than merging records.
-Back up both databases and stop PortOS processes before an intentional move.
+Automatic backend migration is temporarily unavailable. Both the Settings
+migration request and `scripts/db.sh migrate` refuse before copying data or
+changing mode. The former path could accept writes after its dump snapshot
+and strand them on the source; changing `.env` also leaves the running server
+connected to its original pool.
 
-`scripts/db.sh setup-native` selects **native** mode after provisioning; it does
-not copy Docker data. Running `scripts/db.sh migrate` immediately afterward
-therefore copies **native → Docker**, potentially overwriting your existing
-Docker records with a fresh database. For **Docker → native**, first select the
-Docker source with `scripts/db.sh use-docker`, ensure that source is running,
-then run `scripts/db.sh migrate`. Check `scripts/db.sh status` before migrating.
-The migration switches to the destination mode after a successful import.
+Keep the existing backend selected and use backups until the coordinated
+offline cutover is available (tracked in #8797 / #8805). A safe cutover requires
+downtime for **all** PortOS writers, including the CoS runner, and verification
+that the restarted server actually uses the target. A server-only restart or
+a saved-mode change is not that verification. Do not use Sync followed by Switch
+as a migration workaround.
 
-The migration command assumes the standard native `:5432` and Docker `:5561`
-destination ports. For custom ports, use an explicitly targeted dump/restore
-instead. See [Backup & Restore](./BACKUP.md) for backup and restore semantics.
+`scripts/db.sh setup-native` selects native mode after provisioning; it does
+not copy Docker data. Preserve the backend holding your records. If an earlier
+migration already ran, keep both databases and its dump intact: the old source
+may contain writes missing from the target. Do not destroy either backend or
+reverse the migration before comparing and recovering those records.
+See [Backup & Restore](./BACKUP.md) for backup and restore semantics.
 
 ### Boot schema upgrades & lock windows
 

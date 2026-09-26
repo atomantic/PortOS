@@ -231,17 +231,12 @@ async function switchDatabaseImpl({ target, migrate }, io) {
   const emit = (event, data) => io?.emit('database:progress', { event, ...data });
 
   if (migrate) {
-    emit('start', { message: `Migrating data to ${target}...` });
-    const result = await runDbScript(['migrate']);
-    if (result.exitCode !== 0) {
-      emit('error', { message: 'Migration failed' });
-      throw new ServerError('Migration failed', {
-        status: 500,
-        context: { details: result.stderr || result.stdout }
-      });
-    }
-    emit('complete', { message: `Migration to ${target} complete` });
-    return { success: true, output: result.stdout };
+    // A shell child cannot fence the CoS runner or rebind this server's pool.
+    // Re-enable only with the durable, verified offline cutover in #8805.
+    throw new ServerError(
+      'Database migration is temporarily unavailable: a coordinated shutdown and restart is required to preserve writes. Keep using the current backend; backups remain available.',
+      { status: 409, code: 'DATABASE_CUTOVER_UNAVAILABLE' }
+    );
   }
 
   // Just switch mode without migrating
