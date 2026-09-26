@@ -7,6 +7,7 @@ import { mutateVideoHistory } from '../videoGen/history.js';
 import { resolveMusicTrackPath } from '../pipeline/audioMux.js';
 import { openComposition } from './browser.js';
 import { encodeComposition } from './encode.js';
+import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
 
 const active = new Map();
 
@@ -28,11 +29,15 @@ export async function renderComposition({ jobId, ...input }) {
   let result;
   let failure;
   try {
-    const { directory, musicTrack } = validateRequest(htmlCompositionRenderSchema, input);
+    const { directory, musicTrack, launchVideo } = validateRequest(htmlCompositionRenderSchema, input);
     const musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     signal.throwIfAborted();
-    page = await openComposition(directory, { signal });
+    let launchPlan;
+    const needsLaunchGate = launchVideo || directory.split('/')[0] === 'launch-videos';
+    page = await openComposition(directory, { signal, validateAssets: needsLaunchGate
+      ? assets => { launchPlan = validateLaunchVideoAssets(assets, launchVideo); }
+      : undefined });
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
@@ -41,6 +46,9 @@ export async function renderComposition({ jobId, ...input }) {
     const parsed = htmlCompositionContractSchema.safeParse(metadata);
     if (!parsed.success) throw new Error(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
     const contract = parsed.data;
+    if (launchPlan && Math.abs(contract.durationSec - launchPlan.durationSec) > 1e-8) {
+      throw new Error('Composition durationSec must match storyboard.json');
+    }
     await ensureDir(PATHS.videos);
     await encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress: progress => {
       videoGenEvents.emit('progress', { generationId: jobId, progress: progress * 0.95 });
@@ -50,7 +58,7 @@ export async function renderComposition({ jobId, ...input }) {
     await page.close({ verify: true });
     page = null;
     signal.throwIfAborted();
-    const thumbnail = await generateThumbnail(outputPath, jobId);
+    const thumbnail = await generateThumbnail(outputPath, jobId, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
     if (!thumbnail) throw new Error('Composition thumbnail generation failed');
     signal.throwIfAborted();
     // Once the shared history write starts, cancellation must be refused.

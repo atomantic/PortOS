@@ -63,3 +63,48 @@ The real-browser contract suite in
 a temporary browser profile and data root, never the live managed browser.
 Set `CHROME_PATH` when Chrome is not in a standard location. The suite skips
 explicitly when either binary is unavailable; route and queue tests still run.
+
+## Launch-video admission (API foundation)
+
+`POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
+This option is required for directories rooted at `launch-videos/` and can also
+be applied to other composition directories. The app-detail action and CoS
+planning task are not part of this API foundation yet (tracked in #8649).
+
+Alongside `index.html`, put non-empty `plan.md`, `caption.txt`, and
+`storyboard.json` in the composition directory. A storyboard has this shape:
+
+```json
+{
+  "posterSec": 5,
+  "scenes": [{
+    "durationSec": 20,
+    "lines": [{
+      "text": "Plan your next great project",
+      "wordCount": 5,
+      "holdSec": 2
+    }]
+  }]
+}
+```
+
+Scene durations must total 15–25 seconds, within two seconds of the requested
+15–25 second target. Each line's actual whitespace-separated word count must
+match `wordCount`; its hold must be at least `max(0.8, 0.3 × words)` seconds and
+fit inside the scene. The composition's runtime duration must equal the total.
+`posterSec` must be inside that duration and selects the generated thumbnail.
+
+Admission scans all UTF-8 HTML, CSS, JavaScript, JSON, SVG, Markdown, and text
+assets, including the plan, storyboard, and caption, for the shared PII patterns
+and recognizable secret tokens. It refuses detected values rather than silently
+redacting them; errors identify the pattern and file without quoting the value.
+Only WOFF/WOFF2 fonts are accepted as binary assets. Raster images, footage, and
+other uninspectable formats are refused on this path. Existing general HTML
+composition renders retain their asset support.
+
+The same checks run again on the renderer's frozen in-memory assets before any
+browser script executes, covering edits while a job waits in the queue. These
+are text-pattern and declared-storyboard checks, not proof that arbitrary code
+cannot construct private text or violate its declared timing. Producers must
+still avoid secrets and live records, use fictional content, and make the
+composition faithfully implement the storyboard. Nothing is uploaded or posted.
