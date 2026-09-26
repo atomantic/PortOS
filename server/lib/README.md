@@ -27,7 +27,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
 | `apiContractSchemas.js` | Canonical Zod request contracts for externally callable APIs plus `zodToOpenApiSchema` (plain JSON Schema — the 3.0.3 conversion happens at the OpenAPI document boundary, not here); runtime routes and OpenAPI use the same schema objects. |
-| `socketEventContracts.js` | Runtime-backed payload contracts for modeled inbound Socket.IO events, reusing the same Zod schemas as live validation. |
+| `socketEventContracts.js` | Payload contracts for modeled Socket.IO events, reusing live Zod validation for inbound events and documenting public outbound snapshots. |
 | `socketEventInventory.js` | Cached source-derived Socket.IO event inventory: event names and directions only, with no checked-in manifest or positional source metadata. |
 | `agentContextValidation.js` | Shared settings, MCP request/tool input/output schemas, result + approximate-token bounds, source-freshness status, and `advertiseAgentContextTools(scopes)` for the opt-in read-only agent-context surface. |
 | `validation.js` | Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing, document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`, `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files below so existing deep imports keep working. |

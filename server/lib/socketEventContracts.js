@@ -1,4 +1,4 @@
-/** Runtime-backed payload contracts for modeled client-to-server Socket.IO events. */
+/** Runtime-backed payload contracts for modeled Socket.IO events. */
 
 import { zodToOpenApiSchema } from './apiContractSchemas.js';
 import {
@@ -34,6 +34,41 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'iterm:attach': input(itermSessionRefSchema, 'Start viewing one live iTerm2 session.'),
   'iterm:detach': input(itermSessionRefSchema, 'Stop viewing one live iTerm2 session.'),
   'iterm:input': input(itermInputSchema, 'Type bytes into one live iTerm2 session.'),
+  'localLlm:sweep:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'Public assessment sweep snapshot after a queue state change, including cancellation and final runtime restoration.',
+    payloadSchema: {
+      type: 'object',
+      required: ['status', 'settled', 'total', 'completed', 'results', 'cancelRequested'],
+      properties: {
+        status: { type: 'string', enum: ['idle', 'running', 'cancelled', 'failed', 'complete'] },
+        mode: { type: ['string', 'null'], enum: ['models', 'tunings', null] },
+        scope: { type: ['string', 'null'] },
+        target: { type: ['object', 'null'], properties: { backend: { type: 'string' }, modelId: { type: 'string' } } },
+        settled: { type: 'boolean' },
+        startedAt: { type: ['string', 'null'] },
+        finishedAt: { type: ['string', 'null'] },
+        total: { type: 'integer' },
+        completed: { type: 'integer' },
+        current: { type: ['object', 'null'], properties: {
+          backend: { type: 'string' }, modelId: { type: 'string' },
+          tuningLabel: { type: ['string', 'null'] }, startedAt: { type: 'string' },
+        } },
+        results: { type: 'array', items: { type: 'object', properties: {
+          backend: { type: 'string' }, modelId: { type: 'string' },
+          tuningLabel: { type: ['string', 'null'] }, finishedAt: { type: 'string' },
+          verdict: { type: ['string', 'null'] }, error: { type: ['string', 'null'] },
+          meanTokensPerSecond: { type: ['number', 'null'] }, meanCharsPerSecond: { type: ['number', 'null'] },
+          tokensEstimated: { type: ['boolean', 'null'] }, tuningApplied: { type: ['boolean', 'null'] },
+          tuningNotApplied: { type: ['string', 'null'] },
+        } } },
+        cancelRequested: { type: 'boolean' },
+        error: { type: ['string', 'null'] },
+        restoreError: { type: ['string', 'null'] },
+      },
+      additionalProperties: false,
+    },
+  }),
   'logs:subscribe': input(logsSubscribeSchema, 'Subscribe to a bounded process-log tail.'),
   'logs:unsubscribe': input(logsUnsubscribeSchema, 'Release one process-log subscription or all legacy subscriptions.'),
   'shell:attach': input(shellAttachSchema, 'Attach this socket to an existing terminal session.'),

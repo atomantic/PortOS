@@ -807,6 +807,7 @@ router.post('/assessments/sweep', asyncHandler(async (req, res) => {
   const status = await startSweep({
     scope, contextTokens, backend, modelId, tunings,
     onProgress: (frame) => io?.emit('localLlm:progress', frame),
+    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
   })
   // A refused start (one already running, or nothing to measure) is a 409, not a
   // silent no-op that would leave the page waiting for progress that never comes.
@@ -815,7 +816,7 @@ router.post('/assessments/sweep', asyncHandler(async (req, res) => {
 }))
 
 // GET /api/local-llm/assessments/sweep — queue status. Module state only, zero
-// LLM calls, so the page can poll it and a reload can pick a running sweep back up.
+// LLM calls; mount, reconnect and tab re-show reconcile missed state events here.
 router.get('/assessments/sweep', asyncHandler(async (_req, res) => {
   res.json(getSweepStatus())
 }))
