@@ -271,4 +271,5 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | `useGoalOrganize` / `useGoalCreate` | Shared goal suggestion preview, explicit apply, and guarded create flows for both Goals views. | Goals List and Tree views. |
 
+| `useGraphNodeDetail` | Selection-keyed graph record loading with render-time identity gating and late-response disposal. | Brain and CoS graph detail panels. |
 | `useModelLifecycle` | Targeted 3D model lifecycle reads, cancellation and bounded transient recovery. | Image-to-3D and procedural model views. |

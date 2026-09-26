@@ -14,6 +14,7 @@ import TouchDragHint from '../../graph3d/TouchDragHint';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
+import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
 
@@ -83,7 +84,9 @@ export default function BrainGraph() {
   const [loading, setLoading] = useState(true);
   const [subLoading, setSubLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [fullRecord, setFullRecord] = useState(null);
+  const detailLoader = TYPE_GETTERS[selectedNode?.brainType];
+  const detailKey = selectedNode ? JSON.stringify([selectedNode.brainType, selectedNode.id]) : null;
+  const fullRecord = useGraphNodeDetail(detailKey, detailLoader, selectedNode?.id);
   const { theme } = useThemeContext();
   const [layoutKey, setLayoutKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -200,19 +203,6 @@ export default function BrainGraph() {
   // Prose the detail panel renders for the loaded record (see recordBody).
   const detailBody = recordBody(fullRecord);
 
-  // Fetch full brain record when a node is selected
-  useEffect(() => {
-    if (!selectedNode) { setFullRecord(null); return; }
-    let cancelled = false;
-    const getter = TYPE_GETTERS[selectedNode.brainType];
-    if (!getter) return;
-    getter(selectedNode.id).then(record => {
-      if (!cancelled) setFullRecord(record);
-    }).catch(() => {
-      if (!cancelled) setFullRecord(null);
-    });
-    return () => { cancelled = true; };
-  }, [selectedNode]);
 
   // A null node clears the selection (an empty-space tap); re-selecting the
   // current node toggles it off.

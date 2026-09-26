@@ -252,4 +252,5 @@ export * from './useSocketResource.js';
 export * from './useProcessSnapshot.js';
 export * from './useFableLoomRun.js';
 
+export { default as useGraphNodeDetail } from './useGraphNodeDetail.js';
 export * from './useModelLifecycle.js';
