@@ -47,7 +47,10 @@ vi.mock('../lib/db.js', () => ({
       }],
     };
   }),
-  withTransaction: vi.fn(),
+  withTransaction: vi.fn(async (fn) => {
+    const { query } = await import('../lib/db.js');
+    return fn({ query });
+  }),
   pgvectorToArray: vi.fn(() => null),
   arrayToPgvector: vi.fn((a) => a),
 }));
