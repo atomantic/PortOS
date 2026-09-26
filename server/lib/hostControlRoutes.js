@@ -109,6 +109,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Toggle arms an existing job, shell jobs included, for its next run.
   'POST /api/cos/jobs/:id/toggle',
   'POST /api/cos/jobs/:id/trigger',
+  // A job skill template IS the prompt a scheduled job's agent runs (#8762).
+  'PUT /api/prompts/skills/jobs/:name',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/maintenance-runs',

@@ -14,6 +14,21 @@ import { getAppById } from '../apps.js'
 import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
 import { appendJobFormValues } from '../../lib/jobFormFields.js'
 import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
+import { ServerError } from '../../lib/errorHandler.js'
+
+const KNOWN_SKILL_NAMES = new Set(Object.values(JOB_SKILL_MAP))
+
+/**
+ * Resolve a skill name to its template path, refusing anything but a known
+ * job skill — the name arrives from a URL segment, where Express has already
+ * decoded `%2F`, so an unchecked name could reach any `.md` file (#8762).
+ */
+function jobSkillTemplatePath(skillName) {
+  if (typeof skillName !== 'string' || !/^[a-z0-9-]+$/.test(skillName) || !KNOWN_SKILL_NAMES.has(skillName)) {
+    throw new ServerError('Unknown job skill template', { status: 400, code: 'VALIDATION_ERROR' })
+  }
+  return join(JOBS_SKILLS_DIR, `${skillName}.md`)
+}
 
 /**
  * Load a job skill template from disk
@@ -21,7 +36,7 @@ import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../.
  * @returns {Promise<string|null>} Template content or null if not found
  */
 async function loadJobSkillTemplate(skillName) {
-  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  const filePath = jobSkillTemplatePath(skillName)
   const content = await tryReadFile(filePath)
   if (content) {
     console.log(`🎯 Loaded job skill template: ${skillName}`)
@@ -36,7 +51,7 @@ async function loadJobSkillTemplate(skillName) {
  */
 async function saveJobSkillTemplate(skillName, content) {
   await ensureDir(JOBS_SKILLS_DIR)
-  const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
+  const filePath = jobSkillTemplatePath(skillName)
   await writeFileGuarded(filePath, content)
   console.log(`💾 Saved job skill template: ${skillName}`)
 }
