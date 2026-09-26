@@ -13,17 +13,19 @@ import {
   Activity
 } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo, formatWeekdayDate, formatCount } from '../utils/formatters';
+
+const RESOURCE_EVENTS = ['cos:tasks:changed', 'cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:agent:spawned', 'cos:agent:completed', 'cos:agents:changed', 'cos:status', 'cos:status:paused', 'cos:status:resumed', 'cos:learning:changed'];
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
  * Shows today's progress, learning health, CoS running state, and recent tasks
  */
 const CosDashboardWidget = memo(function CosDashboardWidget() {
-  const { data: dashData, loading } = useAutoRefetch(async () => {
-    // Let errors throw — `useAutoRefetch` preserves the last-good batch on
+  const { data: dashData, loading } = useSocketResource(async () => {
+    // Let errors throw — `useSocketResource` preserves the last-good batch on
     // transient failures. Without this, a per-endpoint `.catch(() => null)`
     // could mix fresh and stale sections (e.g. summary=null but
     // learningSummary holding its prior value) and the widget would flicker
@@ -36,12 +38,13 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
       api.getCosActivityCalendar(8, silent)
     ]);
     return { summary, learningSummary, recentTasks, activityCalendar };
-  }, 30000, {
+  }, {
+    namespace: 'cos', events: RESOURCE_EVENTS,
     // Re-render only when one of the aggregated counts actually moves —
     // running agents, completed/failed counts, queue depth, learning
     // success rate, every visible recent-task field, every per-day heatmap
-    // cell, and the heatmap summary. The poll fires every 30s; without this
-    // guard each tick re-renders the activity heatmap + recent tasks list
+    // cell, and the heatmap summary. Without this
+    // guard each invalidation re-renders the activity heatmap + recent tasks list
     // even when nothing changed.
     //
     // Recent-tasks comparison walks every rendered field per row (id,
@@ -49,13 +52,14 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     // time label is rendered client-side from `task.completedAt` via timeAgo
     // and refreshed by the useTimeTick(60000) below, so the server's
     // `task.completedRelative` string is intentionally ignored — it ships in
-    // the payload but would freeze across deduped polls if we used it.
+    // the payload but would freeze across unchanged snapshots if we used it.
     //
     // Heatmap comparison walks every cell's (date, tasks, isToday) tuple plus
     // summary totals — the per-day distribution can shift without changing
     // top-level totals (e.g. a run moving from one day to another in
     // late-arriving telemetry).
     compare: (prev, next) => {
+      if (!prev) return false;
       const prevTasks = prev.recentTasks?.tasks;
       const nextTasks = next.recentTasks?.tasks;
       const prevLen = prevTasks?.length ?? 0;
@@ -127,7 +131,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);
   // Tick every minute so the client-side `timeAgo(task.completedAt)` labels
-  // recompute against the latest wall-clock time across deduped polls.
+  // recompute against the latest wall-clock time across unchanged snapshots.
   useTimeTick(60000);
 
   // Don't render while loading
@@ -308,7 +312,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
                           label without help from the server. The server's
                           `completedRelative` string ships in the payload but
                           we intentionally ignore it — it goes stale across
-                          deduped polls. */}
+                          unchanged snapshots. */}
                       <span>{timeAgo(task.completedAt)}</span>
                     </div>
                   </div>

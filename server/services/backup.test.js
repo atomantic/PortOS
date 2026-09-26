@@ -2459,6 +2459,33 @@ describe('runBackup lifecycle', () => {
     rmSync(destRoot, { recursive: true, force: true });
   });
 
+  it.each([0, 1])('invalidates scheduled backups only after readable lifecycle transitions (exit %s)', async (exitCode) => {
+    const { dashboardEvents } = await import('./dashboardEvents.js');
+    const { getState, listSnapshots } = await import('./backup.js');
+    const reads = [];
+    const listener = () => reads.push(Promise.all([getState(), listSnapshots(destRoot)]));
+    dashboardEvents.on('backup:changed', listener);
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    try {
+      const pending = runBackup(destRoot, null).catch(error => error);
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const [started, initialSnapshots] = await reads[0];
+      expect(started.status).toBe('running');
+      expect(initialSnapshots[0].incomplete).toBe(true);
+      proc.emit('close', exitCode);
+      const result = await pending;
+      expect(reads).toHaveLength(2);
+      const [finished, snapshots] = await reads[1];
+      expect(finished.status).toBe(exitCode ? 'error' : 'ok');
+      expect(snapshots[0].incomplete).toBe(false);
+      expect(Boolean(snapshots[0].failed)).toBe(Boolean(exitCode));
+      if (exitCode) expect(result).toBeInstanceOf(Error);
+    } finally {
+      dashboardEvents.off('backup:changed', listener);
+    }
+  });
+
   it('rsyncs, writes a manifest and state, and emits started/completed', async () => {
     const io = { emit: vi.fn() };
     const proc = fakeProc();

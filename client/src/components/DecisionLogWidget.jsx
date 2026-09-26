@@ -15,11 +15,13 @@ import {
   Moon
 } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo } from '../utils/formatters';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
 import ProvenanceChip from './ui/ProvenanceChip';
+
+const RESOURCE_EVENTS = ['cos:decisions:changed'];
 
 // Every row here is a record of an autonomous choice the Chief of Staff made —
 // what it skipped, switched, or deferred and why. That's read straight off the
@@ -40,13 +42,13 @@ const DECISION_PROVENANCE = {
  * exactly why the CoS took (or didn't take) action.
  */
 const DecisionLogWidget = memo(function DecisionLogWidget() {
-  // Let errors throw — `useAutoRefetch` preserves the last-good summary on
+  // Let errors throw — `useSocketResource` preserves the last-good summary on
   // transient failures instead of dropping the widget back to its loading
   // state on every blip.
-  const { data: summary, loading } = useAutoRefetch(
+  const { data: summary, loading } = useSocketResource(
     () => api.getCosDecisionSummary({ silent: true }),
-    60000,
     {
+      namespace: 'cos', events: RESOURCE_EVENTS,
       // Decision stream is append-only; same 24h totals + same per-decision
       // tuple of every rendered field means nothing visible advanced this
       // minute. Comparator walks: id (key + dedup), type (icon + label),
@@ -58,7 +60,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
       // below — including the timestamp fields in this comparator would
       // pointlessly break dedup on every backend mtime nudge. Keep this tuple
       // in sync with the JSX above.
-      compare: (prev, next) =>
+      compare: (prev, next) => prev != null &&
         equalByKeys(prev.last24Hours, next.last24Hours, [
           'total', 'skipped', 'switched', 'capacityFull',
           'cooldownActive', 'selected', 'adjusted',
@@ -75,7 +77,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
   );
   const [expanded, setExpanded] = useState(false);
   // Tick every minute so the `timeAgo(...)` relative-time labels on each
-  // decision row roll over even when the poll payload is unchanged by the
+  // decision row roll over even when the resource snapshot is unchanged by the
   // comparator.
   useTimeTick(60000);
 

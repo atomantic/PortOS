@@ -1,4 +1,5 @@
 import { meatspaceEvents } from '../meatspaceEvents.js';
+import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
@@ -153,4 +154,5 @@ export async function saveJSON(filePath, data) {
   if (filePath === GOALS_FILE && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
     await mlReplace('goals', data.goals);
   }
+  if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
 }

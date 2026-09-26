@@ -10,16 +10,18 @@ import {
   Sparkles
 } from 'lucide-react';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
+
+const RESOURCE_EVENTS = ['cos:schedule:changed', 'cos:scheduler:changed', 'cos:tasks:changed', 'cos:learning:changed', 'cos:config:changed'];
 
 /**
  * UpcomingTasksWidget - Shows a preview of upcoming scheduled tasks
  * Helps users understand what the CoS will work on next
  */
 const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
-  const { data: upcoming, loading, error } = useAutoRefetch(
+  const { data: upcoming, loading, error } = useSocketResource(
     () => api.getCosUpcomingTasks(6, { silent: true }),
-    60000
+    { namespace: 'cos', events: RESOURCE_EVENTS }
   );
 
   // Don't render during the initial load.

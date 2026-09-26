@@ -1120,34 +1120,45 @@ describe('overview invalidation from MortalLoom', () => {
     store._resetMortalLoomInitForTest();
     settingsEvents.removeAllListeners();
     const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const { dashboardEvents } = await import('./dashboardEvents.js');
+    const goalsChanged = vi.fn();
+    dashboardEvents.on('goals:changed', goalsChanged);
     const changed = vi.fn();
     meatspaceEvents.on('changed', changed);
     try {
-      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [] }));
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [], goals: [] }));
       await store.initMortalLoomStore();
       await store.initMortalLoomStore();
       await vi.advanceTimersByTimeAsync(0);
       changed.mockClear();
-      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 170 }] }));
+      goalsChanged.mockClear();
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 170 }], goals: [{ id: 'example-goal' }] }));
       await vi.advanceTimersByTimeAsync(10_000);
       expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['body'] });
+      expect(goalsChanged).toHaveBeenCalledTimes(1);
       changed.mockClear();
+      goalsChanged.mockClear();
       readFileMock.mockRejectedValueOnce(Object.assign(new Error('unreadable'), { code: 'EACCES' }));
       await vi.advanceTimersByTimeAsync(10_000);
       expect(changed).not.toHaveBeenCalled();
+      expect(goalsChanged).not.toHaveBeenCalled();
       readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 172 }] }));
       await vi.advanceTimersByTimeAsync(10_000);
       expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['body'] });
+      expect(goalsChanged).toHaveBeenCalledTimes(1);
       settingsEvents.emit('settings:updated', { mortalloom: { enabled: false } });
       changed.mockClear();
+      goalsChanged.mockClear();
       const reads = readFileMock.mock.calls.length;
       await vi.advanceTimersByTimeAsync(30_000);
       expect(readFileMock).toHaveBeenCalledTimes(reads);
       expect(changed).not.toHaveBeenCalled();
+      expect(goalsChanged).not.toHaveBeenCalled();
     } finally {
       store._resetMortalLoomInitForTest();
       settingsEvents.removeAllListeners();
       meatspaceEvents.off('changed', changed);
+      dashboardEvents.off('goals:changed', goalsChanged);
       vi.useRealTimers();
     }
   });

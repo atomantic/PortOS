@@ -7,6 +7,7 @@
  */
 
 import { join } from 'path';
+import { dashboardEvents } from './dashboardEvents.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
 
@@ -70,6 +71,7 @@ async function loadDecisions() {
 async function saveDecisions(data) {
   decisionCache = data;
   await atomicWrite(DECISION_FILE, data);
+  dashboardEvents.emit('cos:decisions:changed');
 }
 
 /**

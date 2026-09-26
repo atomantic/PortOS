@@ -8,6 +8,7 @@
  * up on the other after iCloud sync completes.
  */
 
+import { dashboardEvents } from './dashboardEvents.js';
 import { homedir } from 'os';
 import { join } from 'path';
 import { stat } from 'fs/promises';
@@ -204,7 +205,6 @@ async function materializeNow(path) {
 // retry the initial pin without duplicating the listener.
 let listenerAttached = false;
 let didInitialPin = false;
-
 // One server watcher for external iCloud changes, including atomic replacement
 // and recovery after transient unreadability; never one poll per browser.
 let watchedPath = null;
@@ -232,6 +232,9 @@ function configureStoreWatcher(settings) {
         // Retain the last good snapshot through eviction/read failures.
         if (result.ok) {
           invalidateMortalLoomChanges(previous, result.store);
+          if (JSON.stringify(previous?.goals) !== JSON.stringify(result.store?.goals)) {
+            dashboardEvents.emit('goals:changed');
+          }
           previous = structuredClone(result.store);
         }
       } while (dirty);
@@ -276,6 +279,7 @@ export async function initMortalLoomStore() {
       if (nextPath !== watchedPath) {
         configureStoreWatcher(settings);
         invalidateMeatspace(['overview', 'alcohol', 'body', 'blood', 'epigenetic', 'eyes', 'calendar']);
+        dashboardEvents.emit('goals:changed');
       }
       if (!settings?.mortalloom?.enabled) {
         // Disable clears the dedup cache so a future re-enable (even with the
@@ -440,6 +444,7 @@ export async function readStore() {
 
 async function writeStoreAtPath(path, data) {
   await withTransientRetry(() => atomicWrite(path, data));
+  dashboardEvents.emit('goals:changed');
 }
 
 /** Atomic read → mutate → write. Ensures all array keys are initialized. */
@@ -830,6 +835,7 @@ export async function importToPortOS() {
     await ensureDir(dataPath('digital-twin'));
     localGoals.updatedAt = new Date().toISOString();
     await atomicWrite(goalsPath, localGoals);
+    dashboardEvents.emit('goals:changed');
   }
   report.added.goals = gAdded; report.skipped.goals = gSkipped;
 
