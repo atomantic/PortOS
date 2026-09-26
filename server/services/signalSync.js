@@ -168,6 +168,9 @@ export function signalTouchpointCandidates(messages = [], timezone) {
   for (const msg of messages || []) {
     if (!(msg?.at instanceof Date) || Number.isNaN(msg.at.getTime())) continue;
     if (!msg.conversationId) continue;
+    // System rows (verified-change, group-v2-change, call-history, …) are not a
+    // conversation — they must not log contact history (#8766).
+    if (!signalActivityKind(msg.type, msg.isFromMe)) continue;
     const day = localDayKey(msg.at, timezone);
     if (!day) continue;
     const key = `${msg.conversationId}\u0000${day}`;
