@@ -6,6 +6,7 @@ import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './s
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
+import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
@@ -154,6 +155,7 @@ describe('socket.js — initSocket', () => {
     meatspaceEvents.removeAllListeners();
     dashboardEvents.removeAllListeners();
     modelLifecycleEvents.removeAllListeners();
+    providerQuotaEvents.removeAllListeners();
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
@@ -192,6 +194,12 @@ describe('socket.js — initSocket', () => {
       ['image-to-3d:changed', { id: 'example-image-model' }],
       ['threejs-model:changed', { id: 'example-procedural-model' }],
     ]);
+  });
+
+  it('forwards quota completion without leaking source data', () => {
+    io.emitted.length = 0;
+    providerQuotaEvents.emit('updated', { privateContent: 'example account detail' });
+    expect(io.emitted).toEqual([['provider-quota:updated', {}]]);
   });
 
   it('forwards death-clock invalidations without personal data', () => {

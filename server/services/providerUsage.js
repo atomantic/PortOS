@@ -1,3 +1,4 @@
+import { notifyProviderQuotaUpdated } from './providerQuotaEvents.js';
 import { isProcessProvider } from '../lib/providerTypes.js';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
@@ -486,6 +487,7 @@ export async function fetchCodexQuota({ codexHome = codexHomeDir(), now = Date.n
 // (leaving it uncached turns each poll into a fresh PTY spawn).
 const scrapeCache = createStaleWhileRevalidate({
   ttlMs: 5 * 60 * 1000,
+  onSettled: notifyProviderQuotaUpdated,
   isComplete: (card) => Boolean(card?.limits?.length),
 });
 
