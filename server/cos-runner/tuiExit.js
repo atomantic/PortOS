@@ -6,7 +6,7 @@
 // buffer and is enough to carry a CLI's startup diagnostic.
 const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
 
-export function createTuiExitHandler({ agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState }) {
+export function createTuiExitHandler({ agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState, persistCompletion, onError }) {
   return async ({ exitCode, signal }) => {
     try {
       // The force-kill timer removes the registry entry before node-pty emits
@@ -25,11 +25,18 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
         clearTimeout(current.killTimer);
         current.killTimer = null;
       }
+      // A sentinel read already in flight owns its completion output too.
+      await current.sentinelWork;
       const duration = Date.now() - current.startedAt;
       const success = current.completedBySentinel;
       const effectiveExitCode = success ? 0 : exitCode;
       const effectiveSignal = success ? 0 : signal;
       const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
+      await persistCompletion(agentId, current.outputBuffer, current.paused ? null : {
+        taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
+        signal: effectiveSignal, success: !!success, duration,
+        completionReason: success ? 'agent-signaled-done' : 'tui-exit',
+      });
       io.emit('tui:exit', {
         sessionId,
         agentId,
@@ -58,6 +65,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
     } catch (err) {
       console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
       activeAgents.delete(agentId);
+      onError?.(err);
     }
   };
 }
