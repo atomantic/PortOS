@@ -63,6 +63,7 @@ const agentSubscribers = new Set();
 const instanceSubscribers = new Set();
 // Store loop subscribers
 const loopSubscribers = new Set();
+const codeAnimationSubscribers = new Set();
 // Store Beeper realtime subscribers (#33). Invalidation frames and transport
 // liveness ONLY — see setupBeeperEventForwarding for why this may never be a
 // global emit.
@@ -80,7 +81,11 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, beeperSubscribers, fableLoomSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers];
+
+export function emitCodeAnimationChanged(id) {
+  broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', { id });
+}
 
 function broadcastToSet(set, event, data) {
   const disconnected = [];
@@ -157,6 +162,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'agents', agentSubscribers);
   registerSubscriber(socket, 'instances', instanceSubscribers);
   registerSubscriber(socket, 'loops', loopSubscribers);
+  registerSubscriber(socket, 'code-animation', codeAnimationSubscribers);
   registerSubscriber(socket, 'beeper', beeperSubscribers);
   registerSubscriber(socket, 'fableloom', fableLoomSubscribers);
 }

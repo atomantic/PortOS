@@ -4,13 +4,24 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const pollHarness = vi.hoisted(() => ({ callbacks: new Map() }));
+const socketHarness = vi.hoisted(() => ({ handlers: new Map() }));
+
+vi.mock('../services/socket', () => ({ default: {
+  emit: vi.fn(),
+  on: vi.fn((event, handler) => {
+    const handlers = socketHarness.handlers.get(event) || new Set();
+    handlers.add(handler);
+    socketHarness.handlers.set(event, handlers);
+  }),
+  off: vi.fn((event, handler) => socketHarness.handlers.get(event)?.delete(handler)),
+} }));
 
 vi.mock('../services/api', () => ({
   buildCodeAnimationPrompt: vi.fn(),
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
-  listCodeAnimationJobs: vi.fn().mockResolvedValue([]),
+  listCodeAnimationJobPage: vi.fn().mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null }),
   listMoodBoardNames: vi.fn(),
   listTracks: vi.fn().mockResolvedValue([]),
   listUniverseNames: vi.fn(),
@@ -42,6 +53,7 @@ import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
+  listCodeAnimationJobPage,
   getCodeAnimationOptions,
   listMoodBoardNames,
   listTracks,
@@ -77,6 +89,8 @@ describe('Code Animation page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     pollHarness.callbacks.clear();
+    socketHarness.handlers.clear();
+    listCodeAnimationJobPage.mockResolvedValue({ items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null });
     localStorage.clear();
     getCodeAnimationOptions.mockResolvedValue(OPTIONS);
     listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
@@ -104,6 +118,28 @@ describe('Code Animation page', () => {
 
     expect(screen.getByLabelText(/^title/i)).toHaveValue('');
     expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
+  });
+
+  it('loads one compact page, stays idle, and refreshes on durable changes and reconnect', async () => {
+    const jobs = Array.from({ length: 50 }, (_, n) => ({
+      id: `job-${n}`, status: 'completed', title: `Animation ${n}`, createdAt: '2026-01-01T00:00:00.000Z',
+    }));
+    listCodeAnimationJobPage.mockResolvedValue({ items: jobs, total: 1000,
+      counts: { running: 0, completed: 1000 }, nextCursor: 'next-page' });
+    await renderPage();
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Animation \d+/ })).toHaveLength(50));
+    expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
+    expect(pollHarness.callbacks.has(10_000)).toBe(false);
+    expect(screen.getByText('0 in progress · 1,000 completed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load older animations' })).toBeInTheDocument();
+    vi.useFakeTimers();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    vi.useRealTimers();
+    expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(1);
+    await act(async () => { for (const handler of socketHarness.handlers.get('code-animation:changed') || []) handler({ id: 'job-0' }); });
+    await waitFor(() => expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(2));
+    await act(async () => { for (const handler of socketHarness.handlers.get('connect') || []) handler(); });
+    await waitFor(() => expect(listCodeAnimationJobPage).toHaveBeenCalledTimes(3));
   });
 
   it('builds a universe-styled prompt that follows the universe mood board by default', async () => {

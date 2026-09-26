@@ -21,6 +21,7 @@ import {
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   listCodeAnimationJobs,
+  pageCodeAnimationJobs,
   getCodeAnimationOptions,
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
@@ -135,8 +136,16 @@ router.post('/generate', asyncHandler(async (req, res) => {
   res.status(202).json(await startCodeAnimationGeneration(input));
 }));
 
-router.get('/jobs', asyncHandler(async (_req, res) => {
-  res.json(await listCodeAnimationJobs());
+const jobsPageSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
+  cursor: z.string().min(1).max(256).optional(),
+}).strict();
+
+router.get('/jobs', asyncHandler(async (req, res) => {
+  // Existing query-less callers retain the array contract.
+  res.json(Object.keys(req.query).length === 0
+    ? await listCodeAnimationJobs()
+    : await pageCodeAnimationJobs(validateRequest(jobsPageSchema, req.query)));
 }));
 
 router.get('/generate/:id', asyncHandler(async (req, res) => {

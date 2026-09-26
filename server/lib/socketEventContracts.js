@@ -74,6 +74,12 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Release readiness observation; the last subscriber stops the observer.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'code-animation:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the bounded Code Animation gallery after a durable job change.',
+    payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',

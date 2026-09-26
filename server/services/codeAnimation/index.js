@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
+import { emitCodeAnimationChanged } from '../socket.js';
 import { PATHS } from '../../lib/paths.js';
 import { makePathResolver, resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
@@ -25,6 +26,9 @@ import {
   getCodeAnimationJobRecord,
   isCodeAnimationJobId,
   listCodeAnimationJobRecords,
+  listRunningCodeAnimationJobIds,
+  listCodeAnimationJobPage,
+  countCodeAnimationJobs,
   readCodeAnimationHtml,
   saveCodeAnimationHtml,
   saveCodeAnimationJobRecord,
@@ -428,6 +432,7 @@ async function reconcileJob(job) {
     updatedAt: now,
   };
   await saveCodeAnimationJobRecord(interrupted);
+  emitCodeAnimationChanged(job.id);
   return interrupted;
 }
 
@@ -438,6 +443,45 @@ export async function listCodeAnimationJobs() {
     const record = await getCodeAnimationJobRecord(job.id);
     return record ? summaryJob(await reconcileJob(record)) : summaryJob(job);
   }));
+}
+
+const JOB_PAGE_SIZE = 50;
+const JOB_PAGE_MAX = 100;
+
+function decodeJobCursor(value) {
+  if (!value) return null;
+  let tuple;
+  try { tuple = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')); } catch { /* invalid cursor */ }
+  if (!Array.isArray(tuple) || tuple.length !== 2
+      || typeof tuple[0] !== 'string' || Number.isNaN(Date.parse(tuple[0]))
+      || !isCodeAnimationJobId(tuple[1])) {
+    throw new ServerError('Invalid job cursor', { status: 400, code: 'INVALID_CURSOR' });
+  }
+  return { createdAt: new Date(tuple[0]).toISOString(), id: tuple[1] };
+}
+
+export async function pageCodeAnimationJobs({ limit = JOB_PAGE_SIZE, cursor } = {}) {
+  const size = Math.min(limit, JOB_PAGE_MAX);
+  const after = decodeJobCursor(cursor);
+  // Reconcile only the small running subset before counting or reading a page.
+  const runningIds = await listRunningCodeAnimationJobIds();
+  await Promise.all(runningIds.filter((id) => !activeJobs.has(id)).map(async (id) => {
+    const record = await getCodeAnimationJobRecord(id);
+    if (record) await reconcileJob(record);
+  }));
+  const [rows, counts] = await Promise.all([
+    listCodeAnimationJobPage({ limit: size, cursor: after }),
+    countCodeAnimationJobs(),
+  ]);
+  const items = rows.slice(0, size);
+  const last = items.at(-1);
+  return {
+    items,
+    total: counts.total,
+    counts: { running: counts.running, completed: counts.completed },
+    nextCursor: rows.length > size && last
+      ? Buffer.from(JSON.stringify([last.createdAt, last.id])).toString('base64url') : null,
+  };
 }
 
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
@@ -498,6 +542,7 @@ export async function startCodeAnimationGeneration(input) {
     activeJobs.delete(id);
     throw error;
   });
+  emitCodeAnimationChanged(id);
   console.log(`🎞️ Code animation generation ${id.slice(0, 8)} started on ${provider.id}`);
   runGeneration({ provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
     .then(async ({ html, provider: ranOn, model, runId }) => {
@@ -512,6 +557,7 @@ export async function startCodeAnimationGeneration(input) {
         completedAt,
         updatedAt: completedAt,
       });
+      emitCodeAnimationChanged(id);
       activeJobs.delete(id);
       console.log(`✅ Code animation generation ${id.slice(0, 8)} completed (${html.length} chars)`);
     })
@@ -519,7 +565,7 @@ export async function startCodeAnimationGeneration(input) {
       const message = String(error?.message || error || 'Generation failed').slice(0, 2_000);
       const completedAt = new Date().toISOString();
       const failed = { ...job, status: 'failed', error: message, completedAt, updatedAt: completedAt };
-      await saveCodeAnimationJobRecord(failed).catch((persistError) => {
+      await saveCodeAnimationJobRecord(failed).then(() => emitCodeAnimationChanged(id)).catch((persistError) => {
         console.error(`❌ Code animation generation ${id.slice(0, 8)} status could not be saved: ${persistError.message}`);
       });
       activeJobs.delete(id);
@@ -547,6 +593,7 @@ export async function getCodeAnimationJob(id) {
       updatedAt: completedAt,
     };
     await saveCodeAnimationJobRecord(job);
+    emitCodeAnimationChanged(id);
     return { ...job, html: null };
   }
 }
