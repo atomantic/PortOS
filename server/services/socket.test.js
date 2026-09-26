@@ -167,7 +167,8 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual(Array.from({ length: 5 }, () => ['digital-twin:changed', {}]));
   });
 
-  it('forwards bounded MeatSpace invalidations', () => {
+  it('forwards bounded MeatSpace invalidations once after repeated initialization', () => {
+    initSocket(io);
     io.emitted.length = 0;
     invalidateMeatspace(['body', 'blood']);
     expect(io.emitted).toEqual([['meatspace:changed', { resources: ['body', 'blood'] }]]);
