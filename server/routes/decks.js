@@ -140,6 +140,7 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
     });
   }
   try {
+    emit({ type: 'phase', deckId: deck.id, phase: 'preparing', label: 'Preparing prompt generation…' });
     if (deck.universeId) {
       const { getUniverse } = await import('../services/universeBuilder.js');
       universe = await getUniverse(deck.universeId).catch(() => null);
@@ -155,7 +156,7 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
       }
     }
     const targets = roster.filter((c) => targetIds.has(c.id));
-    const perCall = Number.isFinite(PROMPTS_PER_CALL) && PROMPTS_PER_CALL > 0 ? PROMPTS_PER_CALL : 12;
+    const perCall = Number.isFinite(PROMPTS_PER_CALL) && PROMPTS_PER_CALL > 0 ? PROMPTS_PER_CALL : 16;
     const chunks = Math.max(1, Math.ceil(targets.length / perCall));
     emit({ type: 'start', deckId: deck.id, requested: targets.length, chunks, at: new Date().toISOString() });
 
@@ -166,12 +167,25 @@ router.post('/:id/generate-prompts', asyncHandler(async (req, res) => {
     const byId = new Map(targets.map((c) => [c.id, c]));
     const generated = await generateDeckCardPrompts({
       deck, roster, targets, universe, ...llm,
-      onChunk: async (chunk) => {
-        appliedCount += await applyCardGenerations(deck.id, chunk);
-        chunkIndex += 1;
+      onBatchStart: ({ chunk, chunks: batchCount }) => emit({
+        type: 'batch-start', deckId: deck.id, chunk, chunks: batchCount,
+        written: appliedCount, requested: targets.length,
+      }),
+      onActivity: ({ chunk, chunks: batchCount }) => emit({
+        type: 'activity', deckId: deck.id, chunk, chunks: batchCount,
+        written: appliedCount, requested: targets.length,
+      }),
+      onChunk: async (chunk, batch) => {
+        chunkIndex = Number.isFinite(batch?.chunk) ? batch.chunk : chunkIndex + 1;
+        const batchCount = Number.isFinite(batch?.chunks) ? batch.chunks : chunks;
+        const cardsWritten = chunk.length
+          ? await applyCardGenerations(deck.id, chunk)
+          : 0;
+        appliedCount += cardsWritten;
         emit({
-          type: 'chunk', deckId: deck.id, chunk: chunkIndex, chunks,
+          type: 'chunk', deckId: deck.id, chunk: chunkIndex, chunks: batchCount,
           written: appliedCount, requested: targets.length,
+          cardsWritten,
           keys: chunk.map((e) => byId.get(e.cardId)?.key || null).filter(Boolean),
         });
       },
