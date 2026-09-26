@@ -1,10 +1,7 @@
-import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, PATHS, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
-
-const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');
+import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
 
 function computeExpectedProgress(goal) {
   const start = new Date(goal.createdAt);
@@ -40,12 +37,13 @@ Respond with JSON only (no markdown fences): { "assessment": "string", "recommen
 
 export async function runGoalCheckIn({ background = false } = {}) {
   const { getActiveProvider } = await import('./providers.js');
-  // Strict (#4115): a swallowed unreadable goals.json reports "no active goals"
-  // and the check-in reports `{ checked: 0 }` — indistinguishable from a user
-  // who genuinely has none. The run also writes `goals` straight back, so any
-  // future non-empty path off a fake default would persist the emptiness.
-  const goals = await readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
-  const activeGoals = goals.goals.filter(g => g.status === 'active' && g.targetDate);
+  // This initial load is only to decide WHICH goals to prompt for and to build
+  // the LLM prompts — it is never the snapshot that gets saved. The slow LLM
+  // calls below can take seconds to minutes, during which the user can add a
+  // progress entry or edit a goal; `mutateGoals` re-reads goals.json right
+  // before persisting so that concurrent edit survives (#8755).
+  const initialGoals = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
+  const activeGoals = initialGoals.goals.filter(g => g.status === 'active' && g.targetDate);
 
   if (!activeGoals.length) {
     console.log('📊 Goal check-in: no active goals with target dates');
@@ -85,6 +83,11 @@ export async function runGoalCheckIn({ background = false } = {}) {
   const now = new Date().toISOString();
   const today = now.slice(0, 10);
 
+  // Build the check-in records off the snapshot captured before the LLM calls
+  // (title/status text only needs to be roughly current), but apply them to a
+  // freshly re-read goals document inside `mutateGoals` so a concurrent edit
+  // that landed while the LLM calls were in flight isn't clobbered (#8755).
+  const checkInsByGoalId = new Map();
   for (let i = 0; i < checkInData.length; i++) {
     const d = checkInData[i];
     const llmResult = llmResults[i];
@@ -113,15 +116,21 @@ export async function runGoalCheckIn({ background = false } = {}) {
       createdAt: now
     };
 
-    if (!d.goal.checkIns) d.goal.checkIns = [];
-    d.goal.checkIns.push(checkIn);
-    d.goal.updatedAt = now;
+    checkInsByGoalId.set(d.goal.id, checkIn);
     results.push({ goalId: d.goal.id, title: d.goal.title, status: d.status, checkIn });
   }
 
-  goals.updatedAt = now;
-  await ensureDir(PATHS.digitalTwin);
-  await atomicWrite(GOALS_FILE, goals);
+  await mutateGoals(goals => {
+    for (const goal of goals.goals) {
+      const checkIn = checkInsByGoalId.get(goal.id);
+      if (!checkIn) continue;
+      if (!goal.checkIns) goal.checkIns = [];
+      goal.checkIns.push(checkIn);
+      goal.updatedAt = now;
+    }
+    goals.updatedAt = now;
+    return goals;
+  });
 
   // Send Telegram notification
   const statusEmoji = { 'on-track': '🟢', 'behind': '🟡', 'at-risk': '🔴' };
