@@ -287,6 +287,48 @@ describe('classifyBranches', () => {
   });
 });
 
+describe('retired claim markers in reconcile', () => {
+  it('releases early-reaped claims on the enterprise host with the pinned account', async () => {
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'github.example.com', fullName: 'example/app' });
+    wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
+    git.getBranches.mockResolvedValue([]);
+    await reconcile('/repo', { forgeAccount: 'app-account' });
+    expect(execGh).toHaveBeenCalledWith([
+      'issue', 'edit', '42', '--repo', 'github.example.com/example/app',
+      '--remove-assignee', '@me', '--remove-label', 'in-progress'
+    ], undefined, { cwd: '/repo', env: PINNED_ENV });
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'app-account' });
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the reap successful and logs once when marker release fails during a forge outage', async () => {
+    wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }], skipped: [] });
+    execGh.mockRejectedValueOnce(new Error('forge unavailable'));
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unavailable' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await reconcile('/repo');
+    expect(result.cleaned).toEqual(['claim/issue-42']);
+    expect(result.forgeUnavailable).toBe(true);
+    expect(log.mock.calls.filter(([line]) => line.includes('could not release claim markers for #42'))).toHaveLength(1);
+    log.mockRestore();
+  });
+
+  it('does not release protected claims, unrelated branches, or non-GitHub issues', async () => {
+    wt.reapMergedWorktrees.mockResolvedValue({
+      reaped: [{ branch: 'feature/issue-42', branchDeleted: true }, { branch: 'claim/issue-44', branchDeleted: false }],
+      skipped: [{ branch: 'claim/issue-43', reason: 'worktree-active-agent' }]
+    });
+    git.getBranches.mockResolvedValue([]);
+    await reconcile('/repo');
+    expect(execGh.mock.calls.filter(([args]) => args[0] === 'issue')).toEqual([]);
+    execGh.mockClear();
+    getOriginInfo.mockResolvedValue({ hasOrigin: true, host: 'gitlab.com', fullName: 'example/app' });
+    wt.reapMergedWorktrees.mockResolvedValue({ reaped: [{ branch: 'claim/issue-42', branchDeleted: true }] });
+    await reconcile('/repo');
+    expect(execGh).not.toHaveBeenCalled();
+  });
+});
+
 describe('cleanupMerged', () => {
   it('removes worktree + deletes branch when merged and clean', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
@@ -350,6 +392,28 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual(['claim/issue-1933']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
+  });
+
+  it('releases a retired issue claim with the repository credential after deletion', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42', worktreePath: '/wt/retired' }]);
+    expect(execGh).toHaveBeenCalledWith([
+      'issue', 'edit', '42', '--repo', 'github.com/atomantic/PortOS',
+      '--remove-assignee', '@me', '--remove-label', 'in-progress'
+    ], undefined, { cwd: '/repo', env: PINNED_ENV });
+    expect(execGh.mock.invocationCallOrder[0]).toBeGreaterThan(git.deleteBranch.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves markers intact for a live owner or a failed branch deletion', async () => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    const branch = { branch: 'claim/issue-42', worktreePath: '/wt/claim-issue-42', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 };
+    const held = await cleanupMerged('/repo', 'main', [branch], { activeAgentIds: new Set(['claim-issue-42']) });
+    expect(held.skipped[0].reason).toBe('worktree-active-agent');
+    expect(execGh).not.toHaveBeenCalled();
+    git.deleteBranch.mockResolvedValue({ error: 'delete refused' });
+    const failed = await cleanupMerged('/repo', 'main', [branch]);
+    expect(failed.cleaned).toEqual([]);
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it('reaps the invalid empty-issue claim immediately when merged and clean', async () => {

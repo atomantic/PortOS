@@ -930,6 +930,27 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
 }
 
 /**
+ * Release only exact issue claims whose local retirement already succeeded.
+ * Keep forge/account resolution aligned with the reconcile cycle, including
+ * enterprise hosts. A forge outage must never undo or block local cleanup.
+ */
+async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeAccount = null } = {}) {
+  const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
+  if (!issue) return;
+  await (async () => {
+    const repoSpec = githubRepoSpec(origin === undefined ? await getOriginInfo(repoPath) : origin);
+    if (!repoSpec) return;
+    const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
+    await execGh([
+      'issue', 'edit', issue, '--repo', repoSpec,
+      '--remove-assignee', '@me', '--remove-label', 'in-progress'
+    ], undefined, { cwd, env });
+  })().catch(() => {
+    console.log(`⚠️ branch-reconcile: could not release claim markers for #${issue} after local cleanup`);
+  });
+}
+
+/**
  * Deterministically clean up fully-merged branches: remove the lingering
  * worktree, then delete the local branch. Safety gates (ALL must hold):
  *   1. `hasBranchMergeEvidence(default)` re-verified true (fail closed).
@@ -967,7 +988,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
  * @returns {Promise<{cleaned:string[], skipped:{branch:string,reason:string,retryAt?:string}[]}>}
  *   A skip carries `retryAt` when its hold is known to lift at a specific time.
  */
-export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set() } = {}) {
+export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds = new Set(), origin, forgeExec, forgeAccount = null } = {}) {
   const cleaned = [];
   const skipped = [];
   for (const b of merged) {
@@ -992,6 +1013,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       skipped.push({ branch: b.branch, ...failure });
       continue;
     }
+    await releaseRetiredClaim(repoPath, b.branch, { origin, forgeExec, forgeAccount });
     cleaned.push(b.branch);
   }
   return { cleaned, skipped };
@@ -1204,6 +1226,12 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const forgeExec = githubRepoSpec(origin)
     ? await resolveForgeExecOptions(repoPath, { forgeAccount })
     : null;
+  // The early reaper may have deleted the branch before gather can see it.
+  // Release these claims even when the subsequent forge probe is unavailable.
+  for (const entry of worktreeCleanup.reaped || []) {
+    if (!entry?.branchDeleted) continue;
+    await releaseRetiredClaim(repoPath, entry.branch, { origin, forgeExec, forgeAccount });
+  }
   if (forgeExec) {
     const forge = await ensureForgeReachable('branch-reconcile', {
       hostname: githubApiHost(origin.host),
@@ -1261,7 +1289,7 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   const wip = classified.filter((c) => c.state === 'WIP');
 
   const { cleaned: cleanedBranches, skipped } = cleanup
-    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds })
+    ? await cleanupMerged(repoPath, defaultBranch, merged, { activeAgentIds, origin, forgeExec, forgeAccount })
     : { cleaned: [], skipped: merged.map((m) => ({ branch: m.branch, reason: 'cleanup-disabled' })) };
   const cleaned = [...new Set([...cleanedWorktrees, ...cleanedBranches])];
 
