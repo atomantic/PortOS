@@ -24,7 +24,6 @@ import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { removeCompletionSentinel } from './agentCompletionCleanup.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
@@ -1062,7 +1061,10 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
 
   // Recovery retires the run without reaching finalizeAgent's completion
   // cleanup, so the sentinel has no other owner — and the hook above was the
-  // last thing to read it.
+  // last thing to read it. Keep this recovery-only dependency lazy: the
+  // completion-cleanup module also imports worktree/PR orchestration, while
+  // agentFinalization is on the static path of nearly every agent service.
+  const { removeCompletionSentinel } = await import('./agentCompletionCleanup.js');
   await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
 
