@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { spawn } from '../lib/childProcess.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPortReachable } from '../lib/connectivity.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
@@ -444,7 +445,7 @@ export function stopForwardForPeer(peerId) {
     const entries = await readForwards();
     const entry = entries.find((f) => f.peerId === peerId);
     if (!entry) return;
-    killLiveForward(entry.id);
+    await killLiveForward(entry.id);
     await deleteForward(entry.id);
   });
 }
@@ -455,7 +456,7 @@ export function forgetTailcatForward(id, { removePeerFn = removeInstancePeer } =
     const entries = await readForwards();
     const entry = entries.find((f) => f.id === id);
     if (!entry) throw new ServerError('Tailcat forward not found', { status: 404 });
-    killLiveForward(id);
+    await killLiveForward(id);
     await deleteForward(id);
     if (entry.peerId) {
       // stopTransport:false — this lifecycle operation already owns the child
@@ -466,16 +467,42 @@ export function forgetTailcatForward(id, { removePeerFn = removeInstancePeer } =
   });
 }
 
-function killLiveForward(id) {
+async function killLiveForward(id) {
   const live = liveForwards.get(id);
-  if (live?.child && !live.child.killed) {
-    try {
-      live.child.kill('SIGTERM');
-    } catch {
-      // best-effort
-    }
+  const child = live?.child;
+  if (!child) return;
+  // `killed` only means a signal was sent, not that the process released its port.
+  if (child.exitCode == null && child.signalCode == null) {
+    await new Promise((resolve, reject) => {
+      let escalation;
+      let settled = false;
+      const finish = (error) => {
+        settled = true;
+        clearTimeout(escalation);
+        clearTimeout(deadline);
+        child.removeListener('exit', onExit);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onExit = () => finish();
+      const deadline = setTimeout(() => finish(new ServerError(
+        'Previous Tailcat forward did not exit; retry was not started',
+        { status: 503, code: 'TAILCAT_STOP_TIMEOUT' }
+      )), 16_000);
+      child.once('exit', onExit);
+      try {
+        escalation = killWithEscalation(child, {
+          label: 'Tailcat forward', stillRunning: () => liveForwards.get(id) === live,
+        });
+        if (settled) clearTimeout(escalation);
+      } catch (error) {
+        finish(error);
+      }
+    });
   }
-  liveForwards.delete(id);
+  // A failed stop retains ownership so another retry cannot orphan this child.
+  if (liveForwards.get(id) === live) liveForwards.delete(id);
+  ownedChildren.delete(child);
 }
 
 /** Track a started child so shutdown and retry can find it again. */
@@ -723,7 +750,7 @@ async function retryForward(id, {
   }
 
   // A live child on a stale mapping would keep the port and mask the retry.
-  killLiveForward(entry.id);
+  await killLiveForward(entry.id);
 
   const peers = await getPeersFn();
   // Match the transport too, exactly as the boot-time restore does: a stale entry
