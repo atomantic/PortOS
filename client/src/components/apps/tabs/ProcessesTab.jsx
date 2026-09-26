@@ -271,7 +271,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                   <option value={2000}>2000</option>
                 </select>
               </FormField>
-              <span className="text-sm text-gray-600">{formatCount(logs.length)} lines</span>
+              <span className="text-sm text-gray-400">{formatCount(logs.length)} lines</span>
               <button
                 onClick={clearLogs}
                 className="min-h-[44px] min-w-[44px] px-1 text-sm text-gray-500 hover:text-white"

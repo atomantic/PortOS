@@ -101,11 +101,11 @@ export default function TasksTab({ appId }) {
           <table className="w-full min-w-[40rem] table-fixed text-sm">
             <thead>
               <tr className="border-b border-port-border">
-                <th className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Description</th>
-                <th className="w-28 text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Type</th>
-                <th className="w-32 text-center px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Status</th>
-                <th className="w-28 text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Duration</th>
-                <th className="w-28 text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">When</th>
+                <th className="text-left px-4 py-3 text-xs text-gray-400 uppercase tracking-wide font-medium">Description</th>
+                <th className="w-28 text-left px-4 py-3 text-xs text-gray-400 uppercase tracking-wide font-medium whitespace-nowrap">Type</th>
+                <th className="w-32 text-center px-4 py-3 text-xs text-gray-400 uppercase tracking-wide font-medium whitespace-nowrap">Status</th>
+                <th className="w-28 text-right px-4 py-3 text-xs text-gray-400 uppercase tracking-wide font-medium whitespace-nowrap">Duration</th>
+                <th className="w-28 text-right px-4 py-3 text-xs text-gray-400 uppercase tracking-wide font-medium whitespace-nowrap">When</th>
               </tr>
             </thead>
             <tbody>
