@@ -933,6 +933,9 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
  * Release only exact issue claims whose local retirement already succeeded.
  * Keep forge/account resolution aligned with the reconcile cycle, including
  * enterprise hosts. A forge outage must never undo or block local cleanup.
+ * The in-progress marker keeps the issue ineligible for a new claim until this
+ * edit: deleting the local branch alone does not release it to the claim queue.
+ * Only our own assignment is removed; other assignees are left untouched.
  */
 async function releaseRetiredClaim(repoPath, branch, { origin, forgeExec, forgeAccount = null } = {}) {
   const issue = /^claim\/issue-([1-9]\d*)$/.exec(branch)?.[1];
