@@ -311,16 +311,16 @@ function CostReportTable({ report }) {
 
       {/* Desktop view (>= sm): Table layout */}
       <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full text-sm min-w-[680px]">
+        <table className="w-full text-sm min-w-[680px]" aria-label="Provider token usage and costs">
           <thead>
             <tr className="text-left text-xs text-gray-400 border-b border-port-border">
-              <th className="py-2 pr-2 font-medium">Provider / Model</th>
-              <th className="py-2 px-2 font-medium text-right">Sessions</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens In</th>
-              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
-              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens Out</th>
-              <th className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
+              <th scope="col" className="py-2 pr-2 font-medium">Provider / Model</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Sessions</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens In</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens Out</th>
+              <th scope="col" className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
             </tr>
           </thead>
           <tbody>
