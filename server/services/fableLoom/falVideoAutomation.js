@@ -62,6 +62,16 @@ const publicJob = (job) => ({
   filename: job.filename,
 });
 
+// Socket delivery must never turn a durably attached video into a failed job
+// or break the serialized browser queue. Disconnected clients recover by GET.
+const emitJob = (job) => {
+  try {
+    job.io?.emit('fableloom:fal-video:changed', publicJob(job));
+  } catch {
+    console.error('❌ Could not broadcast fal.ai browser job status');
+  }
+};
+
 const pruneJobs = () => {
   const cutoff = Date.now() - FAL_JOB_TTL_MS;
   for (const [id, job] of jobs) {
@@ -76,6 +86,7 @@ const setJobProgress = (job, statusMsg, progress) => {
   job.status = 'running';
   job.statusMsg = statusMsg;
   job.progress = progress;
+  emitJob(job);
 };
 
 const falAspectRatio = (requested) => {
@@ -395,6 +406,7 @@ const executeJob = async (job) => {
     job.statusMsg = 'Scene video ready';
     job.progress = 1;
     job.completedAt = new Date().toISOString();
+    emitJob(job);
     console.log(`🎬 fal.ai scene video attached: ${galleryVideo.id}`);
   } catch (error) {
     const message = safeFailureMessage(error);
@@ -404,6 +416,7 @@ const executeJob = async (job) => {
     job.statusMsg = 'fal.ai video failed';
     job.error = message;
     job.completedAt = new Date().toISOString();
+    emitJob(job);
     console.error(`❌ fal.ai scene video failed: ${message} (${diagnostic} during ${failedStage})`);
   } finally {
     // Keep a real fal.ai page open for login/CAPTCHA inspection, but do not
@@ -425,12 +438,14 @@ const executeJob = async (job) => {
  * @param {object} options - Generation options.
  * @param {string} options.prompt - Authored video generation prompt and camera direction.
  * @param {'16:9'|'9:16'|'1:1'} [options.aspectRatio='16:9'] - Target video aspect ratio.
+ * @param {object} [options.io] - Private application Socket.IO emitter.
  * @returns {Promise<object>} Public job status descriptor.
  * @throws {ServerError} When scene/image is missing or browser is unavailable.
  */
 export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
   prompt,
   aspectRatio = '16:9',
+  io = null,
 }) {
   pruneJobs();
   const key = sceneKey(loomId, episodeId, nodeId);
@@ -458,6 +473,7 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
 
     const job = {
       id: `fal-${randomUUID()}`,
+      io,
       loomId,
       episodeId,
       nodeId,
@@ -476,6 +492,7 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
     };
     jobs.set(job.id, job);
     latestJobByScene.set(key, job.id);
+    emitJob(job);
 
     // The free tool exposes one form in one persistent browser profile. Keep
     // every user-requested scene job, but serialize them so a later click

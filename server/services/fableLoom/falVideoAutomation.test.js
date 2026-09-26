@@ -34,6 +34,8 @@ vi.mock('./records.js', () => ({
   getLoom: (...args) => mocks.getLoom(...args),
 }));
 
+import { SOCKET_EVENT_CONTRACTS } from '../../lib/socketEventContracts.js';
+
 import {
   _resetFalVideoAutomations,
   FAL_H3_MAX_FREE_URL,
@@ -188,6 +190,62 @@ describe('FableLoom fal.ai browser automation', () => {
       videoHistoryId: 'upload-ab12cd34',
     });
     expect(mocks.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits only public snapshots and completes once after both durable writes settle', async () => {
+    makeBrowser();
+    const io = { emit: vi.fn() };
+    let save, attach;
+    mocks.saveUploadedGalleryVideoBuffer.mockImplementationOnce(() => new Promise(resolve => { save = resolve; }));
+    mocks.attachNodeVideo.mockImplementationOnce(() => new Promise(resolve => { attach = resolve; }));
+    const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example direction', io });
+    const frames = () => io.emit.mock.calls.map(([event, data]) => {
+      expect(event).toBe('fableloom:fal-video:changed');
+      return data;
+    });
+    await vi.waitFor(() => expect(save).toBeTypeOf('function'));
+    expect(frames()[0]).toEqual(queued);
+    expect(frames().at(-1)).toMatchObject({ status: 'running', progress: 0.9 });
+    expect(frames().some(frame => frame.status === 'completed')).toBe(false);
+    save({ id: 'upload-ab12cd34', filename: 'upload-ab12cd34.mp4' });
+    await vi.waitFor(() => expect(attach).toBeTypeOf('function'));
+    expect(frames().some(frame => frame.status === 'completed')).toBe(false);
+    attach({ id: 'node-1', videoHistoryId: 'upload-ab12cd34' });
+    const completed = await waitForTerminalJob(queued);
+    expect(frames().filter(frame => frame.status === 'completed')).toEqual([completed]);
+    expect(mocks.saveUploadedGalleryVideoBuffer).toHaveBeenCalledTimes(1);
+    expect(mocks.attachNodeVideo).toHaveBeenCalledTimes(1);
+    const contract = SOCKET_EVENT_CONTRACTS['fableloom:fal-video:changed'].payloadSchema;
+    for (const frame of frames()) {
+      expect(Object.keys(frame).sort()).toEqual([...contract.required].sort());
+      expect(frame).not.toHaveProperty('prompt');
+      expect(frame).not.toHaveProperty('imageFilename');
+      expect(frame).not.toHaveProperty('io');
+    }
+  });
+
+  it('emits one failure and no completion when durable attachment rejects', async () => {
+    makeBrowser();
+    const io = { emit: vi.fn() };
+    mocks.attachNodeVideo.mockRejectedValueOnce(new Error('Synthetic storage failure'));
+    const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example direction', io });
+    const failed = await waitForTerminalJob(queued);
+    const terminal = io.emit.mock.calls.map(([, data]) => data)
+      .filter(data => ['completed', 'failed'].includes(data.status));
+    expect(terminal).toEqual([failed]);
+    expect(failed.status).toBe('failed');
+    expect(mocks.attachNodeVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves durable completion when socket delivery throws', async () => {
+    makeBrowser();
+    const io = { emit: vi.fn(() => { throw new Error('Synthetic socket failure'); }) };
+    const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example direction', io });
+    await expect(waitForTerminalJob(queued)).resolves.toMatchObject({
+      status: 'completed', videoHistoryId: 'upload-ab12cd34',
+    });
+    expect(mocks.attachNodeVideo).toHaveBeenCalledTimes(1);
+    expect(io.emit.mock.calls.filter(([, data]) => data.status === 'failed')).toHaveLength(0);
   });
 
   it('dismisses a privacy prompt that appears after controls load before filling the scene', async () => {

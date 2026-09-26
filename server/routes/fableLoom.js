@@ -275,7 +275,7 @@ router.post('/:id/episodes/:episodeId/nodes/:nodeId/fal-video', asyncHandler(asy
     req.params.id,
     req.params.episodeId,
     req.params.nodeId,
-    input,
+    { ...input, io: req.app.get('io') },
   ));
 }));
 

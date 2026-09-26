@@ -286,14 +286,17 @@ describe('FableLoom routes', () => {
       id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'queued',
     };
     fableLoom.startFalVideoAutomation.mockResolvedValueOnce(job);
-    const created = await request(makeApp())
+    const app = makeApp();
+    const io = { emit: vi.fn() };
+    app.set('io', io);
+    const created = await request(app)
       .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video')
       .send({ prompt: 'One continuous example shot.', aspectRatio: '9:16' });
 
     expect(created.status).toBe(202);
     expect(created.body).toEqual(job);
     expect(fableLoom.startFalVideoAutomation).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', {
-      prompt: 'One continuous example shot.', aspectRatio: '9:16',
+      prompt: 'One continuous example shot.', aspectRatio: '9:16', io,
     });
 
     fableLoom.getFalVideoAutomation.mockReturnValueOnce({ ...job, status: 'running' });

@@ -10,9 +10,8 @@
 import { useEffect, useRef } from 'react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { getLoomFalVideo } from '../../services/api';
-
-const FAL_POLL_MS = 2000;
-const FAL_POLL_FAILURE_LIMIT = 3;
+import socket from '../../services/socket';
+import { subscribeVisibility } from '../../hooks/useVisibilityEvent';
 
 function LoomMediaJobWatcher({ nodeId, kind, job, onUpdate, onTerminal }) {
   const progress = useMediaJobProgress(job.jobId, { kind });
@@ -36,50 +35,60 @@ function LoomMediaJobWatcher({ nodeId, kind, job, onUpdate, onTerminal }) {
 
 function LoomFalBrowserJobWatcher({ nodeId, kind, job, onUpdate, onTerminal }) {
   const reportedTerminalRef = useRef(null);
+  const callbacks = useRef({ onUpdate, onTerminal });
+  callbacks.current = { onUpdate, onTerminal };
 
   useEffect(() => {
     let canceled = false;
-    let timer = null;
-    let failures = 0;
-
-    const poll = () => {
+    let revision = 0;
+    const matches = (progress) => progress?.id === job.jobId
+      && progress.loomId === job.loomId && progress.episodeId === job.episodeId
+      && progress.nodeId === nodeId;
+    const apply = (progress) => {
+      if (canceled || !matches(progress) || reportedTerminalRef.current === job.jobId) return;
+      const terminal = progress.status === 'failed' || progress.status === 'completed';
+      // Latch before callbacks: parent updates may unmount this watcher.
+      if (terminal) reportedTerminalRef.current = job.jobId;
+      callbacks.current.onUpdate(nodeId, kind, job.jobId, progress);
+      if (terminal) callbacks.current.onTerminal(nodeId, kind, job.jobId, progress);
+    };
+    const read = () => {
+      if (canceled || reportedTerminalRef.current === job.jobId) return;
+      const started = ++revision;
       getLoomFalVideo(job.loomId, job.episodeId, nodeId, job.jobId, { silent: true })
         .then((progress) => {
-          if (canceled) return;
-          failures = 0;
-          onUpdate(nodeId, kind, job.jobId, progress);
-          const terminal = progress.status === 'failed' || progress.status === 'completed';
-          const terminalKey = terminal ? `${job.jobId}:${progress.status}` : null;
-          if (terminalKey && reportedTerminalRef.current !== terminalKey) {
-            reportedTerminalRef.current = terminalKey;
-            onTerminal(nodeId, kind, job.jobId, progress);
-            return;
-          }
-          timer = setTimeout(poll, FAL_POLL_MS);
+          if (started === revision) apply(progress);
         })
         .catch(() => {
-          if (canceled) return;
-          failures += 1;
-          if (failures < FAL_POLL_FAILURE_LIMIT) {
-            timer = setTimeout(poll, FAL_POLL_MS);
-            return;
-          }
-          const failed = {
-            ...job,
-            status: 'failed',
-            error: 'Could not read fal.ai browser automation status',
-          };
-          onUpdate(nodeId, kind, job.jobId, failed);
-          onTerminal(nodeId, kind, job.jobId, failed);
+          // A failed status read is not a failed render. Keep listening and
+          // retry at the next reconnect or tab show, without a polling timer.
         });
     };
+    const onChange = (progress) => {
+      if (!matches(progress)) return;
+      revision += 1; // An older HTTP snapshot must not overwrite this event.
+      apply(progress);
+    };
+    const onConnect = () => {
+      if (document.visibilityState !== 'hidden') read();
+    };
+    let lastVisibility = document.visibilityState;
+    const unsubscribeVisibility = subscribeVisibility((state) => {
+      const changed = state !== lastVisibility;
+      lastVisibility = state;
+      if (changed && state === 'visible') read();
+    });
 
-    poll();
+    socket.on('fableloom:fal-video:changed', onChange);
+    socket.on('connect', onConnect);
+    read();
     return () => {
       canceled = true;
-      clearTimeout(timer);
+      unsubscribeVisibility();
+      socket.off('fableloom:fal-video:changed', onChange);
+      socket.off('connect', onConnect);
     };
-  }, [job.episodeId, job.jobId, job.loomId, kind, nodeId, onTerminal, onUpdate]);
+  }, [job.episodeId, job.jobId, job.loomId, kind, nodeId]);
 
   return null;
 }
