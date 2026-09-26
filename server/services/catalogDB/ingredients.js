@@ -6,7 +6,7 @@
  * Also the FTS / vector / hybrid (RRF) search paths over the ingredient corpus.
  */
 
-import { query, arrayToPgvector } from '../../lib/db.js';
+import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import { reciprocalRankFusion } from '../../lib/rrfRanking.js';
 import {
   getActiveCatalogType,
@@ -30,12 +30,19 @@ import { normalizeTags } from './tags.js';
 
 // `{ client }` is optional — when supplied, SQL runs on the caller's transaction
 // client (so the write rolls back if a later step in the same `withTransaction`
-// block throws). Absent, falls through to the pool-level `query` as before.
+// block throws). Standalone creates own a transaction including tags and history.
 // See `POST /api/catalog/scraps/:id/commit` for the scrap-commit batch that
 // needs every per-draft ingredient + source-link to commit-or-rollback together.
 export async function createIngredient({ id: explicitId, type, name, payload = {}, tags = [], embedding = null, embeddingModel = null } = {}, { client, source = 'user', actor = null } = {}) {
   if (!type || !getActiveCatalogType(type)) throw new Error(`Invalid ingredient type: ${type}`);
   if (!name || !String(name).trim()) throw new Error('name is required');
+
+  if (!client) {
+    return withTransaction((tx) => createIngredient(
+      { id: explicitId, type, name, payload, tags, embedding, embeddingModel },
+      { client: tx, source, actor },
+    ));
+  }
 
   // `explicitId` is used by the backfill when a universe arrives from a peer
   // already carrying an ingredientId — preserves cross-peer identity so the
@@ -56,7 +63,7 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   // skew; this is the per-record payload-shape marker, distinct from that.)
   const storedPayload = { ...sanitizedPayload, schemaVersion: currentPayloadSchemaVersion(type) };
   const originInstanceId = await getInstanceId();
-  const exec = client ? client.query.bind(client) : query;
+  const exec = client.query.bind(client);
   // Route freeform tags through the canonical catalog_tags table (creating
   // rows on first use) and seed the type's registry default tags. The freeform
   // TEXT[] column stores the canonical labels so existing tag-search/GIN paths
@@ -87,8 +94,9 @@ export async function createIngredient({ id: explicitId, type, name, payload = {
   return created;
 }
 
-export async function getIngredient(id) {
-  const result = await query(
+export async function getIngredient(id, { client } = {}) {
+  const exec = client ? client.query.bind(client) : query;
+  const result = await exec(
     `SELECT * FROM catalog_ingredients WHERE id = $1 AND deleted = false`,
     [id],
   );
@@ -117,7 +125,15 @@ export async function getIngredientTimestamps(ingredientIds) {
 // change. `source` is one of user|extract|refine|sync (default 'user'); `actor`
 // is an optional free label (agent run id, provider). Embedding-only patches
 // (the backfill path) carry no name/payload/tags and so record NO revision.
-export async function updateIngredient(id, patch = {}, { source = 'user', actor = null } = {}) {
+export async function updateIngredient(id, patch = {}, { client, source = 'user', actor = null } = {}) {
+  const touchedContent =
+    patch.name !== undefined || patch.payload !== undefined || patch.tags !== undefined;
+  // Share one commit boundary for tags, content, snapshot and retention. A
+  // caller-owned transaction must never nest or escape through the pool.
+  if (touchedContent && !client) {
+    return withTransaction((tx) => updateIngredient(id, patch, { client: tx, source, actor }));
+  }
+  const exec = client ? client.query.bind(client) : query;
   const fields = [];
   const params = [];
   let idx = 1;
@@ -126,7 +142,7 @@ export async function updateIngredient(id, patch = {}, { source = 'user', actor 
   // casing variant. `tags: []` (intentional clear) round-trips as an empty
   // array; absent `tags` skips normalization entirely (the loop below skips it).
   let normalizedPatch = patch.tags !== undefined
-    ? { ...patch, tags: await normalizeTags(patch.tags) }
+    ? { ...patch, tags: await normalizeTags(patch.tags, { client }) }
     : patch;
   // Bible-type hardening: when a character/place/object payload is being
   // written, run it through the storyBible sanitizer (the same one the canon
@@ -137,7 +153,7 @@ export async function updateIngredient(id, patch = {}, { source = 'user', actor 
   // concept and user-defined types skip this entirely. Embedding-only patches
   // (no payload) never trigger the lookup.
   if (normalizedPatch.payload !== undefined) {
-    const current = await getIngredient(id);
+    const current = await getIngredient(id, { client });
     if (current && BIBLE_SANITIZERS[current.type]) {
       const name = normalizedPatch.name !== undefined ? normalizedPatch.name : current.name;
       normalizedPatch = {
@@ -166,12 +182,12 @@ export async function updateIngredient(id, patch = {}, { source = 'user', actor 
       params.push(normalizedPatch[jsField]);
     }
   }
-  if (fields.length === 0) return getIngredient(id);
+  if (fields.length === 0) return getIngredient(id, { client });
   params.push(id);
   // Mirrors updateScrap: PATCH on a soft-deleted row returns zero rows so the
   // route 404s. Revival of soft-deleted rows is intentionally separate via
   // `reviveDeletedIngredient`, so this filter doesn't conflict with that path.
-  const result = await query(
+  const result = await exec(
     `UPDATE catalog_ingredients SET ${fields.join(', ')} WHERE id = $${idx} AND deleted = false RETURNING *`,
     params,
   );
@@ -179,13 +195,10 @@ export async function updateIngredient(id, patch = {}, { source = 'user', actor 
 
   // Record a revision only when a USER-facing field (name/payload/tags) was
   // part of this patch AND the row actually exists/updated. Embedding/model-
-  // only patches skip history entirely. `payload.schemaVersion` is stripped
-  // from the stored revision diff-by-content check below, but we snapshot the
-  // committed payload verbatim so a restore round-trips the exact stored shape.
-  const touchedContent =
-    patch.name !== undefined || patch.payload !== undefined || patch.tags !== undefined;
+  // only patches skip history entirely. Snapshot the stored payload verbatim
+  // so a restore round-trips the exact shape, including its schemaVersion.
   if (updated && touchedContent) {
-    await recordIngredientRevision(updated, { source, actor });
+    await recordIngredientRevision(updated, { source, actor, client });
   }
   return updated;
 }

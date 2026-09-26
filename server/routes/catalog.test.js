@@ -17,9 +17,10 @@
 
 import { describe, it, expect, afterAll, vi } from 'vitest';
 import express from 'express';
+import pg from 'pg';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
@@ -207,6 +208,124 @@ describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref rec
   });
 });
 
+// Inject a real SQL error at the pg transport, retaining its promise/callback
+// interface. All other statements (including rollback) still reach portos_test.
+async function withRevisionFailure(statement, operation, matchesParams = () => true) {
+  const original = pg.Client.prototype.query;
+  const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function (sql, ...args) {
+    if (typeof sql === 'string' && statement.test(sql.trim()) && matchesParams(args[0])) {
+      const callback = typeof args.at(-1) === 'function' ? args.at(-1) : undefined;
+      return original.call(this, 'SELECT 1 / 0', [], callback);
+    }
+    return original.call(this, sql, ...args);
+  });
+  try {
+    return await operation();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe.skipIf(!runDb)('ingredient content and history commit together', () => {
+  it('rolls back standalone creation and new tags when the seed revision fails', async () => {
+    const id = `cat-idea-rollback-${NONCE}`;
+    const tag = `rollback-create-${NONCE}`;
+    createdIngredientIds.add(id);
+    await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      catalogDB.createIngredient({ id, type: 'idea', name: 'Example rollback', tags: [tag] }),
+    )).rejects.toThrow('division by zero');
+    expect(await catalogDB.getIngredient(id)).toBeNull();
+    expect((await catalogDB.listIngredientRevisions(id)).items).toEqual([]);
+    expect((await query('SELECT id FROM catalog_tags WHERE label = $1', [tag])).rows).toEqual([]);
+  });
+
+  it.each(['insert', 'prune'])('rolls back public PATCH when revision %s fails', async (stage) => {
+    const ing = await catalogDB.createIngredient({ type: 'idea', name: `Before ${NONCE}` });
+    createdIngredientIds.add(ing.id);
+    const revisions = (await catalogDB.listIngredientRevisions(ing.id)).items;
+    const tag = `rollback-patch-${stage}-${NONCE}`;
+    const statement = stage === 'insert'
+      ? /^INSERT INTO catalog_ingredient_revisions/i
+      : /^DELETE FROM catalog_ingredient_revisions/i;
+    const response = await withRevisionFailure(statement, () =>
+      request(makeApp()).patch(`/api/catalog/ingredients/${ing.id}`)
+        .send({ name: 'After', payload: { summary: 'changed' }, tags: [tag] }),
+    );
+    expect(response.status).toBe(500);
+    expect(await catalogDB.getIngredient(ing.id)).toEqual(ing);
+    expect((await catalogDB.listIngredientRevisions(ing.id)).items).toEqual(revisions);
+    expect((await query('SELECT id FROM catalog_tags WHERE label = $1', [tag])).rows).toEqual([]);
+  });
+
+  it('rolls back a public restore when its new revision fails', async () => {
+    const ing = await catalogDB.createIngredient({ type: 'concept', name: `Restore rollback ${NONCE}` });
+    createdIngredientIds.add(ing.id);
+    const original = (await catalogDB.listIngredientRevisions(ing.id)).items[0];
+    const edited = await catalogDB.updateIngredient(ing.id, { payload: { schemaVersion: 99, summary: 'keep' } });
+    const revisions = (await catalogDB.listIngredientRevisions(ing.id)).items;
+    const response = await withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      request(makeApp()).post(`/api/catalog/ingredients/${ing.id}/revisions/${original.id}/restore`).send({}),
+    );
+    expect(response.status).toBe(500);
+    expect(await catalogDB.getIngredient(ing.id)).toEqual(edited);
+    expect((await catalogDB.listIngredientRevisions(ing.id)).items).toEqual(revisions);
+  });
+
+  it('commits public create and PATCH snapshots with their content and attribution', async () => {
+    const created = await request(makeApp()).post('/api/catalog/ingredients')
+      .send({ type: 'idea', name: `Atomic create ${NONCE}`, payload: { summary: 'initial' } });
+    expect(created.status).toBe(201);
+    createdIngredientIds.add(created.body.id);
+    const seed = (await catalogDB.listIngredientRevisions(created.body.id)).items[0];
+    expect(seed).toMatchObject({
+      name: created.body.name, payload: created.body.payload, tags: created.body.tags, source: 'user', actor: null,
+    });
+    const edited = await request(makeApp()).patch(`/api/catalog/ingredients/${created.body.id}`)
+      .send({ payload: { schemaVersion: 7, summary: 'edited' }, source: 'refine', actor: 'example-agent' });
+    expect(edited.status).toBe(200);
+    const revisions = (await catalogDB.listIngredientRevisions(created.body.id)).items;
+    expect(revisions).toHaveLength(2);
+    expect(revisions.find((rev) => rev.id !== seed.id)).toMatchObject({
+      name: edited.body.name, payload: edited.body.payload, tags: edited.body.tags,
+      source: 'refine', actor: 'example-agent',
+    });
+  });
+
+  it('keeps create and update inside a supplied transaction, including reads of uncommitted rows', async () => {
+    const id = `cat-chr-owned-${NONCE}`;
+    createdIngredientIds.add(id);
+    await expect(withTransaction(async (client) => {
+      await catalogDB.createIngredient({ id, type: 'character', name: 'Example character' }, { client });
+      const edited = await catalogDB.updateIngredient(id, {
+        payload: { aliases: [' Example alias ', ''] }, tags: ['example-owned'],
+      }, { client });
+      expect(edited.payload.aliases).toEqual(['Example alias']);
+      expect((await client.query('SELECT id FROM catalog_ingredient_revisions WHERE ingredient_id = $1', [id])).rows).toHaveLength(2);
+      throw new Error('cancel outer transaction');
+    })).rejects.toThrow('cancel outer transaction');
+    expect(await catalogDB.getIngredient(id)).toBeNull();
+    expect((await catalogDB.listIngredientRevisions(id)).items).toEqual([]);
+  });
+
+  it('rolls back the scrap graph when a later ingredient revision fails', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example source' });
+    createdScrapIds.add(scrap.id);
+    const firstName = `Example first ${NONCE}`;
+    const secondName = `Example second ${NONCE}`;
+    const refId = `example-universe-${NONCE}`;
+    await expect(withRevisionFailure(/^INSERT INTO catalog_ingredient_revisions/i, () =>
+      catalogDB.commitScrap({
+        scrapId: scrap.id, universeRef: refId,
+        accepted: [{ type: 'idea', name: firstName }, { type: 'idea', name: secondName }],
+      }), (params) => params?.[2] === secondName,
+    )).rejects.toThrow('division by zero');
+    expect((await query('SELECT ingredient_id FROM catalog_ingredient_refs WHERE ref_id = $1', [refId])).rows).toEqual([]);
+    expect((await query('SELECT id FROM catalog_ingredients WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
+    expect((await query('SELECT ingredient_id FROM catalog_ingredient_sources WHERE scrap_id = $1', [scrap.id])).rows).toEqual([]);
+    expect((await query('SELECT id FROM catalog_ingredient_revisions WHERE name = ANY($1)', [[firstName, secondName]])).rows).toEqual([]);
+  });
+});
+
 describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId/restore', () => {
   it('restores the revision payload verbatim, preserving its schemaVersion, and records a new revision', async () => {
     // Seed an ingredient, then write an "old shape" payload (schemaVersion 0) so
@@ -224,7 +343,7 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId
 
     const r = await request(makeApp())
       .post(`/api/catalog/ingredients/${ing.id}/revisions/${oldRev.id}/restore`)
-      .send({});
+      .send({ source: 'user', actor: 'example-restore' });
 
     expect(r.status).toBe(200);
     expect(r.body.payload.description).toBe('old-shape');
@@ -233,6 +352,9 @@ describe.skipIf(!runDb)('POST /api/catalog/ingredients/:id/revisions/:revisionId
     // The restore is itself recorded as a new revision (auditable/reversible).
     const { items: after } = await catalogDB.listIngredientRevisions(ing.id);
     expect(after.length).toBe(revisions.length + 1);
+    expect(after.find((rev) => !revisions.some((before) => before.id === rev.id))).toMatchObject({
+      name: r.body.name, payload: r.body.payload, tags: r.body.tags, source: 'user', actor: 'example-restore',
+    });
   });
 
   it('404s when the revision belongs to a different ingredient', async () => {
