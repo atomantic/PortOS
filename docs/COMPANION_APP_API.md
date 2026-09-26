@@ -20,11 +20,14 @@ over Tailscale. Each install:
   mirror runs on `127.0.0.1:5553` (not reachable over the tailnet). See
   [PORTS.md](./PORTS.md).
 - Has an **optional single password** gate. When off, the tailnet-private trust
-  model means the app needs no credential; when on, every `/api/*` request needs
-  credentials (see [Authentication](#authentication)).
+  model means the app needs no credential for most routes; when on, every
+  `/api/*` request needs credentials. Either way, peer management and host
+  control need a separate **operator session** on top (see
+  [Authentication](#authentication)).
 
 The app therefore treats each instance as `{ scheme, host, port: 5555, password? }`
-and must handle both the auth-on/auth-off and HTTP/HTTPS cases per instance.
+and must handle both the auth-on/auth-off and HTTP/HTTPS cases per instance,
+plus whether it currently holds an operator session for that instance.
 
 ## 1. Discovery & identity (pre-auth)
 
@@ -66,16 +69,87 @@ route is exposed pre-auth.
 ## 2. Authentication
 
 PortOS auth is a single optional password (`server/services/auth.js`,
-`server/services/authGate.js`). The app authenticates as a **full session via HTTP
-Basic**, reusing the exact path peer-to-peer federation uses — nothing new to
-build server-side.
+`server/services/authGate.js`), but it grants **two different levels of access**
+depending on how the app presents it — Basic is not a full session, and the app
+needs both.
 
-- **When `authRequired` is `false`:** send no credential. All `/api/*` routes are
-  open on the tailnet.
+- **When `authRequired` is `false`:** most routes need no credential at all, but
+  peer management and host control are still gated — see
+  [Operator sessions](#operator-sessions-vs-http-basic) below. A remote
+  companion app can never satisfy either gate on a passwordless install: host
+  control falls back to a local (loopback) connection, which a tailnet caller
+  never is, and peer management requires a real session, which
+  `POST /api/auth/login` refuses to issue while the password is off
+  (`400 AUTH_NOT_ENABLED`). Managing peers remotely requires setting a
+  password first.
 - **When `authRequired` is `true`:** send
-  `Authorization: Basic base64(":" + password)` on every `/api/*` request. PortOS
-  is single-user, so the username half is ignored — only the password is verified.
-  Store the password **per instance in the iOS Keychain**.
+  `Authorization: Basic base64(":" + password)` on every `/api/*` request as a
+  baseline credential. PortOS is single-user, so the username half is ignored —
+  only the password is verified. Store the password **per instance in the iOS
+  Keychain**. Basic alone is enough for ordinary reads and most writes, but
+  **not** for peer management or host control (below) — those need an
+  operator session on top.
+
+### Operator sessions vs. HTTP Basic
+
+`server/services/authGate.js` distinguishes three authenticated states on a
+request: `method: 'session'` (a signed-in operator), `method: 'basic'` (the
+instance password sent as HTTP Basic — the legacy peer-federation credential),
+and `method: 'peer'` (a paired peer's scoped token, out of scope for a native
+client). **A route can require `method: 'session'` specifically** — Basic does
+not satisfy it, no matter how correct the password is:
+
+- **Peer management** (`POST/PUT/DELETE /api/instances/peers/*`, except
+  `POST /peers/announce` and the one-time `POST /peers/pair-secret` Basic
+  bootstrap — see [§3](#3-instance-management)) requires an operator session.
+  A Basic-only request gets `403 PEER_SETTINGS_OPERATOR_REQUIRED`, whether or
+  not a password is set.
+- **Host control** (`/api/commands/*` and the routes audited in
+  `server/lib/hostControlRoutes.js` — app lifecycle, CoS agent queueing, git,
+  scaffold, provider/runtime installs, autopilot start, and the matching
+  Socket.IO events) requires an operator session, **or** a genuinely local
+  (loopback) connection when no password is set. A remote caller — which a
+  companion app always is, even on a passwordless install — never gets host
+  control from Basic or from being on the tailnet; it gets
+  `403 HOST_CONTROL_FORBIDDEN`. See [API.md](./API.md#security-model) for the
+  full host-control contract.
+
+To obtain a session, sign in the same way the web UI does:
+
+```
+POST /api/auth/login
+Content-Type: application/json
+
+{ "password": "…" }
+```
+
+- If the password is enabled and correct, the response is `{ "authenticated":
+  true }` with a `Set-Cookie` header carrying the session token — **the token
+  is never returned in the JSON body**, only in that header. There is no
+  bearer-token endpoint for native clients today.
+- Preserve that cookie in the app's per-instance HTTP cookie store (e.g.
+  `HTTPCookieStorage` scoped to the instance's host/port) and send it back on
+  every subsequent request that needs operator authority. **Do not hardcode
+  the cookie name** — it's port-scoped from the request's `Host` header
+  (`portos_auth_<port>`, `sessionCookieNameFor` in `lib/portosAuthCore.js`) so
+  one device can hold sessions for several instances without collisions.
+- If the password is not enabled, `/api/auth/login` returns
+  `400 AUTH_NOT_ENABLED` — there is nothing to sign in to, and no other way to
+  mint a session. A companion app reaching the instance remotely therefore
+  cannot obtain peer-management authority at all on a passwordless install;
+  host control is separately unreachable there too, since it falls back to
+  requiring a local (loopback) connection instead of a session. Set an
+  instance password to manage peers or host control from the companion app.
+- `GET /api/auth/status` (always public) reports whether a password is set;
+  `GET /api/auth/whoami` confirms whether the app's current cookie is still a
+  valid session. Neither requires the app to already hold a session.
+
+**401 vs. 403.** A `401 AUTH_REQUIRED` means the request carried no accepted
+credential at all (no session, Basic, or peer token) on a password-enabled
+instance — reprompt for the password. A `403` (`PEER_SETTINGS_OPERATOR_REQUIRED`
+/ `HOST_CONTROL_FORBIDDEN`) means the credential was valid but insufficient for
+that specific route — retrying the same password won't help; the app needs a
+session instead of Basic.
 
 **CSRF note.** In both auth modes — with or without a password — PortOS 403s a
 browser request whose `Origin` does not match its `Host` (`CROSS_ORIGIN_BLOCKED`,
@@ -99,20 +173,28 @@ Full CRUD + peer operations at `/api/instances/*` (`server/routes/instances.js`,
 `server/services/instances.js`). The foundation the app's instance-management UI
 builds on:
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/api/instances` | Self + all configured peers. |
-| `GET` | `/api/instances/self` | This instance's identity (`instanceId`, `name`). |
-| `PUT` | `/api/instances/self` | Rename this instance. |
-| `GET` | `/api/instances/tailnet-suffix` | The tailnet's MagicDNS suffix. |
-| `GET` | `/api/instances/sync-status` | Federation sync status. |
-| `POST` | `/api/instances/peers` | Add a peer. |
-| `PUT` / `DELETE` | `/api/instances/peers/:id` | Update / remove a peer. |
-| `POST` | `/api/instances/peers/:id/connect` | Establish a peer connection. |
-| `POST` | `/api/instances/peers/:id/reciprocate` | Reciprocate a peer connection. |
-| `POST` | `/api/instances/peers/:id/probe` | Probe a peer's reachability. |
-| `POST` | `/api/instances/peers/:id/sync` | Trigger a sync with a peer. |
-| `GET` | `/api/instances/peers/:id/query?path=/api/…` | Proxy a request through a peer. |
+Every route under `/api/instances/peers/*` other than `GET`/`HEAD` and
+`POST /peers/announce` requires an **operator session** (see
+[Operator sessions vs. HTTP Basic](#operator-sessions-vs-http-basic)) — Basic
+alone gets `403 PEER_SETTINGS_OPERATOR_REQUIRED`, even with the correct
+password and even on a passwordless install. Every other route below,
+including `PUT /api/instances/self`, only needs the baseline credential from
+[§2](#2-authentication) (Basic when a password is set, none when it's off).
+
+| Method | Path | Session required? | Purpose |
+|--------|------|--------------------|---------|
+| `GET` | `/api/instances` | No | Self + all configured peers. |
+| `GET` | `/api/instances/self` | No | This instance's identity (`instanceId`, `name`). |
+| `PUT` | `/api/instances/self` | No | Rename this instance. |
+| `GET` | `/api/instances/tailnet-suffix` | No | The tailnet's MagicDNS suffix. |
+| `GET` | `/api/instances/sync-status` | No | Federation sync status. |
+| `POST` | `/api/instances/peers` | **Yes** | Add a peer. |
+| `PUT` / `DELETE` | `/api/instances/peers/:id` | **Yes** | Update / remove a peer. |
+| `POST` | `/api/instances/peers/:id/connect` | **Yes** | Establish a peer connection. |
+| `POST` | `/api/instances/peers/:id/reciprocate` | **Yes** | Reciprocate a peer connection. |
+| `POST` | `/api/instances/peers/:id/probe` | **Yes** | Probe a peer's reachability. |
+| `POST` | `/api/instances/peers/:id/sync` | **Yes** | Trigger a sync with a peer. |
+| `GET` | `/api/instances/peers/:id/query?path=/api/…` | No | Proxy a request through a peer. |
 
 ## 4. Remote desktop
 

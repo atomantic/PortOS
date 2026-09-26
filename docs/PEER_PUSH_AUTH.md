@@ -116,11 +116,18 @@ A media host with no instance password still verifies the pair token on the
 federation surface, so its provider keeps admitting paired peers. Automatic
 pairing requires that host to have an instance password when the pair is set up.
 
-Legacy HTTP Basic is the instance password itself, so it keeps operator reach
-(`method: 'basic'`, still refused host control). Its holder can already sign in
-at `/api/auth/login`, and the companion app uses it as a full session
-(`docs/COMPANION_APP_API.md`). The saved password is used once for pair setup;
-after the peer confirms the scoped credential, remove the stored password.
+Legacy HTTP Basic is the instance password itself, verified as `method:
+'basic'` — but that is narrower than an operator session: it's refused for
+host control (`403 HOST_CONTROL_FORBIDDEN`) and for peer-settings mutations
+(`403 PEER_SETTINGS_OPERATOR_REQUIRED`), including the ones this pairing flow
+itself uses (`PUT`/`DELETE` on a peer, connect/reciprocate/probe/sync). Its
+holder can already sign in at `/api/auth/login` to obtain the operator session
+those routes need. The one exception is the one-time
+`POST /api/instances/peers/pair-secret` bootstrap above, which Basic alone is
+enough for. See [Operator sessions vs. HTTP Basic](./COMPANION_APP_API.md#operator-sessions-vs-http-basic)
+for the full session-vs-Basic contract a companion client needs. The saved
+password is used once for pair setup; after the peer confirms the scoped
+credential, remove the stored password.
 
 Rollout without breaking older installs:
 
