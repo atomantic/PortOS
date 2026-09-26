@@ -5,6 +5,7 @@
  * metric+timestamp, and day-partitioned file storage at data/health/YYYY-MM-DD.json.
  */
 
+import { invalidateMeatspace } from './meatspaceEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -67,11 +68,14 @@ export async function readDayFile(dateStr) {
  * @param {Object} data - Day file data to write
  * @returns {Promise<void>}
  */
-export async function writeDayFile(dateStr, data) {
+export async function writeDayFile(dateStr, data, changedMetrics = Object.keys(data.metrics || {})) {
   await ensureDir(PATHS.health);
   data.updated = new Date().toISOString();
   const filePath = join(PATHS.health, `${dateStr}.json`);
   await atomicWrite(filePath, data);
+  if (changedMetrics.some(name => ['body_mass', 'body_fat_percentage', 'lean_body_mass'].includes(name))) {
+    invalidateMeatspace(['healthBody']);
+  }
 }
 
 /**
@@ -135,7 +139,7 @@ export async function mergeIntoDay(dateStr, metricName, newPoints) {
 
     if (added > 0 || updated > 0) {
       dayData.metrics[metricName] = result;
-      await writeDayFile(dateStr, dayData);
+      await writeDayFile(dateStr, dayData, [metricName]);
     }
 
     return { added, updated, totalPoints: result.length };

@@ -232,6 +232,8 @@ function registerAuthRevocationHandler(io) {
   });
 }
 
+const forwardMeatspaceChange = payload => ioInstance?.emit('meatspace:changed', payload);
+
 function setupEventForwarding() {
   meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
   setupCosEventForwarding();
@@ -241,6 +243,8 @@ function setupEventForwarding() {
   setupAgentEventForwarding();
   setupBrainEventForwarding();
   setupDigitalTwinEventForwarding();
+  meatspaceEvents.off('changed', forwardMeatspaceChange);
+  meatspaceEvents.on('changed', forwardMeatspaceChange);
   setupMoltworldWsEventForwarding();
   setupMoltworldQueueEventForwarding();
   setupInstanceEventForwarding();

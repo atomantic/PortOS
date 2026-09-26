@@ -271,7 +271,7 @@ async function flushDayBuckets(dayBuckets) {
         }
       }
 
-      await writeDayFile(dateStr, dayData);
+      await writeDayFile(dateStr, dayData, Object.keys(metrics));
       flushedDates.add(dateStr);
     });
 

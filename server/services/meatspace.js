@@ -5,7 +5,7 @@
  * and LEV 2045 tracker. Reads genome/longevity data from Digital Twin.
  */
 
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, readJSONFileStrict } from '../lib/fileUtils.js';
@@ -74,6 +74,7 @@ async function saveConfig(config) {
   await ensureMeatspaceDir();
   await atomicWrite(CONFIG_FILE, config);
   meatspaceEvents.emit('death-clock:changed', {});
+  invalidateMeatspace(['overview', 'alcohol', 'calendar']);
 }
 
 // === Sex Detection ===

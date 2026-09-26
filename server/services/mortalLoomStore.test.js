@@ -1092,3 +1092,63 @@ describe('evicted (dataless) iCloud store', () => {
     expect(readFileMock).toHaveBeenCalledWith(UBIQUITY_PATH, 'utf-8');
   });
 });
+
+describe('overview invalidation from MortalLoom', () => {
+  it('emits the changed collection only after persistence and suppresses failed writes', async () => {
+    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const changed = vi.fn();
+    meatspaceEvents.on('changed', changed);
+    try {
+      readFileMock.mockResolvedValue(JSON.stringify({ bloodTests: [] }));
+      let persist;
+      writeFileMock.mockImplementationOnce(() => new Promise(resolve => { persist = resolve; }));
+      const writing = store.mlPush('bloodTests', { date: '2026-01-01', markers: { example: 1 } });
+      await vi.waitFor(() => expect(persist).toBeTypeOf('function'));
+      expect(changed).not.toHaveBeenCalled();
+      persist();
+      await writing;
+      expect(changed).toHaveBeenCalledWith({ resources: ['blood'] });
+      changed.mockClear();
+      writeFileMock.mockRejectedValueOnce(new Error('write failed'));
+      await expect(store.mlPush('bloodTests', { date: '2026-01-02' })).rejects.toThrow('write failed');
+      expect(changed).not.toHaveBeenCalled();
+    } finally { meatspaceEvents.off('changed', changed); }
+  });
+
+  it('uses one watcher, detects external edits, retries failed reads and stops when disabled', async () => {
+    vi.useFakeTimers();
+    store._resetMortalLoomInitForTest();
+    settingsEvents.removeAllListeners();
+    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const changed = vi.fn();
+    meatspaceEvents.on('changed', changed);
+    try {
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [] }));
+      await store.initMortalLoomStore();
+      await store.initMortalLoomStore();
+      await vi.advanceTimersByTimeAsync(0);
+      changed.mockClear();
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 170 }] }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['body'] });
+      changed.mockClear();
+      readFileMock.mockRejectedValueOnce(Object.assign(new Error('unreadable'), { code: 'EACCES' }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(changed).not.toHaveBeenCalled();
+      readFileMock.mockResolvedValue(JSON.stringify({ bodyEntries: [{ date: '2026-01-01', weightLbs: 172 }] }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['body'] });
+      settingsEvents.emit('settings:updated', { mortalloom: { enabled: false } });
+      changed.mockClear();
+      const reads = readFileMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(readFileMock).toHaveBeenCalledTimes(reads);
+      expect(changed).not.toHaveBeenCalled();
+    } finally {
+      store._resetMortalLoomInitForTest();
+      settingsEvents.removeAllListeners();
+      meatspaceEvents.off('changed', changed);
+      vi.useRealTimers();
+    }
+  });
+});

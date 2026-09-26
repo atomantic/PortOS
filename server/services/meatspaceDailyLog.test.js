@@ -339,3 +339,41 @@ describe('serialized daily-log writes (#8032)', () => {
     expect((await getNicotineSummary()).today).toBe(7);
   });
 });
+
+it('invalidates only affected overview resources after a successful body write, never a failed write', async () => {
+  const { meatspaceEvents } = await import('./meatspaceEvents.js');
+  const changed = vi.fn();
+  meatspaceEvents.on('changed', changed);
+  try {
+    readJSONFile.mockImplementation(async () => ({ entries: [] }));
+    let persist;
+    atomicWrite.mockImplementationOnce(() => new Promise(resolve => { persist = resolve; }));
+    const writing = addBodyEntry({ date: '2024-06-01', weightLbs: 170 });
+    await vi.waitFor(() => expect(persist).toBeTypeOf('function'));
+    expect(changed).not.toHaveBeenCalled();
+    persist();
+    await writing;
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ resources: ['overview', 'body'] });
+    changed.mockClear();
+    atomicWrite.mockRejectedValueOnce(new Error('write failed'));
+    await expect(addBodyEntry({ date: '2024-06-01', weightLbs: 171 })).rejects.toThrow('write failed');
+    expect(changed).not.toHaveBeenCalled();
+  } finally {
+    meatspaceEvents.off('changed', changed);
+  }
+});
+
+it('invalidates the alcohol summary cache when a mirrored drink changes', async () => {
+  const { invalidateMortalLoomChanges } = await import('./meatspaceEvents.js');
+  readJSONFile.mockResolvedValue({ sex: 'male' });
+  readDailyLogIfEnabled.mockResolvedValue({ entries: [] });
+  invalidateMortalLoomChanges(null, { alcoholDrinks: [] });
+  const before = await getAlcoholSummary();
+  expect(before.recentEntries).toEqual([]);
+  readDailyLogIfEnabled.mockResolvedValue({ entries: [{
+    date: '2024-06-01',
+    alcohol: { standardDrinks: 1, drinks: [{ name: 'Example Drink', oz: 12, abv: 5 }] },
+  }] });
+  invalidateMortalLoomChanges({ alcoholDrinks: [] }, { alcoholDrinks: [{ id: 'example-drink' }] });
+  expect((await getAlcoholSummary()).recentEntries).toHaveLength(1);
+});
