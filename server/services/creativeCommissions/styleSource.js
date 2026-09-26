@@ -44,7 +44,7 @@ async function orSkipMissing(label, promise, fallback) {
  * Render resolved style inputs into the bounded art-direction base. Pure.
  * Returns '' when there is nothing to say.
  */
-export function renderCommissionStyleSource({ universe = null, board = null, images = [] }) {
+function renderCommissionStyleSource({ universe = null, board = null, images = [] }) {
   const sections = [];
   if (universe) {
     const lines = [`The look comes from the universe "${universe.name}" — match its established style so this work sits beside its other artwork.`];
