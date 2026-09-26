@@ -24,10 +24,27 @@ const IMAGE_DIRS = {
 };
 
 // A local image as a prompt reference, or null when the file is missing.
+// `kind` + `filename` are the machine-independent identity a caller persists
+// (never `path`, which embeds this install's data dir); `url` is the served
+// path a prompt can cite.
 function localReference(kind, filename, label, origin) {
   const dir = IMAGE_DIRS[kind];
   const path = dir?.resolve(filename);
-  return path ? { label, origin, path, url: `${dir.urlPrefix}${encodeURIComponent(filename)}` } : null;
+  return path ? { kind, filename, label, origin, path, url: `${dir.urlPrefix}${encodeURIComponent(filename)}` } : null;
+}
+
+/**
+ * Resolve persisted style reference images (`{ kind, filename }`, as a style
+ * source returns them) back to absolute local paths for a model call or a
+ * render. Files that are gone — deleted since, or never synced to this peer —
+ * and unknown kinds are skipped, so the result may be shorter than the input.
+ */
+export function styleReferenceImagePaths(images) {
+  if (!Array.isArray(images)) return [];
+  const paths = images
+    .map((image) => IMAGE_DIRS[image?.kind]?.resolve(image?.filename) || null)
+    .filter(Boolean);
+  return [...new Set(paths)];
 }
 
 // Resolve reference candidates in order until `slots` are filled, so a

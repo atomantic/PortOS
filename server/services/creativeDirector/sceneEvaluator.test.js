@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   enqueueEvaluateTask: vi.fn(),
   advanceAfterSceneSettled: vi.fn(),
   existsSync: vi.fn(() => true),
+  styleReferenceImagePaths: vi.fn(),
 }));
 
 vi.mock('fs', () => ({ existsSync: mocks.existsSync }));
@@ -50,6 +51,9 @@ vi.mock('./local.js', () => ({
 }));
 vi.mock('./agentBridge.js', () => ({ enqueueEvaluateTask: mocks.enqueueEvaluateTask }));
 vi.mock('./completionHook.js', () => ({ advanceAfterSceneSettled: mocks.advanceAfterSceneSettled }));
+// Filename → path resolution is covered against real files at the
+// media_enqueueImageJob boundary; here it only has to hand back paths.
+vi.mock('../creativeStyleSources.js', () => ({ styleReferenceImagePaths: mocks.styleReferenceImagePaths }));
 
 const {
   parseVisionVerdict,
@@ -242,6 +246,31 @@ describe('evaluateSceneWithVision', () => {
     const res = await evaluateSceneWithVision(project, scene);
     expect(res).toMatchObject({ ok: false, fallbackToAgent: true });
     expect(mocks.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('attaches the project style reference images after the frames and tells the model which is which (#8724)', async () => {
+    const styleReferenceImages = [{ kind: 'image', filename: 'board-pin.png', label: 'Pinned', origin: 'mood-board' }];
+    mocks.styleReferenceImagePaths.mockReturnValue(['/data/images/board-pin.png']);
+    mocks.runPromptThroughProvider.mockResolvedValue({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
+    await evaluateSceneWithVision({ ...project, styleReferenceImages }, scene);
+    expect(mocks.styleReferenceImagePaths).toHaveBeenCalledWith(styleReferenceImages);
+    const call = mocks.runPromptThroughProvider.mock.calls[0][0];
+    expect(call.screenshots).toEqual([
+      resolvePath('/data/video-thumbnails/job-1-f1.jpg'),
+      resolvePath('/data/video-thumbnails/job-1-f2.jpg'),
+      '/data/images/board-pin.png',
+    ]);
+    expect(call.prompt).toContain('After the scene frames come 1 style reference image(s)');
+  });
+
+  it('sends only the frames and the unchanged prompt for a project without style references', async () => {
+    mocks.runPromptThroughProvider.mockResolvedValue({ text: '{"accepted": true}', model: 'qwen2.5-vl', provider: OLLAMA });
+    await evaluateSceneWithVision(project, scene);
+    const call = mocks.runPromptThroughProvider.mock.calls[0][0];
+    expect(call.screenshots).toHaveLength(2);
+    expect(call.prompt).toContain("in order (first = start, last = end).\n\n## Scene\n");
+    expect(call.prompt).not.toContain('style reference');
+    expect(mocks.styleReferenceImagePaths).not.toHaveBeenCalled();
   });
 
   it('uses the single-thumbnail fallback when no sampled frames are present', async () => {
