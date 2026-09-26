@@ -17,7 +17,7 @@ function inside(root, path) {
 
 // Freeze the input before any script runs. Symlinks are refused, including
 // symlinked assets, so the virtual origin cannot export another data store.
-async function snapshotAssets(directory) {
+export async function snapshotAssets(directory) {
   const root = await realpath(PATHS.data);
   const dir = await realpath(resolve(root, directory));
   if (!inside(root, dir)) throw new Error('directory must be inside data');
@@ -45,8 +45,9 @@ async function snapshotAssets(directory) {
 
 // One browser-level socket owns a disposable context and its hidden target.
 // Disconnect/abort rejects pending commands; disposeOnDetach covers crashes.
-export async function openComposition(directory, { signal } = {}) {
+export async function openComposition(directory, { signal, validateAssets } = {}) {
   const assets = await snapshotAssets(directory);
+  validateAssets?.(assets);
   signal?.throwIfAborted();
   const response = await cdpRequest('/json/version');
   if (!response.ok) throw new Error('Managed browser is unavailable');

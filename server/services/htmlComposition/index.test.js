@@ -103,6 +103,24 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect((await readFile(join(PATHS.videoThumbnails, result.thumbnail))).length).toBeGreaterThan(0);
   }, 30000);
 
+  it('renders a gated launch composition and uses its declared poster beat', async () => {
+    const html = `<!doctype html><html><body><script>
+      globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,
+        async seek(t) { document.body.style.background = t >= 10 ? 'rgb(255,0,0)' : 'rgb(0,0,255)'; }
+      };</script></body></html>`;
+    const input = await composition(html);
+    await writeFile(join(PATHS.data, input.directory, 'plan.md'), 'A fictional product demonstration.');
+    await writeFile(join(PATHS.data, input.directory, 'caption.txt'), 'Make a clear plan.');
+    await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({
+      posterSec: 11, scenes: [{ durationSec: 15, lines: [] }],
+    }));
+    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15 } });
+    const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videoThumbnails, result.thumbnail),
+      '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    expect(pixel[0]).toBeGreaterThan(220);
+    expect(pixel[2]).toBeLessThan(30);
+  }, 60000);
+
   it('refuses a remote request by its full URL and removes partial artifacts', async () => {
     const url = 'https://example.com/forbidden.png';
     const input = await composition(fixture(`new Image().src = '${url}';`));

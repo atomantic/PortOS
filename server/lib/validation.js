@@ -2427,8 +2427,25 @@ export const mindBundleApplySchema = z.object({
   )).strict(),
 }).strict();
 
+export const launchVideoOptionsSchema = z.object({
+  targetDurationSec: z.number().min(15).max(25),
+}).strict();
+
+export const launchVideoStoryboardSchema = z.object({
+  posterSec: z.number().nonnegative(),
+  scenes: z.array(z.object({
+    durationSec: z.number().positive(),
+    lines: z.array(z.object({
+      text: z.string().trim().min(1).max(10000),
+      wordCount: z.number().int().positive(),
+      holdSec: z.number().positive(),
+    }).strict()).max(100),
+  }).strict()).min(1).max(100),
+}).strict();
+
 // HTML composition inputs are local, editable assets, never provider prompts.
 export const htmlCompositionRenderSchema = z.object({
+  launchVideo: launchVideoOptionsSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
 });

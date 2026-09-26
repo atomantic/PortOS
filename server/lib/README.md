@@ -758,3 +758,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `modelComparisonComposite.js` | `buildModelComparisonComposite(observations, inventory)` derives a stable sourced index with calibrated and effort estimates, route-specific price references and explicit research gaps. |
 
 | `messageLogError.js` | `messageLogError(error)` projects mailbox failures to allowlisted codes and HTTP error status, excluding provider text and credentials. |
+
+| `launchVideoValidation.js` | `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time, duration, and poster position before rendering. |
