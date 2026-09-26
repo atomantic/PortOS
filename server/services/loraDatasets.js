@@ -35,6 +35,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getUniverse } from './universeBuilder.js';
 import { getJob } from './mediaJobQueue/index.js';
+import { trainingEvents } from './loraTraining/events.js';
 
 export const loraDatasetStore = createCollectionStore({
   dir: PATHS.loraDatasets,
@@ -82,6 +83,7 @@ export async function updateDataset(id, mutate) {
     if (!next) return current;
     next.updatedAt = nowIso();
     await loraDatasetStore.saveOneNow(id, next);
+    trainingEvents.emit('dataset:changed', { datasetId: id });
     return next;
   });
 }

@@ -11,8 +11,8 @@
  * dataset grid UI).
  *
  * Mirrors `universeCharacterSheet.js`'s enqueue → single-dispatcher
- * subscribe → copy pattern, including the two-stage queue-wait/run
- * timeout. See that module for the rationale on each piece.
+ * subscribe → copy pattern. Dataset subscriptions stay attached until the
+ * queue reports a terminal result; the queue owns execution timeouts.
  */
 
 import { readFile } from 'fs/promises';
@@ -38,7 +38,7 @@ import {
   extractCharacterPromptCommon,
   REFERENCE_SHEET_CONSTANTS,
 } from './universeCharacterSheet.js';
-import { assertMediaQueueRoom, enqueueJob, mediaJobEvents, partialBatchAdmissionError } from './mediaJobQueue/index.js';
+import { assertMediaQueueRoom, enqueueJob, getJob, mediaJobEvents, partialBatchAdmissionError } from './mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
 import { selectLocalImageModelFromSettings } from './imageGen/prepareParams.js';
@@ -225,9 +225,6 @@ function subscribeToDatasetJob(jobId, handlers) {
   return () => { datasetSubscribers.delete(jobId); };
 }
 
-const QUEUE_WAIT_MS = 4 * 60 * 60 * 1000; // survives queueing behind long video jobs
-const RUN_TIMEOUT_MS = 30 * 60 * 1000;
-
 const setImageStatus = (datasetId, imageId, status) =>
   updateDataset(datasetId, (current) => ({
     ...current,
@@ -344,27 +341,19 @@ export async function generateDatasetImages(datasetId, options = {}) {
     };
     await updateDataset(datasetId, (current) => ({ ...current, images: [...current.images, entry] }));
 
-    let timeoutHandle = null;
+    // Keep the completion hook for long-running jobs: detaching on a local
+    // timer would require a browser poll to discover their eventual result.
     let unsubscribe = null;
-    const armTimeout = (ms, reason) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      timeoutHandle = setTimeout(() => {
-        console.log(`⏱️ Dataset render ${reason} [${shortId(jobId)}] — detaching (reconcile heals on next read)`);
-        detach();
-      }, ms);
-      timeoutHandle.unref?.();
-    };
     const detach = () => {
-      if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
       if (unsubscribe) { unsubscribe(); unsubscribe = null; }
     };
-    unsubscribe = subscribeToDatasetJob(jobId, {
-      onStarted: () => armTimeout(RUN_TIMEOUT_MS, 'exceeded run window'),
+    const handlers = {
       onCompleted: async (job) => {
         detach();
         await onRenderComplete({
           datasetId, imageId, file, sourceFilename: job.result?.filename,
-        }).catch((err) => {
+        }).catch(async (err) => {
+          await setImageStatus(datasetId, imageId, 'failed');
           console.error(`❌ Dataset render post-completion failed [${shortId(jobId)}]: ${err?.message}`);
         });
       },
@@ -373,8 +362,13 @@ export async function generateDatasetImages(datasetId, options = {}) {
         console.log(`⚠️ Dataset render ${job.status} [${shortId(jobId)}]: ${job.error || 'unknown'}`);
         await setImageStatus(datasetId, imageId, 'failed');
       },
-    });
-    armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
+    };
+    unsubscribe = subscribeToDatasetJob(jobId, handlers);
+    // Enqueue and record persistence are asynchronous; a fast job may already
+    // have finished before its subscriber was registered.
+    const currentJob = getJob(jobId);
+    if (currentJob?.status === 'completed') await handlers.onCompleted(currentJob);
+    else if (['failed', 'canceled'].includes(currentJob?.status)) await handlers.onFailed(currentJob);
 
     launched.push({ imageId, jobId, variation });
   }

@@ -440,6 +440,8 @@ describe('socket.js — initSocket', () => {
   // generationId-keyed *-gen:canceled broadcast so stuck render spinners clear.
   // ===========================================================================
   it('broadcasts bounded queue and checkpoint invalidations', () => {
+    trainingEvents.emit('dataset:changed', { datasetId: 'example-dataset', privateRecord: 'must not be forwarded' });
+    expect(io.emitted).toContainEqual(['training:dataset:changed', { datasetId: 'example-dataset' }]);
     mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
     trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
     expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
