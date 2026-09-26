@@ -1,3 +1,4 @@
+import '../services/databaseBootFence.js';
 /**
  * CoS Agent Runner - Standalone PM2 Process
  *
@@ -9,6 +10,7 @@
  */
 
 import express from 'express';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { spawn } from '../lib/childProcess.js';
 import * as pty from 'node-pty';
 import { join, basename } from 'path';
@@ -200,6 +202,7 @@ app.get('/agents', async (req, res) => {
  * restarts before the TUI exits.
  */
 app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -284,6 +287,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // the actual fault instead, and let the caller block on the unrecoverable ones.
   let tuiProcess;
   try {
+    assertDatabaseAdmission();
     tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
       name: 'xterm-256color',
       cols,
@@ -406,6 +410,7 @@ app.get('/agents/:agentId/stats', async (req, res) => {
  * Spawn a new agent
  */
 app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -499,6 +504,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   }
 
   // Spawn the CLI process
+  assertDatabaseAdmission();
   const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
     shell: false,

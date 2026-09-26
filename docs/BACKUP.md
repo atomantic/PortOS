@@ -209,3 +209,28 @@ failure. Subsequent partial settings saves preserve restored fields. Transfer
 errors still report that files may have been overwritten; a cache-reload failure
 requires restarting PortOS before using CoS. Dry runs and selective restores
 outside the CoS state/config scope do not acquire this boundary.
+
+## Database maintenance admission
+
+The persistent maintenance boundary is a prerequisite for coordinated offline migration (#8805). It does **not** migrate data, change saved mode, stop existing writer processes, or prove a target cutover. In particular, entering maintenance is not permission to invoke an uncoordinated SQL import or backend migration.
+
+From the install root, inspect or establish the fence:
+
+```sh
+node scripts/database-maintenance.mjs status
+node scripts/database-maintenance.mjs begin native docker
+# Or, when the saved source mode is Docker:
+node scripts/database-maintenance.mjs begin docker native
+```
+
+The command returns the operation ID and direction. Plan for downtime: new pooled database operations and CoS spawn admission are refused immediately, and both managed server and runner refuse normal boot while fenced. Already-admitted transactions may finish; this boundary alone is **not a drained snapshot boundary**. The offline coordinator must still stop/drain all owned writers and validate live/spawning work before export. A process-local restore callback cannot bypass this persistent fence.
+
+If no transfer has started and saved source configuration is unchanged, cancel using that exact ID:
+
+```sh
+node scripts/database-maintenance.mjs cancel <operation-id>
+```
+
+Cancellation supports only the initial accepted stage, preserves the journal in the machine-local cancelled archive, and never switches mode or reverses direction. Restart managed processes through the existing PM2 ecosystem workflow after cancellation if their normal boot was refused. CLI configuration follows the ecosystem's environment precedence; run from the same configured operator environment. Changed source configuration, a different operation ID, an unknown stage/version, and a competing operation are refused.
+
+An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. This first boundary deliberately supplies no transfer-stage resume/rollback command; the detached coordinator and verified restart protocol are tracked in #8810, and Settings recovery feedback in #8811. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.

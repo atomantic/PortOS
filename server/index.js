@@ -1,3 +1,4 @@
+import './services/databaseBootFence.js';
 import express from 'express';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';

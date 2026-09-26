@@ -1,0 +1,187 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+
+const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
+const target = { ...source, mode: 'docker', port: 5561 };
+const moduleUrl = new URL('./databaseMaintenanceJournal.js', import.meta.url).href;
+let root;
+let data;
+let journal;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'portos-maintenance-'));
+  data = join(root, 'data');
+  writeFileSync(join(root, '.portos-disposable-root'), '');
+  journal = createDatabaseMaintenanceJournal(data);
+});
+afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+function node(code, args = []) {
+  return spawnSync(process.execPath, [...args, '--input-type=module', '-e', code], {
+    encoding: 'utf8',
+    env: { ...process.env, PORTOS_DATA_ROOT: root, PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
+    timeout: 10_000,
+  });
+}
+
+describe('persistent database maintenance boundary', () => {
+  it('publishes once across competing processes and preserves the winning direction', async () => {
+    const code = `import { createDatabaseMaintenanceJournal } from ${JSON.stringify(moduleUrl)};
+      const j = createDatabaseMaintenanceJournal(${JSON.stringify(data)});
+      try { console.log(JSON.stringify(j.begin(${JSON.stringify({ source, target })}))); }
+      catch { process.exitCode = 1; }`;
+    const run = () => new Promise(resolve => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'] });
+      child.once('close', code => resolve(code));
+    });
+    expect((await Promise.all([run(), run()])).sort()).toEqual([0, 1]);
+    const record = journal.read();
+    expect(record).toMatchObject({ stage: 'accepted', source, target });
+    expect(() => journal.begin({ source: target, target: source })).toThrow();
+    expect(journal.read()).toEqual(record);
+  });
+
+  it('blocks a fresh database process, boot graphs, and agent admission while preserving journal identity', () => {
+    const operation = journal.begin({ source, target });
+    // No real pg connection is possible, even if an admission regression occurs.
+    const loader = join(root, 'pg-loader.mjs');
+    const stub = `export default {types:{setTypeParser(){}},Pool:class {
+      on(){} query(){throw Error('POOL_REACHED')} connect(){throw Error('POOL_REACHED')}
+    }};`;
+    writeFileSync(loader, `export async function resolve(specifier, context, next) {
+      if (specifier === 'pg') return {url: ${JSON.stringify('data:text/javascript,' + encodeURIComponent(stub))}, shortCircuit:true};
+      return next(specifier, context);
+    }`);
+    const dbUrl = new URL('./db.js', import.meta.url).href;
+    const guardsUrl = new URL('../services/agentGuards.js', import.meta.url).href;
+    const code = `import {query, withTransaction, withDatabaseMaintenance, ensureSchema} from ${JSON.stringify(dbUrl)};
+      import {withSpawnDedupGuard} from ${JSON.stringify(guardsUrl)};
+      const outcomes = [];
+      for (const call of [
+        () => query('INSERT INTO example_record VALUES (1)'),
+        () => withTransaction(() => {throw Error('CALLER_REACHED')}),
+        () => withDatabaseMaintenance(() => query('SELECT 1')),
+        () => ensureSchema(),
+        () => withSpawnDedupGuard(new Set(), 'example', () => {throw Error('SPAWN_REACHED')})
+      ]) { try { await call(); outcomes.push('unexpected'); } catch(e) {outcomes.push(e.code || e.message);} }
+      console.log(JSON.stringify(outcomes));`;
+    // A second invocation is a restarted process, not a module-cache reset.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = node(code, ['--loader', pathToFileURL(loader).href]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout.trim())).toEqual(Array(5).fill('DATABASE_MAINTENANCE'));
+    }
+    const bootUrl = new URL('../services/databaseBootFence.js', import.meta.url).href;
+    const boot = node(`try {await import(${JSON.stringify(bootUrl)}); process.exitCode=2;}
+      catch(e) {console.log(e.code);}`);
+    expect(boot.status, boot.stderr).toBe(0);
+    expect(boot.stdout.trim()).toBe('DATABASE_MAINTENANCE');
+    expect(journal.read().id).toBe(operation.id);
+  });
+
+  it('lets an admitted transaction finish but refuses new work after another process fences it', () => {
+    const loader = join(root, 'transaction-loader.mjs');
+    const stub = `const log=[]; globalThis.sqlLog=log; export default {
+      types:{setTypeParser(){}},Pool:class {
+        on(){} async connect(){return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
+        query(){throw Error('NEW_QUERY_REACHED')}
+      }};`;
+    writeFileSync(loader, `export async function resolve(s,c,n) {
+      return s==='pg'?{url:${JSON.stringify('data:text/javascript,'+encodeURIComponent(stub))},shortCircuit:true}:n(s,c);
+    }`);
+    const code = `import {spawnSync} from 'node:child_process';
+      import {withTransaction,query} from ${JSON.stringify(new URL('./db.js', import.meta.url).href)};
+      await withTransaction(async client=>{
+        const result=spawnSync(process.execPath,['--input-type=module','-e',
+          ${JSON.stringify('import {createDatabaseMaintenanceJournal} from '+JSON.stringify(moduleUrl)+'; createDatabaseMaintenanceJournal('+JSON.stringify(data)+').begin('+JSON.stringify({source,target})+');')}]);
+        if(result.status!==0) throw Error('FENCE_FAILED');
+        await client.query('INSERT INTO example_record VALUES (1)');
+        try {await query('INSERT INTO example_record VALUES (2)'); throw Error('NEW_WRITE_ACCEPTED')}
+        catch(e){if(e.code!=='DATABASE_MAINTENANCE') throw e}
+      });
+      console.log(JSON.stringify(globalThis.sqlLog));`;
+    const result = node(code, ['--loader', pathToFileURL(loader).href]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual(['BEGIN', 'INSERT INTO example_record VALUES (1)', 'COMMIT']);
+    expect(journal.isFenced()).toBe(true);
+  });
+
+  it('fails closed across interrupted publication and damaged or future journals', () => {
+    expect(journal.read()).toBeNull();
+    expect(() => journal.assertAdmission()).not.toThrow();
+    mkdirSync(join(data, 'database-maintenance'), { recursive: true });
+    expect(() => journal.assertAdmission()).toThrowError(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
+    expect(() => journal.read()).toThrow();
+    for (const body of ['{', JSON.stringify({ version: 2 }), JSON.stringify({ stage: 'verified' })]) {
+      writeFileSync(join(data, 'database-maintenance', 'operation.json'), body);
+      expect(() => journal.read()).toThrow();
+      expect(() => journal.assertAdmission()).toThrow();
+      expect(() => journal.cancel('unknown', source)).toThrow();
+    }
+  });
+
+  it('cancels only an accepted matching source and retains the immutable operation as local evidence', () => {
+    const operation = journal.begin({ source, target });
+    expect(() => journal.cancel('00000000-0000-4000-8000-000000000000', source)).toThrow();
+    expect(() => journal.cancel(operation.id, target)).toThrow();
+    expect(() => journal.cancel(operation.id, { ...source, port: 6000 })).toThrow();
+    expect(journal.read()).toEqual(operation);
+    expect(journal.cancel(operation.id, source)).toEqual({ id: operation.id, stage: 'cancelled' });
+    expect(journal.read()).toBeNull();
+    expect(() => journal.assertAdmission()).not.toThrow();
+    const archived = join(data, 'database-maintenance-cancelled', operation.id, 'operation.json');
+    expect(JSON.parse(readFileSync(archived, 'utf8'))).toEqual(operation);
+    const next = journal.begin({ source: target, target: source });
+    expect(next.id).not.toBe(operation.id);
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(journal.read()).toEqual(next);
+  });
+
+  it('does not reopen admission after an interrupted cancellation or an unknown transfer stage', () => {
+    const operation = journal.begin({ source, target });
+    const active = join(data, 'database-maintenance');
+    writeFileSync(join(active, 'cancel-' + operation.id + '.claim'), '{}');
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(journal.isFenced()).toBe(true);
+    writeFileSync(join(active, 'operation.json'), JSON.stringify({ ...operation, stage: 'importing' }));
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(readdirSync(data)).toEqual(['database-maintenance']);
+  });
+
+  it('drives the operator CLI against disposable saved configuration without touching PostgreSQL', () => {
+    copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
+    const config = 'PGMODE=native\nPGPORT=6543\nPGPORT_DOCKER=6544\n';
+    writeFileSync(join(root, '.env'), config);
+    const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
+    const run = (...args) => spawnSync(process.execPath, [fileURLToPath(cli), ...args], {
+      encoding: 'utf8', timeout: 10_000,
+      env: { ...process.env, PORTOS_DATA_ROOT: root, PGPORT: '', PGPORT_DOCKER: '',
+        PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
+    });
+    expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
+    expect(run('begin', 'docker', 'native').status).toBe(1);
+    const started = run('begin', 'native', 'docker');
+    expect(started.status, started.stderr).toBe(0);
+    const operation = JSON.parse(started.stdout);
+    expect(journal.read()).toMatchObject({ source: { port: 6543 }, target: { port: 6544 } });
+    expect(JSON.parse(run('status').stdout)).toEqual(operation);
+    expect(run('begin', 'docker', 'native').status).toBe(1);
+    writeFileSync(join(root, '.env'), config.replace('6543', '6545'));
+    expect(run('cancel', operation.id).status).toBe(1);
+    expect(journal.isFenced()).toBe(true);
+    writeFileSync(join(root, '.env'), config);
+    expect(JSON.parse(run('cancel', operation.id).stdout)).toEqual({ id: operation.id, stage: 'cancelled' });
+    expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
+  });
+
+  it('refuses same-endpoint and credential-bearing journals before fencing', () => {
+    expect(() => journal.begin({ source, target: { ...target, host: '127.0.0.1', port: source.port } })).toThrow();
+    expect(() => journal.begin({ source: { ...source, password: 'example-secret' }, target })).toThrow();
+    expect(journal.isFenced()).toBe(false);
+  });
+});
