@@ -6,10 +6,11 @@ function child() {
   const proc = new EventEmitter();
   proc.exitCode = null;
   proc.signalCode = null;
+  proc.stderr = { destroy: vi.fn() };
   proc.kill = vi.fn(signal => {
     if (signal === 'SIGKILL') {
       proc.signalCode = signal;
-      proc.emit('close', null, signal);
+      proc.emit('exit', null, signal);
     }
     return true;
   });
@@ -26,15 +27,16 @@ describe('owned test Chrome cleanup', () => {
     vi.restoreAllMocks();
   });
 
-  it('does not wait for a signal-exited child whose close event already fired', async () => {
+  it('does not wait for a signal-exited child whose exit event already fired', async () => {
     const proc = child();
     proc.signalCode = 'SIGTERM';
-    proc.emit('close', null, 'SIGTERM');
+    proc.emit('exit', null, 'SIGTERM');
     const cleanup = vi.fn();
     await _cleanupTestBrowser({ proc, cleanup });
     expect(proc.kill).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(proc.listenerCount('close')).toBe(0);
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
+    expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -42,20 +44,20 @@ describe('owned test Chrome cleanup', () => {
     const proc = child();
     proc.kill.mockImplementation(signal => {
       proc.signalCode = signal;
-      proc.emit('close', null, signal);
+      proc.emit('exit', null, signal);
     });
     await _cleanupTestBrowser({ proc, cleanup: vi.fn() });
     expect(proc.kill.mock.calls).toEqual([['SIGTERM']]);
-    expect(proc.listenerCount('close')).toBe(0);
+    expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('escalates an ignored SIGTERM and waits for delayed close', async () => {
+  it('escalates an ignored SIGTERM and waits for delayed exit without waiting for inherited stderr', async () => {
     const proc = child();
     proc.kill.mockImplementation(signal => {
       if (signal === 'SIGKILL') {
         proc.signalCode = signal;
-        setTimeout(() => proc.emit('close', null, signal), 100);
+        setTimeout(() => proc.emit('exit', null, signal), 100);
       }
     });
     const cleanup = vi.fn();
@@ -66,7 +68,8 @@ describe('owned test Chrome cleanup', () => {
     await vi.advanceTimersByTimeAsync(100);
     await result;
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(proc.listenerCount('close')).toBe(0);
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
+    expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -81,10 +84,11 @@ describe('owned test Chrome cleanup', () => {
     await rejected;
     expect(proc.kill).toHaveBeenLastCalledWith('SIGKILL');
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('reports both deadlines and cleans data even if disconnect and child close never settle', async () => {
+  it('reports both deadlines and cleans data even if disconnect and child exit never settle', async () => {
     const proc = child();
     proc.kill.mockImplementation(() => true);
     const cleanup = vi.fn();
@@ -98,7 +102,8 @@ describe('owned test Chrome cleanup', () => {
     await rejected;
     expect(proc.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
     expect(cleanup).toHaveBeenCalledOnce();
-    expect(proc.listenerCount('close')).toBe(0);
+    expect(proc.stderr.destroy).toHaveBeenCalledOnce();
+    expect(proc.listenerCount('exit')).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -17,11 +17,12 @@ async function withinDeadline(action, timeoutMs, stage) {
 async function terminateOwnedChrome(proc) {
   if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
   let escalation;
-  let onClose;
-  // Subscribe before kill: even an immediate close must settle this promise.
-  const closed = new Promise(resolve => {
-    onClose = resolve;
-    proc.once('close', onClose);
+  let onExit;
+  // Subscribe before kill. Wait for exit, not stdio close: Chrome descendants
+  // can retain stderr after the owned process has terminated.
+  const exited = new Promise(resolve => {
+    onExit = resolve;
+    proc.once('exit', onExit);
   });
   try {
     await withinDeadline(() => {
@@ -30,11 +31,11 @@ async function terminateOwnedChrome(proc) {
         stillRunning: () => proc.exitCode === null && proc.signalCode === null,
         delayMs: 3000,
       });
-      return closed;
+      return exited;
     }, 10000, 'child termination');
   } finally {
     clearTimeout(escalation);
-    proc.removeListener('close', onClose);
+    proc.removeListener('exit', onExit);
   }
 }
 
@@ -46,6 +47,7 @@ export async function _cleanupTestBrowser({ browser, proc, cleanup }) {
     await withinDeadline(() => browser?.close(), 5000, 'browser disconnect').catch(error => errors.push(error));
     await terminateOwnedChrome(proc).catch(error => errors.push(error));
   } finally {
+    proc?.stderr?.destroy();
     await cleanup();
   }
   if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join('; '));
