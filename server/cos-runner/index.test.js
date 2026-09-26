@@ -113,7 +113,7 @@ describe('cos-runner termination', () => {
   });
 
   it('binds TUI exit handling to the original process record', () => {
-    expect(RUNNER_SRC).toContain('tuiProcess.onExit(createTuiExitHandler({');
+    expect(RUNNER_SRC).toContain('tuiProcess.onExit(lifecycle.agentExit(agentId, agent, createTuiExitHandler({');
     expect(RUNNER_SRC).toContain('agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState,');
   });
 });

@@ -16,7 +16,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS, sleep, watchForFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, watchForFile } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -28,12 +28,14 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { createStreamJsonParser } from '../lib/streamJsonParser.js';
-import { loadState, saveState, withState } from './runnerState.js';
+import { withState, drainState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
 import { createTuiExitHandler } from './tuiExit.js';
+import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
+import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -56,7 +58,6 @@ setupProcessErrorHandlers();
 // windows are obvious at each call site instead of bare literals.
 const SIGKILL_GRACE_MS = 5000;       // wait after SIGTERM before forcing SIGKILL
 const ORPHAN_CLEANUP_DELAY_MS = 3000; // delay on boot before reaping orphaned agents
-const SHUTDOWN_DRAIN_MS = 5000;       // SIGTERM drain window before closing the server
 // Agentic CLIs can spend several seconds loading config/plugins before their
 // lightweight version command returns. Keep this aligned with commandExists'
 // documented heavy-CLI probe budget so a cold but runnable provider is not
@@ -100,6 +101,41 @@ const server = http.createServer(app);
 const io = new SocketServer(server, {
   cors: { origin: '*' }
 });
+
+const httpDrain = createHttpDrain([server]);
+let transportClose;
+const lifecycle = createRunnerShutdown({
+  stopIntake: (deadlineMs) => httpDrain.begin(deadlineMs),
+  closeTransports: () => {
+    transportClose ??= new Promise(resolve => {
+      io.close(resolve);
+      server.closeAllConnections?.();
+    });
+    return transportClose;
+  },
+  drainState,
+  exit: (code) => process.exit(code),
+});
+registerRunnerShutdownSignals(process, lifecycle);
+
+// Keep established sockets for outgoing completion events, but stop incoming
+// commands and new namespace connections as soon as shutdown starts.
+io.use((socket, next) => next(lifecycle.isStopping() ? new Error('Runner is shutting down') : undefined));
+
+async function persistCompletion(agentId, output, metadata) {
+  const agentDir = join(AGENTS_DIR, agentId);
+  await ensureDir(agentDir);
+  await writeFile(join(agentDir, 'output.txt'), output);
+  if (!metadata) return;
+  const metadataPath = join(agentDir, 'metadata.json');
+  const existing = JSON.parse(await readFile(metadataPath, 'utf-8').catch(err => {
+    if (err.code === 'ENOENT') return '{}';
+    throw err;
+  }));
+  await writeFile(metadataPath, JSON.stringify({
+    ...existing, agentId, ...metadata, outputSize: Buffer.byteLength(output),
+  }, null, 2));
+}
 
 /**
  * Emit event to connected portos-server instances
@@ -163,7 +199,7 @@ app.get('/agents', async (req, res) => {
  * runner owns process survival and emits normal agent completion if the server
  * restarts before the TUI exits.
  */
-app.post('/spawn-tui', async (req, res) => {
+app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   const {
     agentId,
     taskId,
@@ -232,6 +268,7 @@ app.post('/spawn-tui', async (req, res) => {
     env: childEnv,
     cwd,
   });
+  if (lifecycle.rejectSpawn(res)) return;
   if (!runnable) {
     return res.status(422).json({
       error: `Command executable unavailable: ${basename(command)} did not pass the CoS Runner capability check. Reinstall it or update the provider command.`
@@ -296,27 +333,31 @@ app.post('/spawn-tui', async (req, res) => {
     io.emit('tui:output', { sessionId, agentId, data });
   });
 
-  tuiProcess.onExit(createTuiExitHandler({
+  tuiProcess.onExit(lifecycle.agentExit(agentId, agent, createTuiExitHandler({
     agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState,
-  }));
+    persistCompletion, onError: lifecycle.reportFailure,
+  })));
 
   if (doneSentinelPath) {
-    agent.doneWatcher = watchForFile(doneSentinelPath, async () => {
-      const current = activeAgents.get(agentId);
-      if (!current) return;
-      current.completedBySentinel = true;
-      const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
-        console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
-        return '';
-      });
-      const { summary } = parseSentinelPayload(contents);
-      if (summary) {
-        emitToServer('agent:output', {
-          agentId,
-          text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
+    agent.doneWatcher = watchForFile(doneSentinelPath, () => {
+      agent.sentinelWork = lifecycle.trackWork(async () => {
+        const current = activeAgents.get(agentId);
+        if (!current) return;
+        current.completedBySentinel = true;
+        const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
+          console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
+          return '';
         });
-      }
-      current.process.kill();
+        const { summary } = parseSentinelPayload(contents);
+        if (summary) {
+          emitToServer('agent:output', {
+            agentId,
+            text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
+          });
+        }
+        if (!current.exited) current.process.kill();
+      });
+      return agent.sentinelWork;
     });
   }
 
@@ -335,7 +376,7 @@ app.post('/spawn-tui', async (req, res) => {
 
   console.log(`📟 Runner-owned TUI ${agentId} started (PID: ${tuiProcess.pid})`);
   res.json({ success: true, agentId, sessionId, pid: tuiProcess.pid });
-});
+}));
 
 /**
  * Get process stats for a specific agent
@@ -364,7 +405,7 @@ app.get('/agents/:agentId/stats', async (req, res) => {
 /**
  * Spawn a new agent
  */
-app.post('/spawn', async (req, res) => {
+app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   const {
     agentId,
     taskId,
@@ -452,6 +493,11 @@ app.post('/spawn', async (req, res) => {
   const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt, { cwd });
   const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, deliveredArgs, childEnv);
 
+  if (lifecycle.rejectSpawn(res)) {
+    cleanupPromptFile();
+    return;
+  }
+
   // Spawn the CLI process
   const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
     cwd,
@@ -467,7 +513,7 @@ app.post('/spawn', async (req, res) => {
   const codexStderrFormatter = isCodexCli ? createCodexStderrFormatter(prompt) : null;
 
   // Store in memory
-  activeAgents.set(agentId, {
+  const agent = {
     process: claudeProcess,
     taskId,
     pid: claudeProcess.pid,
@@ -484,7 +530,8 @@ app.post('/spawn', async (req, res) => {
     stripStdoutAnsi: isStreamJson ? (text) => text : createStreamingAnsiStripper(),
     stripStderrAnsi: createStreamingAnsiStripper(),
     workspacePath: cwd
-  });
+  };
+  activeAgents.set(agentId, agent);
 
   // Guard the stdin pipe BEFORE writing: a child that exits before reading it
   // (bad flag, missing CLI) emits EPIPE, and an unlistened stream 'error' out
@@ -497,7 +544,6 @@ app.post('/spawn', async (req, res) => {
 
   // Handle stdout
   claudeProcess.stdout.on('data', (data) => {
-    const agent = activeAgents.get(agentId);
     const text = agent?.stripStdoutAnsi ? agent.stripStdoutAnsi(data.toString()) : data.toString();
 
     if (agent?.streamParser) {
@@ -526,7 +572,6 @@ app.post('/spawn', async (req, res) => {
 
   // Handle stderr
   claudeProcess.stderr.on('data', (data) => {
-    const agent = activeAgents.get(agentId);
     const decolored = agent?.stripStderrAnsi ? agent.stripStderrAnsi(data.toString()) : data.toString();
     if (agent?.codexStderrFormatter) {
       const lines = agent.codexStderrFormatter.processChunk(decolored);
@@ -556,102 +601,84 @@ app.post('/spawn', async (req, res) => {
   });
 
   // Handle process exit
-  claudeProcess.on('close', async (code) => {
+  claudeProcess.on('close', lifecycle.agentExit(agentId, agent, async (code) => {
     cleanupPromptFile();
     try {
-    const agent = activeAgents.get(agentId);
-    // Cancel any pending SIGKILL timer — process already exited.
-    if (agent?.killTimer) {
-      clearTimeout(agent.killTimer);
-      agent.killTimer = null;
-    }
-    const duration = Date.now() - (agent?.startedAt || Date.now());
-
-    // Flush remaining stream parser data
-    if (agent?.streamParser) {
-      const remaining = agent.streamParser.flush();
-      for (const line of remaining) {
-        agent.outputBuffer += line + '\n';
-        emitToServer('agent:output', { agentId, text: line + '\n' });
+      agent.exited = true;
+      // Cancel any pending SIGKILL timer — process already exited.
+      if (agent?.killTimer) {
+        clearTimeout(agent.killTimer);
+        agent.killTimer = null;
       }
-      // Use the parsed final result for the output file if available
-      const finalResult = agent.streamParser.getFinalResult();
-      if (finalResult) {
-        agent.outputBuffer = finalResult;
+      const duration = Date.now() - (agent?.startedAt || Date.now());
+
+      // Flush remaining stream parser data
+      if (agent?.streamParser) {
+        const remaining = agent.streamParser.flush();
+        for (const line of remaining) {
+          agent.outputBuffer += line + '\n';
+          emitToServer('agent:output', { agentId, text: line + '\n' });
+        }
+        // Use the parsed final result for the output file if available
+        const finalResult = agent.streamParser.getFinalResult();
+        if (finalResult) {
+          agent.outputBuffer = finalResult;
+        }
       }
-    }
-    if (agent?.codexStderrFormatter) {
-      const remaining = agent.codexStderrFormatter.flush();
-      for (const line of remaining) {
-        agent.outputBuffer += line + '\n';
-        emitToServer('agent:output', { agentId, text: line + '\n' });
+      if (agent?.codexStderrFormatter) {
+        const remaining = agent.codexStderrFormatter.flush();
+        for (const line of remaining) {
+          agent.outputBuffer += line + '\n';
+          emitToServer('agent:output', { agentId, text: line + '\n' });
+        }
       }
-    }
 
-    const output = agent?.outputBuffer || '';
-    const paused = agent?.paused === true;
+      const output = agent?.outputBuffer || '';
+      const paused = agent?.paused === true;
 
-    // A non-zero exit is a failure line, so it belongs on stderr where a
-    // stderr-based monitor can see it (#7945). A pause or a clean exit is
-    // ordinary progress and stays on stdout.
-    const logExit = !paused && code !== 0 ? console.error : console.log;
-    logExit(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
+      // A non-zero exit is a failure line, so it belongs on stderr where a
+      // stderr-based monitor can see it (#7945). A pause or a clean exit is
+      // ordinary progress and stays on stdout.
+      const logExit = !paused && code !== 0 ? console.error : console.log;
+      logExit(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
 
-    // Save output to agent directory
-    const agentDir = join(AGENTS_DIR, agentId);
-    if (!existsSync(agentDir)) {
-      await ensureDir(agentDir);
-    }
-    await writeFile(join(agentDir, 'output.txt'), output)
-      .catch(err => console.error(`❌ Agent ${agentId} failed to persist output.txt: ${err.message}`));
+      // Persist output and terminal evidence before publishing completion or
+      // removing durable ownership. Failed writes leave recovery evidence intact.
+      await persistCompletion(agentId, output, paused ? null : {
+        taskId,
+        completedAt: new Date().toISOString(),
+        exitCode: code,
+        success: code === 0,
+        duration,
+      });
+      if (paused) {
+        activeAgents.delete(agentId);
+        return;
+      }
 
-    if (paused) {
+      // Emit completion event
+      emitToServer('agent:completed', {
+        agentId,
+        taskId,
+        exitCode: code,
+        success: code === 0,
+        duration,
+        outputLength: output.length
+      });
+
+      // Update state — serialize with the spawn write path via withState.
+      await withState((state) => {
+        state.stats.completed++;
+        if (code !== 0) state.stats.failed++;
+        delete state.agents[agentId];
+      });
+
       activeAgents.delete(agentId);
-      return;
-    }
-
-    // Persist completion status to disk BEFORE emitting event
-    // This ensures recovery is possible even if the socket event is lost
-    const metadataPath = join(agentDir, 'metadata.json');
-    const existingMetadata = JSON.parse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-    const completionMetadata = {
-      ...existingMetadata,
-      agentId,
-      taskId,
-      completedAt: new Date().toISOString(),
-      exitCode: code,
-      success: code === 0,
-      duration,
-      outputSize: Buffer.byteLength(output)
-    };
-    // Recovery-critical: completion metadata is how a restart reconstructs a
-    // finished task — never swallow a write failure here, log it.
-    await writeFile(metadataPath, JSON.stringify(completionMetadata, null, 2))
-      .catch(err => console.error(`❌ Agent ${agentId} failed to persist completion metadata: ${err.message}`));
-
-    // Emit completion event
-    emitToServer('agent:completed', {
-      agentId,
-      taskId,
-      exitCode: code,
-      success: code === 0,
-      duration,
-      outputLength: output.length
-    });
-
-    // Update state — serialize with the spawn write path via withState.
-    await withState((state) => {
-      state.stats.completed++;
-      if (code !== 0) state.stats.failed++;
-      delete state.agents[agentId];
-    });
-
-    activeAgents.delete(agentId);
     } catch (err) {
-      console.error(`❌ Agent ${agentId} close handler error: ${err.message}`);
+      lifecycle.reportFailure(err);
       activeAgents.delete(agentId);
     }
-  });
+  }));
 
   // Update state — use withState to serialize the read-modify-write with the
   // close handler's own state update, preventing concurrent mutation of the
@@ -670,7 +697,7 @@ app.post('/spawn', async (req, res) => {
     agentId,
     pid: claudeProcess.pid
   });
-});
+}));
 
 /**
  * Terminate an agent (graceful with SIGTERM, then SIGKILL after timeout)
@@ -830,6 +857,10 @@ app.get('/agents/:agentId/output', (req, res) => {
  * Socket.IO connection handling
  */
 io.on('connection', (socket) => {
+  if (lifecycle.isStopping()) { socket.disconnect(true); return; }
+  socket.use((packet, next) => {
+    if (!lifecycle.isStopping()) next();
+  });
   console.log(`🔌 Client connected: ${socket.id}`);
 
   socket.on('tui:input', ({ sessionId, data }) => {
@@ -881,21 +912,21 @@ io.on('connection', (socket) => {
  * Emits a batch completion event for dead agents so main server can retry tasks
  */
 async function cleanupOrphanedAgents() {
-  const state = await loadState();
   const orphaned = [];
-
-  for (const [agentId, agentInfo] of Object.entries(state.agents)) {
-    // Check if process is still running
-    const isRunning = await checkProcessRunning(agentInfo.pid);
-    if (!isRunning) {
-      orphaned.push({ agentId, taskId: agentInfo.taskId });
-      delete state.agents[agentId];
+  // Recovery can overlap a signal and finalizers. Keep its entire read/check/
+  // write in the same queue so an old snapshot cannot resurrect completed runs.
+  await withState(async (state) => {
+    for (const [agentId, agentInfo] of Object.entries(state.agents)) {
+      const isRunning = await checkProcessRunning(agentInfo.pid);
+      if (!isRunning) {
+        orphaned.push({ agentId, taskId: agentInfo.taskId });
+        delete state.agents[agentId];
+      }
     }
-  }
+  });
 
   if (orphaned.length > 0) {
     console.log(`🧹 Cleaned up ${orphaned.length} orphaned agents from state`);
-    await saveState(state);
 
     // Emit a single batch event with all orphaned agents
     // This avoids log spam when many agents were orphaned
@@ -950,7 +981,8 @@ server.listen(PORT, HOST, async () => {
     // Log and continue — a corrupt state file must not stop the runner from
     // accepting new work, and the sweep re-runs on the next restart.
     try {
-      const orphaned = await cleanupOrphanedAgents();
+      if (lifecycle.isStopping()) return;
+      const orphaned = await lifecycle.trackWork(cleanupOrphanedAgents);
       if (orphaned.length > 0) {
         console.log(`🧹 Cleaned ${orphaned.length} orphaned agent(s)`);
       }
@@ -958,23 +990,4 @@ server.listen(PORT, HOST, async () => {
       console.error(`❌ Orphan cleanup failed: ${err.message}`);
     }
   }, ORPHAN_CLEANUP_DELAY_MS);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('📴 Received SIGTERM, shutting down gracefully...');
-
-  // Terminate all agents
-  for (const [agentId, agent] of activeAgents) {
-    console.log(`🔪 Terminating agent ${agentId}`);
-    killProcessTree(agent.process, 'SIGTERM');
-  }
-
-  // Wait for agents to terminate
-  await sleep(SHUTDOWN_DRAIN_MS);
-
-  server.close(() => {
-    console.log('👋 CoS Agent Runner stopped');
-    process.exit(0);
-  });
 });

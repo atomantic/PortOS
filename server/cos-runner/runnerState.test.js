@@ -57,4 +57,24 @@ describe('cos-runner runnerState', () => {
     ]);
     expect([1, 2]).toContain((await loadState()).stats.spawned);
   });
+  it('drains an entire queued mutation, including writes queued behind it', async () => {
+    const { withState, drainState, loadState } = await loadModule();
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const first = withState(async state => {
+      await gate;
+      state.agents.example = { pid: 123 };
+    });
+    const last = withState(state => { state.stats.completed++; });
+    let drained = false;
+    const drain = drainState().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    release();
+    await Promise.all([first, last, drain]);
+    expect(await loadState()).toMatchObject({
+      agents: { example: { pid: 123 } }, stats: { completed: 1 },
+    });
+  });
+
 });
