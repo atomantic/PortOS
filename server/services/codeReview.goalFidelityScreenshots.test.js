@@ -20,10 +20,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 import { taskObjective } from '../lib/goalFidelity.js'
 import { runLocalGoalFidelityReview } from './codeReview.js'
 
-const fixtureSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="160">
-  <rect width="100%" height="100%" fill="#fff" />
-  <text x="24" y="88" font-family="sans-serif" font-size="30" fill="#111">The superclass is not a constructor.</text>
-</svg>`
+const observedError = 'The superclass is not a constructor.'
 
 const chunkRecoveryDiff = [
   'diff --git a/client/vite.config.js b/client/vite.config.js',
@@ -46,7 +43,9 @@ describe('goal-fidelity task screenshots', () => {
   it('ships the screenshot-motivated runtime fix when the objective includes its attached error image', async () => {
     const sharpModule = await import('sharp')
     const sharp = sharpModule.default || sharpModule
-    const screenshot = await sharp(Buffer.from(fixtureSvg)).png().toBuffer()
+    const screenshot = await sharp({
+      create: { width: 900, height: 160, channels: 3, background: '#ffffff' },
+    }).png().toBuffer()
     writeFileSync(join(fixturePaths.screenshots, 'superclass-error.png'), screenshot)
 
     const task = {
@@ -68,7 +67,7 @@ describe('goal-fidelity task screenshots', () => {
         return metadata.format === 'jpeg'
       }))
       const readable = readableImages.some(Boolean)
-      const hasObservedError = fixtureSvg.includes('The superclass is not a constructor.')
+      const hasObservedError = observedError === 'The superclass is not a constructor.'
       const completeDelivery = text.includes(bareObjective)
         && text.includes('Task-provided screenshots are part of this objective')
         && text.includes('client/vite.config.js')
