@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES, MEDIA_QUEUE_SHUTTING_DOWN } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -425,7 +425,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 router.post('/:id/run-now', asyncHandler(async (req, res) => {
   const result = runJobNow(req.params.id);
   if (!result.ok) {
-    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    const status = result.code === 'NOT_FOUND' ? 404 : result.code === MEDIA_QUEUE_SHUTTING_DOWN ? 503 : 400;
     throw new ServerError(result.error || 'Run-now failed', { status, code: result.code });
   }
   res.json(result);

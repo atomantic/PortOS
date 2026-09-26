@@ -2195,20 +2195,21 @@ describe('local video failure holds', () => {
 
 // #8325: a job id handed to a caller must survive a crash, so admission waits
 // for the snapshot that contains the job — and a failed snapshot refuses it.
+const persistedJobs = () => JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf-8')).jobs;
+const persistedIds = () => persistedJobs().map((j) => j.id);
+// Hold the NEXT snapshot write until the returned release() is called.
+const holdNextWrite = () => {
+  const realWrite = atomicWriteSpy.getMockImplementation();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  atomicWriteSpy.mockImplementationOnce(async (...args) => {
+    await gate;
+    return realWrite(...args);
+  });
+  return () => release();
+};
+
 describe('durable admission and shutdown flush', () => {
-  const jobsFile = () => join(tempDataDir, 'media-jobs.json');
-  const persistedIds = () => JSON.parse(readFileSync(jobsFile(), 'utf-8')).jobs.map((j) => j.id);
-  // Hold the NEXT snapshot write until the returned release() is called.
-  const holdNextWrite = () => {
-    const realWrite = atomicWriteSpy.getMockImplementation();
-    let release;
-    const gate = new Promise((resolve) => { release = resolve; });
-    atomicWriteSpy.mockImplementationOnce(async (...args) => {
-      await gate;
-      return realWrite(...args);
-    });
-    return () => release();
-  };
 
   beforeEach(async () => {
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
@@ -2275,6 +2276,125 @@ describe('durable admission and shutdown flush', () => {
     atomicWriteSpy.mockRejectedValueOnce(new Error('disk full'));
     await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: false, error: 'disk full' });
     await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+  });
+});
+
+// #8691: once shutdown quiesces the queue, waiting work stays queued on disk for
+// the next process — a running record left behind by the exit is failed on
+// boot (and its staged upload deleted), while a queued one is restored intact.
+describe('shutdown quiesce', () => {
+  const tick = async (ms = 1000) => {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(ms);
+    await flush();
+  };
+  const stageUpload = () => {
+    const upload = join(tempDataDir, 'uploads', 'example.png');
+    mkdirSync(join(tempDataDir, 'uploads'), { recursive: true });
+    writeFileSync(upload, 'synthetic image');
+    return upload;
+  };
+  const restart = async () => {
+    vi.clearAllTimers();
+    mediaJobQueue.__resetForTests();
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+  };
+
+  beforeEach(() => {
+    // Kickoff resolves; the provider's terminal event arrives when the test emits it.
+    stubs.generateVideo.mockResolvedValue({});
+    vi.useFakeTimers();
+  });
+  afterEach(() => { vi.doUnmock('../videoGen/modelSelection.js'); vi.clearAllTimers(); vi.useRealTimers(); });
+
+  it('keeps a waiting job queued when its lane frees, and restart restores it once with its upload', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'running' } });
+    await tick();
+    expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
+    const upload = stageUpload();
+    const { jobId } = await mediaJobQueue.enqueueJob({
+      kind: 'video', params: { modelId: 'example-mlx', prompt: 'waiting', uploadedTempPath: upload },
+    });
+
+    expect(mediaJobQueue.quiesceMediaJobQueue()).toBe(true);
+    expect(mediaJobQueue.quiesceMediaJobQueue()).toBe(false);
+    // The running job still completes and its transition is flushed.
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: `${blocker.jobId}.mp4` });
+    await tick();
+    expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('completed');
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId).status).toBe('queued');
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+    expect(persistedJobs().find((j) => j.id === blocker.jobId).status).toBe('completed');
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('queued');
+
+    await restart();
+    const restored = mediaJobQueue.listJobs().filter((j) => j.id === jobId);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toMatchObject({ status: 'queued', params: { uploadedTempPath: upload } });
+    expect(existsSync(upload)).toBe(true);
+    // The new process dispatches it normally.
+    await tick();
+    await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId })));
+  });
+
+  it('does not promote when shutdown lands while the worker resolves cohorts', async () => {
+    let releaseCohorts;
+    const cohortsResolved = new Promise((resolve) => { releaseCohorts = resolve; });
+    vi.doMock('../videoGen/modelSelection.js', () => ({
+      resolveVideoModelSelection: vi.fn(async () => {
+        await cohortsResolved;
+        return { model: { id: 'example-mlx', runtime: 'mlx_video' } };
+      }),
+    }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    const blocker = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'running' } });
+    await tick();
+    expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
+    // An omitted modelId makes the next worker pass await the model resolution.
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'waiting' } });
+    await tick();
+
+    // The worker is parked on the resolution; free the lane underneath it.
+    videoGenEvents.emit('completed', { generationId: blocker.jobId, filename: `${blocker.jobId}.mp4` });
+    await tick();
+    expect(mediaJobQueue.getRunningJob()).toBeNull();
+    mediaJobQueue.quiesceMediaJobQueue();
+    releaseCohorts();
+    await tick();
+    expect(stubs.generateVideo).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId).status).toBe('queued');
+  });
+
+  it('refuses Run Now without touching the waiting job', async () => {
+    await mediaJobQueue.initMediaJobQueue();
+    mediaJobQueue.setCodexParallelLimit(1);
+    const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'running' } });
+    await tick();
+    expect(mediaJobQueue.getJob(first.jobId).status).toBe('running');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'codex', prompt: 'waiting' } });
+
+    mediaJobQueue.quiesceMediaJobQueue();
+    expect(mediaJobQueue.runJobNow(jobId)).toMatchObject({ ok: false, code: mediaJobQueue.MEDIA_QUEUE_SHUTTING_DOWN });
+    await tick();
+    expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);
+    expect(mediaJobQueue.getJob(jobId)).toMatchObject({ status: 'queued', position: 2 });
+  });
+
+  it('lets an admission settling during shutdown persist without re-arming the worker', async () => {
+    // No boot: the settling admission is what would otherwise start the worker.
+    const release = holdNextWrite();
+    const admission = mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'late' } });
+    mediaJobQueue.quiesceMediaJobQueue();
+    release();
+    const { jobId, status } = await admission;
+    expect(status).toBe('queued');
+    await tick();
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(persistedJobs().find((j) => j.id === jobId).status).toBe('queued');
   });
 });
 

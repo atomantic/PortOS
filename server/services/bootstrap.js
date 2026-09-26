@@ -135,7 +135,7 @@ import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
 import { initSyncOrchestrator } from './syncOrchestrator.js';
-import { initMediaJobQueue, flushMediaJobQueue } from './mediaJobQueue/index.js';
+import { initMediaJobQueue, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
 import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing } from './sharing/index.js';
@@ -1036,6 +1036,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // new is accepted while the teardown below runs; requests already accepted
     // keep running and are waited on (bounded) just before the HTTP close.
     const requestsDrained = httpDrain.begin(HTTP_DRAIN_WINDOW_MS);
+    // Stop media-job dispatch before the first await too (#8691): a lane freed
+    // during teardown must not promote a waiting job the process is about to
+    // abandon — the next boot fails a running record but restores a queued one.
+    quiesceMediaJobQueue();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
       .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
     await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
