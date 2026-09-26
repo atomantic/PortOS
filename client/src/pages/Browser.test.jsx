@@ -1,10 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import BrowserPage from './Browser';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 
+const handlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({ default: {
+  emit: vi.fn(),
+  on: vi.fn((event, handler) => {
+    if (!handlers.has(event)) handlers.set(event, new Set());
+    handlers.get(event).add(handler);
+  }),
+  off: vi.fn((event, handler) => handlers.get(event)?.delete(handler)),
+} }));
+import socket from '../services/socket';
 vi.mock('../services/api', () => ({
   getBrowserStatus: vi.fn(), getBrowserConfig: vi.fn(), updateBrowserConfig: vi.fn(),
   launchBrowser: vi.fn(), stopBrowser: vi.fn(), restartBrowser: vi.fn(),
@@ -19,7 +29,8 @@ const disconnected = {
 };
 
 beforeEach(() => {
-  vi.resetAllMocks();
+  vi.clearAllMocks();
+  for (const mock of Object.values(api)) mock.mockReset();
   api.getBrowserStatus.mockResolvedValue(disconnected);
   api.getBrowserLogs.mockResolvedValue({ stderr: 'Chrome binary not found' });
   api.getBrowserConfig.mockResolvedValue({ cdpPort: 5556, healthPort: 5557, cdpHost: '127.0.0.1', headless: false, autoConnect: true });
@@ -84,4 +95,36 @@ describe('Browser recovery', () => {
     expect(await screen.findByText('Chrome is not reachable')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+});
+
+afterEach(() => { cleanup(); handlers.clear(); vi.useRealTimers(); });
+
+it('renders socket changes without recurring reads, preserves data on failure, and reconciles reconnect/tab show', async () => {
+  vi.useFakeTimers();
+  const emit = event => { for (const handler of handlers.get(event) || []) handler({}); };
+  const view = render(<BrowserPage />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(screen.getByText('Chrome is not reachable')).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(api.getBrowserStatus).toHaveBeenCalledTimes(1);
+  api.getBrowserStatus.mockResolvedValue({ ...disconnected, connected: true });
+  await act(async () => emit('browser:changed'));
+  expect(screen.getByRole('textbox', { name: 'URL to open' })).toBeInTheDocument();
+  api.getBrowserStatus.mockRejectedValueOnce(new Error('Temporary failure'));
+  await act(async () => emit('browser:changed'));
+  expect(screen.getByRole('textbox', { name: 'URL to open' })).toBeInTheDocument();
+  expect(screen.getByRole('alert')).toHaveTextContent('Temporary failure');
+  await act(async () => emit('connect'));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(socket.emit).toHaveBeenCalledWith('browser:subscribe');
+  const reads = api.getBrowserStatus.mock.calls.length;
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(api.getBrowserStatus).toHaveBeenCalledTimes(reads + 1);
+  view.unmount();
+  expect(socket.emit).toHaveBeenCalledWith('browser:unsubscribe');
+  await act(async () => { emit('browser:changed'); await vi.advanceTimersByTimeAsync(30_000); });
+  expect(api.getBrowserStatus).toHaveBeenCalledTimes(reads + 1);
 });
