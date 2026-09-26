@@ -156,9 +156,10 @@ export function topTrackCounts(entries, limit = 10) {
 // sync ID is namespaced as a track URI so a live play and an imported play of
 // the same track share one key; episode URIs keep their own namespace (#8767).
 function listenNoveltyKey(ev) {
+  if (ev?.metadata?.trackUri) return String(ev.metadata.trackUri);
   const trackId = ev?.metadata?.trackId;
   if (trackId) return String(trackId).startsWith('spotify:') ? String(trackId) : `spotify:track:${trackId}`;
-  return ev?.metadata?.trackUri || ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
+  return ev?.metadata?.isrc || ev?.title || ev?.dedupeKey || '';
 }
 function watchNoveltyKey(ev) {
   return ev?.metadata?.videoId || ev?.url || ev?.title || ev?.dedupeKey || '';

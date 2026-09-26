@@ -143,10 +143,11 @@ describe('rollupListen / rollupWatch', () => {
       { kind: 'media.listen', title: 'Song', metadata: { trackUri: 'spotify:track:example123' } },
       { kind: 'media.listen', title: 'Song', metadata: { trackId: 'other456' } },
       { kind: 'media.listen', title: 'Ep', metadata: { trackUri: 'spotify:episode:example123' } },
+      { kind: 'media.listen', title: 'Ep', metadata: { trackId: 'example123', trackUri: 'spotify:episode:example123' } },
     ];
     expect(rollupListen(mixed.slice(0, 2)).novelty).toEqual({ total: 2, distinct: 1, repeats: 1, noveltyRatio: 0.5 });
     // Same title, different id stays distinct; an episode never collides with a track.
-    expect(rollupListen(mixed).novelty).toEqual({ total: 4, distinct: 3, repeats: 1, noveltyRatio: 0.75 });
+    expect(rollupListen(mixed).novelty).toEqual({ total: 5, distinct: 3, repeats: 2, noveltyRatio: 0.6 });
   });
   it('rolls up only media.watch events with channels + novelty', () => {
     const watches = [
