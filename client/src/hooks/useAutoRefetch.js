@@ -6,6 +6,12 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * once when it becomes visible again. Replaces the per-component
  * useEffect + setInterval pattern for data-fetch polling.
  *
+ * Polling is an anti-pattern in PortOS: data should arrive via Socket.IO
+ * events and own mutations should update local state from their response.
+ * Reach for this hook only for a source that cannot push (hardware telemetry,
+ * an external system with no callback) — see "Realtime updates, not polling"
+ * in docs/UX_DESIGN_GUIDE.md.
+ *
  * The hook catches whatever `fetchFn` throws, warns, and keeps the prior
  * `data` untouched — so data-path callers (those reading the returned `data`)
  * should NOT swallow errors with `.catch(() => null)`. Returning `null` here
