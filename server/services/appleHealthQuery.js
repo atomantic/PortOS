@@ -50,6 +50,61 @@ export async function getAvailableDateRange() {
   return { from: dates[0], to: dates[dates.length - 1], totalDays: dates.length };
 }
 
+// === Aggregation Helpers ===
+
+/**
+ * Choose the single source of truth for a summed metric-day, avoiding
+ * double-counting when multiple devices and/or importers recorded the same
+ * day (e.g. an XML export from an iPhone + Apple Watch pair, or an XML
+ * import overlapping a Health Auto Export sync of the same day).
+ *
+ * - If any point carries `origin: 'hae'` (Health Auto Export — HealthKit has
+ *   already deduplicated across devices before sending it), use only the
+ *   HAE points.
+ * - Otherwise, group the remaining (XML-origin) points by `src` (source
+ *   device) and return only the single source with the largest total. This
+ *   is the standard approximation of Apple Health's own source-priority
+ *   dedup and never double-counts by summing across devices.
+ * - Legacy points written before origin stamping (#8450) have no `origin`:
+ *   a point carrying an `src` key is XML-origin (only the XML importer ever
+ *   writes `src`); anything else is treated as HAE-origin, which keeps
+ *   legacy HAE-only installs byte-identical.
+ *
+ * @param {Array<Object>} points - A day's points for one summed metric
+ * @param {(point: Object) => number} getValue - Extracts the summable value from a point
+ * @returns {Array<Object>} The chosen subset of points to sum/aggregate
+ */
+export function pickDaySumPoints(points, getValue) {
+  if (points.length === 0) return points;
+
+  const originOf = (p) => p.origin ?? (Object.prototype.hasOwnProperty.call(p, 'src') ? 'xml' : 'hae');
+
+  const haePoints = points.filter((p) => originOf(p) === 'hae');
+  if (haePoints.length > 0) return haePoints;
+
+  const xmlPoints = points.filter((p) => originOf(p) === 'xml');
+  if (xmlPoints.length === 0) return points;
+
+  const bySrc = new Map();
+  for (const p of xmlPoints) {
+    const src = p.src ?? 'unknown';
+    if (!bySrc.has(src)) bySrc.set(src, []);
+    bySrc.get(src).push(p);
+  }
+
+  let bestSrc = null;
+  let bestTotal = -Infinity;
+  for (const [src, pts] of bySrc) {
+    const total = pts.reduce((sum, p) => sum + (getValue(p) || 0), 0);
+    if (total > bestTotal) {
+      bestTotal = total;
+      bestSrc = src;
+    }
+  }
+
+  return bySrc.get(bestSrc);
+}
+
 // === Metric Queries ===
 
 /**
@@ -145,13 +200,16 @@ export async function getDailyAggregates(metricName, from, to) {
 
     let value;
     if (metricName === 'sleep_analysis') {
-      // Sum all aggregated sleep entries (batch flushing may produce multiple per day)
+      // Sum aggregated sleep entries for the day's chosen source of truth
+      // (batch flushing may produce multiple per day per source; multiple
+      // *sources* the same night must not be summed together — #8450).
       const sleepPoints = points.filter(p => p.totalSleep !== undefined);
       if (sleepPoints.length > 0) {
-        const deep = sleepPoints.reduce((s, p) => s + (p.deep ?? 0), 0);
-        const rem = sleepPoints.reduce((s, p) => s + (p.rem ?? 0), 0);
-        const core = sleepPoints.reduce((s, p) => s + (p.core ?? 0), 0);
-        const awake = sleepPoints.reduce((s, p) => s + (p.awake ?? 0), 0);
+        const chosen = pickDaySumPoints(sleepPoints, (p) => (p.deep ?? 0) + (p.rem ?? 0) + (p.core ?? 0));
+        const deep = chosen.reduce((s, p) => s + (p.deep ?? 0), 0);
+        const rem = chosen.reduce((s, p) => s + (p.rem ?? 0), 0);
+        const core = chosen.reduce((s, p) => s + (p.core ?? 0), 0);
+        const awake = chosen.reduce((s, p) => s + (p.awake ?? 0), 0);
         results.push({
           date: dateStr,
           value: Math.round((deep + rem + core) * 100) / 100,
@@ -160,8 +218,10 @@ export async function getDailyAggregates(metricName, from, to) {
       }
       continue;
     } else if (SUM_METRICS.has(metricName)) {
-      // Sum qty per day
-      value = points.reduce((sum, p) => sum + (p.qty ?? 0), 0);
+      // Sum qty for the day's chosen source of truth, not every stored
+      // point — multiple devices/importers would otherwise double-count (#8450).
+      const chosen = pickDaySumPoints(points, (p) => p.qty ?? 0);
+      value = chosen.reduce((sum, p) => sum + (p.qty ?? 0), 0);
     } else if (metricName === 'heart_rate') {
       // Average of Avg values (JSON ingest) or qty values (XML ingest)
       const avgPoints = points.filter(p => p.Avg !== undefined);
