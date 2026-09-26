@@ -38,6 +38,16 @@ describe('useMediaJobProgress — canceled handling (#1791)', () => {
     expect(getMediaJob).not.toHaveBeenCalled();
   });
 
+  it('does not let an older recovery snapshot overwrite a terminal socket event', async () => {
+    let resolveSnapshot;
+    getMediaJob.mockReturnValueOnce(new Promise((resolve) => { resolveSnapshot = resolve; }));
+    const { result } = renderHook(() => useMediaJobProgress('job-1'));
+    fire('image-gen:completed', { generationId: 'job-1', filename: 'finished.png' });
+    await act(async () => { resolveSnapshot({ status: 'running' }); });
+    expect(result.current.status).toBe('completed');
+    expect(result.current.filename).toBe('finished.png');
+  });
+
   it('ignores a canceled event for a different job', async () => {
     const { result } = renderHook(() => useMediaJobProgress('job-1'));
     await waitFor(() => expect(result.current.status).toBe('running'));

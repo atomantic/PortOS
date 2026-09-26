@@ -3,6 +3,7 @@ import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
 import { usePreviousSync } from './usePrevious.js';
 import useMounted from './useMounted';
+import { subscribeVisibility } from './useVisibilityEvent';
 
 /**
  * Subscribe to live progress for a single mediaJobQueue job. `kind`
@@ -70,30 +71,37 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     // terminal event emitted while the socket was down is never replayed, so
     // without it a render that finished during a blip stays "running".
     let canceled = false;
-    const hydrate = () => getMediaJob(jobId).then((job) => {
-      if (canceled || !mountedRef.current) return;
-      setState((prev) => ({
-        ...prev,
-        status: job.status || 'unknown',
-        progress: typeof job.progress === 'number' ? job.progress : prev.progress,
-        statusMsg: job.statusMsg || prev.statusMsg,
-        // Reload mid-render: the queue retained the estimate, so the ETA comes
-        // back immediately instead of after the next (minutes-away) step.
-        // Same absent-vs-explicit rule as the socket frames: a key the
-        // snapshot doesn't carry leaves the current value alone, an explicit
-        // null clears it.
-        etaMs: job.etaMs !== undefined ? job.etaMs : prev.etaMs,
-        filename: job.result?.filename || prev.filename,
-        path: job.result?.path || prev.path,
-        error: job.error || prev.error,
-        startedAt: job.startedAt || prev.startedAt,
-        trackId: job.result?.trackId || prev.trackId,
-      }));
-    }).catch(() => {
-      // 404 (job past 24h archive TTL) and any other failure stay silent;
-      // MediaJobThumb's `fallbackFilename` path bypasses this fetch entirely
-      // when the parent already has the completed render's filename.
-    });
+    let pendingHydrate = null;
+    let revision = 0;
+    const hydrate = () => {
+      if (pendingHydrate) return pendingHydrate;
+      const startedRevision = revision;
+      pendingHydrate = getMediaJob(jobId).then((job) => {
+        if (canceled || !mountedRef.current || startedRevision !== revision) return;
+        setState((prev) => ({
+          ...prev,
+          status: job.status || 'unknown',
+          progress: typeof job.progress === 'number' ? job.progress : prev.progress,
+          statusMsg: job.statusMsg || prev.statusMsg,
+          // Reload mid-render: the queue retained the estimate, so the ETA comes
+          // back immediately instead of after the next (minutes-away) step.
+          // Same absent-vs-explicit rule as the socket frames: a key the
+          // snapshot doesn't carry leaves the current value alone, an explicit
+          // null clears it.
+          etaMs: job.etaMs !== undefined ? job.etaMs : prev.etaMs,
+          filename: job.result?.filename || prev.filename,
+          path: job.result?.path || prev.path,
+          error: job.error || prev.error,
+          startedAt: job.startedAt || prev.startedAt,
+          trackId: job.result?.trackId || prev.trackId,
+        }));
+      }).catch(() => {
+        // 404 (job past 24h archive TTL) and any other failure stay silent;
+        // MediaJobThumb's `fallbackFilename` path bypasses this fetch entirely
+        // when the parent already has the completed render's filename.
+      }).finally(() => { pendingHydrate = null; });
+      return pendingHydrate;
+    };
     hydrate();
     // A terminal job can't change, so a reconnect only re-fetches live ones.
     const onReconnect = () => {
@@ -103,6 +111,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     const evtPrefix = kind === 'video' ? 'video-gen' : kind === 'audio' ? 'audio-gen' : 'image-gen';
     const onStarted = (data) => {
       if (data.generationId !== jobId) return;
+      revision += 1;
       setState((prev) => {
         const totalSteps = data.totalSteps ?? prev.totalSteps;
         // `etaMs: null` on the wire is the server saying "no estimate for this
@@ -119,6 +128,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     // adds up across a comic page.
     const onProgress = (data) => {
       if (data.generationId !== jobId) return;
+      revision += 1;
       setState((prev) => {
         const next = {
           ...prev,
@@ -144,6 +154,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     };
     const onCompleted = (data) => {
       if (data.generationId !== jobId) return;
+      revision += 1;
       setState((prev) => ({
         ...prev,
         status: 'completed',
@@ -156,6 +167,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     };
     const onFailed = (data) => {
       if (data.generationId !== jobId) return;
+      revision += 1;
       // The mediaJobQueue collapses a RUNNING job's cancellation into a *:failed
       // socket event (SIGTERM looks like a failure to the underlying gen
       // module) while the persisted job.status is actually 'canceled'.
@@ -176,6 +188,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     // alongside *:failed when a running job is canceled.
     const onCanceled = (data) => {
       if (data.generationId !== jobId) return;
+      revision += 1;
       setState((prev) => (prev.status === 'canceled' ? prev : { ...prev, status: 'canceled' }));
     };
 
@@ -185,8 +198,15 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     socket.on(`${evtPrefix}:failed`, onFailed);
     socket.on(`${evtPrefix}:canceled`, onCanceled);
     socket.on('connect', onReconnect);
+    let lastVisibility = document.visibilityState;
+    const unsubscribeVisibility = subscribeVisibility((visibility) => {
+      const changed = visibility !== lastVisibility;
+      lastVisibility = visibility;
+      if (changed && visibility === 'visible') onReconnect();
+    });
     return () => {
       canceled = true;
+      unsubscribeVisibility();
       socket.off(`${evtPrefix}:started`, onStarted);
       socket.off(`${evtPrefix}:progress`, onProgress);
       socket.off(`${evtPrefix}:completed`, onCompleted);
