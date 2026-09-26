@@ -1,12 +1,14 @@
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
+import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
 export const CACHE_DIR = join(PATHS.calendar, 'cache');
 const syncLocks = new Map();
+const queueCacheWrite = createKeyedFileWriteQueue();
 
 const CALENDAR_SEARCH_FIELDS = ['title', 'description', 'location', 'organizer.name'];
 function filterBySearch(events, search) {
@@ -31,15 +33,29 @@ const DEFAULT_CACHE = { syncCursor: null, events: [] };
 export async function loadCache(accountId) {
   if (!UUID_RE.test(accountId)) throw new Error(`Invalid accountId: ${accountId}`);
   await ensureDir(CACHE_DIR);
-  const parsed = await readJSONFile(join(CACHE_DIR, `${accountId}.json`), DEFAULT_CACHE);
-  if (!parsed || !Array.isArray(parsed.events)) return { ...DEFAULT_CACHE };
+  const parsed = await readJSONFile(join(CACHE_DIR, `${accountId}.json`), { ...DEFAULT_CACHE, events: [] });
+  if (!parsed || !Array.isArray(parsed.events)) return { ...DEFAULT_CACHE, events: [] };
   return parsed;
 }
 
-export async function saveCache(accountId, cache) {
+async function saveCache(accountId, cache) {
   await ensureDir(CACHE_DIR);
   const filePath = join(CACHE_DIR, `${accountId}.json`);
   await atomicWrite(filePath, cache);
+}
+
+// One file per account: load, mutate and persist under the same queue. Account
+// deletion removes metadata BEFORE queueing deleteCache; earlier writes drain
+// before unlink, and later/provider-delayed writes reject instead of resurrecting.
+export function mutateCache(accountId, mutate) {
+  return queueCacheWrite(accountId, async () => {
+    const account = await getAccount(accountId);
+    if (!account) throw new ServerError('Account not found', { status: 404 });
+    const cache = await loadCache(accountId);
+    const result = await mutate(cache, account);
+    await saveCache(accountId, cache);
+    return result;
+  });
 }
 
 function filterDeclinedAndCancelled(events) {
@@ -110,21 +126,20 @@ export async function getEvents(options = {}) {
 }
 
 export async function purgeDisabledSubcalendars(accountId) {
-  const account = await getAccount(accountId);
-  if (!account?.subcalendars?.length) return { purged: 0 };
+  return mutateCache(accountId, (cache, account) => {
+    if (!account?.subcalendars?.length) return { purged: 0 };
 
-  const enabledIds = new Set(
-    account.subcalendars.filter(sc => sc.enabled && !sc.dormant).map(sc => sc.calendarId)
-  );
-  const cache = await loadCache(accountId);
-  const before = cache.events.length;
-  cache.events = cache.events.filter(e => !e.subcalendarId || enabledIds.has(e.subcalendarId));
-  const purged = before - cache.events.length;
-  if (purged > 0) {
-    await saveCache(accountId, cache);
-    console.log(`🧹 Purged ${purged} events from disabled subcalendars for account ${accountId}`);
-  }
-  return { purged, remaining: cache.events.length };
+    const enabledIds = new Set(
+      account.subcalendars.filter(sc => sc.enabled && !sc.dormant).map(sc => sc.calendarId)
+    );
+    const before = cache.events.length;
+    cache.events = cache.events.filter(e => !e.subcalendarId || enabledIds.has(e.subcalendarId));
+    const purged = before - cache.events.length;
+    if (purged > 0) {
+      console.log(`🧹 Purged ${purged} events from disabled subcalendars for account ${accountId}`);
+    }
+    return { purged, remaining: cache.events.length };
+  });
 }
 
 export async function getEvent(accountId, eventId) {
@@ -136,27 +151,37 @@ export async function getEvent(accountId, eventId) {
 
 export async function deleteCache(accountId) {
   if (!UUID_RE.test(accountId)) return;
-  const filePath = join(CACHE_DIR, `${accountId}.json`);
-  try {
-    await unlink(filePath);
-    console.log(`🗑️ Calendar cache deleted for account ${accountId}`);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.log(`🗑️ No calendar cache to delete for account ${accountId}`);
-    } else {
-      console.error(`❌ Failed to delete calendar cache for account ${accountId}: ${err.message}`);
+  return queueCacheWrite(accountId, async () => {
+    const filePath = join(CACHE_DIR, `${accountId}.json`);
+    try {
+      await unlink(filePath);
+      console.log(`🗑️ Calendar cache deleted for account ${accountId}`);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        console.log(`🗑️ No calendar cache to delete for account ${accountId}`);
+      } else {
+        console.error(`❌ Failed to delete calendar cache for account ${accountId}: ${err.message}`);
+      }
     }
-  }
+  });
 }
 
 export async function syncAccount(accountId, io, options = {}) {
   if (syncLocks.has(accountId)) throw new ServerError('Sync already in progress', { status: 409 });
 
+  syncLocks.set(accountId, true);
+  try {
+    return await runAccountSync(accountId, io, options);
+  } finally {
+    syncLocks.delete(accountId);
+  }
+}
+
+async function runAccountSync(accountId, io, options) {
   const account = await getAccount(accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (!account.enabled) throw new ServerError('Account is disabled', { status: 400 });
 
-  syncLocks.set(accountId, true);
   io?.emit('calendar:sync:started', { accountId });
   console.log(`📅 Starting calendar sync for ${account.name} (${account.type})`);
 
@@ -180,49 +205,51 @@ export async function syncAccount(accountId, io, options = {}) {
     const newEvents = Array.isArray(providerResult) ? providerResult : providerResult?.events ?? [];
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
 
-    // Deduplicate by externalId; update fields on existing events
-    const existingMap = new Map();
-    cache.events = cache.events.filter(event => {
-      if (!event.externalId) return true;
-      if (existingMap.has(event.externalId)) return false;
-      existingMap.set(event.externalId, event);
-      return true;
-    });
-    const uniqueNew = [];
-    for (const event of newEvents) {
-      if (!event.externalId || !existingMap.has(event.externalId)) {
-        uniqueNew.push(event);
-        if (event.externalId) existingMap.set(event.externalId, event);
-      } else {
-        const existing = existingMap.get(event.externalId);
-        // Update mutable fields
-        if (event.title !== undefined) existing.title = event.title;
-        if (event.description !== undefined) existing.description = event.description;
-        if (event.location !== undefined) existing.location = event.location;
-        if (event.startTime !== undefined) existing.startTime = event.startTime;
-        if (event.endTime !== undefined) existing.endTime = event.endTime;
-        if (event.isAllDay !== undefined) existing.isAllDay = event.isAllDay;
-        if (event.isCancelled !== undefined) existing.isCancelled = event.isCancelled;
-        if (event.organizer !== undefined) existing.organizer = event.organizer;
-        if (event.attendees !== undefined) existing.attendees = event.attendees;
-        if (event.myStatus !== undefined) existing.myStatus = event.myStatus;
-        if (event.categories !== undefined) existing.categories = event.categories;
-        if (event.importance !== undefined) existing.importance = event.importance;
+    const { newCount, pruned, total } = await mutateCache(accountId, cache => {
+      // Deduplicate by externalId; update fields on existing events
+      const existingMap = new Map();
+      cache.events = cache.events.filter(event => {
+        if (!event.externalId) return true;
+        if (existingMap.has(event.externalId)) return false;
+        existingMap.set(event.externalId, event);
+        return true;
+      });
+      const uniqueNew = [];
+      for (const event of newEvents) {
+        if (!event.externalId || !existingMap.has(event.externalId)) {
+          uniqueNew.push(event);
+          if (event.externalId) existingMap.set(event.externalId, event);
+        } else {
+          const existing = existingMap.get(event.externalId);
+          // Update mutable fields
+          if (event.title !== undefined) existing.title = event.title;
+          if (event.description !== undefined) existing.description = event.description;
+          if (event.location !== undefined) existing.location = event.location;
+          if (event.startTime !== undefined) existing.startTime = event.startTime;
+          if (event.endTime !== undefined) existing.endTime = event.endTime;
+          if (event.isAllDay !== undefined) existing.isAllDay = event.isAllDay;
+          if (event.isCancelled !== undefined) existing.isCancelled = event.isCancelled;
+          if (event.organizer !== undefined) existing.organizer = event.organizer;
+          if (event.attendees !== undefined) existing.attendees = event.attendees;
+          if (event.myStatus !== undefined) existing.myStatus = event.myStatus;
+          if (event.categories !== undefined) existing.categories = event.categories;
+          if (event.importance !== undefined) existing.importance = event.importance;
+        }
       }
-    }
-    cache.events.push(...uniqueNew);
+      cache.events.push(...uniqueNew);
 
-    // Reconcile: remove cached events no longer present
-    let pruned = 0;
-    if (providerStatus === 'success') {
-      const fetchedIds = new Set(newEvents.filter(e => e.externalId).map(e => e.externalId));
-      const before = cache.events.length;
-      cache.events = cache.events.filter(e => !e.externalId || fetchedIds.has(e.externalId));
-      pruned = before - cache.events.length;
-      if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale calendar events from ${account.name}`);
-    }
+      // Reconcile: remove cached events no longer present
+      let pruned = 0;
+      if (providerStatus === 'success') {
+        const fetchedIds = new Set(newEvents.filter(e => e.externalId).map(e => e.externalId));
+        const before = cache.events.length;
+        cache.events = cache.events.filter(e => !e.externalId || fetchedIds.has(e.externalId));
+        pruned = before - cache.events.length;
+        if (pruned > 0) console.log(`🧹 Pruned ${pruned} stale calendar events from ${account.name}`);
+      }
 
-    await saveCache(accountId, cache);
+      return { newCount: uniqueNew.length, pruned, total: cache.events.length };
+    });
     await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
 
     // Auto-log Tribe touchpoints from this batch (secondary effect — must not
@@ -235,10 +262,10 @@ export async function syncAccount(accountId, io, options = {}) {
     await recordCalendarActivity(account, newEvents).catch((err) =>
       console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
 
-    io?.emit('calendar:sync:completed', { accountId, newEvents: uniqueNew.length, pruned, status: providerStatus });
-    console.log(`📅 Sync complete for ${account.name}: ${uniqueNew.length} new, ${pruned} pruned, status=${providerStatus}`);
+    io?.emit('calendar:sync:completed', { accountId, newEvents: newCount, pruned, status: providerStatus });
+    console.log(`📅 Sync complete for ${account.name}: ${newCount} new, ${pruned} pruned, status=${providerStatus}`);
 
-    return { newEvents: uniqueNew.length, pruned, total: cache.events.length, status: providerStatus };
+    return { newEvents: newCount, pruned, total, status: providerStatus };
   };
 
   const result = await providerSync().catch(async (error) => {
@@ -246,8 +273,6 @@ export async function syncAccount(accountId, io, options = {}) {
     await updateSyncStatus(accountId, 'error').catch(() => {});
     io?.emit('calendar:sync:failed', { accountId, error: error.message });
     throw error instanceof ServerError ? error : new ServerError(error.message, { status: 502 });
-  }).finally(() => {
-    syncLocks.delete(accountId);
   });
 
   return result;

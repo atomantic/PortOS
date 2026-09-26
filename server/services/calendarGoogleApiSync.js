@@ -4,7 +4,19 @@ import { getAuthenticatedClient } from './googleAuth.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
 
+const apiSyncLocks = new Set();
+
 export async function apiSyncAccount(accountId, io) {
+  if (apiSyncLocks.has(accountId)) throw new ServerError('Google API sync already in progress', { status: 409 });
+  apiSyncLocks.add(accountId);
+  try {
+    return await runApiSyncAccount(accountId, io);
+  } finally {
+    apiSyncLocks.delete(accountId);
+  }
+}
+
+async function runApiSyncAccount(accountId, io) {
   const account = await getAccount(accountId);
   if (!account) throw new ServerError('Account not found', { status: 404 });
   if (account.type !== 'google-calendar') throw new ServerError('Not a Google Calendar account', { status: 400 });

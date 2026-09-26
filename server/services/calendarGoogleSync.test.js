@@ -20,6 +20,12 @@ vi.mock('./calendarAccounts.js', () => ({
 vi.mock('./calendarSync.js', () => ({
   loadCache: vi.fn(),
   saveCache: vi.fn(async () => {}),
+  mutateCache: vi.fn(async (id, mutate) => {
+    const cache = await loadCache(id);
+    const result = await mutate(cache, await getAccount(id));
+    await saveCache(id, cache);
+    return result;
+  }),
   logCalendarTouchpoints: vi.fn(async () => {}),
   recordCalendarActivity: vi.fn(async () => {}),
 }));
