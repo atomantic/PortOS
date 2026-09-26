@@ -1,8 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { typeSettled } from '../../../test/settledInput';
+
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: (event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    },
+    off: (event, handler) => handlers.get(event)?.delete(handler),
+    emit: vi.fn(),
+    receive: (event, payload) => handlers.get(event)?.forEach(handler => handler(payload)),
+  };
+});
+vi.mock('../../../services/socket', () => ({ default: socket }));
 
 vi.mock('../../../services/api', () => ({
   submitCosAgentFeedback: vi.fn(),
@@ -1195,4 +1209,65 @@ it('loads a clipped summary only when the reader asks for the detail', async () 
   await userEvent.click(screen.getByRole('button', { name: 'Load full summary' }));
   expect(await screen.findByText('The full summary with its conclusion.')).toBeInTheDocument();
   expect(screen.queryByText('Summary preview.')).not.toBeInTheDocument();
+});
+
+it('refreshes expanded local stats on matching events without polling and reconciles missed events', async () => {
+  vi.useFakeTimers();
+  const running = { ...agent, status: 'running', completedAt: null, result: null };
+  api.getCosAgentStats.mockResolvedValue({ active: true, cpu: 12.3, memoryMb: 64 });
+  const view = render(<MemoryRouter><AgentCard agent={running} initiallyExpanded /></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getByText('12.3%')).toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
+  await act(async () => socket.receive('cos:agent:output', { agentId: 'another-agent' }));
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
+  api.getCosAgentStats.mockResolvedValue({ active: true, cpu: 24.6, memoryMb: 128 });
+  await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
+  expect(screen.getByText('24.6%')).toBeInTheDocument();
+  await act(async () => socket.receive('cos:agent:updated', { id: agent.id }));
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(3);
+  await act(async () => socket.receive('connect'));
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(4);
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(5);
+  view.unmount();
+  await act(async () => socket.receive('connect'));
+  await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(5);
+  api.getCosAgentStats.mockImplementation(() => new Promise(() => {}));
+});
+
+it.each([{ remote: true }, { completed: true }, { paused: true }])('does not read stats for an ineligible expanded card %j', async props => {
+  render(<MemoryRouter><AgentCard agent={agent} initiallyExpanded {...props} /></MemoryRouter>);
+  await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
+  await act(async () => socket.receive('connect'));
+  expect(api.getCosAgentStats).not.toHaveBeenCalled();
+});
+
+it('drops an outstanding stats response when collapsed and reads afresh on reopening', async () => {
+  let resolveStats;
+  api.getCosAgentStats.mockReturnValueOnce(new Promise(resolve => { resolveStats = resolve; }));
+  const running = { ...agent, status: 'running', completedAt: null, result: null };
+  render(<MemoryRouter><AgentCard agent={running} initiallyExpanded /></MemoryRouter>);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Hide', exact: true }));
+  await act(async () => resolveStats({ active: true, cpu: 99.9 }));
+  await act(async () => socket.receive('cos:agent:output', { agentId: agent.id }));
+  expect(api.getCosAgentStats).toHaveBeenCalledTimes(1);
+  api.getCosAgentStats.mockResolvedValueOnce({ active: true, cpu: 11.1 });
+  fireEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(await screen.findByText('11.1%')).toBeInTheDocument();
+  expect(screen.queryByText('99.9%')).not.toBeInTheDocument();
+  api.getCosAgentStats.mockRejectedValueOnce(new Error('Temporary failure'));
+  await act(async () => socket.receive('cos:agent:updated', { id: agent.id }));
+  expect(screen.getByText('11.1%')).toBeInTheDocument();
 });

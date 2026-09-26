@@ -11,9 +11,10 @@ const visible = () => document.visibilityState !== 'hidden';
  * { reconcile, events: [{ event, payload }] } for targeted invalidation reads.
  * Keep events stable (module-level). fetchFn returns data without setting state.
  * resourceKey cancels old reads; updateData applies mutation responses and
- * prevents an older in-flight read from overwriting them.
+ * prevents an older in-flight read from overwriting them. enabled=false releases
+ * subscriptions and cancels reads for closed or otherwise inactive consumers.
  */
-export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare }) {
+export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare, enabled = true }) {
   const [state, setState] = useState({ key: resourceKey, data: null, loading: true, error: null });
   const fetchRef = useRef(fetchFn);
   const matchesRef = useRef(matchesEvent);
@@ -24,11 +25,12 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
   const controller = useRef(null);
 
   const refetch = useCallback(() => controller.current?.read(), []);
-  useSocketSubscription(namespace, { onResubscribe: () => {
+  useSocketSubscription(namespace, { enabled, onResubscribe: () => {
     if (visible()) refetch();
   } });
 
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false;
     let pending = null;
     let dirty = false;
@@ -97,7 +99,7 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
       for (const [event, handler] of handlers) socket.off(event, handler);
       if (!namespace) socket.off('connect', reconnect);
     };
-  }, [namespace, events, resourceKey]);
+  }, [namespace, events, resourceKey, enabled]);
 
   const lastVisibility = useRef(document.visibilityState);
   useVisibilityEvent(state => {
