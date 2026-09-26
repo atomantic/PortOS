@@ -5,7 +5,7 @@
 // is a stub placed ahead of the system directories on PATH.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,8 +40,18 @@ exit 0
 
 const PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
+case "$*" in *--single-transaction*) cat >> "$IMPORT_LOG"; exit "\${IMPORT_EXIT:-0}" ;; esac
 case "$*" in *count*) echo 3 ;; esac
 exit 0
+`;
+
+const PG_DUMP_STUB = `#!/bin/sh
+echo "pg_dump $*" >> "$STUB_LOG"
+case "$DUMP_MODE" in
+  partial) printf 'DROP TABLE example_record;\\n'; exit 1 ;;
+  empty) exit 1 ;;
+  *) printf '%s' "$FULL_DUMP" ;;
+esac
 `;
 
 function writeStub(binDir, name, body) {
@@ -65,6 +75,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     mkdirSync(binDir);
     writeStub(binDir, 'docker', DOCKER_STUB);
     writeStub(binDir, 'psql', PSQL_STUB);
+    writeStub(binDir, 'pg_dump', PG_DUMP_STUB);
     writeStub(binDir, 'pg_isready', '#!/bin/sh\nexit 0\n');
     // Not Darwin, so db.sh skips prepending Homebrew's real Postgres to PATH.
     writeStub(binDir, 'uname', '#!/bin/sh\necho Linux\n');
@@ -81,7 +92,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     rmSync(root, { recursive: true, force: true });
   });
 
-  const run = (args, dumpMode) => spawnSync('bash', [join(root, 'scripts', 'db.sh'), ...args], {
+  const run = (args, dumpMode, overrides = {}) => spawnSync('bash', [join(root, 'scripts', 'db.sh'), ...args], {
     cwd: root,
     encoding: 'utf8',
     env: {
@@ -92,7 +103,8 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
       DUMP_MODE: dumpMode,
       FULL_DUMP,
       PGPASSWORD: 'test-only',
-      PGHOST: '127.0.0.1'
+      PGHOST: '127.0.0.1',
+      ...overrides,
     }
   });
 
@@ -132,6 +144,83 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=docker\n');
     expect(readFileSync(stubLog, 'utf8')).not.toMatch(/IMPORT|SOURCE_STOP/);
     expect(tempArtifacts()).toEqual([]);
+  });
+
+  // Regression: saved Docker mode formerly overrode a caller's explicit host
+  // port, so a coordinator could silently snapshot the wrong database.
+  it.each(['docker', 'native'])('binds export and transactional import to explicit endpoints in saved %s mode', (mode) => {
+    writeFileSync(envFile, `PGMODE=${mode}\n`);
+    const source = ['--endpoint', 'source.example.invalid', '6543', 'example_user', 'example source'];
+    const target = ['--endpoint', 'target.example.invalid', '6544', 'example_user', 'example target'];
+    const exported = run(['export', ...source, 'explicit'], 'ok', { PGPORT: '9999' });
+    expect(exported.status, exported.stderr).toBe(0);
+    const dump = join(dumpDir, 'portos-explicit.sql');
+    expect(exported.stdout.trim()).toBe(dump);
+    expect(readFileSync(dump, 'utf8')).toBe(FULL_DUMP);
+    writeFileSync(dump, `\\restrict example\nSET transaction_timeout = 0;\n${FULL_DUMP}\\unrestrict example\n`);
+    const imported = run(['import', ...target, dump], 'ok');
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('pg_dump -h source.example.invalid -p 6543 -U example_user -d example source');
+    expect(log).toContain('psql -h target.example.invalid -p 6544 -U example_user -d example target -v ON_ERROR_STOP=1 --single-transaction');
+    expect(log).not.toMatch(/docker|SOURCE_STOP|test-only/);
+    expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
+  });
+
+  it('preserves the recovery dump and propagates explicit dump/import failures', () => {
+    const endpoint = ['--endpoint', 'example.invalid', '6543', 'example', 'example_db'];
+    mkdirSync(dumpDir, { recursive: true });
+    const dump = join(dumpDir, 'portos-recovery.sql');
+    writeFileSync(dump, FULL_DUMP);
+    const exported = run(['export', ...endpoint, 'recovery'], 'partial');
+    expect(exported.status).not.toBe(0);
+    expect(exported.stdout).toBe('');
+    expect(tempArtifacts()).toEqual([]);
+    const imported = run(['import', ...endpoint, dump], 'ok', { IMPORT_EXIT: '7' });
+    expect(imported.status).not.toBe(0);
+    expect(imported.stdout).not.toContain('Import complete');
+    expect(readFileSync(dump, 'utf8')).toBe(FULL_DUMP);
+    expect(readFileSync(stubLog, 'utf8')).not.toMatch(/docker|SOURCE_STOP/);
+  });
+
+  it('fails closed when explicit host tools are missing instead of using Docker', () => {
+    rmSync(join(root, 'bin', 'psql'));
+    rmSync(join(root, 'bin', 'pg_dump'));
+    // Isolate PATH completely so installed PostgreSQL cannot be reached.
+    const commands = ['dirname', 'mkdir', 'mktemp', 'rm', 'sed', 'grep', 'cut', 'tr'];
+    const isolated = join(root, 'isolated');
+    mkdirSync(isolated);
+    writeStub(isolated, 'uname', '#!/bin/sh\necho Linux\n');
+    for (const name of commands) {
+      const binary = ['/usr/bin', '/bin'].map(dir => join(dir, name)).find(existsSync);
+      symlinkSync(binary, join(isolated, name));
+    }
+    const endpoint = ['--endpoint', 'example.invalid', '6543', 'example', 'example_db'];
+    const invoke = args => spawnSync('/bin/bash', [join(root, 'scripts', 'db.sh'), ...args], {
+      encoding: 'utf8', env: { PATH: isolated, STUB_LOG: stubLog, PGPASSWORD: 'test-only' },
+    });
+    expect(invoke(['export', ...endpoint, 'missing']).status).not.toBe(0);
+    const dump = join(root, 'example.sql');
+    writeFileSync(dump, FULL_DUMP);
+    expect(invoke(['import', ...endpoint, dump]).status).not.toBe(0);
+    expect(readFileSync(stubLog, 'utf8')).toBe('');
+    expect(dumps()).toEqual([]);
+  });
+
+  it('rejects incomplete endpoints and connection-string database overrides before any database command', () => {
+    for (const args of [
+      ['--endpoint', 'example.invalid', '6543'],
+      ['--endpoint', 'example.invalid', '0', 'example', 'example_db'],
+      ['--endpoint', 'example.invalid', '65536', 'example', 'example_db'],
+      ['--endpoint', 'example.invalid', '6543', 'example', 'host=other.invalid'],
+      ['--endpoint', 'example.invalid', '6543', 'example', 'postgresql://other.invalid/db'],
+      ['--endpoint', 'first.invalid,second.invalid', '6543', 'example', 'example_db'],
+    ]) {
+      expect(run(['export', ...args], 'ok').status).not.toBe(0);
+    }
+    expect(readFileSync(stubLog, 'utf8')).toBe('');
+    expect(existsSync(dumpDir)).toBe(false);
   });
 
   it.each(['docker', 'native'])('refuses all cutover commands in %s mode before any database command', (mode) => {
