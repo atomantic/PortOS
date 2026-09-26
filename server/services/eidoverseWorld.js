@@ -8,6 +8,7 @@
  * external checkout or calls an AI provider.
  */
 
+import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
 import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
@@ -361,6 +362,7 @@ async function mutateState(mutator) {
     const result = await mutator(state);
     await ensureDir(DATA_DIR);
     await atomicWrite(STATE_FILE, state);
+    eidoverseWorldEvents.emit('updated');
     return result;
   });
 }

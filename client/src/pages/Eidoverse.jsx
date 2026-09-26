@@ -12,6 +12,7 @@ import {
 import { Link, useLocation, useNavigate } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { useSocketResource } from '../hooks/useSocketResource';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
 import EidoverseTravel from '../components/eidoverse/EidoverseTravel';
@@ -32,6 +33,8 @@ import {
 } from '../services/api';
 
 const silent = { silent: true };
+const PROJECTION_EVENTS = ['eidoverse:projection'];
+const readProjection = () => getEidoverseWorldProjectionStatus(silent);
 const RUNNING_STATUSES = new Set(['online', 'launching', 'unknown']);
 const FRESH_WORLD_VISIBLE_CHECKPOINTS = new Set([
   'environment-complete',
@@ -177,8 +180,6 @@ export default function Eidoverse() {
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
   const savedDraftRevision = useRef(0);
-  const projectionPollGeneration = useRef(0);
-  const projectionPollTimer = useRef(null);
   const [phase, setPhase] = useState('loading');
   const [error, setError] = useState('');
   const [hostUrl, setHostUrl] = useState('');
@@ -198,6 +199,18 @@ export default function Eidoverse() {
   const [draftDirty, setDraftDirty] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
+
+  const { data: projectionProgress, updateData: updateProjectionProgress } = useSocketResource(readProjection, {
+    events: PROJECTION_EVENTS, enabled: phase === 'ready', immediate: false,
+  });
+  useEffect(() => {
+    if (!projectionProgress) return;
+    setWorldState(current => current ? {
+      ...current,
+      projection: projectionProgress.projection || current.projection,
+      design: projectionProgress.design ? { ...current.design, ...projectionProgress.design } : current.design,
+    } : current);
+  }, [projectionProgress]);
 
   const markConfigDirty = useCallback(() => {
     configDraftRevision.current += 1;
@@ -223,6 +236,7 @@ export default function Eidoverse() {
   );
 
   const applyWorldResponse = useCallback((updated, { replaceDraft = true } = {}) => {
+    updateProjectionProgress(null);
     setWorldState((current) => current
       ? { ...current, ...updated, identity: updated.identity || updated.human || current.identity }
       : updated);
@@ -236,7 +250,7 @@ export default function Eidoverse() {
       savedDraftRevision.current = configDraftRevision.current;
       setDraftDirty(false);
     }
-  }, []);
+  }, [updateProjectionProgress]);
 
   const prepare = useCallback(() => {
     const generation = ++requestGeneration.current;
@@ -318,24 +332,9 @@ export default function Eidoverse() {
     setProjectionError('');
     const submittedRevision = configDraftRevision.current;
     const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
-    const pollGeneration = ++projectionPollGeneration.current;
-    const poll = () => {
-      if (projectionPollGeneration.current !== pollGeneration) return;
-      getEidoverseWorldProjectionStatus(silent).then((status) => {
-        if (projectionPollGeneration.current !== pollGeneration) return;
-        setWorldState((current) => current ? {
-          ...current,
-          projection: status.projection || current.projection,
-          design: status.design ? { ...current.design, ...status.design } : current.design,
-        } : current);
-      }).catch(() => {}).finally(() => {
-        if (projectionPollGeneration.current === pollGeneration) {
-          projectionPollTimer.current = setTimeout(poll, 750);
-        }
-      });
-    };
-    projectionPollTimer.current = setTimeout(poll, 750);
     return projectEidoverseWorld(silent).then((result) => {
+      // A progress read begun before the mutation response must not regress it.
+      updateProjectionProgress(null);
       const replaceDraft = submittedDraftWasClean
         && configDraftRevision.current === submittedRevision;
       setWorldState((current) => current ? {
@@ -356,16 +355,12 @@ export default function Eidoverse() {
       setProjectionStatus('error');
       setProjectionError(reason?.message || 'PortOS could not project its current state into Eidoverse.');
       const failedStatus = await getEidoverseWorldStatus(silent).catch(() => null);
-      if (failedStatus) applyWorldResponse(failedStatus, { replaceDraft: false });
-      throw reason;
-    }).finally(() => {
-      if (projectionPollGeneration.current === pollGeneration) {
-        projectionPollGeneration.current += 1;
-        clearTimeout(projectionPollTimer.current);
-        projectionPollTimer.current = null;
+      if (failedStatus) {
+        applyWorldResponse(failedStatus, { replaceDraft: false });
       }
+      throw reason;
     });
-  }, [applyWorldResponse]);
+  }, [applyWorldResponse, updateProjectionProgress]);
 
   useEffect(() => {
     if (phase !== 'ready' || !hostUrl) return undefined;
@@ -377,8 +372,6 @@ export default function Eidoverse() {
     prepare();
     return () => {
       requestGeneration.current += 1;
-      projectionPollGeneration.current += 1;
-      clearTimeout(projectionPollTimer.current);
     };
   }, [prepare]);
 
