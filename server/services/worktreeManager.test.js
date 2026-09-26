@@ -136,7 +136,7 @@ describe('Worktree dependency preparation', () => {
       ? missing() : Promise.resolve({ isDirectory: () => true }));
     lstat.mockImplementation(path => {
       const normalized = normalize(path);
-      if (directories.filter(name => name !== 'node_modules').some(name => normalized === `/worktree/${name}`)) {
+      if (directories.filter(name => name !== 'node_modules').some(name => normalized === `/repo/${name}`)) {
         return Promise.resolve({ isDirectory: () => true });
       }
       if (normalized.endsWith('/package.json') && normalized !== '/worktree/assets/package.json') {
@@ -174,13 +174,12 @@ describe('Worktree dependency preparation', () => {
   });
 
   it('removes only owned links including admin, even if source dependencies were removed', async () => {
-    const original = lstat.getMockImplementation();
     lstat.mockImplementation(path => {
       const normalized = normalize(path);
-      if (normalized.endsWith('/node_modules')) {
+      if (['/worktree/node_modules', '/worktree/admin/node_modules', '/worktree/client/node_modules', '/worktree/server/node_modules'].includes(normalized)) {
         return Promise.resolve({ isSymbolicLink: () => normalized !== '/worktree/client/node_modules' });
       }
-      return original(path);
+      return missing();
     });
     stat.mockImplementation(missing);
     readlink.mockImplementation(path => Promise.resolve(normalize(path).includes('/server/')
@@ -190,7 +189,7 @@ describe('Worktree dependency preparation', () => {
     await unlinkWorktreeDependencies('/repo', '/worktree');
 
     expect(unlink.mock.calls.map(([path]) => normalize(path)).sort()).toEqual([
-      '/worktree/admin/node_modules', '/worktree/node_modules', '/worktree/uninstalled/node_modules',
+      '/worktree/admin/node_modules', '/worktree/node_modules',
     ]);
   });
 });

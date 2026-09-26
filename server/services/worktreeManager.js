@@ -45,13 +45,15 @@ const DIRT_PATHS_IN_WARNING = 5;
 // Dependencies are linked from the source checkout for ordinary ephemeral
 // worktrees. Dependency-update tasks opt out so package managers cannot mutate
 // the source checkout's installed tree through these links.
-async function worktreeDependencyPaths(sourceWorkspace, worktreePath) {
-  const entries = await readdir(sourceWorkspace, { withFileTypes: true });
+async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup = false } = {}) {
+  const entries = await readdir(worktreePath, { withFileTypes: true });
   const children = await Promise.all(entries
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
     .map(async ({ name }) => {
-      const targetDirectory = await lstat(join(worktreePath, name)).catch(() => null);
-      if (!targetDirectory?.isDirectory()) return null;
+      // Cleanup must still find owned links after a package or its source is removed.
+      if (cleanup) return join(name, 'node_modules');
+      const sourceDirectory = await lstat(join(sourceWorkspace, name)).catch(() => null);
+      if (!sourceDirectory?.isDirectory()) return null;
       if (existsSync(join(sourceWorkspace, name, '.git')) || existsSync(join(worktreePath, name, '.git'))) return null;
       const manifest = await lstat(join(worktreePath, name, 'package.json')).catch(() => null);
       if (!manifest?.isFile()) return null;
@@ -84,7 +86,7 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
  * Real dependency directories and links managed by another tool stay intact.
  */
 export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) {
-  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup: true });
   await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
