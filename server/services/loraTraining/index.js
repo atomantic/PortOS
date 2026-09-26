@@ -736,7 +736,9 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         ...(flushing.checkpoints ? { checkpoints: dedupeCheckpointsByStep([...current.artifacts.checkpoints, ...flushing.checkpoints]) } : {}),
         ...(flushing.samples ? { samples: [...new Set([...current.artifacts.samples, ...flushing.samples])] } : {}),
       },
-    })).catch((err) => console.error(`❌ training [${shortId(jobId)}] progress persist failed: ${err?.message}`));
+    })).then(() => {
+      if (flushing.checkpoints || flushing.samples) trainingEvents.emit('checkpoints:changed', { runId });
+    }).catch((err) => console.error(`❌ training [${shortId(jobId)}] progress persist failed: ${err?.message}`));
   };
   // Checkpoints/samples accumulate as arrays so two that land in one debounce
   // window (common in the final post-exit scan) both survive — a single-value

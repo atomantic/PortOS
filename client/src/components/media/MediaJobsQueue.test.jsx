@@ -5,7 +5,7 @@ import { retypeSettled } from '../../test/settledInput';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
-// the network. useAutoRefetch calls the fetcher on mount.
+// the network. The socket resource fetches once on mount.
 const listQueueMediaJobs = vi.fn();
 const cancelMediaJob = vi.fn();
 const retryMediaJob = vi.fn();
@@ -35,6 +35,20 @@ const listLoraTrainingCheckpoints = vi.fn();
 vi.mock('../../services/apiLoraTraining.js', () => ({
   listLoraTrainingCheckpoints: (...a) => listLoraTrainingCheckpoints(...a),
 }));
+
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../../services/socket', () => ({
+  default: {
+    on: (event, handler) => {
+      if (!socketHandlers.has(event)) socketHandlers.set(event, new Set());
+      socketHandlers.get(event).add(handler);
+    },
+    off: (event, handler) => socketHandlers.get(event)?.delete(handler),
+  },
+}));
+const emitSocket = (event, payload) => {
+  for (const handler of socketHandlers.get(event) ?? []) handler(payload);
+};
 
 import MediaJobsQueue from './MediaJobsQueue';
 
@@ -523,70 +537,54 @@ describe('MediaJobsQueue — training rows', () => {
   });
 });
 
-// #5697 — the checkpoint poll used to be a raw `useEffect` + `setInterval`, so
-// a live training run kept re-listing checkpoints every 5s from a background
-// tab. This is the gated (`enabled`) half of the migration; MemoryManagement
-// covers the unconditional half.
-describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
+// Queue and checkpoints advance from events, without timer-driven reads.
+describe('MediaJobsQueue — socket updates', () => {
   beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
-  afterEach(() => { vi.useRealTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  it('pauses the checkpoint poll while the tab is hidden and re-fires on return', async () => {
+  it('updates from events and reconciles reconnect and tab show once', async () => {
     listQueueMediaJobs.mockResolvedValue([trainingJob]);
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
-
-    render(<MediaJobsQueue kind="training" />);
-    /*
-     * Settle the mount on an OBSERVABLE state before taking the baseline call
-     * counts below.
-     *
-     * The tick-counting form this replaced — `advanceTimersByTimeAsync(0)`
-     * inside one `act` flush — settles a FIXED number of microtask turns, not
-     * "the mount fetches finished". A mount chain needing one more turn on a
-     * loaded machine is measured mid-flight, and the counts race BOTH ways
-     * (#7592/#7448): the checkpoint assertion goes red, and
-     * `listQueueMediaJobs.mock.calls.length` is a baseline taken before the list had
-     * loaded — so "the count did not move" then passes for the wrong reason,
-     * because nothing had loaded to move it.
-     *
-     * `TrainingJobDetail` renders this copy only once `listLoraTrainingCheckpoints`
-     * has RESOLVED (`checkpoints` leaves its `null` loading sentinel), and it
-     * only renders at all once the job list has landed and produced the row —
-     * so it is the end of both mount chains.
-     *
-     * The fake clock stays armed across the mount, unlike BeeperTab's
-     * settle-then-arm order (#7592): BOTH polls under test here are
-     * `setInterval`s registered during mount, so a real-timer mount would leave
-     * them on the real clock where `advanceTimersByTimeAsync` cannot reach them
-     * — and both "did not fire while hidden" assertions would pass vacuously
-     * again, for a new reason.
-     *
-     * `shouldAdvanceTime` is what makes the barrier possible under that armed
-     * clock, and is NOT optional here. @testing-library/dom@10's
-     * `jestFakeTimersAreEnabled` only recognizes JEST's fake timers, so with
-     * vitest's installed `waitFor` takes its REAL-timer path and then waits on
-     * a timer the fake clock owns: against a frozen clock it never polls again
-     * and the test burns its whole timeout. Auto-advancing in step with real
-     * time keeps that poll alive at the cost of a few ms of fake clock — three
-     * orders below the 5s poll interval these assertions measure.
-     */
+    const { unmount } = render(<MediaJobsQueue kind="training" />);
     await screen.findByText(/No checkpoints yet/);
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
     expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-    const jobListCalls = listQueueMediaJobs.mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(1);
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
+
+    listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [
+      { step: 250, loss: 0.42, previewUrl: '/example-preview.png' },
+    ] });
+    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'other-run' }); });
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
+    await act(async () => { emitSocket('training:checkpoints:changed', { runId: 'run-abc' }); });
+    expect(screen.queryByText(/No checkpoints yet/)).not.toBeInTheDocument();
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(2);
+
+    await act(async () => { emitSocket('connect'); });
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(2);
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(3);
 
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
-    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
-    // The queue's own job poll is paused by the same hook.
-    expect(listQueueMediaJobs.mock.calls.length).toBe(jobListCalls);
-
-    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     await act(async () => {
-      document.dispatchEvent(new Event('visibilitychange'));
-      await vi.advanceTimersByTimeAsync(0);
+      emitSocket('media-jobs:changed', {});
+      await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(2);
-    visibility.mockRestore();
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(2);
+    visibility.mockReturnValue('visible');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(3);
+    expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(4);
+
+    listQueueMediaJobs.mockResolvedValue([]);
+    await act(async () => { emitSocket('media-jobs:changed', {}); });
+    expect(screen.getByText('No training runs queued.')).toBeInTheDocument();
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(4);
+    unmount();
+    expect([...socketHandlers.values()].every(handlers => handlers.size === 0)).toBe(true);
   });
 });
 
