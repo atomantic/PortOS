@@ -43,6 +43,7 @@ describe('browser/runtime mutation inventory (#8798)', () => {
       'download-preflight', 'install', 'delete', 'switch', 'migrate', 'unload',
       'test', 'test/stream', 'compare',
       'assessments/run', 'assessments/sweep', 'assessments/sweep/cancel', 'assessments/delete',
+      // /run is body-gated for sandbox-repair; ordinary inference stays open.
       'capability-tests/run', 'capability-tests/delete',
       'llama-server/download-model', 'llama-server/download-model/cancel', 'llama-server/download-model/remove',
       'mtplx/models/pull', 'mtplx/models/remove',

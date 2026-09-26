@@ -45,11 +45,12 @@
  *     (including cancel/remove), mtplx models/pull/remove and slotstream
  *     models/download (including cancel) manage model data, not executables.
  *     download-preflight only reads. switch selects a built-in backend and
- *     registers its fixed provider. unload and jev/unload release weights;
+ *     enables its existing fixed provider. unload and jev/unload release weights;
  *     security-guard/install/cancel and jev/install/cancel cancel work.
  *     laya-mlx/score, jev/score, test (including stream), compare,
- *     assessments/run/sweep (including sweep/cancel), capability-tests/run
- *     use configured runtimes for inference, not tool-enabled agent work;
+ *     assessments/run/sweep (including sweep/cancel) and capability-tests/run
+ *     except sandbox-repair use configured runtimes for inference; sandbox-repair
+ *     runs a tool-enabled agent and is gated by testId after body parsing.
  *     assessments/delete and capability-tests/delete remove result records.
  *     In contrast, installers, explicit service lifecycle/startup persistence,
  *     persistent-mind setup, agent-benchmark and JEV policy/head mutations
@@ -342,10 +343,11 @@ const COMPILED_ROUTES = HOST_CONTROL_ROUTES.map(compileRoute);
 
 const bodyKeys = (body) => (body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : []);
 
-// The two polymorphic policy stores, gated per body key rather than per route.
+// Polymorphic policy stores and the capability runner, gated per body rather than per route.
 // `hostControlBodyGate` in services/authGate.js applies these after the body
 // parser, since `hostControlRouteGate` runs before it.
 const COMPILED_BODY_ROUTES = [
+  ['POST /api/local-llm/capability-tests/run', (body) => body?.testId === 'sandbox-repair' ? ['testId'] : []],
   ['PUT /api/settings', (body) => bodyKeys(body).filter((key) => HOST_CONTROL_SETTINGS_SLICES.includes(key))],
   ['PUT /api/cos/config', (body) => bodyKeys(body).filter((key) => !HOST_CONTROL_OPEN_COS_CONFIG_KEYS.includes(key))],
 ].map(([route, pick]) => ({ ...compileRoute(route), pick }));

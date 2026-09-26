@@ -172,7 +172,7 @@ vi.mock('../services/lmStudioManager.js', () => ({
   getLoadedModels: vi.fn(),
 }));
 
-import { authGate, hostControlRouteGate } from '../services/authGate.js';
+import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
 import browserRoutes from './browser.js';
 import harnessRoutes from './harnesses.js';
 import localLlmRoutes from './localLlm.js';
@@ -182,6 +182,7 @@ import { installBackend, getStatus, listModels, installModel } from '../services
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { updateSettingsWith } from '../services/settings.js';
 import { runLocalLlmTest } from '../services/localLlmPlayground.js';
+import { runCapabilityTest } from '../services/modelCapabilityTests.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 
 const buildApp = (address = '192.0.2.10') => {
@@ -190,7 +191,7 @@ const buildApp = (address = '192.0.2.10') => {
     Object.defineProperty(req.socket, 'remoteAddress', { value: address });
     next();
   });
-  app.use(authGate, hostControlRouteGate, express.json());
+  app.use(authGate, hostControlBodyGate, hostControlRouteGate, express.json(), hostControlBodyGate);
   app.use('/api/browser', browserRoutes);
   app.use('/api/harnesses', harnessRoutes);
   app.use('/api/local-llm', localLlmRoutes);
@@ -199,6 +200,7 @@ const buildApp = (address = '192.0.2.10') => {
 };
 
 const writes = [
+  ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'sandbox-repair' }, runCapabilityTest],
   ['put', '/api/browser/config', { chromePath: '/opt/example/bin/chrome', headless: true }, updateConfig],
   ['post', '/api/browser/launch', {}, launchBrowser],
   ['post', '/api/harnesses/action?runtime=codex&action=uninstall', {}, streamHarnessAction],
@@ -219,6 +221,7 @@ describe('operator authority for browser, harness and local-runtime management (
     auth.isAuthEnabled.mockResolvedValue(false);
     installBackend.mockResolvedValue({ success: true });
     runOpenCodeAgentBenchmark.mockResolvedValue({ completed: true });
+    runCapabilityTest.mockResolvedValue({ passed: true });
     getStatus.mockResolvedValue({ available: true });
     listModels.mockResolvedValue([]);
     getMeasuredFits.mockResolvedValue({});
@@ -277,6 +280,8 @@ describe('operator authority for browser, harness and local-runtime management (
     }
     expect((await call(app, ['post', '/api/local-llm/install', { backend: 'ollama', modelId: 'example-model' }])).status).toBe(200);
     expect((await call(app, ['post', '/api/local-llm/test', { backend: 'ollama', modelId: 'example-model', prompt: 'Example' }])).status).toBe(200);
+    expect((await call(app, ['post', '/api/local-llm/capability-tests/run', { backend: 'ollama', modelId: 'example-model', testId: 'story-outline' }])).status).toBe(200);
+    expect(runCapabilityTest).toHaveBeenCalledTimes(1);
     expect(installModel).toHaveBeenCalledTimes(1);
     expect(runLocalLlmTest).toHaveBeenCalledTimes(1);
   });
