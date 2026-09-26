@@ -59,6 +59,7 @@ export function resolveRenderCfg(settings, { record = null, target = null } = {}
     recordMode: record?.imageMode,
     recordModel: record?.imageModelId,
     fallbackMode: IMAGE_GEN_MODE.LOCAL,
+    usableInstallFallback: true,
   });
   const mode = pin.mode;
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;

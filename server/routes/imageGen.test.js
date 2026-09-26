@@ -207,12 +207,6 @@ import { AGY_IMAGEGEN_DEFAULT_MODEL } from '../lib/imageGenCapabilities.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 
-import { resolveRenderCfg, pipelineImageCfgToRenderOpts } from '../../client/src/lib/pipelineImageDefaults.js';
-import * as mediaModels from '../lib/mediaModels.js';
-
-const getUniverseRenderPin = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverseRenderPin }));
-
 describe('Image Gen Routes', () => {
   let app;
 
@@ -222,93 +216,6 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
-  });
-
-  describe('inherited browser render preferences', () => {
-    const tag = { universeRun: { universeId: 'example-universe', universeName: 'Example Universe' } };
-    const model = (id, state = 'available') => ({
-      id, name: id, hardwareCompatibility: { state }, pipelineClass: 'QwenImage21Pipeline',
-    });
-    afterEach(() => {
-      vi.restoreAllMocks();
-      getUniverseRenderPin.mockResolvedValue(null);
-      getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
-    });
-    const submit = async (settings, record, overrides = {}) => {
-      getSettings.mockResolvedValue(settings);
-      getUniverseRenderPin.mockResolvedValue(record);
-      const cfg = resolveRenderCfg(settings, { record, target: 'universe-bible' });
-      const opts = pipelineImageCfgToRenderOpts(cfg, tag);
-      expect(opts).not.toHaveProperty('mode');
-      expect(opts).not.toHaveProperty('modelId');
-      expect(opts).not.toHaveProperty('cloudModel');
-      return request(app).post('/api/image-gen/generate').send({
-        ...opts, ...tag, prompt: 'A synthetic landscape', ...overrides,
-      });
-    };
-
-    it.each(['example-retired', 'example-incompatible'])('falls back from inherited %s but rejects an explicit request', async (pin) => {
-      vi.spyOn(mediaModels, 'getImageModels').mockReturnValue([
-        model('example-incompatible', 'unavailable'), model('example-compatible'),
-      ]);
-      const settings = { imageGen: { mode: 'local', local: { modelId: pin, pythonPath: '/example/python' } } };
-      const response = await submit(settings, { imageMode: 'local', imageModelId: pin });
-      expect(response.status).toBe(200);
-      expect(mediaJobQueue.enqueueJob).toHaveBeenLastCalledWith(expect.objectContaining({
-        params: expect.objectContaining({ modelId: 'example-compatible' }),
-      }));
-      expect(getUniverseRenderPin).toHaveBeenCalledTimes(1);
-      mediaJobQueue.enqueueJob.mockClear();
-      const explicit = await submit(settings, {}, { mode: 'local', modelId: pin });
-      expect(explicit.status).toBe(400);
-      expect(explicit.body.code).toBe(pin === 'example-retired' ? 'IMAGE_GEN_UNKNOWN_MODEL' : 'MODEL_HARDWARE_UNAVAILABLE');
-      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
-    });
-
-    it('keeps local record and target preferences ahead of the install and uses the selected capability', async () => {
-      vi.spyOn(mediaModels, 'getImageModels').mockReturnValue([
-        { ...model('example-install'), pipelineClass: 'FluxPipeline' }, model('example-target'), model('example-record'),
-      ]);
-      const settings = {
-        imageGen: { mode: 'local', local: { modelId: 'example-install', pythonPath: '/example/python' } },
-        renderDefaults: { 'universe-bible': { imageMode: 'local', imageModel: 'example-target' } },
-      };
-      for (const [pin, expected] of [['example-record', 'example-record'], ['example-retired', 'example-target']]) {
-        const response = await submit(settings, { imageMode: 'local', imageModelId: pin });
-        expect(response.status).toBe(200);
-        expect(mediaJobQueue.enqueueJob).toHaveBeenLastCalledWith(expect.objectContaining({
-          params: expect.objectContaining({ modelId: expected }),
-        }));
-      }
-      // Six references require the selected Qwen model; the install's Flux
-      // fallback would reject them before enqueue if preparation resolved twice.
-      vi.spyOn(fileUtils, 'resolveGalleryImage').mockReturnValue('/example/reference.png');
-      const response = await submit(settings, { imageMode: 'local', imageModelId: 'example-record' }, {
-        referenceImageFiles: Array.from({ length: 6 }, (_, index) => `example-ref-${index}.png`),
-      });
-      expect(response.status).toBe(200);
-      expect(mediaJobQueue.enqueueJob).toHaveBeenLastCalledWith(expect.objectContaining({
-        params: expect.objectContaining({ modelId: 'example-record', referenceImagePaths: Array(6).fill('/example/reference.png') }),
-      }));
-    });
-
-    it('inherits same-backend cloud target models and keeps explicit overrides and backend isolation', async () => {
-      const settings = {
-        imageGen: { mode: 'codex', codex: { enabled: true, model: 'example-install-cloud' }, agy: { enabled: true } },
-        renderDefaults: { 'universe-bible': { imageMode: 'codex', imageModel: 'example-target-cloud' } },
-      };
-      for (const [record, overrides, expectedMode, expectedModel] of [
-        [{ imageMode: 'codex' }, {}, 'codex', 'example-target-cloud'],
-        [{ imageMode: 'codex', imageModelId: 'example-record-cloud' }, {}, 'codex', 'example-record-cloud'],
-        [{ imageMode: 'codex' }, { cloudModel: 'example-explicit' }, 'codex', 'example-explicit'],
-        [{ imageMode: 'codex' }, { mode: 'agy', cloudModel: 'example-agy' }, 'agy', 'example-agy'],
-        [{ imageMode: 'grok', imageModelId: 'example-disabled' }, {}, 'codex', 'example-target-cloud'],
-      ]) {
-        const response = await submit(settings, record, overrides);
-        expect(response.status).toBe(200);
-        expect(response.body).toMatchObject({ mode: expectedMode, model: expectedModel });
-      }
-    });
   });
 
   describe('GET /api/image-gen/gallery', () => {

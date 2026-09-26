@@ -201,6 +201,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
       recordMode: pin.mode,
       recordModel: pin.modelId,
       fallbackMode: IMAGE_GEN_MODE.EXTERNAL,
+      usableInstallFallback: true,
     });
     mode = resolved.mode;
     localModelCandidates = resolved.modelCandidates;

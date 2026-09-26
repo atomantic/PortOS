@@ -214,7 +214,10 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
  *                    `recordMode`/`recordModel` so the leak guard still knows
  *                    which backend the record pinned).
  *
- * Returns `{ mode, cloud }` — `cloud` is the resolveCloudProviderConfig
+ * `usableInstallFallback` opts inherited browser renders into a usable
+ * install fallback; batch callers retain their disabled-provider skip contract.
+ *
+ * Returns `{ mode, cloud, modelCandidates }` — `cloud` is the resolveCloudProviderConfig
  * bundle (null for non-cloud modes), with the layered model threaded through.
  */
 export function resolveRenderTargetConfig(settings, target, {
@@ -223,9 +226,10 @@ export function resolveRenderTargetConfig(settings, target, {
   recordMode = null,
   recordModel = null,
   fallbackMode = null,
+  usableInstallFallback = false,
 } = {}) {
   const resolved = resolveRenderTargetPins(settings, target, {
-    mode, model, recordMode, recordModel, fallbackMode,
+    mode, model, recordMode, recordModel, fallbackMode, usableInstallFallback,
   });
   return {
     mode: resolved.mode,

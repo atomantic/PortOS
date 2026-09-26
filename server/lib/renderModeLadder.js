@@ -124,6 +124,7 @@ export function resolveRenderPins(sources, { mode = null, usable = () => true } 
 /** Resolve preferences without filesystem, catalog, or provider dependencies. */
 export function resolveRenderTargetPins(settings, target, {
   mode = null, model = null, recordMode = null, recordModel = null, fallbackMode = null,
+  usableInstallFallback = false,
 } = {}) {
   const defaults = renderTargetDefaults(settings, target);
   const sources = [
@@ -132,7 +133,15 @@ export function resolveRenderTargetPins(settings, target, {
   ];
   const usable = (candidate) => isModeUsable(settings, candidate);
   const pin = resolveRenderPins(sources, { usable });
-  const finalMode = mode || pin.mode || settings?.imageGen?.mode || fallbackMode;
+  const installMode = settings?.imageGen?.mode;
+  // Saved cloud preferences may outlive their enable toggle. Keep explicit
+  // requests exact, and preserve the legacy external install default.
+  const needsUsableFallback = installMode
+    ? CLOUD_IMAGE_GEN_MODES.includes(installMode) && !usable(installMode)
+    : CLOUD_IMAGE_GEN_MODES.some(usable);
+  const installFallback = usableInstallFallback && needsUsableFallback
+    ? pickUsableMode(settings) : installMode;
+  const finalMode = mode || pin.mode || installFallback || fallbackMode;
   const resolved = resolveRenderPins(sources, { mode: finalMode, usable });
   const requestedModel = typeof model === 'string' && model.trim() ? model.trim() : null;
   return { ...resolved, modelId: requestedModel || resolved.modelId };
