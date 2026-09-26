@@ -558,3 +558,47 @@ it('reads v1, v2, and the legacy filename without falling past a canonical file'
   expect(unreadable.status).toBe('unreadable');
   expect(unreadable.filename).toBe('.quality.json');
 });
+
+it('serializes worktree cleanup, retries a failed Git removal, and reports stale metadata without failing publication', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const order = [];
+  let removals = 0;
+  const run = async ({ retrySucceeds }) => {
+    removals = 0;
+    order.length = 0;
+    __resetQualitySnapshotPublishState();
+    const base = gitDouble().execGit;
+    const deps = testDeps({
+      rm: vi.fn(async () => { order.push('rm'); }),
+      git: gitDouble({ execGit: vi.fn(async (args, cwd, opts) => {
+        if (args[0] === 'worktree' && args[1] === 'remove') {
+          order.push('remove');
+          removals += 1;
+          if (removals === 1) return { exitCode: 128, stdout: '', stderr: `fatal: '${worktreePath}' is locked` };
+          if (!retrySucceeds) throw new Error(`cannot remove ${worktreePath}`);
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'list') {
+          const stale = retrySucceeds ? '' : `worktree /private${worktreePath}\ndetached\n\n`;
+          return { exitCode: 0, stdout: `worktree /repo/example-app\nbranch refs/heads/main\n\n${stale}worktree /repo/other\n`, stderr: '' };
+        }
+        return base(args, cwd, opts);
+      }) }),
+    });
+    return publishAppQualitySnapshot(app, deps);
+  };
+
+  const ok = await run({ retrySucceeds: true });
+  expect(ok.published).toBe(true);
+  expect(order).toEqual(['remove', 'rm', 'remove']);
+  expect(warn).not.toHaveBeenCalled();
+
+  const stale = await run({ retrySucceeds: false });
+  expect(stale.published).toBe(true);
+  expect(warn).toHaveBeenCalledTimes(1);
+  const message = warn.mock.calls[0][0];
+  expect(message).toContain('registration remains');
+  expect(message).toContain('<snapshot-worktree>');
+  expect(message).not.toContain(worktreePath);
+  warn.mockRestore();
+});

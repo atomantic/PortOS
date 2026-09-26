@@ -19,7 +19,7 @@
  * Reads never write. A v1 file or historical
  * `quality-snapshot.json` is explicit legacy input.
  */
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { atomicWrite } from '../lib/fileCore.js';
@@ -384,11 +384,38 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps, mess
     };
   };
 
-  return run().finally(() => Promise.all([
-    git.execGit(['worktree', 'remove', '--force', worktreePath], app.repoPath, { ignoreExitCode: true })
-      .catch(() => {}),
-    removeTemp(worktreePath, { recursive: true, force: true }).catch(() => {}),
-  ]));
+  return run().finally(() => cleanupSnapshotWorktree(app, git, worktreePath, removeTemp));
+}
+
+const removeWorktreeRegistration = (git, repoPath, worktreePath) => git
+  .execGit(['worktree', 'remove', '--force', worktreePath], repoPath, { ignoreExitCode: true })
+  .then(result => (result?.exitCode ?? 0) === 0 ? null : String(result.stderr || `exit ${result.exitCode}`))
+  .catch(err => err?.message || String(err));
+
+// Serialized cleanup of the ONE temporary worktree this invocation created
+// (#8726): Git removal first, then the directory, then a retry of the
+// registration removal (Git accepts a missing directory), then a verification
+// against `worktree list`. The mkdtemp basename is unique, so matching on it
+// never touches another worktree and survives /var ↔ /private/var aliasing.
+// Cleanup failure is reported, never thrown — the publication outcome stands.
+async function cleanupSnapshotWorktree(app, git, worktreePath, removeTemp) {
+  const redact = text => String(text || '').split(worktreePath).join('<snapshot-worktree>')
+    .replace(/\s+/g, ' ').trim().slice(0, 200);
+  let gitError = await removeWorktreeRegistration(git, app.repoPath, worktreePath);
+  const rmError = await removeTemp(worktreePath, { recursive: true, force: true })
+    .then(() => null, err => err?.code || err?.message || String(err));
+  if (gitError) gitError = await removeWorktreeRegistration(git, app.repoPath, worktreePath);
+  const listing = await git.execGit(['worktree', 'list', '--porcelain'], app.repoPath, { ignoreExitCode: true })
+    .catch(() => null);
+  const name = basename(worktreePath);
+  const stillRegistered = String(listing?.stdout || '').split('\n')
+    .some(line => line.startsWith('worktree ') && basename(line.slice(9).trim()) === name);
+  if (!stillRegistered && !rmError) return;
+  const reasons = [
+    stillRegistered && `registration remains (${redact(gitError) || 'no error reported'})`,
+    rmError && `directory removal failed (${redact(rmError)})`,
+  ].filter(Boolean).join('; ');
+  console.warn(`⚠️ Quality snapshot worktree cleanup incomplete for app ${app.id}: ${reasons}`);
 }
 
 async function pushSnapshotBranch(git, repoPath, worktreePath) {
