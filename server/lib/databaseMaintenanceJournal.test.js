@@ -166,10 +166,11 @@ describe('persistent database maintenance boundary', () => {
     const config = 'PGMODE=native\nPGPORT=6543\nPGPORT_DOCKER=6544\n';
     writeFileSync(join(root, '.env'), config);
     const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
+    let overrides = {};
     const run = (...args) => spawnSync(process.execPath, [fileURLToPath(cli), ...args], {
       encoding: 'utf8', timeout: 10_000,
       env: { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '', PGPORT_DOCKER: '',
-        PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
+        PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only', ...overrides },
     });
     expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
     expect(run('begin', 'docker', 'native').status).toBe(1);
@@ -185,6 +186,20 @@ describe('persistent database maintenance boundary', () => {
     writeFileSync(join(root, '.env'), config);
     expect(JSON.parse(run('cancel', operation.id).stdout)).toEqual({ id: operation.id, stage: 'cancelled' });
     expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
+    // Mode follows the ecosystem's saved PGMODE contract; each endpoint uses
+    // its own environment port override, rather than mixing env and file ports.
+    overrides = { PGPORT: '7001', PGPORT_DOCKER: '7002', PGMODE: 'docker', PGHOST: 'example.invalid' };
+    const overridden = run('begin', 'native', 'docker');
+    expect(overridden.status, overridden.stderr).toBe(0);
+    expect(journal.read()).toMatchObject({
+      source: { mode: 'native', host: 'example.invalid', port: 7001 },
+      target: { mode: 'docker', host: 'example.invalid', port: 7002 },
+    });
+    const overrideId = JSON.parse(overridden.stdout).id;
+    overrides = {};
+    expect(run('cancel', overrideId).status).toBe(1);
+    overrides = { PGPORT: '7001', PGPORT_DOCKER: '7002', PGHOST: 'example.invalid' };
+    expect(run('cancel', overrideId).status).toBe(0);
   });
 
   it.skipIf(process.platform === 'win32')('never releases a symlinked active directory or journal', () => {

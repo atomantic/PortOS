@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // Operator interface for the admission boundary. This does NOT transfer data,
 // stop existing writers, change mode, or authorize invoking db.sh migrate.
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PATHS } from '../server/lib/paths.js';
@@ -10,16 +9,12 @@ import { createDatabaseMaintenanceJournal } from '../server/lib/databaseMaintena
 const journal = createDatabaseMaintenanceJournal();
 const require = createRequire(import.meta.url);
 
-function configuredSource() {
-  const text = (() => {
-    try { return readFileSync(join(PATHS.installRoot, '.env'), 'utf8'); }
-    catch (err) { if (err.code === 'ENOENT') return ''; throw err; }
-  })();
-  const mode = text.match(/^PGMODE=(\S+)/m)?.[1] || 'docker';
-  const config = require(join(PATHS.installRoot, 'ecosystem.config.cjs'));
-  const env = config.apps.find(app => app.name === 'portos-server')?.env;
-  if (!env || !['native', 'docker'].includes(mode)) throw new Error('Database configuration is not a supported backend.');
-  return { mode, host: env.PGHOST, port: Number(env.PGPORT), database: env.PGDATABASE, user: env.PGUSER };
+function configuredEndpoints() {
+  const { DATABASE_MODE, DATABASE_ENDPOINTS } = require(join(PATHS.installRoot, 'ecosystem.config.cjs'));
+  if (!['native', 'docker'].includes(DATABASE_MODE) || !DATABASE_ENDPOINTS) {
+    throw new Error('Database configuration is not a supported backend.');
+  }
+  return { source: DATABASE_ENDPOINTS[DATABASE_MODE], endpoints: DATABASE_ENDPOINTS };
 }
 
 function main() {
@@ -31,23 +26,15 @@ function main() {
   }
   if (command === 'begin' && args.length === 2) {
     const [sourceMode, targetMode] = args;
-    const source = configuredSource();
+    const { source, endpoints } = configuredEndpoints();
     if (source.mode !== sourceMode || !['native', 'docker'].includes(targetMode) || targetMode === sourceMode) {
       throw new Error('Explicit source/target must match saved mode and name different backends.');
     }
-    // Target ports are resolved from the saved mode-specific override, never
-    // from the current process PGPORT (which belongs to the SOURCE).
-    const text = (() => {
-      try { return readFileSync(join(PATHS.installRoot, '.env'), 'utf8'); }
-      catch (err) { if (err.code === 'ENOENT') return ''; throw err; }
-    })();
-    const key = targetMode === 'native' ? 'PGPORT' : 'PGPORT_DOCKER';
-    const port = Number(text.match(new RegExp('^' + key + '=(\\S+)', 'm'))?.[1] || (targetMode === 'native' ? 5432 : 5561));
-    const record = journal.begin({ source, target: { ...source, mode: targetMode, port } });
+    const record = journal.begin({ source, target: endpoints[targetMode] });
     return { id: record.id, stage: record.stage, source: sourceMode, target: targetMode };
   }
   if (command === 'cancel' && args.length === 1) {
-    return journal.cancel(args[0], configuredSource());
+    return journal.cancel(args[0], configuredEndpoints().source);
   }
   throw new Error('Usage: node scripts/database-maintenance.mjs status | begin <native|docker> <native|docker> | cancel <operation-id>');
 }
