@@ -21,7 +21,6 @@ import {
   isMpsWatchdogError,
   resolveTrellis2PipelineType,
   resolveGlbPostprocess,
-  getTarget,
   TRELLIS2_WATCHDOG_HELP,
   probeTrellis2TextureBake,
   probeMetalToolchain,
