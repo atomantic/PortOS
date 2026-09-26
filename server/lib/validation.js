@@ -2426,3 +2426,23 @@ export const mindBundleApplySchema = z.object({
     PERSISTENT_MIND_BUNDLE_GROUPS.map((group) => [group, z.enum(MIND_BUNDLE_GROUP_CHOICES).optional()]),
   )).strict(),
 }).strict();
+
+// HTML composition inputs are local, editable assets, never provider prompts.
+export const htmlCompositionRenderSchema = z.object({
+  directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
+});
+
+export const htmlCompositionContractSchema = z.object({
+  durationSec: z.number().min(1).max(120),
+  fps: z.number().int().min(12).max(60),
+  width: z.number().int(),
+  height: z.number().int(),
+}).superRefine((value, ctx) => {
+  if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
+    ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
+  }
+  if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
+    ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
+  }
+});

@@ -742,6 +742,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
 | `/api/devtools/video-download` | Video download |
 | `/api/video-timeline` | Video timeline editor |
+| `/api/html-composition` | Offline seekable HTML-to-MP4 rendering; [contract and job endpoints](./HTML_COMPOSITIONS.md) |
 | `/api/continuous-video` | Continuous-video episodes (script + bible → chained multi-clip generation) |
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
