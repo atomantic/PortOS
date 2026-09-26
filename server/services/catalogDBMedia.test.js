@@ -54,16 +54,18 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'inst-1') }));
 
 const catalogDB = await import('./catalogDB.js');
+const db = await import('../lib/db.js');
 
 beforeEach(() => {
   calls.length = 0;
   vi.clearAllMocks();
+  db.withTransaction.mockImplementation((fn) => fn({ query: db.query }));
 });
 
 describe('attachMedia', () => {
   it('upserts the tuple and revives a soft-deleted row on conflict', async () => {
     await catalogDB.attachMedia('i1', 'hero.png', 'portrait', { role: 'hero', caption: 'cap' });
-    const { sql, params } = calls[0];
+    const { sql, params } = calls.at(-1);
     expect(sql).toMatch(/INSERT INTO catalog_ingredient_media/i);
     expect(sql).toMatch(/ON CONFLICT \(ingredient_id, media_key, kind\) DO UPDATE/i);
     expect(sql).toMatch(/deleted = false, deleted_at = NULL/i);
@@ -97,7 +99,8 @@ describe('detachMedia', () => {
 describe('setPortraitMedia', () => {
   it('demotes other live portraits then attaches the new one', async () => {
     await catalogDB.setPortraitMedia('i1', 'new.png', { caption: 'now' });
-    // First statement: demote other portraits.
+    expect(calls.shift().sql).toMatch(/SELECT id FROM catalog_ingredients WHERE id = \$1 FOR UPDATE/);
+    // Demote only after locking the owning ingredient.
     expect(calls[0].sql).toMatch(/UPDATE catalog_ingredient_media SET deleted = true/i);
     expect(calls[0].sql).toMatch(/kind = 'portrait'/i);
     expect(calls[0].sql).toMatch(/media_key <> \$2/);
