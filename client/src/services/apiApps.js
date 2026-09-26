@@ -184,8 +184,7 @@ export const deleteApp = (id) => request(`/apps/${id}`, { method: 'DELETE' });
 // App actions
 export const launchNativeApp = (id, options = {}) =>
   request(`/apps/${id}/native-launch`, { method: 'POST', ...options });
-export const getNativeLaunchStatus = (id, options = {}) =>
-  request(`/apps/${id}/native-launch/status`, options);
+
 export const startApp = (id, options = {}) =>
   request(`/apps/${id}/start`, { method: 'POST', ...options });
 export const stopApp = (id) => request(`/apps/${id}/stop`, { method: 'POST' });
