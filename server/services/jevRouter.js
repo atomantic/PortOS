@@ -14,6 +14,7 @@
  * decides what a caller does with an abstention.
  */
 
+import { notifyJevChanged } from './jevEvents.js';
 import { join } from 'path';
 import { createCachedStore, PATHS } from '../lib/fileUtils.js';
 import { JEV_DECISIONS, getJevDecision, jevHypotheses, jevMinMarginFor, jevValueForHypothesis } from '../lib/jevDecisions.js';
@@ -170,6 +171,9 @@ export async function recordJevObservations(observations) {
       decisions[row.decisionId] = counters;
     }
     return { schemaVersion: SHADOW_SCHEMA_VERSION, decisions, updatedAt: new Date().toISOString() };
+  }).then((result) => {
+    notifyJevChanged('stats');
+    return result;
   }).catch((error) => {
     console.error(`❌ jev: could not record decision agreement counters: ${error.message}`);
     return null;

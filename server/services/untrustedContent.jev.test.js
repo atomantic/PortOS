@@ -1,3 +1,4 @@
+import { jevEvents } from './jevEvents.js';
 /**
  * The jev rung of the screen → reason → validate ladder.
  *
@@ -32,7 +33,7 @@ import { JEV_DECISIONS, jevHypotheses } from '../lib/jevDecisions.js';
 // Dynamic: a static import is hoisted above `makeProxy`'s initializer, so the
 // mock factory would run before the temp data root exists.
 const { jevBatchGate, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
-const { resetJevShadowCache } = await import('./jevRouter.js');
+const { resetJevShadowCache, recordJevObservations } = await import('./jevRouter.js');
 
 const local = { id: 'local', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'example-text' };
 const dispositionSchema = z.object({
@@ -249,4 +250,20 @@ describe('jev rung of the untrusted-content ladder', () => {
     expect(result).toMatchObject({ ok: true, providerId: 'local' });
     expect(result.via).toBeUndefined();
   });
+});
+
+it('announces aggregate counters only after the durable observation write', async () => {
+  const snapshots = [];
+  const changed = payload => snapshots.push({ payload, read: readShadow() });
+  jevEvents.on('stats', changed);
+  try {
+    await recordJevObservations({ decisionId: 'scope-adherence', kind: 'decided', agreed: true });
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].payload).toEqual({});
+    expect((await snapshots[0].read).decisions['scope-adherence']).toMatchObject({ observed: 1, agreed: 1 });
+    await recordJevObservations({ decisionId: 'unknown-decision', kind: 'decided' });
+    expect(snapshots).toHaveLength(1);
+  } finally {
+    jevEvents.off('stats', changed);
+  }
 });

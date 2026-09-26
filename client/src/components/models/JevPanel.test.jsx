@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getJevStatus: vi.fn(),
@@ -15,7 +15,13 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../../hooks/useInstanceFeatures', () => ({ useInstanceFeatures: () => ({ features: [{ id: 'jev', enabled: false }] }) }));
 vi.mock('./JevIntegrations', () => ({ default: () => <div>Integration controls</div> }));
-vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+vi.mock('../../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  const bus = new EventEmitter();
+  bus.on = vi.fn(bus.on.bind(bus));
+  bus.off = vi.fn(bus.off.bind(bus));
+  return { default: bus };
+});
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }));
@@ -202,8 +208,14 @@ describe('JevPanel try-it box', () => {
 
     getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true), resident: true }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh status' })); });
+    let resolveOldStatus;
+    getJevStatus.mockImplementationOnce(() => new Promise(resolve => { resolveOldStatus = resolve; }));
+    await act(async () => { socket.emit('jev:status', {}); });
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Unload now' })); });
     expect(unloadJev).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Unload now' })).not.toBeInTheDocument();
+    await act(async () => { resolveOldStatus(status({ ready: true, resident: true, stages: stages(true) })); });
+    expect(screen.queryByRole('button', { name: 'Unload now' })).not.toBeInTheDocument();
   });
 });
 
@@ -388,5 +400,74 @@ describe('Jev task navigation', () => {
     expect(installJev).not.toHaveBeenCalled();
     expect(scoreJev).not.toHaveBeenCalled();
     expect(trainJevHead).not.toHaveBeenCalled();
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  socket.removeAllListeners();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+describe('JEV realtime resources', () => {
+  it('updates only the affected resource and reconciles once without timer reads', async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    initialView = 'setup';
+    const view = render(<MemoryRouter initialEntries={['/models/decision-classifiers/jev/setup']}><Routes>
+      <Route path="/models/decision-classifiers/jev/:taskView?" element={<JevPanel />} />
+    </Routes></MemoryRouter>);
+    await act(async () => {});
+    const reads = [getJevStatus, getJevDecisionStats, getJevHeads];
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(1));
+
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    await act(async () => { socket.emit('jev:status', {}); });
+    expect(screen.getByTestId('jev-stage-model')).toHaveAttribute('data-ready', 'true');
+    expect(getJevStatus).toHaveBeenCalledTimes(2);
+    expect(getJevDecisionStats).toHaveBeenCalledTimes(1);
+    expect(getJevHeads).toHaveBeenCalledTimes(1);
+
+    getJevDecisionStats.mockResolvedValue({ decisions: [{
+      decisionId: 'scope-adherence', label: 'Scope adherence', observed: 1234,
+      abstained: 0, unavailable: 0, compared: 0, agreed: 0, agreementRate: null,
+    }] });
+    await act(async () => { socket.emit('jev:stats', {}); });
+    expect(within(screen.getByTestId('jev-decision-stats')).getByText('1,234')).toBeInTheDocument();
+
+    getJevHeads.mockResolvedValue({ heads: [headRow()], training: true });
+    await act(async () => { socket.emit('jev:heads', {}); });
+    expect(screen.getByRole('button', { name: 'Training in progress' })).toBeInTheDocument();
+    expect(screen.getByTestId('jev-head-table')).toHaveTextContent('Candidate');
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(2));
+
+    getJevHeads.mockRejectedValueOnce(new Error('unavailable'));
+    await act(async () => { socket.emit('jev:heads', {}); });
+    expect(screen.getByText(/Head status unavailable/)).toBeInTheDocument();
+    expect(screen.getByTestId('jev-head-table')).toHaveTextContent('Candidate');
+    reads.forEach(read => read.mockClear());
+
+    await act(async () => { socket.emit('connect'); });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      visibility.mockReturnValue('hidden');
+      document.dispatchEvent(new Event('visibilitychange'));
+      socket.emit('jev:status', {});
+    });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      visibility.mockReturnValue('visible');
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(2));
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(2));
+
+    view.unmount();
+    await act(async () => { socket.emit('jev:status', {}); socket.emit('connect'); });
+    reads.forEach(read => expect(read).toHaveBeenCalledTimes(2));
   });
 });

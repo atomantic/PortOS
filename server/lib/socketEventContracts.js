@@ -62,6 +62,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Payload-free invalidation after persisted Eidoverse world changes; clients read projection progress through the authenticated API.',
     payloadSchema: { type: 'object', additionalProperties: false, properties: {} },
   },
+  'jev:status': {
+    direction: 'server-to-client',
+    summary: 'JEV install or sidecar lifecycle changed; reread status without loading a model.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'jev:stats': {
+    direction: 'server-to-client',
+    summary: 'JEV decision counters persisted; reread aggregate statistics.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'jev:heads': {
+    direction: 'server-to-client',
+    summary: 'JEV head artifacts or training state changed; reread head metadata.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'jev:policy': {
     direction: 'server-to-client',
     summary: 'Invalidate Jev integration policy after settings persistence or restore invalidation; no settings content.',

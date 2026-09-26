@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale, Plug, BarChart3, Wrench } from 'lucide-react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import TabPills from '../ui/TabPills';
 import toast from '../ui/Toast';
 import JevIntegrations from './JevIntegrations';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import {
@@ -56,6 +56,13 @@ const TASK_VIEWS = [
   { id: 'training', label: 'Training', icon: GraduationCap },
   { id: 'setup', label: 'Setup', icon: Wrench },
 ];
+const STATUS_EVENTS = ['jev:status'];
+const STATS_EVENTS = ['jev:stats'];
+const HEAD_EVENTS = ['jev:heads'];
+const readStatus = ({ signal }) => getJevStatus({ silent: true, signal });
+const readStats = ({ signal }) => getJevDecisionStats({ silent: true, signal });
+const readHeads = ({ signal }) => getJevHeads({ silent: true, signal });
+
 const JEV_PATH = '/models/decision-classifiers/jev';
 
 export default function JevPanel() {
@@ -71,8 +78,9 @@ export default function JevPanel() {
     if (!validView) navigate({ pathname: `${JEV_PATH}/try`, search: location.search }, { replace: true });
   }, [validView, navigate, location.search]);
 
-  const [status, setStatus] = useState(null);
-  const [statusError, setStatusError] = useState(false);
+  const { data: status, error: statusError, refetch: loadStatus, updateData: setStatus } = useSocketResource(readStatus, { events: STATUS_EVENTS });
+  const { data: decisionStats, error: statsError, refetch: loadStats } = useSocketResource(readStats, { events: STATS_EVENTS });
+  const { data: headState, error: headStatusError, refetch: loadHeads } = useSocketResource(readHeads, { events: HEAD_EVENTS });
   const [installing, setInstalling] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [installError, setInstallError] = useState('');
@@ -81,10 +89,6 @@ export default function JevPanel() {
   const [hypothesesText, setHypothesesText] = useState('');
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
-  const [decisionStats, setDecisionStats] = useState(null);
-  const [statsError, setStatsError] = useState(false);
-  const [headState, setHeadState] = useState(null);
-  const [headStatusError, setHeadStatusError] = useState(false);
   const [training, setTraining] = useState(false);
   const [headError, setHeadError] = useState('');
   // `linear` is the honest default: a 3-way logistic regression over a frozen
@@ -93,40 +97,6 @@ export default function JevPanel() {
   // hand-written request can reach is a knob nobody tunes.
   const [architecture, setArchitecture] = useState('linear');
   const progressTimer = useRef(null);
-
-  const loadStatus = useCallback(() => (
-    getJevStatus({ silent: true })
-      .then((res) => {
-        if (res) { setStatus(res); setStatusError(false); }
-        return res;
-      })
-      .catch(() => { setStatusError(true); return null; })
-  ), []);
-
-  const loadStats = useCallback(() => getJevDecisionStats({ silent: true })
-    .then(res => { setDecisionStats(res); setStatsError(false); })
-    .catch(() => setStatsError(true)), []);
-
-  // Metrics and adoption state only — no corpus row, premise, or path crosses
-  // this boundary, so it is as safe to load on mount as the counters are.
-  const loadHeads = useCallback(() => (
-    getJevHeads({ silent: true })
-      .then((res) => { setHeadState(res); setHeadStatusError(false); return res; })
-      .catch(() => { setHeadStatusError(true); return null; })
-  ), []);
-
-  useAutoRefetch(() => Promise.all([loadStatus(), loadStats(), loadHeads()]), 30000, { pollOnly: true, immediate: false });
-
-  useEffect(() => {
-    let active = true;
-    loadStatus();
-    // Counters only, so this is safe to load beside status on every mount.
-    getJevDecisionStats({ silent: true })
-      .then((res) => { if (active) setDecisionStats(res); })
-      .catch(() => { if (active) setStatsError(true); });
-    loadHeads();
-    return () => { active = false; };
-  }, [loadStatus, loadHeads]);
 
   useEffect(() => {
     const handleProgress = (data) => {
@@ -160,8 +130,10 @@ export default function JevPanel() {
     setProgressMsg('Installing the jev scorer…');
     return installJev({ silent: true })
       .then((result) => {
-        if (result?.ready === true) toast.success('jev scorer installed and ready');
-        return loadStatus();
+        if (result?.ready === true) {
+          setStatus(result);
+          toast.success('jev scorer installed and ready');
+        } else return loadStatus();
       })
       .catch((error) => { setInstallError(error.message || 'Installation failed.'); return loadStatus(); })
       .finally(() => {
@@ -172,7 +144,9 @@ export default function JevPanel() {
 
   const cancel = () => cancelJevInstall({ silent: true }).then(loadStatus).catch(() => null);
 
-  const unload = () => unloadJev({ silent: true }).then(loadStatus).catch(() => null);
+  const unload = () => unloadJev({ silent: true }).then(() => {
+    setStatus(current => current ? { ...current, resident: false } : current);
+  }).catch(() => null);
 
   const hypotheses = parseHypotheses(hypothesesText);
   const canScore = status?.ready === true && premise.trim().length > 0 && hypotheses.length >= 2;

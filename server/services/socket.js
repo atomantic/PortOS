@@ -38,6 +38,7 @@ import { audioGenEvents } from './audioGen/events.js';
 import { aiStatusEvents } from './aiStatusEvents.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
+import { jevEvents } from './jevEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
@@ -250,6 +251,9 @@ function setupEventForwarding() {
   meatspaceEvents.on('death-clock:changed', data => ioInstance?.emit('meatspace:death-clock:changed', data));
   usageBackfillEvents.on('updated', () => ioInstance?.emit('usage-backfill:updated', {}));
   eidoverseWorldEvents.on('updated', () => ioInstance?.emit('eidoverse:projection', {}));
+  jevEvents.on('status', () => ioInstance?.emit('jev:status', {}));
+  jevEvents.on('stats', () => ioInstance?.emit('jev:stats', {}));
+  jevEvents.on('heads', () => ioInstance?.emit('jev:heads', {}));
   layaMlxEvents.on('updated', () => ioInstance?.emit('laya:status', {}));
   providerQuotaEvents.on('updated', () => ioInstance?.emit('provider-quota:updated', {}));
   setupCosEventForwarding();
