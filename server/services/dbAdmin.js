@@ -2,7 +2,7 @@ import { execFile, spawn } from '../lib/childProcess.js';
 import { existsSync, mkdirSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { checkHealth, query } from '../lib/db.js';
+import { checkHealth, query, POOL_CONFIG } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -16,6 +16,21 @@ const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
 // `H:/...` drive path above — exit 127. resolveBashBinary() prefers Git Bash,
 // which both accepts drive paths and runs db.sh against the Windows toolchain.
 const bashBinary = resolveBashBinary();
+
+// One host can receive overlapping admin requests. Reject competing mutations
+// before they probe or change configuration; always release after failure.
+let databaseOperationActive = false;
+async function withDatabaseOperation(operation) {
+  if (databaseOperationActive) {
+    throw new ServerError('Another database operation is in progress. Wait for it to finish and retry.', { status: 409 });
+  }
+  databaseOperationActive = true;
+  try {
+    return await operation();
+  } finally {
+    databaseOperationActive = false;
+  }
+}
 
 /**
  * Run a command and return { stdout, stderr, exitCode }.
@@ -212,7 +227,7 @@ export async function getStatus() {
 /**
  * Switch database backends, optionally migrating data first.
  */
-export async function switchDatabase({ target, migrate }, io) {
+async function switchDatabaseImpl({ target, migrate }, io) {
   const emit = (event, data) => io?.emit('database:progress', { event, ...data });
 
   if (migrate) {
@@ -253,9 +268,9 @@ export async function switchDatabase({ target, migrate }, io) {
   return { success: true, output: switchResult.stdout + '\n' + startResult.stdout };
 }
 
-const pgUser = process.env.PGUSER || 'portos';
-const pgDb = process.env.PGDATABASE || 'portos';
-const pgPassword = process.env.PGPASSWORD || 'portos';
+const pgUser = POOL_CONFIG.user;
+const pgDb = POOL_CONFIG.database;
+const pgPassword = POOL_CONFIG.password;
 
 // Safely quote a PostgreSQL identifier (table name, role name, db name) by
 // doubling any embedded double-quotes and wrapping in double-quotes.
@@ -511,23 +526,31 @@ async function probeServerMajor(port, env) {
  * Native (5432) and Docker (5561) can run simultaneously, so the active
  * backend remains running throughout the operation.
  */
-export async function syncDatabase(io) {
+async function syncDatabaseImpl(io) {
   const emit = (event, data) => io?.emit('database:progress', { event, ...data });
 
   const statusResult = await runDbScript(['status']);
-  const currentMode = parseDbMode(statusResult.stdout);
+  const currentMode = statusResult.exitCode === 0
+    ? statusResult.stdout.match(/Current mode:\s*(docker|native)\b/)?.[1]
+    : null;
+  if (!currentMode) {
+    throw new ServerError('Cannot verify the active database backend. Reconcile database settings and restart before syncing.', { status: 409 });
+  }
   const targetMode = currentMode === 'docker' ? 'native' : 'docker';
+  const sourcePort = currentMode === 'docker' ? DOCKER_PORT : NATIVE_PORT;
   const targetPort = targetMode === 'docker' ? DOCKER_PORT : NATIVE_PORT;
 
-  // Step 1: Export from active database (stays running)
-  emit('start', { message: 'Exporting from active database...' });
-  const exportResult = await runDbScript(['export', `sync-${Date.now()}`]);
-  if (exportResult.exitCode !== 0) {
-    emit('error', { message: 'Export failed' });
-    throw new ServerError('Export failed', { status: 500, context: { details: exportResult.stderr || exportResult.stdout } });
+  // POOL_CONFIG is the connection captured when the running pool was created.
+  // Saved mode and mutable environment values cannot establish its identity.
+  // Only canonical local endpoints can participate in native/Docker transfer.
+  if (!endpointsAlias('localhost', sourcePort, POOL_CONFIG.host, POOL_CONFIG.port)
+      || endpointsAlias('localhost', targetPort, POOL_CONFIG.host, POOL_CONFIG.port)) {
+    throw new ServerError('Database settings do not match the running connection. Reconcile database settings and restart before syncing.', { status: 409 });
   }
-  const exportLines = exportResult.stdout.trim().split('\n');
-  const dumpFile = exportLines[exportLines.length - 1]?.trim();
+
+  emit('start', { message: 'Exporting from active database...' });
+  // Explicit backend export bypasses db.sh's saved-mode/container selection.
+  const { dumpFile } = await exportDatabase(currentMode);
   console.log(`🗄️ Sync: exported to ${dumpFile}`);
 
   // Step 2: Ensure target is running and configured
@@ -580,7 +603,7 @@ export async function syncDatabase(io) {
 }
 
 /** Start a specific database backend. */
-export async function startDatabase(backend) {
+async function startDatabaseImpl(backend) {
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'up', '-d', 'db'], 60_000);
     return { success: result.exitCode === 0, output: result.stdout };
@@ -592,7 +615,7 @@ export async function startDatabase(backend) {
 }
 
 /** Stop a specific database backend. */
-export async function stopDatabase(backend) {
+async function stopDatabaseImpl(backend) {
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'stop', 'db'], 30_000);
     return { success: result.exitCode === 0, output: result.stdout };
@@ -604,7 +627,7 @@ export async function stopDatabase(backend) {
 }
 
 /** Destroy an inactive database backend's data. */
-export async function destroyDatabase(backend) {
+async function destroyDatabaseImpl(backend) {
   // Safety: authorize deletion only from a successful, recognized mode probe.
   // parseDbMode intentionally has a Docker fallback for non-destructive callers,
   // so destruction validates the probe independently and fails closed.
@@ -649,7 +672,7 @@ export async function destroyDatabase(backend) {
 }
 
 /** Install and configure native PostgreSQL. */
-export async function setupNativeDatabase(io) {
+async function setupNativeDatabaseImpl(io) {
   emitProgress(io, 'start', 'Setting up native PostgreSQL...');
 
   const result = await runDbScript(['setup-native']);
@@ -719,7 +742,7 @@ export async function exportDatabase(backend) {
 }
 
 /** Fix stale PostgreSQL pid files. */
-export async function fixDatabase() {
+async function fixDatabaseImpl() {
   const result = await runDbScript(['fix']);
   return {
     success: result.exitCode === 0,
@@ -727,3 +750,17 @@ export async function fixDatabase() {
     error: result.exitCode !== 0 ? (result.stderr || result.stdout) : undefined
   };
 }
+
+export const switchDatabase = (options, io) => withDatabaseOperation(() => switchDatabaseImpl(options, io));
+
+export const syncDatabase = (io) => withDatabaseOperation(() => syncDatabaseImpl(io));
+
+export const destroyDatabase = (backend) => withDatabaseOperation(() => destroyDatabaseImpl(backend));
+
+export const startDatabase = (backend) => withDatabaseOperation(() => startDatabaseImpl(backend));
+
+export const stopDatabase = (backend) => withDatabaseOperation(() => stopDatabaseImpl(backend));
+
+export const setupNativeDatabase = (io) => withDatabaseOperation(() => setupNativeDatabaseImpl(io));
+
+export const fixDatabase = () => withDatabaseOperation(() => fixDatabaseImpl());
