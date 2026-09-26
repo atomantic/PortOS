@@ -1479,11 +1479,14 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   return restoreFiles();
 }
 
+const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });
+
 /**
  * Restore the PostgreSQL dump from a snapshot. Dry-run by default — mirrors
- * restoreSnapshot's safety default. A real restore pipes the snapshot's
- * portos-db.sql into psql; the dump was written with --no-owner --no-acl so
- * it replays cleanly.
+ * restoreSnapshot's safety default. Both modes first admit the snapshot's
+ * portos-db.sql (complete pg_dump envelope, manifest hash when recorded); a
+ * real restore then replays the admitted private copy into psql. The dump was
+ * written with --no-owner --no-acl so it replays cleanly.
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
@@ -1528,7 +1531,11 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   // Execution replays a private copy written by the same read that admits the
   // dump, so the bytes checked are exactly the bytes psql replays even if the
   // snapshot changes afterwards (#8782). Preview only inspects.
-  const spoolDir = dryRun ? null : await mkdtemp(join(tmpdir(), 'portos-restore-'));
+  const spoolDir = dryRun ? null : await mkdtemp(join(tmpdir(), 'portos-restore-')).catch((err) => {
+    console.error(`❌ restore: cannot stage dump for snapshot ${snapshotId}: ${err.message}`);
+    return false;
+  });
+  if (spoolDir === false) return DUMP_UNREADABLE;
   try {
     return await restoreAdmittedDump({ sqlPath, spoolPath: spoolDir && join(spoolDir, 'dump.sql'), expectedHash, snapshotId, dryRun, sizeBytes: info.size });
   } finally {
@@ -1547,7 +1554,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return null;
   });
   if (!dump) {
-    return { status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' };
+    return DUMP_UNREADABLE;
   }
   if (expectedHash && dump.sha256 !== expectedHash) {
     console.error(`❌ restore: manifest hash mismatch for snapshot ${snapshotId} (expected ${expectedHash}, got ${dump.sha256})`);
