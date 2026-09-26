@@ -76,7 +76,11 @@ export async function getSystemHealthSnapshot() {
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcessesStrict().catch(() => null),
-    getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
+    getAppStatusSummary().catch((error) => {
+      const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(error.code) ? error.code : 'unknown';
+      console.error(`❌ App health probe failed (operation=getAppStatusSummary, code=${code})`);
+      return failedProbe;
+    }),
     cos.getStatus().catch((error) => {
       console.error('Chief of Staff health probe failed', error);
       return failedProbe;
@@ -160,7 +164,10 @@ export async function getSystemHealthSnapshot() {
   // App status summary — PM2-managed apps only (Xcode/iOS-native projects
   // have no detectable runtime state, so they're tracked under `unmanaged`
   // and excluded from the running denominator)
-  const appStats = appStatusSummary;
+  // Numeric placeholders preserve older clients' shape, not measurements.
+  const appStats = appStatusSummary === failedProbe
+    ? { total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, unmanaged: 0, degraded: true, status: 'unavailable' }
+    : appStatusSummary;
 
   // Determine overall health status. Each condition below records its
   // severity on the warning itself rather than mutating `overallHealth`
@@ -217,7 +224,9 @@ export async function getSystemHealthSnapshot() {
   // A degraded app summary means PM2 couldn't be read for one or more homes, so
   // those apps' online/stopped status is unknown — surface it rather than letting
   // the counts silently read as "everything not started."
-  if (appStats.degraded) {
+  if (appStatusSummary === failedProbe) {
+    rawWarnings.push({ type: 'probe-unavailable', source: 'apps', status: 'unavailable', severity: 'warning', message: 'Apps unavailable', dismissible: false });
+  } else if (appStats.degraded) {
     const unknown = appStats.unknown || 0;
     rawWarnings.push({ type: 'apps', severity: 'warning', message: `App status unavailable for ${unknown} app(s) — PM2 read failed` });
   }

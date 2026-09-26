@@ -230,7 +230,9 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <Zap size={14} className="hidden shrink-0 text-amber-400 @2xs:block" />
             <span className="truncate text-xs text-gray-500">Services</span>
           </div>
-          {apps.total > 0 ? (
+          {apps.status === 'unavailable' ? (
+            <div className="text-lg font-bold text-port-warning">Apps unavailable</div>
+          ) : apps.total > 0 ? (
             <>
               <div className="text-lg @sm:text-xl font-bold text-white">
                 {apps.online}

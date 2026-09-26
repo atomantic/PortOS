@@ -13,6 +13,7 @@ import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
 import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
 import { statfs } from 'fs/promises';
+import { getAppStatusSummary } from '../services/appProcessStatus.js';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([]),
@@ -156,6 +157,51 @@ describe('System Health Routes', () => {
     expect(response.body).toHaveProperty('system');
     expect(response.body).toHaveProperty('apps');
     expect(response.body).toHaveProperty('overallHealth');
+  });
+
+  it('reports an unreadable app aggregate without leaking details, then recovers to a healthy empty registry', async () => {
+    const privateDetail = 'EIO reading /private/example-registry.json';
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getAppStatusSummary.mockRejectedValueOnce(Object.assign(new Error(privateDetail), { code: 'EIO' }));
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: false, settings: { health: {
+      dismissedWarnings: { 'probe-unavailable': { message: 'Apps unavailable' } }
+    } } });
+
+    try {
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.status).toBe(200);
+      expect(response.body.overallHealth).toBe('warning');
+      expect(response.body.apps).toEqual({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, unmanaged: 0, degraded: true, status: 'unavailable' });
+      expect(response.body.warnings).toEqual([
+        { type: 'probe-unavailable', source: 'apps', status: 'unavailable', severity: 'warning', message: 'Apps unavailable', dismissible: false }
+      ]);
+      expect(JSON.stringify(response.body)).not.toContain(privateDetail);
+      expect(JSON.stringify(response.body)).not.toContain('EIO');
+      expect(errorSpy).toHaveBeenCalledWith('❌ App health probe failed (operation=getAppStatusSummary, code=EIO)');
+      expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(privateDetail);
+      const dismiss = await request(app).post('/api/system/health/warnings/probe-unavailable/dismiss').send({ message: 'Apps unavailable' });
+      expect(dismiss.status).toBe(400);
+
+      checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+      const recovered = await request(app).get('/api/system/health/details');
+      expect(recovered.body.overallHealth).toBe('healthy');
+      expect(recovered.body.apps.total).toBe(0);
+      expect(recovered.body.apps.status).toBeUndefined();
+      expect(recovered.body.warnings).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('keeps a known per-home PM2 failure distinct from an unavailable app aggregate', async () => {
+    getAppStatusSummary.mockResolvedValueOnce({ total: 2, online: 1, stopped: 0, notStarted: 0, unknown: 1, unmanaged: 0, degraded: true });
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    const response = await request(app).get('/api/system/health/details');
+    expect(response.body.overallHealth).toBe('warning');
+    expect(response.body.apps).toMatchObject({ total: 2, online: 1, unknown: 1, degraded: true });
+    expect(response.body.apps.status).toBeUndefined();
+    expect(response.body.warnings).toEqual([{ type: 'apps', severity: 'warning', message: 'App status unavailable for 1 app(s) — PM2 read failed' }]);
   });
 
   it('reports failed disk and CoS probes without exposing their errors or hiding healthy measurements', async () => {
