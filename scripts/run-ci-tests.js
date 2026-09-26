@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
+import { mkdtempSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -129,15 +131,61 @@ export function recordVitestDuration(scope, label, startedAt) {
 }
 
 /**
+ * Recover diagnostics independently of the terminal reporter. Bound both the
+ * input and rendered output; diagnostic failures never change the exit status.
+ */
+export function structuredFailureDiagnostics(reportPath) {
+  try {
+    if (statSync(reportPath).size > 32 * 1024 * 1024) throw new Error('report exceeds 32 MiB');
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+    if (!Array.isArray(report?.testResults)) throw new Error('invalid report schema');
+    const lines = [];
+    for (const suite of report.testResults) {
+      if (typeof suite?.name !== 'string' || !Array.isArray(suite.assertionResults)) {
+        throw new Error('invalid suite schema');
+      }
+      for (const assertion of suite.assertionResults) {
+        if (assertion.status !== 'failed') continue;
+        if (typeof assertion.fullName !== 'string' || !Array.isArray(assertion.failureMessages)
+          || !assertion.failureMessages.every(message => typeof message === 'string')) {
+          throw new Error('invalid assertion schema');
+        }
+        lines.push(`FAIL ${suite.name} > ${assertion.fullName}\n${assertion.failureMessages.join('\n')}`.slice(0, 8000));
+        if (lines.length === 10) break;
+      }
+      if (suite.status === 'failed' && suite.message) {
+        lines.push(`FAIL ${suite.name}\n${String(suite.message)}`.slice(0, 8000));
+      }
+      if (lines.length >= 10) break;
+    }
+    return lines.length
+      ? `Structured Vitest failure diagnostics (up to 10 failures):\n${lines.slice(0, 10).join('\n')}`
+      : 'Inconclusive Vitest diagnostics: structured report contains no failed assertion or suite message.';
+  } catch {
+    return 'Inconclusive Vitest diagnostics: structured report is missing, malformed, or exceeds 32 MiB.';
+  }
+}
+
+/**
  * Run `npm run <script> --prefix <scope> [-- extraArgs]`, streaming stdout and
  * stderr live (so a long CI job keeps showing progress) while also retaining
  * a bounded tail of the combined output for post-run crash detection.
  *
  * @returns {Promise<{status: number, output: string, error?: Error}>}
  */
-function runNpm(scope, script, extraArgs) {
+export async function runNpm(scope, script, extraArgs) {
+  const reportDir = mkdtempSync(join(tmpdir(), 'portos-vitest-'));
+  const reportPath = join(reportDir, 'failures.json');
+  try {
+    return await runNpmWithReport(scope, script, extraArgs, reportPath);
+  } finally {
+    rmSync(reportDir, { recursive: true, force: true });
+  }
+}
+
+function runNpmWithReport(scope, script, extraArgs, reportPath) {
   const args = ['run', script, '--prefix', scope];
-  if (extraArgs.length > 0) args.push('--', ...extraArgs);
+  args.push('--', ...extraArgs, '--reporter=json', `--outputFile.json=${reportPath}`);
   // Wrapped, not a bare `npm.cmd`: Node refuses to spawn a `.cmd` under
   // `shell:false` and throws EINVAL, so this script could never run on a
   // Windows checkout. See server/lib/bufferedSpawn.js.
@@ -152,7 +200,10 @@ function runNpm(scope, script, extraArgs) {
     child.stdout.on('data', (chunk) => tee(process.stdout, chunk));
     child.stderr.on('data', (chunk) => tee(process.stderr, chunk));
     child.on('error', (error) => resolve({ status: 1, output, error }));
-    child.on('close', (code) => resolve({ status: code ?? 1, output }));
+    child.on('close', (code) => {
+      if (code !== 0) console.error(structuredFailureDiagnostics(reportPath));
+      resolve({ status: code ?? 1, output });
+    });
   });
 }
 
