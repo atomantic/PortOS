@@ -13,10 +13,12 @@ const endpointSchema = z.object({
   user: z.string().min(1).max(63),
 }).strict();
 
+const stages = ['accepted', 'quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified'];
+
 const journalSchema = z.object({
   version: z.literal(1),
   id: z.string().uuid(),
-  stage: z.literal('accepted'),
+  stage: z.enum(stages),
   createdAt: z.string().datetime(),
   source: endpointSchema,
   target: endpointSchema,
@@ -109,6 +111,41 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return record;
   };
 
+  // One durable owner for the operation's entire lifetime. Never infer that an
+  // owner is dead from a PID or elapsed time; interrupted ownership needs an
+  // explicit recovery protocol before another process may advance the journal.
+  const acquireCoordinator = (id) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance ownership');
+    const current = read();
+    if (!current || current.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
+    const token = randomUUID();
+    writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id, token });
+    syncDirectory(activeDir);
+    const owned = read();
+    if (!owned || owned.id !== id || owned.stage !== 'accepted') throw databaseMaintenanceError();
+    return token;
+  };
+
+  const transition = (id, token, expectedStage, nextStage) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance transition');
+    const current = read();
+    if (!current || current.id !== id || current.stage !== expectedStage
+      || stages.indexOf(nextStage) !== stages.indexOf(expectedStage) + 1) throw databaseMaintenanceError();
+    const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
+    if (!lstatSync(ownerPath).isFile()) throw databaseMaintenanceError();
+    const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+    if (typeof token !== 'string' || owner.id !== id || owner.token !== token) throw databaseMaintenanceError();
+    // Exclusive per-stage publication also serializes two calls by the owner.
+    // A crash before rename leaves a pending file and fails closed on retry.
+    writeDurableExclusive(join(activeDir, 'stage-' + expectedStage + '.claim'), { id });
+    const pending = join(activeDir, 'stage-' + expectedStage + '.pending');
+    const next = journalSchema.parse({ ...current, stage: nextStage });
+    writeDurableExclusive(pending, next);
+    renameSync(pending, recordPath);
+    syncDirectory(activeDir);
+    return next;
+  };
+
   const cancel = (id, source) => {
     assertNotRealDataWrite(activeDir, 'database maintenance cancel');
     // A per-operation exclusive cancellation claim prevents two cancellations
@@ -136,7 +173,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return { id, stage: 'cancelled' };
   };
 
-  return { isFenced, assertAdmission, read, begin, cancel };
+  return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition };
 }
 
 const journal = createDatabaseMaintenanceJournal();
