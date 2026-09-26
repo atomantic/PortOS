@@ -37,6 +37,13 @@ const asArray = (v) => Array.isArray(v) ? v : [];
 // Backup form. Drop those on load instead: the spelling of the survivors is left
 // untouched (anchoring is a read-time concern), so the form is not dirty.
 const asExcludeArray = (v) => asArray(v).filter(isSafeExcludePattern);
+// restorePostgres refusals that left the database untouched (preview or execution).
+const DB_RESTORE_REFUSALS = {
+  manifest_mismatch: 'Snapshot dump failed integrity verification',
+  manifest_unreadable: 'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.',
+  dump_unreadable: 'The snapshot database dump could not be read or staged for restore. Nothing was changed; check the backup media and free temp space, then retry.',
+  dump_incomplete: 'The snapshot database dump is incomplete (truncated or damaged). Nothing was changed; choose another snapshot.',
+};
 const snapshotIdentity = (snapshot) =>
   snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
 const snapshotSourceLabel = (snapshot) =>
@@ -323,12 +330,7 @@ export function BackupTab() {
       return;
     }
     if (preview.status !== 'ok') {
-      const message = preview.reason === 'manifest_mismatch'
-        ? 'Snapshot dump failed integrity verification'
-        : preview.reason === 'manifest_unreadable'
-          ? 'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.'
-          : `DB restore unavailable: ${preview.reason || 'unknown'}`;
-      toast.error(message);
+      toast.error(DB_RESTORE_REFUSALS[preview.reason] || `DB restore unavailable: ${preview.reason || 'unknown'}`);
       return;
     }
     setRestorePreview(preview);
@@ -342,6 +344,8 @@ export function BackupTab() {
       .catch(() => ({ status: 'failed', reason: 'request_error' }));
     if (result.status === 'ok') {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
+    } else if (DB_RESTORE_REFUSALS[result.reason]) {
+      toast.error(DB_RESTORE_REFUSALS[result.reason]);
     } else if (result.reason === 'restore_schema_reconciliation') {
       toast.error('The database dump was applied, but schema recovery is incomplete. It was not rolled back. Restart PortOS to retry recovery; if it still fails, check the server logs and repair the database before continuing.', { duration: Infinity });
     } else if (result.reason === 'restore_sync_resync') {

@@ -2,7 +2,7 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
@@ -32,6 +32,7 @@ const personId = '00000000-0000-4000-8000-000000000862';
 const pendingMigration = '007-storyboard-scene-durable-ids.js';
 const connectionArgs = ['-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port), '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database];
 const childEnv = { ...process.env, PGPASSWORD: POOL_CONFIG.password };
+const DUMP_COMPLETE = '\n--\n-- PostgreSQL database dump complete';
 
 afterAll(async () => {
   if (ready) {
@@ -111,7 +112,10 @@ describe.skipIf(!ready)('restore older database schema', () => {
   it('rolls back the reset and preserves rows and constraints when replay fails', async () => {
     const invalidDir = join(dest, 'snapshots', 'fixture-source', 'invalid-sql');
     await mkdir(invalidDir);
-    await writeFile(join(invalidDir, 'portos-db.sql'), `${await readFile(dumpPath, 'utf8')}\nTHIS IS INVALID SQL;\n`);
+    // Inside the complete envelope, so admission passes and psql itself fails.
+    const dumpSql = await readFile(dumpPath, 'utf8');
+    const trailerAt = dumpSql.lastIndexOf(DUMP_COMPLETE);
+    await writeFile(join(invalidDir, 'portos-db.sql'), `${dumpSql.slice(0, trailerAt)}\nTHIS IS INVALID SQL;\n${dumpSql.slice(trailerAt)}`);
     await query("UPDATE tribe_people SET name = 'Must survive failure' WHERE id = $1", [personId]);
     const before = (await query("SELECT oid FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass ORDER BY oid")).rows;
     const rewindsBefore = rewindPostgresSyncCursors.mock.calls.length;
@@ -121,6 +125,25 @@ describe.skipIf(!ready)('restore older database schema', () => {
     expect((await query("SELECT oid FROM pg_constraint WHERE conrelid = 'beeper_participants'::regclass ORDER BY oid")).rows).toEqual(before);
     // The maintenance gate must have released on the replay error.
     await query("UPDATE tribe_people SET name = 'After failed restore' WHERE id = $1", [personId]);
+  });
+
+  // #8782: a legacy dump without a checksum that parses cleanly but stops early
+  // must be refused before the full reset, or it commits an empty database.
+  it.each([
+    ['header-only', sql => sql.slice(0, sql.indexOf('SET '))],
+    ['truncated between complete statements', sql => sql.slice(0, sql.indexOf('\nCOPY ') + 1)],
+  ])('refuses a %s legacy dump in preview and execution and keeps existing rows', async (name, truncate) => {
+    const dir = join(dest, 'snapshots', 'fixture-source', `truncated-${name.split(' ')[0]}`);
+    await mkdir(dir);
+    await writeFile(join(dir, 'portos-db.sql'), truncate(await readFile(dumpPath, 'utf8')));
+    await query("UPDATE tribe_people SET name = 'Must survive refusal' WHERE id = $1", [personId]);
+    const rewindsBefore = rewindPostgresSyncCursors.mock.calls.length;
+    for (const dryRun of [true, false]) {
+      expect(await restore(dryRun, basename(dir))).toMatchObject({ status: 'failed', reason: 'dump_incomplete' });
+    }
+    expect(rewindPostgresSyncCursors).toHaveBeenCalledTimes(rewindsBefore);
+    expect((await query('SELECT name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual([{ name: 'Must survive refusal' }]);
+    expect((await query('SELECT 1 FROM writers_room_folders WHERE id = $1', [folderId])).rowCount).toBe(1);
   });
 
   it('preflights unknown objects and external dependencies without mutations, including preview', async () => {
