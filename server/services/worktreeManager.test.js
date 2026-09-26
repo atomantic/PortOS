@@ -60,7 +60,7 @@ const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
 const { win32 } = await import('path');
 const { existsSync } = await import('fs');
-const { lstat, readlink, symlink, unlink } = await import('fs/promises');
+const { lstat, readdir, stat, readlink, symlink, unlink } = await import('fs/promises');
 const { PATHS } = await import('../lib/fileUtils.js');
 
 /**
@@ -118,63 +118,79 @@ describe('Worktree Path Construction', () => {
 });
 
 describe('Worktree dependency preparation', () => {
+  const directories = ['client', 'server', 'admin', 'uninstalled', 'assets', '.hidden', 'node_modules', 'nested'];
+  const missing = () => Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  const normalize = path => path.replaceAll('\\', '/');
+
   beforeEach(() => {
     lstat.mockReset();
     readlink.mockReset();
     symlink.mockClear();
     unlink.mockClear();
-  });
-
-  it('links installed root, client, and server dependencies when targets are absent', async () => {
-    lstat.mockImplementation((path) => path.replaceAll('\\', '/').startsWith('/repo/')
-      ? Promise.resolve({})
-      : Promise.reject(new Error('missing')));
-
-    await linkWorktreeDependencies('/repo', '/worktree');
-
-    expect(symlink).toHaveBeenCalledTimes(3);
-    const linkedPaths = symlink.mock.calls.map(([source, target]) => [
-      source.replaceAll('\\', '/'), target.replaceAll('\\', '/'),
+    existsSync.mockImplementation(path => normalize(path) === '/repo/nested/.git');
+    readdir.mockResolvedValue([
+      ...directories.map(name => ({ name, isDirectory: () => true })),
+      { name: 'linked-package', isDirectory: () => false },
     ]);
-    expect(linkedPaths).toEqual(expect.arrayContaining([
-      ['/repo/node_modules', '/worktree/node_modules'],
-      ['/repo/client/node_modules', '/worktree/client/node_modules'],
-      ['/repo/server/node_modules', '/worktree/server/node_modules'],
-    ]));
+    stat.mockImplementation(path => normalize(path) === '/repo/uninstalled/node_modules'
+      ? missing() : Promise.resolve({ isDirectory: () => true }));
+    lstat.mockImplementation(path => {
+      const normalized = normalize(path);
+      if (directories.filter(name => name !== 'node_modules').some(name => normalized === `/repo/${name}`)) {
+        return Promise.resolve({ isDirectory: () => true });
+      }
+      if (normalized.endsWith('/package.json') && normalized !== '/worktree/assets/package.json') {
+        return Promise.resolve({ isFile: () => true });
+      }
+      return missing();
+    });
   });
 
-  it('skips missing sources and preserves existing targets', async () => {
-    lstat.mockImplementation((path) => ['/repo/node_modules', '/worktree/node_modules'].includes(path.replaceAll('\\', '/'))
-      ? Promise.resolve({})
-      : Promise.reject(new Error('missing')));
+  afterEach(() => {
+    lstat.mockReset().mockResolvedValue({});
+    readdir.mockReset().mockResolvedValue([]);
+    stat.mockReset().mockResolvedValue({ isDirectory: () => true });
+    existsSync.mockReset().mockReturnValue(true);
+  });
 
+  it('links installed immediate packages including admin and skips non-packages, hidden and nested repos', async () => {
     await linkWorktreeDependencies('/repo', '/worktree');
 
+    expect(symlink.mock.calls.map(([source, target]) => [normalize(source), normalize(target)]))
+      .toEqual(expect.arrayContaining(['', '/client', '/server', '/admin'].map(part => [
+        `/repo${part}/node_modules`, `/worktree${part}/node_modules`,
+      ])));
+    expect(symlink).toHaveBeenCalledTimes(4);
+  });
+
+  it('preserves existing real directories and foreign links', async () => {
+    const original = lstat.getMockImplementation();
+    lstat.mockImplementation(path => normalize(path).endsWith('/node_modules')
+      ? Promise.resolve({ isSymbolicLink: () => normalize(path).includes('/admin/') })
+      : original(path));
+
+    await linkWorktreeDependencies('/repo', '/worktree');
     expect(symlink).not.toHaveBeenCalled();
   });
 
-  it('does not require the PortOS layout for generic managed repositories', async () => {
-    lstat.mockRejectedValue(new Error('missing'));
-
-    await expect(linkWorktreeDependencies('/generic-repo', '/generic-worktree')).resolves.toBeUndefined();
-    expect(symlink).not.toHaveBeenCalled();
-  });
-
-  it('removes only symlinks that point to the source checkout', async () => {
-    const sourceDependencyPath = join('/repo', 'node_modules');
-    const worktreeDependencyPath = join('/worktree', 'node_modules');
-    lstat.mockImplementation((path) => {
-      const normalized = path.replaceAll('\\', '/');
-      if (normalized === '/worktree/node_modules') return Promise.resolve({ isSymbolicLink: () => true });
-      if (normalized === '/worktree/client/node_modules') return Promise.resolve({ isSymbolicLink: () => false });
-      return Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }));
+  it('removes only owned links including admin, even if source dependencies were removed', async () => {
+    lstat.mockImplementation(path => {
+      const normalized = normalize(path);
+      if (['/worktree/node_modules', '/worktree/admin/node_modules', '/worktree/client/node_modules', '/worktree/server/node_modules'].includes(normalized)) {
+        return Promise.resolve({ isSymbolicLink: () => normalized !== '/worktree/client/node_modules' });
+      }
+      return missing();
     });
-    readlink.mockResolvedValue(sourceDependencyPath);
+    stat.mockImplementation(missing);
+    readlink.mockImplementation(path => Promise.resolve(normalize(path).includes('/server/')
+      ? join('/foreign', 'node_modules')
+      : path.replace('worktree', 'repo')));
 
     await unlinkWorktreeDependencies('/repo', '/worktree');
 
-    expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink).toHaveBeenCalledWith(worktreeDependencyPath);
+    expect(unlink.mock.calls.map(([path]) => normalize(path)).sort()).toEqual([
+      '/worktree/admin/node_modules', '/worktree/node_modules',
+    ]);
   });
 });
 
