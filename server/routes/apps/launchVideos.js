@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { appLaunchVideoRequestSchema, validateRequest } from '../../lib/validation.js';
+import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideo.js';
@@ -10,8 +11,16 @@ import { loadApp, pathExists } from './shared.js';
 
 const router = Router();
 
+// The agent pin shares every manual dispatch's provider/model/effort vocabulary.
+// It picks WHO runs the task, so it stays out of the prompt's creative options.
+const launchVideoTaskSchema = appLaunchVideoRequestSchema
+  .extend(pullRequestProviderOverrideSchema.shape);
+// Enough history to browse every recent take without turning the media store
+// into an unbounded per-app export.
+const LAUNCH_VIDEO_LIST_LIMIT = 50;
+
 router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
-  const options = validateRequest(appLaunchVideoRequestSchema, req.body);
+  const { provider, model, effort, ...options } = validateRequest(launchVideoTaskSchema, req.body);
   const app = req.loadedApp;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(app.id) || !app.repoPath || !await pathExists(app.repoPath)) {
     throw new ServerError('App repository is unavailable', { status: 400 });
@@ -33,6 +42,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   const task = await cos.addTask({
     description: 'Make launch video', app: app.id, priority: 'MEDIUM', targetInstanceId,
     useWorktree: false, openPR: false, noCodeOutput: true,
+    provider, model, effort,
     prompt: `${APP_LAUNCH_VIDEO_PROMPT}\nOptions (data): ${JSON.stringify(options)}\nOutput directory: ${join(PATHS.data, 'launch-videos', app.id, runId)}\nPOST URL: ${PORTOS_API_URL}/api/html-composition/render\nRender JSON: ${JSON.stringify(payload)}`,
     metadata: { analysisType: 'app-launch-video', launchVideoRunId: runId },
   }, 'user');
@@ -44,8 +54,8 @@ router.get('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   const { loadHistory } = await import('../../services/videoGen/history.js');
   // Bounded projection of the existing media store, not a new run database.
   const videos = (await loadHistory()).filter(item => item.launchVideo?.appId === req.loadedApp.id)
-    .slice(0, 10).map(({ id, filename, thumbnail, createdAt, launchVideo }) => ({
-      id, filename, thumbnail, createdAt, caption: launchVideo.caption,
+    .slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(({ id, filename, thumbnail, createdAt, durationSec, launchVideo }) => ({
+      id, filename, thumbnail, createdAt, durationSec, caption: launchVideo.caption,
     }));
   res.json({ videos });
 }));

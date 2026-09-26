@@ -4,7 +4,7 @@ import {
   ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
   Pencil, AlertTriangle, Sparkles, LayoutDashboard, Zap, Dog, FileText, GitBranch,
   Compass, CircleDot, GitPullRequest, Ticket, Cpu, ShieldCheck, BookOpen, Boxes,
-  ListChecks,
+  ListChecks, Clapperboard,
 } from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
@@ -33,6 +33,7 @@ import ReferencesTab from './tabs/ReferencesTab';
 import SubmodulesTab from './tabs/SubmodulesTab';
 import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
+import LaunchVideoPanel from './LaunchVideoPanel';
 import TabPills from '../ui/TabPills';
 
 // Icons live here rather than on `APP_DETAIL_TABS` so `constants.js` stays
@@ -47,6 +48,7 @@ export const APP_DETAIL_TAB_ICONS = {
   issues: CircleDot,
   'pull-requests': GitPullRequest,
   jira: Ticket,
+  'launch-video': Clapperboard,
   processes: Cpu,
   quality: ShieldCheck,
   references: BookOpen,
@@ -336,6 +338,8 @@ function AppDetail() {
         return <PullRequestsTab appId={appId} appName={app.name} />;
       case 'jira':
         return <JiraTab app={app} onRefresh={fetchApp} />;
+      case 'launch-video':
+        return <LaunchVideoPanel app={app} />;
       case 'processes':
         return <ProcessesTab appId={app.id} pm2ProcessNames={app.pm2ProcessNames} />;
       case 'quality':

@@ -38,6 +38,13 @@ describe('user-triggered launch videos', () => {
     expect(task.prompt).toContain(`launch-videos/example/${response.body.runId}`);
     expect(task.prompt).toContain('Do not read .env*');
     expect(task.prompt).toContain('Only report success after complete');
+    expect(task.provider).toBeUndefined();
+    addTask.mockClear();
+    await submit({ provider: 'example-provider', model: 'example-model', effort: 'high' });
+    const [pinned] = addTask.mock.calls[0];
+    expect(pinned).toMatchObject({ provider: 'example-provider', model: 'example-model', effort: 'high' });
+    // The agent pin chooses the runner; it is not a creative option in the prompt.
+    expect(pinned.prompt).not.toContain('example-provider');
     addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
     const duplicate = await submit({ tone: 'parody' });
     expect(duplicate.status).toBe(409);
@@ -47,6 +54,7 @@ describe('user-triggered launch videos', () => {
   it('refuses invalid options, missing music, and unavailable CoS before queuing', async () => {
     expect((await submit({ targetDurationSec: 4 })).status).toBe(400);
     expect((await submit({ tone: 'unknown' })).status).toBe(400);
+    expect((await submit({ effort: 'extreme' })).status).toBe(400);
     expect((await submit({ musicTrack: 'missing.wav' })).status).toBe(400);
     isRunning.mockReturnValue(false);
     expect((await submit({})).status).toBe(409);
@@ -56,12 +64,12 @@ describe('user-triggered launch videos', () => {
   it('returns a bounded app-only result projection and propagates storage failure', async () => {
     loadHistory.mockResolvedValue([
       { id: 'other', launchVideo: { appId: 'other' } },
-      ...Array.from({ length: 12 }, (_, n) => ({ id: `video-${n}`, filename: 'example.mp4', thumbnail: 'example.jpg', prompt: 'not projected', launchVideo: { appId: 'example', caption: 'A clear plan.' } })),
+      ...Array.from({ length: 52 }, (_, n) => ({ id: `video-${n}`, filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, prompt: 'not projected', launchVideo: { appId: 'example', caption: 'A clear plan.' } })),
     ]);
     const response = await request(app).get('/api/apps/example/launch-videos');
     expect(response.status).toBe(200);
-    expect(response.body.videos).toHaveLength(10);
-    expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', caption: 'A clear plan.' });
+    expect(response.body.videos).toHaveLength(50);
+    expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, caption: 'A clear plan.' });
     loadHistory.mockRejectedValue(new Error('Storage unavailable'));
     expect((await request(app).get('/api/apps/example/launch-videos')).status).toBe(500);
   });
