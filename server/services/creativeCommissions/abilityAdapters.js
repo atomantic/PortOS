@@ -90,12 +90,15 @@ function sanitizeGenerationFor(ability, raw) {
 // Build the common brief lines (intent + genre/category/style) shared by every
 // adapter's directive, with a type-specific lead sentence prepended by the
 // caller. Returns { lines, digest, constraints } — the adapter assembles the goal
-// via composeDirectiveGoal.
-function briefContext(commission, leadSentence) {
+// via composeDirectiveGoal. `styleSource` is the fire-time resolution of the
+// commission's universe / mood board (styleSource.js): its text is the art
+// direction BASE, so it precedes the user's own style notes, which refine it.
+function briefContext(commission, leadSentence, { styleSource } = {}) {
   const brief = commission?.brief || {};
   const lines = [`${leadSentence} ${String(brief.intent || '').trim()}`.trim()];
   if (brief.genre) lines.push(`Genre: ${brief.genre}.`);
   if (brief.category) lines.push(`Category: ${brief.category}.`);
+  if (styleSource?.text) lines.push(styleSource.text);
   if (brief.styleSpec) lines.push(`Style: ${brief.styleSpec}.`);
   const digest = renderFeedbackDigest(commission?.feedback, commission?.feedbackWindow ?? 5);
   // Preserve the user's structured form choices alongside the prose brief.
@@ -111,6 +114,9 @@ function briefContext(commission, leadSentence) {
   };
   if (brief.constraints?.universeId) constraints.universeId = brief.constraints.universeId;
   if (brief.constraints?.seriesId) constraints.seriesId = brief.constraints.seriesId;
+  // The RESOLVED board (an explicit pick, or the universe's linked one) — the
+  // stored choice may be the follow-the-universe sentinel.
+  if (styleSource?.moodBoardId) constraints.moodBoardId = styleSource.moodBoardId;
   return { lines, digest, constraints };
 }
 
@@ -212,10 +218,11 @@ const videoAdapter = {
   label: 'Video',
   sanitizeGeneration: (raw) => sanitizeGenerationFor('video', raw),
   buildProjectParams: buildVideoGeometryParams,
-  buildDirective(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = {}) {
+  buildDirective(commission, options = {}) {
+    const { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = options;
     const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate duration between 5 and 600 seconds for the brief.' : '';
-    const { lines, digest, constraints } = briefContext(commission, `Create a short-form video piece.${duration}`);
+    const { lines, digest, constraints } = briefContext(commission, `Create a short-form video piece.${duration}`, options);
     lines.unshift(videoPromptGuidanceFor(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId }));
     return { goal: composeDirectiveGoal(lines, digest), deliverables: ['One rendered video matching the brief'], constraints };
   },
@@ -226,11 +233,11 @@ const imageAdapter = {
   label: 'Image',
   sanitizeGeneration: (raw) => sanitizeGenerationFor('image', raw),
   buildProjectParams: buildVideoGeometryParams,
-  buildDirective(commission) {
+  buildDirective(commission, options = {}) {
     const count = genValue(commission, 'imageCount');
     const noun = count === 1 ? 'a single still image' : `${count} still images`;
     const lead = `Produce ${noun}. Use the image / catalog generation tools; do NOT plan a video or music render.`;
-    const { lines, digest, constraints } = briefContext(commission, lead);
+    const { lines, digest, constraints } = briefContext(commission, lead, options);
     return {
       goal: composeDirectiveGoal(lines, digest),
       deliverables: [count === 1 ? 'One still image matching the brief' : `${count} still images matching the brief`],
@@ -244,10 +251,11 @@ const musicAdapter = {
   label: 'Music',
   sanitizeGeneration: (raw) => sanitizeGenerationFor('music', raw),
   buildProjectParams: buildVideoGeometryParams,
-  buildDirective(commission, { tasteRecipe } = {}) {
+  buildDirective(commission, options = {}) {
+    const { tasteRecipe } = options;
     const secs = genValue(commission, 'lengthSeconds');
     const lead = `Compose an original ~${secs}s music / audio piece. Use the music generation tools; do NOT plan a video or image render.`;
-    const { lines, digest, constraints } = briefContext(commission, lead);
+    const { lines, digest, constraints } = briefContext(commission, lead, options);
     const tastePrompt = renderMusicTasteRecipePrompt(tasteRecipe);
     // Keep the bounded recipe + original-work constraint ahead of the optional
     // brief tags (genre / category / style). composeDirectiveGoal truncates only
@@ -263,11 +271,12 @@ const musicVideoAdapter = {
   label: 'Music video',
   sanitizeGeneration: (raw) => sanitizeGenerationFor('music-video', raw),
   buildProjectParams: buildVideoGeometryParams,
-  buildDirective(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = {}) {
+  buildDirective(commission, options = {}) {
+    const { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = options;
     const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate video duration between 5 and 600 seconds for the brief.' : '';
     const lead = `Create a short-form music video:${duration} Generate an original music bed AND a matching video scored to it.`;
-    const { lines, digest, constraints } = briefContext(commission, lead);
+    const { lines, digest, constraints } = briefContext(commission, lead, options);
     lines.unshift(videoPromptGuidanceFor(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId }));
     return {
       goal: composeDirectiveGoal(lines, digest),
@@ -282,7 +291,7 @@ const seriesAdapter = {
   label: 'Series',
   sanitizeGeneration: (raw) => sanitizeGenerationFor('series', raw),
   buildProjectParams: buildVideoGeometryParams,
-  buildDirective(commission) {
+  buildDirective(commission, options = {}) {
     const count = genValue(commission, 'episodeCount');
     const hasUniverse = !!commission?.brief?.constraints?.universeId;
     const scope = hasUniverse
@@ -290,7 +299,7 @@ const seriesAdapter = {
       : 'Invent a fitting universe context for the series.';
     const noun = count === 1 ? 'its opening issue/episode' : `its first ${count} issues/episodes`;
     const lead = `Create a new episodic series and generate ${noun}. ${scope} Use the pipeline series tools.`;
-    const { lines, digest, constraints } = briefContext(commission, lead);
+    const { lines, digest, constraints } = briefContext(commission, lead, options);
     return {
       goal: composeDirectiveGoal(lines, digest),
       deliverables: [count === 1 ? 'A new series with its opening issue/episode started' : `A new series with its first ${count} issues/episodes started`],

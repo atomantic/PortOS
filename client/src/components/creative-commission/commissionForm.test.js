@@ -4,7 +4,7 @@ import {
   describeSchedule, describeAssignment,
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, GENERATION_DEFAULTS_BY_ABILITY,
   generationToForm, mergeGenerationForAbility, generationToPayload,
-  backendFieldsForAbility, RENDER_BACKEND_AUTO,
+  backendFieldsForAbility, RENDER_BACKEND_AUTO, BOARD_FOLLOW_UNIVERSE, BOARD_NONE,
   IMAGE_BACKEND_OPTIONS, VIDEO_BACKEND_OPTIONS,
 } from './commissionForm.js';
 
@@ -72,6 +72,23 @@ describe('commissionForm helpers', () => {
     it('coerces a blank genre to null', () => {
       const form = { ...blankForm(), brief: { intent: 'x', genre: '  ', styleSpec: '' } };
       expect(toPayload(form).brief.genre).toBeNull();
+    });
+
+    // The board picker's three choices map onto the server's wire contract
+    // (styleSource.js): null follows the universe's board, '' is none, an id is
+    // explicit. A wrong mapping silently swaps which look every run uses.
+    it('round-trips the universe / mood-board style source through the wire contract', () => {
+      const follow = toForm({ id: 'c1', brief: { intent: 'x', constraints: { universeId: 'u1' } } });
+      expect(follow.styleSource).toEqual({ universeId: 'u1', moodBoardChoice: BOARD_FOLLOW_UNIVERSE });
+      expect(toPayload({ ...follow, name: 'n' }).brief.constraints).toEqual({ universeId: 'u1', moodBoardId: null });
+
+      const none = toForm({ id: 'c1', brief: { intent: 'x', constraints: { universeId: 'u1', moodBoardId: '' } } });
+      expect(none.styleSource.moodBoardChoice).toBe(BOARD_NONE);
+      expect(toPayload({ ...none, name: 'n' }).brief.constraints.moodBoardId).toBe('');
+
+      const explicit = toForm({ id: 'c1', brief: { intent: 'x', constraints: { moodBoardId: 'b1' } } });
+      expect(explicit.styleSource).toEqual({ universeId: '', moodBoardChoice: 'b1' });
+      expect(toPayload({ ...explicit, name: 'n' }).brief.constraints).toEqual({ universeId: null, moodBoardId: 'b1' });
     });
 
     it('round-trips taste controls only for an opted-in music commission', () => {

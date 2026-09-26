@@ -231,6 +231,23 @@ export function generationToPayload(ability, generation) {
   return out;
 }
 
+// Mood-board choice sentinels for the style-source picker (form-only values —
+// never real board ids). The wire contract is the server's
+// (services/creativeCommissions/styleSource.js): a null moodBoardId follows the
+// universe's linked board, '' means no board, any other string names one.
+export const BOARD_FOLLOW_UNIVERSE = '__universe__';
+export const BOARD_NONE = '__none__';
+
+function boardChoiceFromRecord(moodBoardId) {
+  if (moodBoardId == null) return BOARD_FOLLOW_UNIVERSE;
+  return moodBoardId === '' ? BOARD_NONE : moodBoardId;
+}
+
+function boardIdFromChoice(choice) {
+  if (choice === BOARD_FOLLOW_UNIVERSE) return null;
+  return choice === BOARD_NONE ? '' : choice;
+}
+
 // Human-readable cadence summary for the list card + detail header.
 export function describeSchedule(schedule) {
   if (!schedule) return 'No schedule';
@@ -260,6 +277,12 @@ export function toForm(c) {
       intent: c.brief?.intent || '',
       genre: c.brief?.genre || '',
       styleSpec: c.brief?.styleSpec || '',
+    },
+    // The universe / mood board whose style tags and reference images are the
+    // art-direction base each run hands the Creative Director.
+    styleSource: {
+      universeId: c.brief?.constraints?.universeId || '',
+      moodBoardChoice: boardChoiceFromRecord(c.brief?.constraints?.moodBoardId),
     },
     musicTaste: c.brief?.musicTaste ? {
       enabled: true,
@@ -334,6 +357,11 @@ export function toPayload(form) {
       intent: form.brief.intent.trim(),
       genre: form.brief.genre.trim() || null,
       styleSpec: form.brief.styleSpec,
+      // Merged one level deep server-side, so a stored seriesId survives.
+      constraints: {
+        universeId: form.styleSource.universeId || null,
+        moodBoardId: boardIdFromChoice(form.styleSource.moodBoardChoice),
+      },
       musicTaste: form.targetAbility === 'music' && form.musicTaste.enabled ? {
         source: 'digital-twin',
         window: form.musicTaste.window,

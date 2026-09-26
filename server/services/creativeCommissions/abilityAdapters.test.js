@@ -6,7 +6,7 @@ import { CREATIVE_COMMISSION_ABILITIES, ABILITY_GENERATION_SPEC } from '../../li
 import {
   COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
 } from '../../lib/creativeBriefLimits.js';
-import { MAX_DIRECTIVE_GOAL_LEN } from './directive.js';
+import { MAX_DIRECTIVE_GOAL_LEN, MAX_STYLE_SOURCE_LEN } from './directive.js';
 import { buildVideoPromptGuidance, isMiniMaxVideoModel } from './videoPromptGuidance.js';
 
 const MAXED_INTENT = 'x'.repeat(COMMISSION_INTENT_MAX);
@@ -103,19 +103,34 @@ describe('buildCommissionDirective — video (unchanged brief/feedback fold)', (
   // store, so the system prefix AND the user's own words must both survive it:
   // the clamp drops the tail, and the guidance is prepended, so an under-sized
   // MAX_DIRECTIVE_GOAL_LEN would silently eat the brief instead of erroring.
-  it('carries a brief filled to the schema caps AND the MiniMax recipe', () => {
+  it('carries a brief filled to the schema caps, a maxed style source, AND the MiniMax recipe', () => {
     const intent = 'x'.repeat(COMMISSION_INTENT_MAX);
     const styleSpec = 'y'.repeat(COMMISSION_STYLE_SPEC_MAX);
+    const styleSource = { text: 's'.repeat(MAX_STYLE_SOURCE_LEN), moodBoardId: 'b1' };
     const directive = buildCommissionDirective({
       targetAbility: 'video',
       brief: { intent, styleSpec, genre: 'g'.repeat(COMMISSION_BRIEF_TAG_MAX), category: 'c'.repeat(COMMISSION_BRIEF_TAG_MAX) },
       feedback: Array.from({ length: 50 }, (_, i) => ({ rating: i % 2 === 0 ? 'up' : 'down', note: 'z'.repeat(1000) })),
       feedbackWindow: 50,
       generation: { videoModelId: 'minimax_h3_cuda' },
-    });
+    }, { styleSource });
     expect(directive.goal).toContain('MiniMax H3 prompt template');
     expect(directive.goal).toContain(intent);
     expect(directive.goal).toContain(styleSpec);
+    expect(directive.goal).toContain(styleSource.text);
+    expect(directive.goal.length).toBeLessThanOrEqual(MAX_DIRECTIVE_GOAL_LEN);
+  });
+
+  // The universe / mood board base must reach EVERY output type's planner —
+  // the plan stage never renders the project styleSpec — ahead of the user's
+  // own style notes, with the resolved board id in the constraints.
+  it.each(['video', 'image', 'music', 'music-video', 'series'])('folds the style source into the %s directive', (targetAbility) => {
+    const directive = buildCommissionDirective(
+      { targetAbility, brief: { intent: 'a quiet harbor', styleSpec: 'flat color', constraints: { universeId: 'u1' } } },
+      { styleSource: { text: 'Art direction base: ink wash', moodBoardId: 'b1' } },
+    );
+    expect(directive.goal.indexOf('Art direction base: ink wash')).toBeLessThan(directive.goal.indexOf('Style: flat color'));
+    expect(directive.constraints).toMatchObject({ universeId: 'u1', moodBoardId: 'b1' });
   });
 
   it('uses the install default model when choosing model-specific guidance', () => {

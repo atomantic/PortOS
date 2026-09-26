@@ -14,14 +14,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
-import { getProviders, getSettings, listImageModels, listVideoModels, listMusicEngines } from '../../services/api';
+import {
+  getProviders, getSettings, listImageModels, listVideoModels, listMusicEngines,
+  listMoodBoardNames, listUniverseNames, listUniverseStyles,
+} from '../../services/api';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends';
 import CronSchedulePicker from '../CronSchedulePicker';
 import useUserTimezone from '../../hooks/useUserTimezone.js';
 import {
   inputCls, labelCls,
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, mergeGenerationForAbility,
-  backendFieldsForAbility, RENDER_BACKEND_AUTO,
+  backendFieldsForAbility, RENDER_BACKEND_AUTO, BOARD_FOLLOW_UNIVERSE, BOARD_NONE,
   COMMISSION_NAME_MAX, COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
 } from './commissionForm.js';
 
@@ -132,6 +135,9 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         </div>
       </section>
 
+      {/* Style source — a universe / mood board as the art-direction base */}
+      <StyleSourceSection styleSource={form.styleSource} patchForm={patchForm} />
+
       {/* Schedule */}
       <section className="space-y-3 border-t border-port-border pt-4">
         <h3 className="text-sm font-semibold text-gray-200">Schedule</h3>
@@ -200,6 +206,104 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         )}
       </div>
     </div>
+  );
+}
+
+// The universe and/or mood board a commission draws its look from — the same
+// pickers Code Animation offers. Each run resolves them fresh on the server
+// (services/creativeCommissions/styleSource.js): the universe's style tags,
+// notes, and style images plus the board's through-line and pins become the
+// art-direction base the Creative Director works from; the Style notes above
+// refine it.
+function StyleSourceSection({ styleSource, patchForm }) {
+  const [universes, setUniverses] = useState([]);
+  const [universeStyles, setUniverseStyles] = useState({});
+  const [boards, setBoards] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listUniverseNames({ silent: true })
+      .then((rows) => { if (!cancelled) setUniverses(Array.isArray(rows) ? rows : []); })
+      .catch(() => {});
+    listUniverseStyles({ silent: true })
+      .then((rows) => {
+        if (!cancelled) setUniverseStyles(Object.fromEntries((Array.isArray(rows) ? rows : []).map((row) => [row.id, row])));
+      })
+      .catch(() => {});
+    listMoodBoardNames({ silent: true })
+      .then((rows) => { if (!cancelled) setBoards(Array.isArray(rows) ? rows : []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const { universeId, moodBoardChoice } = styleSource;
+  const activeStyle = universeId ? universeStyles[universeId] : null;
+  const embrace = activeStyle?.influences?.embrace || [];
+  const avoid = activeStyle?.influences?.avoid || [];
+  // Keep a stored choice selectable even before the lists load (or after the
+  // record it names was deleted), so the select never silently shows another value.
+  const universeKnown = !universeId || universes.some((u) => u.id === universeId);
+  const boardKnown = moodBoardChoice === BOARD_FOLLOW_UNIVERSE || moodBoardChoice === BOARD_NONE
+    || boards.some((b) => b.id === moodBoardChoice);
+
+  return (
+    <section className="space-y-3 border-t border-port-border pt-4">
+      <h3 className="text-sm font-semibold text-gray-200">Style source</h3>
+      <p className="text-xs text-gray-500">
+        Pick a universe or mood board and each run loads its style tags and reference images as the
+        Creative Director&apos;s art-direction base. Style notes above refine it.
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className={labelCls} htmlFor="commission-universe">Universe</label>
+          <select
+            id="commission-universe"
+            className={inputCls}
+            value={universeId}
+            onChange={(e) => patchForm(['styleSource', 'universeId'], e.target.value)}
+          >
+            <option value="">No universe</option>
+            {!universeKnown && <option value={universeId}>{universeId}</option>}
+            {universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className={labelCls} htmlFor="commission-mood-board">Mood board</label>
+          <select
+            id="commission-mood-board"
+            className={inputCls}
+            value={moodBoardChoice}
+            onChange={(e) => patchForm(['styleSource', 'moodBoardChoice'], e.target.value)}
+          >
+            <option value={BOARD_FOLLOW_UNIVERSE}>Universe&apos;s linked board</option>
+            <option value={BOARD_NONE}>No mood board</option>
+            {!boardKnown && <option value={moodBoardChoice}>{moodBoardChoice}</option>}
+            {boards.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+      </div>
+      {(embrace.length > 0 || avoid.length > 0) && (
+        <div className="flex flex-wrap gap-1 text-[11px]" aria-label="Universe style tags">
+          {embrace.slice(0, 12).map((token) => (
+            <span key={`e-${token}`} className="rounded bg-port-accent/15 px-1.5 py-0.5 text-port-accent">{token}</span>
+          ))}
+          {avoid.slice(0, 6).map((token) => (
+            <span key={`a-${token}`} className="rounded bg-port-error/15 px-1.5 py-0.5 text-port-error line-through">{token}</span>
+          ))}
+        </div>
+      )}
+      {universeId && universeKnown && universes.length > 0 && !activeStyle && (
+        <p className="text-xs text-gray-500">
+          This universe has no style tags yet — only its notes, style references, and images will be used.{' '}
+          <a href={`/universes/${encodeURIComponent(universeId)}`} className="text-port-accent hover:underline">Edit its style guide</a>
+        </p>
+      )}
+      {boards.length === 0 && (
+        <p className="text-xs text-gray-500">
+          No mood boards yet. <a href="/mood-boards" className="text-port-accent hover:underline">Create a mood board</a> to collect style references.
+        </p>
+      )}
+    </section>
   );
 }
 

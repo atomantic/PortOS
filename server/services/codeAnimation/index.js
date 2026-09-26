@@ -16,12 +16,12 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { emitCodeAnimationChanged } from '../socket.js';
 import { PATHS } from '../../lib/paths.js';
-import { makePathResolver, resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
-import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
+import { makePathResolver } from '../../lib/pathSafety.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
 import { SUPPORTED_AUDIO_EXTENSIONS } from '../pipeline/musicLibrary.js';
+import { resolveMoodBoardStyleSource as resolveMoodBoard, resolveUniverseStyleSource as resolveUniverse } from '../creativeStyleSources.js';
 import {
   getCodeAnimationJobRecord,
   isCodeAnimationJobId,
@@ -67,97 +67,6 @@ export function getCodeAnimationOptions() {
   };
 }
 
-// The two served image dirs a reference can live in, by asset kind.
-const IMAGE_DIRS = {
-  'image-ref': { resolve: resolveImageRef, urlPrefix: '/data/image-refs/' },
-  image: { resolve: resolveGalleryImage, urlPrefix: '/data/images/' },
-};
-
-// A local image as a prompt reference, or null when the file is missing.
-function localReference(kind, filename, label, origin) {
-  const dir = IMAGE_DIRS[kind];
-  const path = dir?.resolve(filename);
-  return path ? { label, origin, path, url: `${dir.urlPrefix}${encodeURIComponent(filename)}` } : null;
-}
-
-// Resolve reference candidates in order until `slots` are filled, so a
-// universe or board with many images costs only the stats it can use.
-function fillReferences(candidates, slots) {
-  const images = [];
-  for (const candidate of candidates) {
-    if (images.length >= slots) break;
-    const image = candidate();
-    if (image && !images.some((existing) => existing.path === image.path)) images.push(image);
-  }
-  return images;
-}
-
-// The narrative half of a universe — its bible text and canon arrays, passed
-// through for `renderCanonForPrompt` to project. Only the brief writer reads
-// it: the coding prompt is art direction, and a logline or a character's
-// motivations would just crowd out the runtime contract.
-function universeNarrative(universe) {
-  const { characters, places, objects } = universe;
-  return {
-    logline: trimTo(universe.logline, 2_000),
-    premise: trimTo(universe.premise, 4_000),
-    characters,
-    places,
-    objects,
-  };
-}
-
-async function resolveUniverse(universeId, { imageSlots, narrative = false }) {
-  if (!universeId) return null;
-  const { getUniverse } = await import('../universeBuilder/crud.js');
-  const universe = await getUniverse(universeId).catch((error) => {
-    if (error?.code === 'NOT_FOUND') throw new ServerError('Universe not found', { status: 404, code: 'NOT_FOUND' });
-    throw error;
-  });
-  const { embrace, avoid } = universeVisualStyleTokens(universe);
-  const refs = Array.isArray(universe.styleReferences) ? universe.styleReferences : [];
-  const styleReferences = refs
-    .filter((ref) => isNonBlankStr(ref?.prompt))
-    .slice(0, 6)
-    .map((ref) => ({ title: trimTo(ref.title, 120), prompt: trimTo(ref.prompt, 600) }));
-  // A style image lives in either served dir depending on how it was made
-  // (style-reference upload vs gallery probe), so try refs first, then gallery.
-  const styleImage = (filename, label) => () => localReference('image-ref', filename, label, 'universe')
-    || localReference('image', filename, label, 'universe');
-  const candidates = [
-    ...refs.map((ref) => [ref?.imageRefs?.[0], trimTo(ref?.title, 120) || 'Universe style reference']),
-    ...(Array.isArray(universe.styleImageRefs) ? universe.styleImageRefs : []).map((filename) => [filename, 'Universe style probe']),
-  ].filter(([filename]) => isNonBlankStr(filename)).map(([filename, label]) => styleImage(filename, label));
-  const images = fillReferences(candidates, imageSlots);
-  return {
-    name: universe.name,
-    embrace,
-    avoid,
-    styleNotes: trimTo(universe.styleNotes, 2_000),
-    styleReferences,
-    moodBoardId: isNonBlankStr(universe.moodBoardId) ? universe.moodBoardId : null,
-    images,
-    ...(narrative ? universeNarrative(universe) : {}),
-  };
-}
-
-async function resolveMoodBoard(moodBoardId, { imageSlots }) {
-  if (!moodBoardId) return { board: null, images: [] };
-  const [{ getBoard }, { collectBoardStyleContext }, { boardItemLocalImage }] = await Promise.all([
-    import('../moodBoard/db.js'),
-    import('../moodBoard/styleContext.js'),
-    import('../moodBoard/logic.js'),
-  ]);
-  const board = await getBoard(moodBoardId);
-  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  // Text items, videos, and external pins attach nothing — they still
-  // contribute their caption/analysis text through the board context.
-  const candidates = (board.items || []).map((item) => () => {
-    const asset = boardItemLocalImage(item);
-    return asset ? localReference(asset.kind, asset.filename, trimTo(item.caption, 120) || asset.filename, 'mood-board') : null;
-  });
-  return { board: collectBoardStyleContext(board), images: fillReferences(candidates, imageSlots) };
-}
 
 function resolveUploadedImages(referenceImages) {
   return referenceImages.map((ref) => {

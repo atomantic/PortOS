@@ -88,6 +88,11 @@ vi.mock('../domainUsage.js', () => ({
   getDomainBudgetStatus: (...a) => budgetMock(...a),
   recordDomainUsage: (...a) => recordUsageMock(...a),
 }));
+const resolveUniverseStyleMock = vi.fn();
+vi.mock('../creativeStyleSources.js', () => ({
+  resolveUniverseStyleSource: (...a) => resolveUniverseStyleMock(...a),
+  resolveMoodBoardStyleSource: async () => ({ board: null, images: [] }),
+}));
 
 const {
   activeCommissions,
@@ -302,6 +307,20 @@ describe('runScheduledCommission gates', () => {
     expect(params).not.toHaveProperty('modelOverrides');
     // Resolving the pin is not this path's job any more — it must not even look.
     expect(getProviderByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('hands the configured universe style to both the planner goal and the project styleSpec', async () => {
+    resolveUniverseStyleMock.mockResolvedValue({
+      name: 'Example Universe', embrace: ['ink wash'], avoid: [], styleNotes: '', styleReferences: [], moodBoardId: null, images: [],
+    });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      brief: { intent: 'surreal', styleSpec: 'flat', constraints: { universeId: 'u1' } },
+    }));
+    await runScheduledCommission('commission-1');
+    const [params] = createProjectMock.mock.calls[0];
+    expect(params.directive.goal).toContain('Visual style to embrace: ink wash');
+    expect(params.styleSpec).toContain('Visual style to embrace: ink wash');
+    expect(params.styleSpec.endsWith('flat')).toBe(true);
   });
 
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {

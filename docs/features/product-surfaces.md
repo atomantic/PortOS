@@ -109,7 +109,7 @@ An end-to-end creative production suite for authors, worldbuilders, filmmakers, 
 | **Rounds & Rounds Guide** | `/rounds`, `/rounds/guide` | Composition and learning tool for a cappella musical rounds, multi-part vocal harmonies, lead sheets, and solfège notation. | — |
 | **SongBook** | `/songbook` | Interactive chord charts, guitar tablature, lyric repertoire, and auto-scrolling practice sheet music. | — |
 | **Creative Director** | `/creative-director` | Multi-scene episodic video production orchestrator: turn briefs into treatments, storyboards, render plans, and completed episodes. | — |
-| **Creative Commissions** | `/creative-commission` | Standing briefs and scheduled/nightly autonomous media generation aligning with personal taste profiles and feedback. | — |
+| **Creative Commissions** | `/creative-commission` | Standing briefs and scheduled/nightly autonomous media generation aligning with personal taste profiles and feedback. A universe and/or mood board can be picked as the style source: each run loads its style tags and reference images as the Creative Director's art-direction base. | — |
 | **Music Video Studio** | `/music-video` | Audio-reactive video creation, beat-detection synchronization, scene choreography, and tempo alignment. | — |
 | **Sharing & Conflict Resolution** | `/sharing`, `/sharing/duplicates`, `/sharing/conflicts` | Collaborative asset exchange via cloud storage buckets (Google Drive, Dropbox, iCloud, Syncthing) with duplicate reconciliation and conflict recovery journals. | — |
 
