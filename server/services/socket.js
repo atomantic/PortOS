@@ -35,6 +35,7 @@ import {
   validateSocketData,
   errorRecoverSchema
 } from '../lib/socketValidation.js';
+import { registerEidoverseTravelHandlers } from '../sockets/eidoverseTravel.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
 import { registerProcessHandlers } from '../sockets/processes.js';
 import { registerAppHandlers } from '../sockets/apps.js';
@@ -203,6 +204,7 @@ const SOCKET_HANDLER_REGISTRARS = [
   registerProcessHandlers,
   registerLogHandlers,
   registerSubscriptionHandlers,
+  registerEidoverseTravelHandlers,
   registerErrorHandlers,
   registerShellHandlers,
   registerItermHandlers,

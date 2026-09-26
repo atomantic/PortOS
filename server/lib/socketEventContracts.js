@@ -76,6 +76,32 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),
   'detect:start': input(detectStartSchema, 'Start streamed application detection.'),
+  'eidoverse-travel:subscribe': {
+    direction: 'client-to-server',
+    summary: 'Watch guest destinations while an operator travel panel is visible.',
+    payloadSchema: { type: 'null' },
+  },
+  'eidoverse-travel:unsubscribe': {
+    direction: 'client-to-server',
+    summary: 'Stop watching guest destinations; the last subscriber stops external probes.',
+    payloadSchema: { type: 'null' },
+  },
+  'eidoverse-travel:destinations': {
+    direction: 'server-to-client',
+    summary: 'Changed guest destination snapshot for subscribed operator panels only.',
+    payloadSchema: {
+      type: 'object', required: ['destinations'], additionalProperties: false,
+      properties: {
+        destinations: {
+          type: 'array',
+          items: {
+            type: 'object', required: ['peerId', 'label'], additionalProperties: false,
+            properties: { peerId: { type: 'string' }, label: { type: 'string' } },
+          },
+        },
+      },
+    },
+  },
   'error:recover': input(errorRecoverSchema, 'Request a bounded recovery task for a reported error.'),
   'fableloom:fal-video:changed': Object.freeze({
     direction: 'server-to-client',
