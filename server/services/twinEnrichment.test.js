@@ -137,6 +137,17 @@ describe('rollupListen / rollupWatch', () => {
     // 3 plays, 2 distinct URIs → not collapsed by shared title.
     expect(r.novelty).toEqual({ total: 3, distinct: 2, repeats: 1, noveltyRatio: 0.667 });
   });
+  it('counts a live trackId and an imported trackUri for the same track as one identity', () => {
+    const mixed = [
+      { kind: 'media.listen', title: 'Song', metadata: { trackId: 'example123' } },
+      { kind: 'media.listen', title: 'Song', metadata: { trackUri: 'spotify:track:example123' } },
+      { kind: 'media.listen', title: 'Song', metadata: { trackId: 'other456' } },
+      { kind: 'media.listen', title: 'Ep', metadata: { trackUri: 'spotify:episode:example123' } },
+    ];
+    expect(rollupListen(mixed.slice(0, 2)).novelty).toEqual({ total: 2, distinct: 1, repeats: 1, noveltyRatio: 0.5 });
+    // Same title, different id stays distinct; an episode never collides with a track.
+    expect(rollupListen(mixed).novelty).toEqual({ total: 4, distinct: 3, repeats: 1, noveltyRatio: 0.75 });
+  });
   it('rolls up only media.watch events with channels + novelty', () => {
     const watches = [
       { kind: 'media.watch', title: 'V1', metadata: { videoId: 'v1', channel: 'Chan', topics: ['tech'] } },
