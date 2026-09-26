@@ -88,10 +88,22 @@ const GIT_ENUMERATION = /['"](?:ls-files|grep)['"]/;
  */
 const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?trackedFiles\.js['"]/;
 
+/**
+ * A recursive directory walk (#8723): a call to one of the shared source
+ * walkers in server/lib/testHelper.js, or a `readdirSync(…, { recursive: true })`.
+ * Matched against comment-stripped source so a comment describing a walk
+ * does not register one.
+ */
+const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(/;
+const RECURSIVE_READDIR = /readdirSync\s*\([^)]*\brecursive\s*:\s*true/;
+const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm, '');
+
 /** True when `source` asserts over the tracked tree instead of over its imports. */
-export const scansTrackedTree = (source) => (
-  (GIT_CALL.test(source) && GIT_ENUMERATION.test(source)) || TRACKED_HELPER.test(source)
-);
+export const scansTrackedTree = (source) => {
+  const code = stripLineComments(source);
+  return (GIT_CALL.test(source) && GIT_ENUMERATION.test(source)) || TRACKED_HELPER.test(source)
+    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code);
+};
 
 /** Which runner owns `relPath` (a `git ls-files`-relative path): 'client' or 'server'. */
 const ownerRootFor = (relPath) => (relPath.startsWith('client/src/') ? 'client' : 'server');
@@ -154,11 +166,18 @@ describe('repo-scanning guards are reachable by CI selection (#5055)', () => {
     expect(scansTrackedTree("import { thing } from './thing.js';\nexpect(thing()).toBe(1);")).toBe(false);
     // A comment mentioning the command is not an invocation.
     expect(scansTrackedTree('// enumerated via git ls-files rather than a walk')).toBe(false);
+    // Directory walkers (#8723): the shared source walkers and a recursive readdir.
+    expect(scansTrackedTree("const offenders = collectServerSources().filter(bad);")).toBe(true);
+    expect(scansTrackedTree("for (const f of collectClientSources()) check(f);")).toBe(true);
+    expect(scansTrackedTree("const all = readdirSync(root, { recursive: true });")).toBe(true);
+    expect(scansTrackedTree("// a readdirSync(root, { recursive: true }) walk is too slow")).toBe(false);
+    expect(scansTrackedTree("rmSync(dir, { recursive: true, force: true });")).toBe(false);
   });
 
   it('finds the known scanners', () => {
     expect(scanners).toContain('scripts/agent-instructions-files.test.js');
     expect(scanners).toContain('scripts/tailnet-identity-leak.test.js');
+    expect(scanners).toContain('server/lib/textUtils.test.js');
     expect(scanners.length).toBeGreaterThanOrEqual(8);
   });
 
