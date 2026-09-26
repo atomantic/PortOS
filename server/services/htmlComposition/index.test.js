@@ -4,8 +4,6 @@ import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
@@ -13,6 +11,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
+import { _cleanupTestBrowser } from './testBrowserCleanup.js';
 
 let endpoint;
 vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
@@ -62,33 +61,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     browserSession = await browser.newBrowserCDPSession();
   }, 30000);
 
-  afterAll(async () => {
-    let deadline;
-    let escalation;
-    try {
-      // Wait for process exit, not stdio close: Chrome descendants can retain
-      // stderr after the owned browser exits. Signal exits leave exitCode null.
-      // Subscribe before disconnect/termination so fast exits cannot be missed.
-      const running = proc && proc.exitCode === null && proc.signalCode === null;
-      let processSettled = !running;
-      let browserSettled = !browser;
-      const exited = running ? once(proc, 'exit').then(() => { processSettled = true; }) : Promise.resolve();
-      if (running) escalation = killWithEscalation(proc, {
-        label: 'HTML composition test Chrome', stillRunning: () => true, delayMs: 2000,
-      });
-      await Promise.race([
-        Promise.all([browser?.close().then(() => { browserSettled = true; }), exited]),
-        new Promise((_, reject) => {
-          deadline = setTimeout(() => reject(new Error(`HTML composition Chrome teardown stalled: browserSettled=${browserSettled}, processSettled=${processSettled}, exitCode=${proc?.exitCode}, signalCode=${proc?.signalCode}`)), 20000);
-        }),
-      ]);
-    } finally {
-      clearTimeout(deadline);
-      clearTimeout(escalation);
-      proc?.stderr?.destroy();
-      cleanupTempDataRoots();
-    }
-  });
+  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
 
   it('awaits every seek, encodes exactly 12 frames, keeps the target hidden and registers a thumbnail', async () => {
     const input = await composition();
