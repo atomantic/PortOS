@@ -14,6 +14,7 @@
  * record, never federated, and never committed.
  */
 
+import { instanceEvents } from './instanceEvents.js';
 import { ensureTailcatIngress } from './tailcatIngress.js';
 import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -88,6 +89,7 @@ async function loadServeData() {
 async function saveServeEntry(entry) {
   await ensureDir(PATHS.data);
   await atomicWrite(SERVE_FILE, { version: 1, serve: entry });
+  instanceEvents.emit('tailcat:serve:changed');
 }
 
 async function readServeEntry() {
@@ -124,7 +126,10 @@ async function markServeFailed(error) {
     status: 'failed',
     lastError: detail || 'unknown error',
     lastErrorAt: new Date().toISOString(),
-  }).catch(() => null);
+  }).catch(() => {
+    // Process state still changed even if its failure cannot be persisted.
+    instanceEvents.emit('tailcat:serve:changed');
+  });
 }
 
 /**
@@ -330,6 +335,7 @@ function killLiveServe() {
   const child = liveServe?.child;
   // Relinquish ownership before signalling: a synchronous exit is intentional.
   liveServe = null;
+  if (child) instanceEvents.emit('tailcat:serve:changed');
   if (child && !child.killed) {
     try { child.kill('SIGTERM'); } catch { /* best-effort */ }
   }

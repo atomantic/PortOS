@@ -690,6 +690,8 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 
 // Set up instance event forwarding
 function setupInstanceEventForwarding() {
+  // Invalidation only: the copyable serve capability stays behind the status API.
+  instanceEvents.on('tailcat:serve:changed', () => ioInstance?.emit('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
