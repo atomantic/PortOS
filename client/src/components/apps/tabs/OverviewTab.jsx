@@ -1,10 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone } from 'lucide-react';
+import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone, Clapperboard } from 'lucide-react';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { isStandardizable, NON_PM2_TYPES } from '../constants';
-import LaunchVideoPanel from '../LaunchVideoPanel';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -127,7 +126,18 @@ export default function OverviewTab({ app, onRefresh }) {
 
   return (
     <div className="space-y-6">
-      <LaunchVideoPanel key={app.id} app={app} />
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-port-border bg-port-card p-4">
+        <div>
+          <h2 className="font-semibold">Launch videos</h2>
+          <p className="text-sm text-port-text-muted">Make a short launch video with any agent, then preview and download every take.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link to={`/apps/${encodeURIComponent(app.id)}/launch-video`} className="inline-flex items-center gap-2 rounded border border-port-border px-3 py-2 text-port-text hover:border-port-accent">
+            <Clapperboard size={16} aria-hidden="true" />View launch videos
+          </Link>
+          <Link to={`/apps/${encodeURIComponent(app.id)}/launch-video?launchVideo=true`} className="rounded bg-port-accent px-3 py-2 text-white">Make launch video</Link>
+        </div>
+      </div>
       {/* Capped width so key/value pairs stay legible. (JIRA config + the sprint
           Kanban board, which needed the full page width, now live on the app's
           own JIRA tab.) */}

@@ -1,34 +1,124 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
+import { Download } from 'lucide-react';
 import Drawer from '../Drawer';
+import ProviderModelSelector from '../ProviderModelSelector';
+import useProviderModels from '../../hooks/useProviderModels';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
 import { createAppLaunchVideo, getAppLaunchVideos } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
+import { enabledProcessProviderFilter } from '../../utils/providerTypes';
+import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
+const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
+const posterUrl = video => `/data/video-thumbnails/${encodeURIComponent(video.thumbnail)}`;
 
-export default function LaunchVideoPanel({ app }) {
-  const [search, setSearch] = useSearchParams();
-  const open = search.get('launchVideo') === 'true';
+// The run is an agent task, so it takes the same provider/model/effort pin as
+// every other manual CoS dispatch. Mounted only while the drawer is open, so
+// the provider catalog is fetched on demand.
+function LaunchVideoForm({ appId, onQueued }) {
   const [tone, setTone] = useState('default');
   const [direction, setDirection] = useState('');
   const [format, setFormat] = useState('landscape');
   const [duration, setDuration] = useState(20);
   const [music, setMusic] = useState(false);
   const [musicTrack, setMusicTrack] = useState('');
-  const [tracks, setTracks] = useState([]);
+  const [tracks, setTracks] = useState(null);
+  const [effort, setEffort] = useState('');
+  const [error, setError] = useState('');
+  const submitting = useRef(false);
+  const {
+    providers, selectedProviderId, selectedModel, availableModels, loading: providersLoading,
+    setSelectedProviderId, setSelectedModel,
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
+
+  useEffect(() => {
+    let active = true;
+    listPipelineMusicLibrary({ silent: true }).then(result => {
+      if (active) setTracks(result.tracks);
+    }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
+    return () => { active = false; };
+  }, []);
+
+  const [submit, running] = useAsyncAction(async () => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setError('');
+    await createAppLaunchVideo(appId, {
+      tone, direction, format, targetDurationSec: duration,
+      ...(music ? { musicTrack } : {}),
+      ...(selectedProviderId ? { provider: selectedProviderId } : {}),
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(effort ? { effort } : {}),
+    }, { silent: true }).then(onQueued, err => setError(err.message)).finally(() => { submitting.current = false; });
+  });
+
+  return <form className="space-y-4" onSubmit={event => { event.preventDefault(); submit(); }}>
+    {error && <p role="alert" className="text-port-error">{error}</p>}
+    <section className="space-y-2">
+      <div className="text-xs uppercase tracking-wide text-gray-500">Agent</div>
+      <ProviderModelSelector
+        providers={providers}
+        selectedProviderId={selectedProviderId}
+        selectedModel={selectedModel}
+        availableModels={availableModels}
+        loading={providersLoading}
+        onProviderChange={id => { setSelectedProviderId(id); setEffort(''); }}
+        onModelChange={setSelectedModel}
+        effort={effort}
+        onEffortChange={setEffort}
+        emptyProviderOption="Auto (default)"
+        emptyModelOption="Default model"
+        highlightToolUse
+      />
+    </section>
+    <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+    <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
+    <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+    <div><label htmlFor="launch-duration">Duration (15–25 seconds)</label><input id="launch-duration" type="number" min={15} max={25} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
+    <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
+    {music && <fieldset className="space-y-2">
+      <legend>Music-library track</legend>
+      {tracks === null && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
+      {tracks?.length === 0 && <p>Add a track to the Music library first.</p>}
+      {!!tracks?.length && <ul className="max-h-80 space-y-2 overflow-y-auto">
+        {tracks.map((track, index) => {
+          const id = `launch-track-${index}`;
+          return <li key={track.filename} className={`rounded border p-2 ${musicTrack === track.filename ? 'border-port-accent' : 'border-port-border'}`}>
+            <label htmlFor={id} className="flex cursor-pointer items-start gap-2">
+              <input id={id} type="radio" name="launch-track" required value={track.filename} checked={musicTrack === track.filename} onChange={() => setMusicTrack(track.filename)} className="mt-1" />
+              <span className="min-w-0">
+                <span className="block truncate text-port-text">{track.label || track.filename}</span>
+                <span className="block truncate font-mono text-xs text-gray-500">{track.filename} · {formatDateTime(track.updatedAt)} · {formatBytes(track.sizeBytes)}</span>
+              </span>
+            </label>
+            <audio controls preload="none" className="mt-2 h-8 w-full" src={`/data/music/${encodeURIComponent(track.filename)}`} aria-label={`Preview ${track.label || track.filename}`} />
+          </li>;
+        })}
+      </ul>}
+    </fieldset>}
+    <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
+    <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+  </form>;
+}
+
+export default function LaunchVideoPanel({ app }) {
+  const [search, setSearch] = useSearchParams();
+  const open = search.get('launchVideo') === 'true';
   const [videos, setVideos] = useState([]);
   const [error, setError] = useState('');
   const [queued, setQueued] = useState(false);
-  const submitting = useRef(false);
-  const setOpen = value => setSearch(prev => {
+  const setParam = (key, value) => setSearch(prev => {
     const next = new URLSearchParams(prev);
-    if (value) next.set('launchVideo', 'true'); else next.delete('launchVideo');
+    if (value) next.set(key, value); else next.delete(key);
     return next;
   });
+  // The previewed take lives in the URL so a specific video is linkable.
+  const selected = videos.find(video => video.id === search.get('video')) ?? videos[0];
 
   useEffect(() => {
     let active = true;
@@ -46,51 +136,37 @@ export default function LaunchVideoPanel({ app }) {
     return () => { active = false; socket.off('video-gen:completed', completed); socket.off('connect', load); };
   }, [app.id]);
 
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    listPipelineMusicLibrary({ silent: true }).then(result => {
-      if (active) setTracks(result.tracks);
-    }).catch(err => { if (active) setError(err.message); });
-    return () => { active = false; };
-  }, [open]);
-
-  const [submit, running] = useAsyncAction(async () => {
-    if (submitting.current) return;
-    submitting.current = true;
-    await createAppLaunchVideo(app.id, {
-      tone, direction, format, targetDurationSec: duration,
-      ...(music ? { musicTrack } : {}),
-    }, { silent: true }).then(() => setQueued(true)).finally(() => { submitting.current = false; });
-  });
-
   return <section className="rounded-lg border border-port-border bg-port-card p-4 space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <h2 className="font-semibold">Launch video</h2>
-      <button type="button" className={buttonClass} onClick={() => { setQueued(false); setOpen(true); }}>
+      <h2 className="font-semibold">Launch videos</h2>
+      <button type="button" className={buttonClass} onClick={() => { setQueued(false); setParam('launchVideo', 'true'); }}>
         {videos.length ? 'Make another launch video' : 'Make launch video'}
       </button>
     </div>
     <p className="text-sm text-port-text-muted">Plan a short video using recreated screens and fictional content. Nothing is uploaded or posted.</p>
     {error && <p role="alert" className="text-port-error">{error}</p>}
-    {videos[0] && <div className="space-y-2">
-      <video controls preload="metadata" className="max-h-80 w-full" src={`/data/videos/${encodeURIComponent(videos[0].filename)}`} poster={`/data/video-thumbnails/${encodeURIComponent(videos[0].thumbnail)}`} aria-label="Latest launch video" />
-      <p className="whitespace-pre-wrap">{videos[0].caption}</p>
-      <button type="button" className="text-port-accent" onClick={() => copyToClipboard(videos[0].caption)}>Copy caption</button>
-      <Link className="ml-4 text-port-accent" to="/media/history">Media History</Link>
+    {!videos.length && !error && <p className="text-sm text-port-text-muted">No launch videos yet.</p>}
+    {selected && <div className="space-y-2">
+      <video key={selected.id} controls preload="metadata" className="max-h-[60vh] w-full bg-black" src={videoUrl(selected)} poster={posterUrl(selected)} aria-label="Selected launch video" />
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        <span className="text-port-text-muted">{formatDateTime(selected.createdAt)}{Number.isFinite(selected.durationSec) ? ` · ${formatDurationSec(selected.durationSec)}` : ''}</span>
+        <a className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(selected)} download={`${app.id}-launch-video-${selected.id}.mp4`}><Download size={14} aria-hidden="true" />Download</a>
+        <button type="button" className="text-port-accent" onClick={() => copyToClipboard(selected.caption)}>Copy caption</button>
+        <Link className="text-port-accent" to="/media/history">Media History</Link>
+      </div>
+      <p className="whitespace-pre-wrap">{selected.caption}</p>
     </div>}
-    <Drawer open={open} onClose={() => setOpen(false)} title="Make launch video" size="sm">
-      {queued ? <div className="space-y-3"><p>Launch video queued. Closing this drawer leaves the run active.</p><Link className="text-port-accent" to="/cos/agents">Open CoS agents to follow or cancel the run</Link></div> :
-        <form className="space-y-4" onSubmit={event => { event.preventDefault(); submit(); }}>
-          <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
-          <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
-          <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
-          <div><label htmlFor="launch-duration">Duration (15–25 seconds)</label><input id="launch-duration" type="number" min={15} max={25} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
-          <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
-          {music && <div><label htmlFor="launch-track">Music-library track</label><select id="launch-track" required className={inputClass} value={musicTrack} onChange={event => setMusicTrack(event.target.value)}><option value="">Choose a track</option>{tracks.map(track => <option key={track.filename} value={track.filename}>{track.label}</option>)}</select>{!tracks.length && <p>Add a track to the Music library first.</p>}</div>}
-          <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-          <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
-        </form>}
+    {videos.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+      {videos.map(video => <li key={video.id}>
+        <button type="button" aria-pressed={video.id === selected?.id} onClick={() => setParam('video', video.id)} className={`w-full overflow-hidden rounded border text-left ${video.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`}>
+          <img src={posterUrl(video)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
+          <span className="block truncate p-1 text-xs text-port-text-muted">{formatDateTime(video.createdAt)}</span>
+        </button>
+      </li>)}
+    </ul>}
+    <Drawer open={open} onClose={() => setParam('launchVideo', null)} title="Make launch video" size="md">
+      {queued ? <div className="space-y-3"><p>Launch video queued. Closing this drawer leaves the run active.</p><Link className="text-port-accent" to="/cos/agents">Open CoS agents to follow or cancel the run</Link></div>
+        : open && <LaunchVideoForm appId={app.id} onQueued={() => setQueued(true)} />}
     </Drawer>
   </section>;
 }
