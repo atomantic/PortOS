@@ -254,8 +254,8 @@ that started working again goes quiet — a latched "no route" would be the same
 lie as a permanently green "running", pointing the other way.
 
 **When an add reports the tunnel could not reach the remote, or a live forward
-shows `no route`,** the tunnel — not PortOS — is what to look at. The
-usual cause on macOS is a local network filter (Little Snitch and friends)
+shows `no route`,** check both the remote ingress and the tunnel. One possible
+cause on macOS is a local network filter (Little Snitch and friends)
 denying the `tailcat` binary itself: `tailcat forward --verbose` then logs a
 relay connect that dies the instant it is established, while `curl` to the same
 relay from the same machine succeeds.
@@ -272,6 +272,32 @@ reaches the remote — which is also why the far side shows no activity. Allow
 the `tailcat` binary outbound in the filter, then Retry the forward. If outbound
 allow-listing is impractical on this host, switch to **They dial us**: serve
 here and have the sandbox (or other good initiator) Dial them toward this node.
+
+### Restoring a lost connection
+
+A running Tailcat process proves neither that the tunnel works nor that the
+remote PortOS ingress is listening. Recover in this order:
+
+1. On the remote machine, confirm that PortOS answers on its isolated ingress
+   `:5565`, using the install's HTTP/HTTPS mode. A healthy main API on `:5555`
+   alone does not establish that the ingress is ready.
+2. In the remote **Tailcat serve (this node)** panel, use **Restart serve** even
+   if the process still says **serving**. Restart uses the saved key and keeps
+   restore-on-boot enabled. Do not generate a replacement key as a restart step.
+3. On the dialing machine, use **Retry** on the saved forward. PortOS verifies
+   an HTTP response through the tunnel, then immediately probes the peer rather
+   than waiting for its previous failure backoff (which can reach 24 hours).
+   If relay selection changed the address, use **Replace remote address** on that
+   same forward and paste the new address copied privately from the remote. This
+   preserves the peer, credentials and pairing; it does not require Forget/Add.
+4. Check the peer's new health result. A reachable peer asking for credentials
+   needs pairing/authentication; another tunnel timeout needs further transport
+   diagnosis. Compare versions, the served port and saved address, then inspect
+   relay/firewall diagnostics. A ping alone does not verify TCP forwarding.
+
+The local Retry action cannot restart an unreachable remote process. Use the
+remote machine's own UI or an already authorized out-of-band management channel.
+Keep the existing private access boundary and dedicated ingress when recovering.
 
 ### The DERP map has to be reachable — by Go
 

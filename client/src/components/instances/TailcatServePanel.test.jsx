@@ -29,7 +29,7 @@ import socket from '../../services/socket';
 
 afterEach(() => vi.useRealTimers());
 
-import { getTailcatServe, startTailcatServe, stopTailcatServe } from '../../services/api';
+import { getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
 import TailcatServePanel from './TailcatServePanel';
 
 const stopped = {
@@ -78,6 +78,22 @@ describe('TailcatServePanel', () => {
     await waitFor(() => expect(startTailcatServe).toHaveBeenCalled());
     expect(await screen.findByRole('button', { name: 'Copy address' })).toBeInTheDocument();
     expect(screen.getByText(/tcEX…EEEE/)).toBeInTheDocument();
+  });
+
+  it('restarts a live but stale serve without disabling it or replacing its address', async () => {
+    getTailcatServe.mockResolvedValue(serving);
+    let finishRestart;
+    retryTailcatServe.mockImplementationOnce(() => new Promise(resolve => { finishRestart = resolve; }));
+    const user = userEvent.setup();
+    render(<TailcatServePanel />);
+    await user.click(await screen.findByRole('button', { name: 'Restart serve' }));
+    expect(screen.getByRole('button', { name: 'Working...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    await act(async () => finishRestart(serving));
+    expect(screen.getByRole('button', { name: 'Restart serve' })).toBeEnabled();
+    expect(screen.getByText(/tcEX…EEEE/)).toBeInTheDocument();
+    expect(stopTailcatServe).not.toHaveBeenCalled();
+    expect(startTailcatServe).not.toHaveBeenCalled();
   });
 
   it('stops a live serve', async () => {
