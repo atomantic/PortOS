@@ -402,6 +402,64 @@ describe('settings.js', () => {
     });
   });
 
+  // backupScheduler.js's missed-slot catch-up (#8456) needs to tell "this
+  // config produced the missed slot" from "the config was edited after the
+  // slot was missed" — the same shape as timezoneUpdatedAt above.
+  describe('backupConfigUpdatedAt stamping (#8456)', () => {
+    it('stamps when the cron expression changes', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ backup: { enabled: true, destPath: '/dest', cronExpression: '0 0 * * *' } }));
+
+      const before = Date.now();
+      const result = await updateSettings({ backup: { enabled: true, destPath: '/dest', cronExpression: '0 3 * * *' } });
+
+      expect(typeof result.backupConfigUpdatedAt).toBe('number');
+      expect(result.backupConfigUpdatedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it('stamps when enabled toggles', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ backup: { enabled: true, destPath: '/dest' } }));
+
+      const result = await updateSettings({ backup: { enabled: false, destPath: '/dest' } });
+
+      expect(typeof result.backupConfigUpdatedAt).toBe('number');
+    });
+
+    it('stamps when destPath changes', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ backup: { enabled: true, destPath: '/dest-a' } }));
+
+      const result = await updateSettings({ backup: { enabled: true, destPath: '/dest-b' } });
+
+      expect(typeof result.backupConfigUpdatedAt).toBe('number');
+    });
+
+    it('does NOT stamp when an unrelated backup field changes (excludePaths)', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ backup: { enabled: true, destPath: '/dest', excludePaths: [] } }));
+
+      const result = await updateSettings({ backup: { enabled: true, destPath: '/dest', excludePaths: ['/scratch'] } });
+
+      expect(result.backupConfigUpdatedAt).toBeUndefined();
+    });
+
+    it('does NOT stamp when an unrelated top-level setting is saved', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ backup: { enabled: true, destPath: '/dest' }, theme: 'dark' }));
+
+      const result = await updateSettings({ theme: 'light' });
+
+      expect(result.backupConfigUpdatedAt).toBeUndefined();
+    });
+
+    it('preserves an existing backupConfigUpdatedAt across an unrelated save', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({
+        backup: { enabled: true, destPath: '/dest' },
+        backupConfigUpdatedAt: 1234567890
+      }));
+
+      const result = await updateSettings({ theme: 'dark' });
+
+      expect(result.backupConfigUpdatedAt).toBe(1234567890);
+    });
+  });
+
   describe('MortalLoom store key pollution guard', () => {
     it('strips MortalLoom-store top-level keys on read', async () => {
       // Simulates the historical corruption: settings.json contains both
