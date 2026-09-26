@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { isAuthEnabled, verifyPassword, verifyRequestSession } from './auth.js';
 // Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
 // on :5560 applies byte-identical credential extraction and CSRF rules.
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
+import { browserRequestRefusal, DEV_PROXY_CLIENT_ADDRESS_HEADER, extractBasicPassword } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { isRegistryPublic } from '../lib/apiRegistry.js';
 import {
@@ -102,6 +102,13 @@ const refusePeerScope = (req, res, path, peer) => {
 
 export const __testing = { verifyBasicPassword };
 
+const BROWSER_REFUSAL_MESSAGES = {
+  CROSS_ORIGIN_BLOCKED: 'Cross-origin request rejected',
+  HOST_NOT_ALLOWED: 'Browser requests must address PortOS by an IP, a local or tailnet name, or a host listed in PORTOS_ALLOWED_HOSTS',
+};
+
+const browserRefusalError = (code) => new ServerError(BROWSER_REFUSAL_MESSAGES[code], { status: 403, code });
+
 const isPublicPath = (path) => {
   if (isAlwaysPublicApiPath(path)) return true;
   // /api/* and /data/* are always gated. /sdapi/* (and any future non-/api
@@ -116,9 +123,10 @@ const isPublicPath = (path) => {
   return true;
 };
 
-// Express middleware. Bypasses everything when auth is off. When it's on,
-// allows the small public set above; gates the rest behind a valid token in
-// the cookie or Authorization: Bearer header.
+// Express middleware. The browser-relay guard (cross-origin + DNS-rebinding
+// Host check) runs in both modes. With auth off everything else passes; with
+// it on, allows the small public set above and gates the rest behind a valid
+// token in the cookie or Authorization: Bearer header.
 export const authGate = async (req, res, next) => {
   const enabled = await isAuthEnabled();
   // Downstream peer-provider routes need to distinguish a verified peer Basic
@@ -133,6 +141,15 @@ export const authGate = async (req, res, next) => {
     req.managedVisitorAuth = await authenticateManagedVisitorRequest(req);
     return next();
   }
+  // Runs FIRST, before the auth-off bypass and isPublicPath: without a password
+  // any web page the user opens could otherwise relay a hidden form POST onto
+  // loopback (where requireHostControl trusts the socket peer), and public
+  // endpoints like /api/auth/logout still mutate state.
+  const refusal = browserRequestRefusal(req);
+  if (refusal) {
+    sendErrorResponse(res, browserRefusalError(refusal));
+    return;
+  }
   if (!enabled) {
     // The pair token is independent of the instance password, so a paired peer
     // stays identified after the password is removed: peer-provider routes
@@ -143,16 +160,6 @@ export const authGate = async (req, res, next) => {
       ? await verifyPeerToken(req.headers) : null;
     if (peer) req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: peer.id };
     return next();
-  }
-  // CSRF guard runs FIRST, before isPublicPath — public endpoints like
-  // /api/auth/logout still mutate state (clear the cookie + revoke the
-  // session), so a same-tailnet attacker could force-logout a user
-  // cross-origin if the guard sat behind the public-path bypass.
-  if (isCrossOrigin(req)) {
-    sendErrorResponse(res, new ServerError('Cross-origin request rejected', {
-      status: 403, code: 'CROSS_ORIGIN_BLOCKED',
-    }));
-    return;
   }
   // Express mounts match case-insensitively. Use the same casing for every
   // authorization check, including public exceptions, without rewriting the
@@ -259,7 +266,7 @@ export const socketHasHostControl = (socket) => hasHostControl({ enabled: false 
 // Socket.IO middleware. Run after a successful HTTP-side handshake — same
 // `req.headers.cookie` is available on `socket.handshake.headers`. When auth
 // is off, every connection is allowed; when on, the handshake must carry a
-// valid cookie/header.
+// valid cookie/header. The browser-relay guard applies in both modes.
 //
 // NOTE: there is intentionally NO `isRegistryPublic` check here. The public
 // API surface (apiRegistry) is HTTP-only — external callers hit REST endpoints,
@@ -275,17 +282,26 @@ const markAuthMethod = (socket, method) => {
   socket.data.portosAuthMethod = method;
 };
 
+// engine.io `allowRequest` for the Socket.IO server: refuses the transport
+// handshake itself (polling and websocket) for a foreign or rebindable browser
+// request, before socketAuthGate ever runs.
+export const allowSocketRequest = (req, callback) => callback(null, browserRequestRefusal(req) === null);
+
 export const socketAuthGate = async (socket, next) => {
   if (!socket.data) socket.data = {};
   socket.data.portosLocalConnection = isLocalConnection(socket.handshake?.address, socket.handshake?.headers);
-  const enabled = await isAuthEnabled();
-  if (!enabled) return next();
   const fakeReq = { headers: socket.handshake?.headers || {} };
-  if (isCrossOrigin(fakeReq)) {
-    const err = new Error('Cross-origin request rejected');
-    err.data = { code: 'CROSS_ORIGIN_BLOCKED' };
+  // Before the auth-off bypass: a foreign page must not drive shell:start /
+  // iterm:input on a password-free install. server/index.js also refuses the
+  // engine.io handshake itself with the same predicate.
+  const refusal = browserRequestRefusal(fakeReq);
+  if (refusal) {
+    const err = new Error(BROWSER_REFUSAL_MESSAGES[refusal]);
+    err.data = { code: refusal };
     return next(err);
   }
+  const enabled = await isAuthEnabled();
+  if (!enabled) return next();
   if (await verifyRequestSession(fakeReq)) {
     markAuthMethod(socket, 'session');
     return next();

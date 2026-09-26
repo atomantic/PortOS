@@ -7,7 +7,7 @@ import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
-import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../lib/portosAuthCore.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER, devProxyForwardedOrigin } from '../lib/portosAuthCore.js';
 import {
   EIDOVERSE_HOST_PATH_PREFIX,
   EIDOVERSE_ROOT_EXACT_PATHS,
@@ -107,6 +107,21 @@ function markProxyClientAddress(proxy) {
   proxy.on('proxyReqWs', mark);
 }
 
+// The API's browser-relay guard compares Origin with Host in both auth modes;
+// changeOrigin rewrites Host to the target, so re-stamp a same-origin Origin
+// to match (a foreign one is forwarded as-is and refused). Covers the HTTP
+// hop and the websocket upgrade.
+function forwardSameOrigin(target) {
+  const stamp = (proxyReq, req) => {
+    const origin = devProxyForwardedOrigin(req, target);
+    if (origin) proxyReq.setHeader('origin', origin);
+  };
+  return (proxy) => {
+    proxy.on('proxyReq', stamp);
+    proxy.on('proxyReqWs', stamp);
+  };
+}
+
 // Dev proxies for the same-origin Eidoverse iframe. Root routes only forward
 // while the API host is active; `/node_modules/` + `/shared/` keep a Referer
 // bypass so Vite's own dependency graph is not stolen.
@@ -117,6 +132,7 @@ function eidoverseDevProxies(target) {
       changeOrigin: true,
       ws: true,
       secure: false,
+      configure: forwardSameOrigin(target),
     },
   };
   for (const exact of EIDOVERSE_ROOT_EXACT_PATHS) {
@@ -125,6 +141,7 @@ function eidoverseDevProxies(target) {
       changeOrigin: true,
       ws: exact === '/ws',
       secure: false,
+      configure: forwardSameOrigin(target),
     };
   }
   for (const prefix of EIDOVERSE_ROOT_PREFIX_PATHS) {
@@ -132,6 +149,7 @@ function eidoverseDevProxies(target) {
       target,
       changeOrigin: true,
       secure: false,
+      configure: forwardSameOrigin(target),
       bypass(req) {
         if (prefix !== '/node_modules/' && prefix !== '/shared/') return undefined;
         const referer = String(req.headers.referer || '');
@@ -201,7 +219,10 @@ export default defineConfig(({ command, mode }) => {
           target: API_TARGET,
           changeOrigin: true,
           secure: false,
-          configure: markProxyClientAddress
+          configure(proxy) {
+            markProxyClientAddress(proxy);
+            forwardSameOrigin(API_TARGET)(proxy);
+          }
         },
         // Every `/data/**` asset mount at once, instead of a hand-maintained
         // list that silently fell behind the server's (see docs/PORTS.md:
@@ -215,7 +236,8 @@ export default defineConfig(({ command, mode }) => {
         '^/data/': {
           target: API_TARGET,
           changeOrigin: true,
-          secure: false
+          secure: false,
+          configure: forwardSameOrigin(API_TARGET)
         },
         // The socket carries host-control events (shell, iTerm2, app updates)
         // gated on a local caller, so its handshake needs the same marker —
@@ -225,7 +247,10 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           ws: true,
           secure: false,
-          configure: markProxyClientAddress
+          configure(proxy) {
+            markProxyClientAddress(proxy);
+            forwardSameOrigin(API_TARGET)(proxy);
+          }
         },
         ...eidoverseDevProxies(API_TARGET),
       }
