@@ -57,6 +57,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'eidoverse:projection': {
+    direction: 'server-to-client',
+    summary: 'Payload-free invalidation after persisted Eidoverse world changes; clients read projection progress through the authenticated API.',
+    payloadSchema: { type: 'object', additionalProperties: false, properties: {} },
+  },
   'jev:policy': {
     direction: 'server-to-client',
     summary: 'Invalidate Jev integration policy after settings persistence or restore invalidation; no settings content.',

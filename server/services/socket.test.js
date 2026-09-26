@@ -8,6 +8,7 @@ import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
+import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -156,6 +157,7 @@ describe('socket.js — initSocket', () => {
     authEvents.removeAllListeners('sessions:revoked-all');
     meatspaceEvents.removeAllListeners();
     modelLifecycleEvents.removeAllListeners();
+    eidoverseWorldEvents.removeAllListeners();
     layaMlxEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
     usageBackfillEvents.removeAllListeners();
@@ -209,6 +211,12 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
     expect(io.emitted).toEqual([['jev:policy', {}]]);
+  });
+
+  it('invalidates Eidoverse projection progress without world content', () => {
+    io.emitted.length = 0;
+    eidoverseWorldEvents.emit('updated', { world: 'Example private world' });
+    expect(io.emitted).toEqual([['eidoverse:projection', {}]]);
   });
 
   it('forwards Laya status without experiment content', () => {

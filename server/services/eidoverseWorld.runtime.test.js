@@ -1,3 +1,4 @@
+import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { createHash } from 'node:crypto';
 import { homedir, hostname, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -347,6 +348,22 @@ describe('Eidoverse private-world lifecycle', () => {
       reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
     });
   }, 60_000);
+
+  it('announces persisted configuration and projection checkpoints without record payloads', async () => {
+    const checkpoints = [];
+    const onUpdate = vi.fn(() => checkpoints.push(mocks.persistedState?.reconciliation?.checkpoint));
+    eidoverseWorldEvents.on('updated', onUpdate);
+    try {
+      await world.updateEidoverseWorldConfig({ humanName: 'Example User' });
+      expect(onUpdate).toHaveBeenCalledWith();
+      await world.projectEidoverseWorld();
+      expect(checkpoints).toContain('applying-environment');
+      expect(checkpoints.at(-1)).toBe('projection-committed');
+      for (const args of onUpdate.mock.calls) expect(args).toEqual([]);
+    } finally {
+      eidoverseWorldEvents.off('updated', onUpdate);
+    }
+  });
 
   it('reads projection progress without runtime, app-registry, or library probes', async () => {
     await world.ensureEidoverseWorldConfig();

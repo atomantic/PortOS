@@ -1,5 +1,5 @@
 // @vitest-environment-options {"settings":{"navigation":{"disableChildFrameNavigation":true}}}
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
@@ -18,6 +18,13 @@ vi.mock('../services/api', () => ({
   startEidoverseHost: vi.fn(),
   updateEidoverseWorldConfig: vi.fn(),
 }));
+
+vi.mock('../services/socket', async () => {
+  const { EventEmitter } = await import('node:events');
+  return { default: new EventEmitter() };
+});
+import socket from '../services/socket';
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 vi.mock('../components/BrailleSpinner', () => ({
   default: ({ text }) => <span>{text}</span>,
@@ -653,7 +660,7 @@ describe('Eidoverse hosted page', () => {
     await awaitEnabled(refresh);
   });
 
-  it('keeps a fresh-world curtain up until the dawn environment is applied', async () => {
+  it('pushes projection progress without polling and reconciles once on reconnect and tab show', async () => {
     let resolveProjection;
     api.getEidoverseWorldStatus.mockResolvedValueOnce({
       ...worldResponse,
@@ -670,6 +677,10 @@ describe('Eidoverse hosted page', () => {
     fireEvent.load(frame);
 
     expect(screen.getByText(/Preparing the PortOS systems garden/)).toBeInTheDocument();
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(api.getEidoverseWorldProjectionStatus).not.toHaveBeenCalled();
     api.getEidoverseWorldProjectionStatus.mockResolvedValue({
       projection: worldResponse.projection,
       design: {
@@ -677,22 +688,45 @@ describe('Eidoverse hosted page', () => {
         reconciliation: { status: 'applying', checkpoint: 'environment-complete' },
       },
     });
-    await waitFor(
-      () => expect(screen.queryByText(/Preparing the PortOS systems garden/)).not.toBeInTheDocument(),
-      { timeout: 2500 },
-    );
+    await act(async () => { socket.emit('eidoverse:projection', {}); });
+    expect(screen.queryByText(/Preparing the PortOS systems garden/)).not.toBeInTheDocument();
     expect(api.getEidoverseWorldStatus).toHaveBeenCalledOnce();
-    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalled();
+    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(1);
+    await act(async () => { socket.emit('connect'); });
+    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
+    visibility.mockReturnValue('hidden');
+    fireEvent(document, new Event('visibilitychange'));
+    await act(async () => { socket.emit('eidoverse:projection', {}); });
+    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(2);
+    visibility.mockReturnValue('visible');
+    await act(async () => { fireEvent(document, new Event('visibilitychange')); });
+    expect(api.getEidoverseWorldProjectionStatus).toHaveBeenCalledTimes(3);
+
+    // A read already in flight cannot overwrite the completed mutation response.
+    let finishOldRead;
+    api.getEidoverseWorldProjectionStatus.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }));
+    await act(async () => { socket.emit('eidoverse:projection', {}); });
 
     await act(async () => {
       resolveProjection({
         success: true,
         projection: worldResponse.projection,
         presence: { connected: true },
-        design,
+        design: { ...design, reconciliation: { status: 'complete', checkpoint: 'projection-committed' } },
         recipe,
       });
     });
+    await act(async () => {
+      finishOldRead({
+        projection: { lastSummary: null },
+        design: { lastAppliedVersion: null, reconciliation: { status: 'applying', checkpoint: 'plan-ready' } },
+      });
+    });
+    expect(screen.getByRole('button', { name: 'Refresh world' })).toBeEnabled();
+    expect(screen.queryByText(/Preparing the PortOS systems garden/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'World controls' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Updates & Advanced' }));
+    expect(screen.getByText('projection-committed')).toBeInTheDocument();
   });
 
   it('resets one semantic district without clearing the full world design', async () => {
