@@ -54,6 +54,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate death-clock projection after local or federated inputs change.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'cos:mind:visibility': {
+    direction: 'server-to-client',
+    summary: 'Coalesced environment visibility invalidation for subscribed CoS views; no private records.',
+    payloadSchema: { type: 'object', required: ['invalidated'], properties: { invalidated: { type: 'boolean', enum: [true] } }, additionalProperties: false },
+  },
   'cos:goals:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate operational goal progress after learning statistics persist.',

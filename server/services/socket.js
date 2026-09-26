@@ -423,6 +423,18 @@ function broadcastToCos(event, data) {
 // Broadcast to error subscribers only
 function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event, data); }
 
+// Environment changes need no Mind turn. Coalesce bursts into one bounded,
+// payload-free invalidation and send it only to existing CoS subscribers.
+let mindVisibilityTimer = null;
+function invalidateMindVisibility() {
+  if (!cosSubscribers.size || mindVisibilityTimer) return;
+  mindVisibilityTimer = setTimeout(() => {
+    mindVisibilityTimer = null;
+    broadcastToCos('cos:mind:visibility', { invalidated: true });
+  }, 250);
+  mindVisibilityTimer.unref?.();
+}
+
 // Set up CoS event forwarding
 function setupCosEventForwarding() {
   // Status events
@@ -493,6 +505,10 @@ function setupCosEventForwarding() {
   // Programmatic scheduled handlers report what they actually did — no agent
   // task is created, so there is nothing else for the user to watch.
   cosEvents.on('schedule:on-demand-handled', (data) => broadcastToCos('cos:schedule:on-demand-handled', data));
+  for (const event of ['config:changed', 'status', 'status:paused', 'status:resumed',
+    'agent:spawned', 'agent:updated', 'agent:completed', 'health:check', 'health:critical']) {
+    cosEvents.on(event, invalidateMindVisibility);
+  }
 }
 
 // Set up error event forwarding
@@ -520,6 +536,7 @@ function setupErrorEventForwarding() {
 // Set up apps event forwarding - broadcasts to ALL clients
 function setupAppsEventForwarding() {
   appsEvents.on('changed', (data) => {
+    invalidateMindVisibility();
     if (ioInstance) {
       ioInstance.emit('apps:changed', data);
     }

@@ -151,6 +151,34 @@ describe('socket.js — initSocket', () => {
     meatspaceEvents.removeAllListeners();
   });
 
+  it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
+    vi.useFakeTimers();
+    const subscriber = makeSocket('mind-subscriber');
+    const outsider = makeSocket('mind-outsider');
+    createdSockets.push(subscriber, outsider);
+    io.connect(subscriber);
+    io.connect(outsider);
+    subscriber.handlers['cos:subscribe']();
+    try {
+      for (const name of ['config:changed', 'agent:spawned', 'agent:completed', 'health:check']) {
+        queueListeners.cos.filter(([event]) => event === name).forEach(([, handler]) => handler({ privateContent: 'example private record' }));
+      }
+      vi.advanceTimersByTime(249);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([
+        ['cos:mind:visibility', { invalidated: true }],
+      ]);
+      expect(outsider.emitted.filter(([name]) => name === 'cos:mind:visibility')).toEqual([]);
+      subscriber.handlers['cos:unsubscribe']();
+      queueListeners.cos.filter(([event]) => event === 'health:check').forEach(([, handler]) => handler({}));
+      vi.advanceTimersByTime(60_000);
+      expect(subscriber.emitted.filter(([name]) => name === 'cos:mind:visibility')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('forwards death-clock invalidations without personal data', () => {
     io.emitted.length = 0;
     meatspaceEvents.emit('death-clock:changed', {});

@@ -24,6 +24,17 @@ const localLlm = vi.hoisted(() => ({
   getToolUseModels: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: (event, handler) => { if (!handlers.has(event)) handlers.set(event, new Set()); handlers.get(event).add(handler); },
+    off: (event, handler) => handlers.get(event)?.delete(handler),
+    emit: vi.fn(),
+    emitServer: event => handlers.get(event)?.forEach(handler => handler()),
+  };
+});
+vi.mock('../../../services/socket', () => ({ default: socket }));
+
 vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
@@ -432,4 +443,40 @@ describe('render loop guard (#8348)', () => {
     expect(providerHook.setSelectedProviderId).toHaveBeenCalledWith('codex');
     expect(providerHook.setSelectedModel).toHaveBeenCalledWith('gpt-5');
   });
+});
+
+it('reconciles Mind status on events, reconnect and reshow without polling or reads after unmount', async () => {
+  const view = renderConfig();
+  await screen.findByText('Waiting for the next wake');
+  vi.useFakeTimers();
+  try {
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(1);
+    api.getPersistentMind.mockResolvedValue({ state: { queuedMessageCount: 9 }, profile: {} });
+    for (const event of ['cos:mind:event', 'cos:mind:status', 'connect']) {
+      const before = api.getPersistentMind.mock.calls.length;
+      await act(async () => socket.emitServer(event));
+      expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
+      expect(screen.getByLabelText('Queued persistent mind messages')).toHaveTextContent('9');
+    }
+    const before = api.getPersistentMind.mock.calls.length;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    await act(async () => socket.emitServer('cos:mind:status'));
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(before);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
+    view.unmount();
+    await act(async () => {
+      socket.emitServer('connect');
+      socket.emitServer('cos:mind:event');
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(api.getPersistentMind).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    vi.useRealTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  }
 });
