@@ -382,6 +382,8 @@ const TASK_INTERVAL_DEFAULTS = {
   // runAfter do-replan so proposals are checked against the freshest available
   // work tracker before a new feature plan is filed.
   'plan-feature':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['product-requirements', 'project-goals', 'open-issues', 'open-pull-requests', 'closed-unmerged-pull-requests'], runAfter: ['do-replan'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
+  // Same tracker-filing posture as plan-feature; the tracker Inventory step already lists issues.
+  'media-render-research': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-pull-requests'], taskMetadata: { useWorktree: false, openPR: false, readOnly: false } },
   // user-action-review proposes automations from the operator-action ledger.
   // fileIssues defaults ON (safer unattended: a filed issue over queued work);
   // flipping it OFF makes the agent queue CoS tasks instead — either way it
@@ -592,6 +594,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
+  'media-render-research': 'Research local Apple Silicon image/video models, runtimes and settings; file ready-to-work issues for improvements (no code)',
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
   'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',

@@ -65,7 +65,7 @@ export const WORKFLOW_STAGES = [
     id: 'plan',
     label: 'Plan',
     description: 'Audit PLAN.md against what actually shipped, surface gaps, and plan new features into the work tracker for the build stage to claim.',
-    taskTypes: ['do-replan', 'plan-feature'],
+    taskTypes: ['do-replan', 'plan-feature', 'media-render-research'],
     jobIds: []
   },
   {
