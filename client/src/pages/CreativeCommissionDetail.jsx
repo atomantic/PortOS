@@ -13,9 +13,7 @@
  *
  * A run's render materializes ASYNCHRONOUSLY — the fire creates the Creative
  * Director project and returns, then the planner/render loop fills it in over
- * the following minutes. The page therefore polls the referenced projects while
- * any of them is still generating (#4149) so a freshly-fired render appears in
- * place; there is no server-side completion event to subscribe to today.
+ * the following minutes. Project-change events refresh only the referenced batch.
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -25,7 +23,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { timeAgo } from '../utils/formatters';
 import CommissionConfigForm from '../components/creative-commission/CommissionConfigForm.jsx';
 import RenderHistory from '../components/creative-commission/RenderHistory.jsx';
@@ -39,80 +37,31 @@ import {
   submitCommissionFeedback, runCommissionNow, getCreativeDirectorProjectsByIds,
 } from '../services/api';
 
-// A CD project's lifecycle status is the only completion signal this page can
-// read (no socket channel, and a commission run row is written once and never
-// updated). These are the statuses where more output can still show up.
-//
-// NOTE the difference from `CreativeDirectorDetail`'s terminal set, which counts
-// 'draft' as settled: there, a draft is a project the user hasn't started. Here,
-// a commission fire creates the project and advances it in the same breath, so a
-// draft we observe is just the sliver before the planner's first status write.
-const GENERATING_PROJECT_STATUSES = new Set(['draft', 'planning', 'rendering', 'stitching']);
-
-// Hard ceiling on how long a `started` run is treated as still in flight. A run
-// whose project stalled (crashed mid-plan) or was pruned would otherwise poll
-// forever on a tab left open — bounding by run age stops that without needing a
-// timer, and generously outlasts any real generation.
-const IN_FLIGHT_RUN_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-const PROJECT_POLL_MS = 5000;
+const PROJECT_EVENTS = ['creative-director:project:changed'];
+const COMMISSION_EVENTS = ['commission:changed'];
 
 export default function CreativeCommissionDetail() {
+  const { id } = useParams();
+  return <CommissionDetail key={id} id={id} />;
+}
+
+function CommissionDetail({ id }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { id } = useParams();
   const [searchParams] = useSearchParams();
   // The run this page was deep-linked to (a scheduled-run notification carries
   // `?run=<runId>`), so the gallery can focus that render rather than whatever is
   // newest by the time the user opens it.
   const focusRunId = searchParams.get('run');
-  const [commission, setCommission] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [loadError, setLoadError] = useState(null);
-  const [reloadNonce, setReloadNonce] = useState(0);
+  const { data: commission, loading, error: loadError, refetch: reloadCommission, updateData: setCommission } = useSocketResource(
+    () => getCommission(id, { silent: true }),
+    { events: COMMISSION_EVENTS, resourceKey: `${id}:${location.key}`, matchesEvent: event => !event?.id || event.id === id },
+  );
+  const notFound = loadError?.status === 404;
   const [form, setForm] = useState(() => toForm({}));
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
-  const [projectsById, setProjectsById] = useState(() => new Map());
-  const [projectsLoading, setProjectsLoading] = useState(false);
-  // When the project batch was last ATTEMPTED — the clock the in-flight run
-  // check reads, so it re-evaluates on every poll tick rather than freezing at
-  // whatever `Date.now()` was during the last render.
-  const [projectsFetchedAt, setProjectsFetchedAt] = useState(0);
-  // The id set the batch last resolved SUCCESSFULLY. Distinct from the
-  // attempted-key ref below: a failed fetch is an attempt but not a load, and
-  // the in-flight check has to keep the two apart — an id missing from a
-  // successful batch is a pruned project (settled), while the same id missing
-  // because the request failed is simply not known yet (retry).
-  const [projectsLoadedKey, setProjectsLoadedKey] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  // Load (and refresh) the deep-linked commission. `location.key` is a dep so a
-  // notification deep link to THIS already-open page (a same-path push) still
-  // refetches and pulls in a just-fired run. `reloadNonce` lets the error-state
-  // Retry button re-run the load.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    getCommission(id, { silent: true })
-      .then((fresh) => {
-        if (cancelled) return;
-        setCommission(fresh);
-        setNotFound(false);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // Only a real 404 means the commission is gone. A transient failure
-        // (network, 5xx, auth) must NOT be misreported as "deleted" — surface it
-        // as a retryable error instead (absent-vs-unreachable, per AGENTS.md).
-        if (err?.status === 404) { setNotFound(true); setLoadError(null); }
-        else setLoadError(err?.message || 'Failed to load commission');
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [id, location.key, reloadNonce]);
 
   // Sync the form to the loaded record ONLY when the target id first resolves —
   // never on the in-place record swaps that rating / Run Now / save trigger, or
@@ -136,81 +85,16 @@ export default function CreativeCommissionDetail() {
     return [...new Set(ids)].sort().join(',');
   }, [commission]);
 
-  // ONE fetch path, shared by the id-set change and the generation poll below
-  // (#4149). `seq` supersedes an in-flight response another call has already
-  // replaced — a poll tick that resolves after the id set changed must not
-  // reinstate the previous set's projects.
-  const projectsFetchSeqRef = useRef(0);
-  const projectsAttemptedKeyRef = useRef(null);
-  const fetchProjects = useCallback(async () => {
-    const seq = (projectsFetchSeqRef.current += 1);
-    if (!projectIdsKey) {
-      setProjectsById(new Map());
-      setProjectsLoading(false);
-      projectsAttemptedKeyRef.current = '';
-      setProjectsLoadedKey('');
-      return null;
-    }
-    // Only the FIRST attempt at a given id set shows "loading…" — a poll tick
-    // must not flash an already-resolved (or known-pruned) card back to the
-    // loading placeholder every few seconds.
-    if (projectsAttemptedKeyRef.current !== projectIdsKey) setProjectsLoading(true);
-    const projects = await getCreativeDirectorProjectsByIds(projectIdsKey.split(','), { silent: true })
-      .catch(() => null); // null = fetch failed; [] = resolved-but-empty (keep the two apart)
-    if (seq !== projectsFetchSeqRef.current) return null;
-    // Index by id, not position: an id that no longer resolves (pruned project)
-    // is absent from the response, and its card degrades to the status-only
-    // placeholder. A FAILED fetch keeps the last good map instead of blanking it.
-    if (Array.isArray(projects)) {
-      setProjectsById(new Map(projects.map((p) => [p.id, p])));
-      setProjectsLoadedKey(projectIdsKey);
-    }
-    projectsAttemptedKeyRef.current = projectIdsKey;
-    setProjectsLoading(false);
-    // Stamped on every ATTEMPT, not just a successful one, so the in-flight age
-    // bound below keeps re-evaluating even while the endpoint is failing.
-    setProjectsFetchedAt(Date.now());
-    return null;
-  }, [projectIdsKey]);
-
-  // Is any run still producing? A run row is written once with status 'started'
-  // and never revisited, so "still generating" has to come from the project it
-  // points at, in a non-terminal CD status.
-  const hasGeneratingRun = useMemo(() => {
-    // The freshness of the data we're judging, not wall-clock render time.
-    const now = projectsFetchedAt || Date.now();
-    // Has the CURRENT id set come back from a successful batch? Until it has, an
-    // unresolved id means "not known yet" (initial load, or a failed attempt
-    // worth retrying) — after it has, the same id means the project was pruned,
-    // and no amount of polling brings it back.
-    const batchIsAuthoritative = projectsLoadedKey === projectIdsKey;
-    return (commission?.runs || []).some((r) => {
-      if (r?.status !== 'started' || !r.projectId) return false;
-      const ranAt = Date.parse(r.ranAt);
-      if (!Number.isFinite(ranAt) || now - ranAt > IN_FLIGHT_RUN_MAX_AGE_MS) return false;
-      const project = projectsById.get(r.projectId);
-      if (!project) return !batchIsAuthoritative;
-      return GENERATING_PROJECT_STATUSES.has(project.status);
-    });
-  }, [commission, projectsById, projectsFetchedAt, projectsLoadedKey, projectIdsKey]);
-
-  // Poll only while something is actually generating; the hook also pauses while
-  // the tab is hidden and re-fires on return. `immediate: false` because the
-  // id-set effect below already owns the first fetch.
-  const { refetch: refetchProjects } = useAutoRefetch(fetchProjects, PROJECT_POLL_MS, {
-    enabled: hasGeneratingRun,
-    immediate: false,
-    pollOnly: true,
-  });
-
-  // Fetch whenever the referenced id set changes (including the initial load and
-  // a Run Now appending a render) — the poll is gated on in-flight work, so it
-  // can't be responsible for the first read. The newest run id is a dep too: a
-  // fire always mints a NEW project today, so the id set moves on its own, but a
-  // run that ever REUSED a project id would otherwise be judged against the
-  // cached 'complete' snapshot and never start polling.
-  const latestRunId = commission?.runs?.length ? commission.runs[commission.runs.length - 1].id : null;
-  useEffect(() => { refetchProjects(); }, [projectIdsKey, latestRunId, refetchProjects]);
+  const latestRunId = commission?.runs?.at(-1)?.id || '';
+  const { data: projects, loading: projectsLoading } = useSocketResource(
+    () => projectIdsKey ? getCreativeDirectorProjectsByIds(projectIdsKey.split(','), { silent: true }) : [],
+    {
+      events: PROJECT_EVENTS,
+      resourceKey: `${id}:${projectIdsKey}:${latestRunId}`,
+      matchesEvent: event => projectIdsKey.split(',').includes(event?.id),
+    },
+  );
+  const projectsById = useMemo(() => new Map((projects || []).map(project => [project.id, project])), [projects]);
 
   const patchForm = useCallback((path, value) => setForm((prev) => patchFormState(prev, path, value)), []);
 
@@ -311,10 +195,10 @@ export default function CreativeCommissionDetail() {
     return (
       <div className="max-w-6xl mx-auto text-center py-16">
         <p className="text-gray-300 mb-1">Couldn’t load this commission.</p>
-        <p className="text-gray-500 text-sm mb-4">{loadError || 'Please try again.'}</p>
+        <p className="text-gray-500 text-sm mb-4">{loadError?.message || 'Please try again.'}</p>
         <div className="flex items-center justify-center gap-2">
           <button
-            onClick={() => setReloadNonce((n) => n + 1)}
+            onClick={() => reloadCommission()}
             className="inline-flex items-center gap-2 bg-port-accent text-white px-3 py-1.5 rounded text-sm"
           >
             Retry

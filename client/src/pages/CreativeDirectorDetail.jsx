@@ -27,11 +27,12 @@ import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
 import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useValidTab } from '../hooks/useValidTab';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
-const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
+const PROJECT_EVENTS = ['creative-director:project:changed'];
+const AGENT_EVENTS = ['cos:agent:spawned', 'cos:agent:completed', 'cos:agent:updated'];
 
 const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview', icon: LayoutList }, { id: 'review', label: 'Review', icon: Eye }, { id: 'artifacts', label: 'Artifacts', icon: Package }, { id: 'segments', label: 'Shots', icon: Film }, { id: 'runs', label: 'Runs', icon: ScrollText }];
 
@@ -60,7 +61,10 @@ function CreativeDirectorProject({ id, basePath }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const editingDraft = searchParams.get('draft') === '1';
   const setEditingDraft = open => setSearchParams(prev => { const next = new URLSearchParams(prev); if (open) next.set('draft', '1'); else next.delete('draft'); return next; }, { replace: true });
-  const [project, setProject] = useState(null);
+  const { data: project, loading, refetch: fetchProject, updateData: setProject } = useSocketResource(
+    () => getCreativeDirectorProject(id, { silent: true }),
+    { events: PROJECT_EVENTS, resourceKey: id, matchesEvent: event => event?.id === id },
+  );
   const tabs = project?.workspace === 'video' ? VIDEO_DRAFT_TABS : TABS;
   const activeTab = useValidTab(tabs, 'overview');
   // Deep-linkable open state for the per-project AI models drawer (URL is the
@@ -74,41 +78,26 @@ function CreativeDirectorProject({ id, basePath }) {
       return params;
     }, { replace: !next });
   }, [setSearchParams]);
-  const [loading, setLoading] = useState(true);
-  const [activeAgents, setActiveAgents] = useState([]);
-  // Extends polling past the terminal-status gate below for a bounded window
-  // after the Overview tab queues a first-pass portrait/music-bed render
-  // (#1818/#1928) — those attach asynchronously to a catalog ingredient or
-  // `project.musicBed` without changing the project's lifecycle status, so a
-  // still-'draft' project (no compose flip to escape TERMINAL_PROJECT_STATUSES)
-  // would otherwise never pick up the result without a manual Refresh.
-  const [pendingAsyncWork, setPendingAsyncWork] = useState(false);
-  const pendingAsyncWorkTimerRef = useRef(null);
-  // Watch the queued first-pass music-bed job (#1933). Its completion attaches
-  // to `project.musicBed` via a durable server-side hook (picked up by polling),
-  // but a FAILURE (engine crash/OOM/sidecar error) has no other client-visible
-  // signal — so subscribe to `audio-gen:*` for the single job id and toast the
-  // outcome. Held in a ref alongside the id so the terminal-state effect below
-  // only toasts once per render, even though polling keeps re-rendering.
+  const { data: agents } = useSocketResource(
+    async () => {
+      const data = await getCosAgents();
+      return (data || []).filter(a => a.status === 'running' && (a.taskId || '').startsWith(`cd-${id}-`));
+    },
+    { namespace: 'cos', events: AGENT_EVENTS, resourceKey: id,
+      matchesEvent: event => (event?.taskId || '').startsWith(`cd-${id}-`) },
+  );
+  const activeAgents = agents || [];
   const [musicBedJobId, setMusicBedJobId] = useState(null);
   const musicBedToastedRef = useRef(null);
-  const extendPollingForAsyncWork = useCallback((opts) => {
-    setPendingAsyncWork(true);
+  const watchAsyncWork = useCallback(opts => {
     if (opts?.musicBedJobId) {
       musicBedToastedRef.current = null;
       setMusicBedJobId(opts.musicBedJobId);
     }
-    clearTimeout(pendingAsyncWorkTimerRef.current);
-    // 3 minutes covers a cold model load + render for the local image/audio
-    // gen backends in the common case; if it runs longer the user can still
-    // hit the manual Refresh button. Not tied to a job-completion signal —
-    // this component has no socket/SSE channel into the media job queue.
-    pendingAsyncWorkTimerRef.current = setTimeout(() => setPendingAsyncWork(false), 3 * 60 * 1000);
   }, []);
-  useEffect(() => () => clearTimeout(pendingAsyncWorkTimerRef.current), []);
 
   // Toast the music-bed render's terminal state exactly once. Success is mostly
-  // cosmetic (polling already renders the Music bed field), but confirms the
+  // cosmetic (project events update the Music bed field), but confirms the
   // background render the user opted into actually landed; failure is the whole
   // point of #1933 — otherwise a crashed render is silently invisible.
   const musicBed = useMediaJobProgress(musicBedJobId, { kind: 'audio' });
@@ -127,58 +116,6 @@ function CreativeDirectorProject({ id, basePath }) {
       setMusicBedJobId(null);
     }
   }, [musicBedJobId, musicBed.status, musicBed.error]);
-
-  const fetchProject = useCallback(async () => {
-    const p = await getCreativeDirectorProject(id).catch(() => null);
-    if (!active.current) return null;
-    setProject(p?.id === id ? p : null);
-    setLoading(false);
-    return null;
-  }, [id]);
-
-  // Poll CoS agents in parallel so the Segments tab can flag the scene that's
-  // currently being worked on, even before the agent PATCHes its status.
-  // Filter by `taskId` prefix `cd-<projectId>-` (agentBridge's id scheme).
-  const fetchAgents = useCallback(async () => {
-    const data = await getCosAgents().catch(() => []);
-    if (!active.current) return null;
-    const prefix = `cd-${id}-`;
-    const mine = (data || []).filter((a) => a.status === 'running' && (a.taskId || '').startsWith(prefix));
-    setActiveAgents(mine);
-    return null;
-  }, [id]);
-
-  // Only poll while the agent could still mutate the project. Once the
-  // status reaches a terminal state, the visibility-paused hook stops firing
-  // — except during the bounded `pendingAsyncWork` window above, which
-  // overrides the terminal gate so a queued first-pass render still surfaces.
-  const pollEnabled = !project?.status || !TERMINAL_PROJECT_STATUSES.has(project.status) || pendingAsyncWork;
-  const poll = useCallback(async () => {
-    await Promise.all([fetchProject(), fetchAgents()]);
-    return null;
-  }, [fetchProject, fetchAgents]);
-  const { refetch: refetchPoll } = useAutoRefetch(poll, 5000, { enabled: pollEnabled });
-
-  // Reset state ONLY when the route id changes, so navigating between
-  // projects (or hitting an error fetch) clears the prior project — but
-  // the 5s poll interval below doesn't keep nulling-and-re-setting the
-  // same project (which previously coupled with the `project?.status`
-  // dep on the polling effect to produce a tight refetch loop). Refetch
-  // immediately on id change so a project swap doesn't leave the previous
-  // project on screen for up to one tick.
-  useEffect(() => {
-    setLoading(true);
-    setProject(null);
-    // A pending-async-work window is per-project intent — don't carry it
-    // across a route swap (the new project has its own poll-gate state).
-    setPendingAsyncWork(false);
-    // Stop watching the prior project's music-bed job on a route swap so its
-    // late failure/completion toast can't land on the newly-opened project.
-    setMusicBedJobId(null);
-    musicBedToastedRef.current = null;
-    clearTimeout(pendingAsyncWorkTimerRef.current);
-    refetchPoll();
-  }, [id, refetchPoll]);
 
   // Stop is destructive and irreversible (SIGKILLs a live agent, cancels queued
   // GPU renders) and sits beside Pause, so it takes the same two-step confirm
@@ -204,21 +141,15 @@ function CreativeDirectorProject({ id, basePath }) {
       start: 'Started', pause: 'Paused', resume: 'Resumed',
       stop: 'Stopped — agent, tasks and queued renders torn down',
     };
-    // Optimistic status: start kicks off planning or rendering depending on
-    // whether a treatment exists; the 5s poll will correct it if the server
-    // resolves to a different status (e.g. planning → rendering).
-    const optimisticStatus = (kind === 'pause' || kind === 'stop') ? 'paused'
-      : kind === 'resume' ? (project?.treatment ? 'rendering' : 'planning')
-      : kind === 'start' ? (project?.treatment ? 'rendering' : 'planning')
-      : null;
     try {
-      if (kind === 'start') await startCreativeDirectorProject(id, { silent: true });
-      else if (kind === 'pause') await pauseCreativeDirectorProject(id, { silent: true });
-      else if (kind === 'resume') await resumeCreativeDirectorProject(id, { silent: true });
-      else if (kind === 'stop') await stopCreativeDirectorProject(id, { silent: true });
+      const actions = { start: startCreativeDirectorProject, pause: pauseCreativeDirectorProject,
+        resume: resumeCreativeDirectorProject, stop: stopCreativeDirectorProject };
+      const result = await actions[kind](id, { silent: true });
       if (!active.current) return;
       toast.success(successMessages[kind] || kind);
-      if (optimisticStatus) setProject((p) => p ? { ...p, status: optimisticStatus } : p);
+      if (result?.id === id) setProject(result);
+      else if (result?.project?.id === id) setProject(result.project);
+      else await fetchProject();
     } catch (err) {
       if (active.current) toast.error(err.message || `Failed to ${kind}`);
     }
@@ -363,7 +294,7 @@ function CreativeDirectorProject({ id, basePath }) {
           <OverviewTab
             project={project}
             onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)}
-            onAsyncWorkQueued={extendPollingForAsyncWork}
+            onAsyncWorkQueued={watchAsyncWork}
           />
         )}
         {project.workspace !== 'video' && activeTab === 'plan' && (

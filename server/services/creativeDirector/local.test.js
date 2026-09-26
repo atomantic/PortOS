@@ -300,3 +300,32 @@ describe('getProjectsByIds (#4148)', () => {
     expect(mockReadJSONFile).not.toHaveBeenCalled();
   });
 });
+
+describe('project invalidation after persistence', () => {
+  it('publishes run completion only after the write and never on a failed write', async () => {
+    const { recordEvents } = await import('../sharing/recordEvents.js');
+    const notifications = [];
+    const listener = event => notifications.push(event);
+    const federated = vi.fn();
+    recordEvents.on('invalidated', listener);
+    recordEvents.on('updated', federated);
+    try {
+      mockReadJSONFile.mockResolvedValue([{ id: 'cd-example', runs: [{ runId: 'run-example', status: 'running' }] }]);
+      let releaseWrite;
+      mockAtomicWrite.mockImplementationOnce(() => new Promise(resolve => { releaseWrite = resolve; }));
+      const pending = updateRun('cd-example', 'run-example', { status: 'completed' });
+      await vi.waitFor(() => expect(releaseWrite).toBeTypeOf('function'));
+      expect(notifications).toEqual([]);
+      releaseWrite();
+      await pending;
+      expect(notifications).toEqual([{ recordKind: 'creativeDirectorProject', recordId: 'cd-example' }]);
+      expect(federated).not.toHaveBeenCalled();
+      mockAtomicWrite.mockRejectedValueOnce(new Error('write failed'));
+      await expect(recordRun('cd-example', { kind: 'evaluate', status: 'running' })).rejects.toThrow('write failed');
+      expect(notifications).toHaveLength(1);
+    } finally {
+      recordEvents.off('invalidated', listener);
+      recordEvents.off('updated', federated);
+    }
+  });
+});

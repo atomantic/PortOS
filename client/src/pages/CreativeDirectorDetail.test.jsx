@@ -1,7 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, Link, useLocation } from 'react-router';
+
+const socketHandlers = vi.hoisted(() => new Map());
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (event, fn) => { if (!socketHandlers.has(event)) socketHandlers.set(event, new Set()); socketHandlers.get(event).add(fn); },
+    off: (event, fn) => socketHandlers.get(event)?.delete(fn),
+    emit: vi.fn(),
+  },
+}));
+const fireSocket = async (event, payload) => act(async () => {
+  for (const fn of socketHandlers.get(event) || []) fn(payload);
+});
 
 vi.mock('../services/apiCreativeDirector.js', () => ({
   getCreativeDirectorProject: vi.fn(),
@@ -267,5 +279,31 @@ describe('Video saved artifacts', () => {
     expect(screen.getByText('Source revision: rev-4')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Edit source attachments' })).toHaveAttribute('href', '/video/cd-example/overview?draft=1&videoDraftTab=sources');
     expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
+  });
+});
+
+describe('CreativeDirectorDetail realtime project lifecycle', () => {
+  afterEach(() => vi.useRealTimers());
+  it('filters project events, reconciles reconnects and applies actions before older reads', async () => {
+    cdApi.getCreativeDirectorProject.mockResolvedValue(PROJECT);
+    await renderPage();
+    vi.useFakeTimers();
+    const calls = cdApi.getCreativeDirectorProject.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    await fireSocket('creative-director:project:changed', { id: 'other' });
+    expect(cdApi.getCreativeDirectorProject).toHaveBeenCalledTimes(calls);
+    cdApi.getCreativeDirectorProject.mockResolvedValue({ ...PROJECT, name: 'Updated project' });
+    await fireSocket('creative-director:project:changed', { id: PROJECT.id });
+    expect(screen.getByRole('heading', { name: 'Updated project' })).toBeInTheDocument();
+    await fireSocket('connect');
+    expect(cdApi.getCreativeDirectorProject).toHaveBeenCalledTimes(calls + 2);
+    let resolveOld;
+    cdApi.getCreativeDirectorProject.mockReturnValue(new Promise(resolve => { resolveOld = resolve; }));
+    await fireSocket('creative-director:project:changed', { id: PROJECT.id });
+    cdApi.startCreativeDirectorProject.mockResolvedValue({ ok: true, project: { ...PROJECT, name: 'Started project', status: 'planning' } });
+    await act(async () => screen.getByRole('button', { name: 'Start' }).click());
+    expect(screen.getByRole('heading', { name: 'Started project' })).toBeInTheDocument();
+    await act(async () => resolveOld(PROJECT));
+    expect(screen.getByRole('heading', { name: 'Started project' })).toBeInTheDocument();
   });
 });

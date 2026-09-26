@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -10,20 +10,11 @@ import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-direct
 import ScenePreview from '../../creative-director/ScenePreview';
 import ModelSelect from '../../ModelSelect';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { useVideoFileSrc } from '../../../hooks/useVideoFileSrc';
 import { sceneShotWarnings } from '../../../lib/shotContinuity';
 
-// Monotonic snapshot: a poll is logically equivalent when the project's id,
-// updatedAt, and status all match. Including `id` guards against the restart
-// edge case where prev/next describe different projects with coincidentally
-// matching keys.
-const sameProjectSnapshot = (prev, next) =>
-  prev.id === next.id
-  && prev.updatedAt === next.updatedAt
-  && prev.status === next.status;
-
-const POLL_INTERVAL_MS = 4000;
+const PROJECT_EVENTS = ['creative-director:project:changed'];
 
 const isTerminalProjectStatus = (s) => s === 'complete' || s === 'failed';
 
@@ -127,44 +118,15 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Poll while a project id is bound. Pauses on hidden tab via the hook's
-  // visibility short-circuit; identical snapshots dedup via the compare option
-  // so terminal projects no longer trigger re-renders even though the poll
-  // continues. Single-user app on Tailscale — the small bandwidth cost of
-  // polling a complete project until the user navigates away is negligible.
-  //
-  // Errors are intentionally allowed to throw — the hook's catch logs the
-  // failure and preserves the previously-applied data, so a transient network
-  // blip doesn't wipe the currently-displayed project. (A `.catch(() => null)`
-  // here would make the poll "succeed" with null and clear cdProject.)
-  //
-  // `immediate: true` (default) — the hook owns the visibility-aware initial
-  // fetch on mount and on every enabled-toggle (null↔id). The useEffect below
-  // only covers truthy→truthy id swaps that the hook's enabled gate misses.
-  const { data: rawCdProject, refetch: refetchCdProject } = useAutoRefetch(
-    () => getCreativeDirectorProject(cdProjectId, { slim: true }),
-    POLL_INTERVAL_MS,
-    { enabled: !!cdProjectId, compare: sameProjectSnapshot },
+  const { data: rawCdProject } = useSocketResource(
+    () => cdProjectId ? getCreativeDirectorProject(cdProjectId, { slim: true }) : null,
+    {
+      events: PROJECT_EVENTS,
+      resourceKey: cdProjectId,
+      matchesEvent: event => !!cdProjectId && event?.id === cdProjectId,
+    },
   );
-
-  // After a restart the hook still holds the previous project's snapshot until
-  // the next fetch lands; filter by id so the stale view doesn't paint into the
-  // new context.
   const cdProject = rawCdProject?.id === cdProjectId ? rawCdProject : null;
-
-  // Fires only on truthy→truthy cdProjectId swaps (restart). The hook's own
-  // immediate fetch covers mount and null↔id transitions and respects the
-  // hidden-tab short-circuit. `refetch` bypasses visibility, so we gate the
-  // call on visibilityState — on hidden tab the hook's visibility-event
-  // listener will pick up the new closure when the tab is reactivated.
-  const prevCdProjectIdRef = useRef(cdProjectId);
-  useEffect(() => {
-    const prev = prevCdProjectIdRef.current;
-    prevCdProjectIdRef.current = cdProjectId;
-    if (!cdProjectId || !prev || prev === cdProjectId) return;
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-    refetchCdProject();
-  }, [cdProjectId, refetchCdProject]);
 
   const [runSubmit, submitting] = useAsyncAction(
     async ({ force }) => {
@@ -233,7 +195,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   });
   const isComplete = cdProject?.status === 'complete' && finalVideoId;
   const isFailed = cdProject?.status === 'failed';
-  const polling = cdProject && !isTerminalProjectStatus(cdProject.status);
+  const generating = cdProject && !isTerminalProjectStatus(cdProject.status);
 
   return (
     <div className="space-y-4">
@@ -338,7 +300,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               ) : isFailed ? (
                 <AlertCircle size={16} className="text-port-error" />
               ) : (
-                <Loader2 size={16} className={polling ? 'animate-spin text-port-accent' : 'text-gray-500'} />
+                <Loader2 size={16} className={generating ? 'animate-spin text-port-accent' : 'text-gray-500'} />
               )}
               <span className="text-white">
                 {STATUS_LABEL[cdProject?.status || 'draft'] || cdProject?.status || 'Preparing'}

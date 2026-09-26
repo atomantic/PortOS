@@ -26,7 +26,7 @@ vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data
 // Keep peer push inert, but model the conflict-journal batch boundary so the
 // prune test can assert that multiple evictions share one terminal flush.
 vi.mock('../sharing/recordEvents.js', () => ({
-  emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(),
+  emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(), emitRecordInvalidated: vi.fn(),
   autoSubscribeRecordToAllPeers: vi.fn(() => Promise.resolve()),
 }));
 const conflictJournalMock = vi.hoisted(() => {

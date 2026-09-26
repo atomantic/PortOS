@@ -75,7 +75,7 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
       key: resourceKey,
       update: updater => {
         revision += 1;
-        setState(previous => ({ key: resourceKey, data: updater(previous.data), loading: false, error: null }));
+        setState(previous => ({ key: resourceKey, data: typeof updater === 'function' ? updater(previous.data) : updater, loading: false, error: null }));
       },
     };
     setState({ key: resourceKey, data: null, loading: true, error: null });
