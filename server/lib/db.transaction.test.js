@@ -112,6 +112,33 @@ describe('withTransaction', () => {
 
 
 describe('database restore admission', () => {
+  it('drains detached nested work that outlives its admitted parent', async () => {
+    pool.client = makeClient(vi.fn().mockResolvedValue({}));
+    let releaseQuery;
+    pool.query.mockImplementationOnce(() => new Promise(resolve => { releaseQuery = resolve; }));
+    let nestedQuery;
+    let releaseParent;
+    let enteredParent;
+    const entered = new Promise(resolve => { enteredParent = resolve; });
+    const parent = withTransaction(async () => {
+      enteredParent();
+      await new Promise(resolve => { releaseParent = resolve; });
+      nestedQuery = query('SELECT 1');
+    });
+    await entered;
+    let enteredMaintenance = false;
+    const maintenance = withDatabaseMaintenance(async () => { enteredMaintenance = true; });
+    releaseParent();
+    await parent;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(enteredMaintenance).toBe(false);
+    releaseQuery();
+    await nestedQuery;
+    await maintenance;
+    expect(enteredMaintenance).toBe(true);
+  });
+
   it('drains whole transactions, rejects new work, permits recovery, and releases after failure', async () => {
     pool.client = makeClient(vi.fn().mockResolvedValue({}));
     let finishTransaction;

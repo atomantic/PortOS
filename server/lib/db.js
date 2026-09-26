@@ -213,8 +213,7 @@ function maintenanceError() {
 }
 
 async function databaseOperation(fn) {
-  if (databaseContext.getStore()?.active) return fn();
-  if (maintenanceActive) throw maintenanceError();
+  if (maintenanceActive && !databaseContext.getStore()?.active) throw maintenanceError();
   const context = { active: true };
   const pending = databaseContext.run(context, async () => fn());
   activeOperations.add(pending);
@@ -232,7 +231,10 @@ export async function withDatabaseMaintenance(fn) {
   maintenanceActive = true;
   const context = { active: true };
   try {
-    await Promise.allSettled([...activeOperations]);
+    // An admitted transaction can start nested work while draining. Track it
+    // separately and repeat until that work also settles, even when its parent
+    // did not await it. Async descendants lose admission when their operation ends.
+    while (activeOperations.size) await Promise.allSettled([...activeOperations]);
     return await databaseContext.run(context, fn);
   } finally {
     context.active = false;
