@@ -67,7 +67,7 @@ export function SpotifyTab() {
 
   const handleSave = async () => {
     if (!await save()) return;
-    toast.success('Saved — scheduler applies on next server restart');
+    toast.success('Saved');
   };
 
   const handleSaveCreds = async () => {
