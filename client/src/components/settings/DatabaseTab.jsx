@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Container, HardDrive, Download, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
+import { Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount } from '../../utils/formatters';
