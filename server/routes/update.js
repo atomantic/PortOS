@@ -56,8 +56,8 @@ router.get('/status', asyncHandler(async (req, res) => {
 // renders, from lib/systemIdle.js).
 //
 // Its OWN route rather than a block on /status, and the three service imports
-// are deferred, for one reason each: /status is polled every few seconds while
-// this tab is open and must not drag a git status walk along at that cadence,
+// are deferred: activity invalidations of /status must not drag a git status
+// walk into the cheaper update status read,
 // and a static import of the activity/readiness graph would pull the whole CoS
 // + git subtree into every suite that mounts this router (see "Import scoping"
 // in server/AGENTS.md). `sharedSchemas` is already in this module's static
@@ -74,8 +74,7 @@ router.get('/auto', asyncHandler(async (req, res) => {
   ]);
   const config = storableAutoUpdateConfig(settings?.autoUpdate);
   // The two expensive halves answer "what is the scheduler waiting for", which
-  // is not a question while the scheduler is off — and this route is polled
-  // every 15s by an open Update tab on an install where the feature ships OFF.
+  // is not a question while the scheduler is off (the shipped default).
   // No fetch either way: refreshing origin refs is the scheduler's own tick,
   // not a network hop every viewer of this tab pays for.
   const [repo, processing] = config.enabled
