@@ -173,8 +173,9 @@ Full CRUD + peer operations at `/api/instances/*` (`server/routes/instances.js`,
 `server/services/instances.js`). The foundation the app's instance-management UI
 builds on:
 
-Every route under `/api/instances/peers/*` other than `GET`/`HEAD` and
-`POST /peers/announce` requires an **operator session** (see
+Every route under `/api/instances/peers/*` other than `GET`/`HEAD`,
+`POST /peers/announce`, and the one-time `POST /peers/pair-secret` Basic
+bootstrap requires an **operator session** (see
 [Operator sessions vs. HTTP Basic](#operator-sessions-vs-http-basic)) — Basic
 alone gets `403 PEER_SETTINGS_OPERATOR_REQUIRED`, even with the correct
 password and even on a passwordless install. Every other route below,
