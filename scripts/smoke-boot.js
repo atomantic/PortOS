@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Server boot smoke test — imports server/index.js in a child process and
-// verifies it stays alive for SMOKE_WINDOW_MS without crashing. Catches the
+// waits for readiness, verifies it stays alive for SMOKE_WINDOW_MS, and
+// requires a clean shutdown. Catches the
 // class of bug where top-level initialization code throws (e.g. chaining
 // .catch on a sync function that returns undefined), which is invisible to
 // unit tests that import service modules in isolation.
@@ -108,12 +109,76 @@ export function buildSmokeEnv({ root, parentEnv = process.env }) {
   };
 }
 
-function runSmoke() {
-  const SMOKE_WINDOW_MS = parseMs(process.env.SMOKE_WINDOW_MS, 4000);
-  // Match server/index.js's 10s graceful-shutdown budget so we don't SIGKILL a
-  // healthy server that's still closing Socket.IO + HTTP + DB.
-  const SHUTDOWN_GRACE_MS = parseMs(process.env.SMOKE_SHUTDOWN_GRACE_MS, 10000);
-  const POST_SIGKILL_MS = parseMs(process.env.SMOKE_POST_SIGKILL_MS, 2000);
+/**
+ * Observe the actual child lifecycle. Readiness belongs to this child (IPC),
+ * not another process that happens to answer on the smoke port.
+ * All failure cleanup is bounded and can never turn a failure into a pass.
+ */
+export function monitorSmokeChild(child, {
+  startupMs = 120000,
+  windowMs = 4000,
+  shutdownMs = 10000,
+  postKillMs = 2000
+} = {}) {
+  return new Promise((resolve) => {
+    let phase = 'startup';
+    let failure = null;
+    let timer;
+    const finish = (error) => {
+      if (phase === 'done') return;
+      phase = 'done';
+      clearTimeout(timer);
+      child.removeListener('message', onMessage);
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
+      resolve({ ok: !error, error });
+    };
+    const forceKill = () => {
+      failure ??= 'Server required SIGKILL during shutdown.';
+      phase = 'killing';
+      timer = setTimeout(() => finish(failure), postKillMs);
+      child.kill('SIGKILL');
+    };
+    const shutdown = () => {
+      clearTimeout(timer);
+      phase = 'shutdown';
+      timer = setTimeout(forceKill, shutdownMs);
+      child.kill('SIGTERM');
+    };
+    const onMessage = (message) => {
+      if (phase !== 'startup' || message?.type !== 'portos:smoke-ready') return;
+      clearTimeout(timer);
+      phase = 'survival';
+      console.log('🚀 Smoke child is ready; starting survival window.');
+      timer = setTimeout(shutdown, windowMs);
+    };
+    const onExit = (code, signal) => {
+      const clean = phase === 'shutdown' && code === 0 && !signal;
+      finish(failure ?? (clean ? null : `Server exited during ${phase} (code ${code}, signal ${signal}).`));
+    };
+    const onError = (err) => {
+      failure ??= `Child process error: ${err.message}`;
+      // Spawn failure has no process to reap. A kill error still needs the
+      // existing shutdown/escalation timers to bound cleanup.
+      if (!child.pid) finish(failure);
+      else if (phase === 'startup' || phase === 'survival') shutdown();
+    };
+    child.on('message', onMessage);
+    child.once('exit', onExit);
+    child.on('error', onError);
+    timer = setTimeout(() => {
+      failure = `Server did not become ready within ${startupMs}ms.`;
+      shutdown();
+    }, startupMs);
+  });
+}
+
+async function runSmoke() {
+  const windowMs = parseMs(process.env.SMOKE_WINDOW_MS, 4000);
+  const startupMs = parseMs(process.env.SMOKE_STARTUP_TIMEOUT_MS, 120000);
+  // Match the server's graceful-shutdown budget; escalation is a failure.
+  const shutdownMs = parseMs(process.env.SMOKE_SHUTDOWN_GRACE_MS, 10000);
+  const postKillMs = parseMs(process.env.SMOKE_POST_SIGKILL_MS, 2000);
 
   let root = null;
   let child = null;
@@ -134,52 +199,21 @@ function runSmoke() {
   child = spawn(process.execPath, [SERVER_ENTRY], {
     cwd: root,
     env: buildSmokeEnv({ root }),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true
   });
 
-  let firstErr = '';
-  let crashed = false;
-  let exitCode = null;
-
   child.stdout.on('data', (d) => process.stdout.write(`[smoke] ${d}`));
-  child.stderr.on('data', (d) => {
-    const s = d.toString();
-    if (!firstErr) firstErr = s;
-    process.stderr.write(`[smoke err] ${s}`);
-  });
-  child.on('exit', (code) => { crashed = true; exitCode = code; });
-
-  // After the boot window either fail (child exited early) or send SIGTERM,
-  // wait for the child to actually terminate, and fall back to SIGKILL if it
-  // ignores SIGTERM.
-  setTimeout(() => {
-    if (crashed) {
-      console.error(`❌ Server crashed during ${SMOKE_WINDOW_MS}ms boot window (exit ${exitCode}).`);
-      if (firstErr) console.error('First error:\n' + firstErr);
-      process.exit(1);
-    }
-    console.log(`✅ Server survived ${SMOKE_WINDOW_MS}ms boot window.`);
-
-    let shutdownTimer = null;
-    let forceKillTimer = null;
-    child.once('exit', () => {
-      if (shutdownTimer) clearTimeout(shutdownTimer);
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      process.exit(0);
-    });
-    child.kill('SIGTERM');
-    shutdownTimer = setTimeout(() => {
-      console.warn(`⚠️  Child ignored SIGTERM after ${SHUTDOWN_GRACE_MS}ms — sending SIGKILL.`);
-      child.kill('SIGKILL');
-      // If the child still doesn't exit after SIGKILL, it's an orphan risk in CI.
-      // Fail the smoke instead of silently exiting 0.
-      forceKillTimer = setTimeout(() => {
-        console.error(`❌ Child did not terminate after SIGKILL (${POST_SIGKILL_MS}ms).`);
-        process.exit(1);
-      }, POST_SIGKILL_MS);
-    }, SHUTDOWN_GRACE_MS);
-  }, SMOKE_WINDOW_MS);
+  child.stderr.on('data', (d) => process.stderr.write(`[smoke err] ${d}`));
+  const result = await monitorSmokeChild(child, { startupMs, windowMs, shutdownMs, postKillMs });
+  if (result.ok) console.log(`✅ Server ready, survived ${windowMs}ms, and shut down cleanly.`);
+  else console.error(`❌ ${result.error}`);
+  process.exit(result.ok ? 0 : 1);
 }
 
-if (isDirectlyInvoked(import.meta.url)) runSmoke();
+if (isDirectlyInvoked(import.meta.url)) {
+  runSmoke().catch((err) => {
+    console.error(`❌ Boot smoke failed: ${err.message}`);
+    process.exit(1);
+  });
+}
