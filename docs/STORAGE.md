@@ -204,8 +204,8 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 ### Moving between Docker and native
 
 Automatic backend migration and switching are temporarily unavailable.
-The Settings switch/migration requests and `scripts/db.sh migrate` refuse before copying data or
-changing mode. The former path could accept writes after its dump snapshot
+The Settings switch/migration requests and `scripts/db.sh migrate`,
+`use-native`, and `use-docker` refuse before copying data or changing mode. The former path could accept writes after its dump snapshot
 and strand them on the source; changing `.env` also leaves the running server
 connected to its original pool.
 
@@ -216,8 +216,8 @@ that the restarted server actually uses the target. A server-only restart or
 a saved-mode change is not that verification. Do not use Sync followed by Switch
 as a migration workaround.
 
-`scripts/db.sh setup-native` selects native mode after provisioning; it does
-not copy Docker data. Preserve the backend holding your records. If an earlier
+`scripts/db.sh setup-native` provisions native PostgreSQL without selecting it
+or copying Docker data. Fresh-install setup still selects its configured mode. Preserve the backend holding your records. If an earlier
 migration already ran, keep both databases and its dump intact: the old source
 may contain writes missing from the target. Do not destroy either backend or
 reverse the migration before comparing and recovering those records.

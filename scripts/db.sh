@@ -15,8 +15,8 @@
 #   stop         Stop the database
 #   fix          Fix common issues (stale pid files, etc.)
 #   setup-native Install and configure native PostgreSQL via Homebrew
-#   use-docker   Switch to Docker mode
-#   use-native   Switch to native mode
+#   use-docker   Unavailable pending coordinated offline cutover
+#   use-native   Unavailable pending coordinated offline cutover
 #   migrate      Unavailable pending coordinated offline cutover
 #   export       Export database to a SQL dump file
 #   import       Import a SQL dump file into the database
@@ -45,16 +45,6 @@ warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 err()  { echo -e "${RED}❌ $1${NC}"; }
 info() { echo -e "${BLUE}🗄️  $1${NC}"; }
 
-# Portable in-place sed helper (works with BSD and GNU sed)
-inplace_sed() {
-  local script="$1"
-  local file="$2"
-  local tmp
-  tmp="$(mktemp "${file}.XXXXXX")" || return 1
-  sed "$script" "$file" >"$tmp"
-  mv "$tmp" "$file"
-}
-
 # Detect current mode from .env or default to docker
 get_mode() {
   if [ -f "$ENV_FILE" ]; then
@@ -78,23 +68,6 @@ get_port() {
 }
 
 PGPORT=$(get_port)
-
-# Set mode in .env
-set_mode() {
-  local mode="$1"
-  if [ -f "$ENV_FILE" ]; then
-    if grep -q '^PGMODE=' "$ENV_FILE"; then
-      inplace_sed "s/^PGMODE=.*/PGMODE=$mode/" "$ENV_FILE"
-    else
-      echo "PGMODE=$mode" >> "$ENV_FILE"
-    fi
-  else
-    echo "PGMODE=$mode" > "$ENV_FILE"
-  fi
-  # Update PGPORT to match mode
-  PGPORT=$([ "$mode" = "native" ] && echo "5432" || echo "5561")
-  log "Mode set to: $mode (port $PGPORT)"
-}
 
 # Check if Docker PostgreSQL is running
 docker_running() {
@@ -504,16 +477,12 @@ cmd_setup_native() {
   PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -v ON_ERROR_STOP=1 --single-transaction -f "$ROOT_DIR/server/scripts/init-db.sql"
   log "Schema applied"
 
-  # Step 6: Switch mode to native
-  set_mode native
-
   echo ""
   log "Native PostgreSQL is ready!"
   info "Using system PostgreSQL on port $PGPORT"
   info "Database: $PGDATABASE (user: $PGUSER)"
-  info "Setup selected native mode; Docker data has not been migrated."
-  warn "Running 'scripts/db.sh migrate' now would copy native data OVER Docker data."
-  info "Before moving Docker data to native, see docs/STORAGE.md#moving-between-docker-and-native."
+  info "Provisioning only: the selected mode is unchanged; Docker data has not been migrated."
+  info "Coordinated backend migration is not yet available. Keep using the current backend."
 }
 
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
@@ -611,37 +580,9 @@ cmd_import() {
 # A process-list probe is not a writer fence. The recoverable coordinator in
 # #8805 must own admission, explicit endpoints and verified restart first.
 cmd_migrate() {
-  err "Database migration is temporarily unavailable: coordinated shutdown and restart are required to preserve writes." >&2
+  err "Database migration and switching are temporarily unavailable: coordinated shutdown and restart are required to preserve writes." >&2
   echo "Keep using the current backend. Backups remain available via scripts/db.sh export." >&2
   return 1
-}
-
-# Use Docker mode
-cmd_use_docker() {
-  set_mode docker
-  info "Switched to Docker mode (port 5561). Run 'scripts/db.sh start' to start."
-}
-
-# Use native mode
-cmd_use_native() {
-  if ! has_native_pg; then
-    err "Native PostgreSQL not installed. Run: scripts/db.sh setup-native"
-    exit 1
-  fi
-  # Verify system pg is reachable
-  if ! pg_isready -h "$PGHOST" -p 5432 >/dev/null 2>&1; then
-    warn "System PostgreSQL not running on port 5432"
-    echo "  Start it: brew services start postgresql@17"
-  fi
-  # Best-effort stop of Docker DB container
-  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    (
-      cd "$ROOT_DIR"
-      docker compose stop db >/dev/null 2>&1 || true
-    )
-  fi
-  set_mode native
-  info "Switched to native mode (port 5432). Run 'scripts/db.sh start' to start."
 }
 
 # Show logs
@@ -682,8 +623,8 @@ Commands:
   logs           Tail database logs
 
   setup-native   Detect/install PostgreSQL, create portos database
-  use-docker     Switch to Docker mode (port 5561)
-  use-native     Switch to native/system mode (port 5432)
+  use-docker     Unavailable pending coordinated offline cutover
+  use-native     Unavailable pending coordinated offline cutover
 
   migrate        Unavailable pending coordinated offline cutover
   export [label] Export database to data/db-dumps/
@@ -703,8 +644,8 @@ case "${1:-help}" in
   stop)         cmd_stop ;;
   fix)          cmd_fix ;;
   setup-native) cmd_setup_native ;;
-  use-docker)   cmd_use_docker ;;
-  use-native)   cmd_use_native ;;
+  use-docker)   cmd_migrate ;;
+  use-native)   cmd_migrate ;;
   migrate)      cmd_migrate ;;
   export)       cmd_export "${2:-}" ;;
   import)       cmd_import "${2:?Usage: scripts/db.sh import <file>}" ;;

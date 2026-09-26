@@ -68,6 +68,7 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     writeStub(binDir, 'pg_isready', '#!/bin/sh\nexit 0\n');
     // Not Darwin, so db.sh skips prepending Homebrew's real Postgres to PATH.
     writeStub(binDir, 'uname', '#!/bin/sh\necho Linux\n');
+    writeStub(binDir, 'whoami', '#!/bin/sh\necho example_user\n');
     stubLog = join(root, 'stub.log');
     importLog = join(root, 'import.log');
     envFile = join(root, '.env');
@@ -133,16 +134,28 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     expect(tempArtifacts()).toEqual([]);
   });
 
-  it.each(['docker', 'native'])('refuses repeated %s migrations before any database command', (mode) => {
+  it.each(['docker', 'native'])('refuses all cutover commands in %s mode before any database command', (mode) => {
     writeFileSync(envFile, `PGMODE=${mode}\n`);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const result = run(['migrate'], 'ok');
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/migration is temporarily unavailable/);
-      expect(readFileSync(stubLog, 'utf8')).toBe('');
-      expect(existsSync(importLog)).toBe(false);
-      expect(existsSync(dumpDir)).toBe(false);
-      expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
+      for (const command of ['migrate', 'use-native', 'use-docker']) {
+        const result = run([command], 'ok');
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/migration and switching are temporarily unavailable/);
+        expect(readFileSync(stubLog, 'utf8')).toBe('');
+        expect(existsSync(importLog)).toBe(false);
+        expect(existsSync(dumpDir)).toBe(false);
+        expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
+      }
     }
+  });
+
+  it('provisions native PostgreSQL without selecting it or stopping Docker', () => {
+    const result = run(['setup-native'], 'ok');
+    expect(result.status).toBe(0);
+    expect(readFileSync(envFile, 'utf8')).toBe('PGMODE=docker\n');
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('--single-transaction');
+    expect(log).not.toMatch(/SOURCE_STOP|docker compose stop/);
+    expect(result.stdout).toContain('selected mode is unchanged');
   });
 });
