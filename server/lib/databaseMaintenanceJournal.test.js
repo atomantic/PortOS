@@ -13,6 +13,12 @@ let root;
 let data;
 let journal;
 
+// These children are disposable installs, like smoke-boot, rather than Vitest
+// workers. Keep NODE_ENV=test and fake pg; do not misidentify their temp data
+// as a live install merely by leaking the parent's worker marker.
+const childEnv = { ...process.env };
+delete childEnv.VITEST;
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'portos-maintenance-'));
   data = join(root, 'data');
@@ -24,7 +30,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 function node(code, args = []) {
   return spawnSync(process.execPath, [...args, '--input-type=module', '-e', code], {
     encoding: 'utf8',
-    env: { ...process.env, PORTOS_DATA_ROOT: root, PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
+    env: { ...childEnv, PORTOS_DATA_ROOT: root, PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
     timeout: 10_000,
   });
 }
@@ -160,7 +166,7 @@ describe('persistent database maintenance boundary', () => {
     const cli = new URL('../../scripts/database-maintenance.mjs', import.meta.url);
     const run = (...args) => spawnSync(process.execPath, [fileURLToPath(cli), ...args], {
       encoding: 'utf8', timeout: 10_000,
-      env: { ...process.env, PORTOS_DATA_ROOT: root, PGPORT: '', PGPORT_DOCKER: '',
+      env: { ...childEnv, PORTOS_DATA_ROOT: root, PGPORT: '', PGPORT_DOCKER: '',
         PGHOST: 'localhost', PGUSER: 'example', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' },
     });
     expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
