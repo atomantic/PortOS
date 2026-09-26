@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -83,7 +83,21 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       if (!lstatSync(activeDir).isDirectory() || !lstatSync(recordPath).isFile()) {
         throw databaseMaintenanceError();
       }
-      return journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
+      let current = journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
+      // Immutable publications cannot be overwritten by a delayed older writer.
+      // Legacy journals keep their recorded stage as the history's starting point.
+      for (const stage of stages.slice(stages.indexOf(current.stage) + 1)) {
+        const stagePath = join(activeDir, 'published-' + stage + '.json');
+        try { lstatSync(stagePath); } catch (err) {
+          if (err.code === 'ENOENT') break;
+          throw err;
+        }
+        if (!lstatSync(stagePath).isFile()) throw databaseMaintenanceError();
+        const next = journalSchema.parse(JSON.parse(readFileSync(stagePath, 'utf8')));
+        if (JSON.stringify(next) !== JSON.stringify({ ...current, stage })) throw databaseMaintenanceError();
+        current = next;
+      }
+      return current;
     } catch {
       throw databaseMaintenanceError();
     }
@@ -129,20 +143,36 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const transition = (id, token, expectedStage, nextStage) => {
     assertNotRealDataWrite(activeDir, 'database maintenance transition');
     const current = read();
-    if (!current || current.id !== id || current.stage !== expectedStage
+    if (!current || current.id !== id || !stages.includes(expectedStage)
       || stages.indexOf(nextStage) !== stages.indexOf(expectedStage) + 1) throw databaseMaintenanceError();
     const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
     if (!lstatSync(ownerPath).isFile()) throw databaseMaintenanceError();
     const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
     if (typeof token !== 'string' || owner.id !== id || owner.token !== token) throw databaseMaintenanceError();
-    // Exclusive per-stage publication also serializes two calls by the owner.
-    // A crash before rename leaves a pending file and fails closed on retry.
-    writeDurableExclusive(join(activeDir, 'stage-' + expectedStage + '.claim'), { id });
-    const pending = join(activeDir, 'stage-' + expectedStage + '.pending');
+    // An acknowledged publication may have crashed before returning to its
+    // caller. Only that exact owned transition is idempotent, never a reversal.
+    if (current.stage === nextStage) {
+      syncDirectory(activeDir);
+      return current;
+    }
+    if (current.stage !== expectedStage) throw databaseMaintenanceError();
+    // Do not reinterpret interrupted writes from the old publication protocol.
+    if (existsSync(join(activeDir, 'stage-' + expectedStage + '.claim'))) throw databaseMaintenanceError();
     const next = journalSchema.parse({ ...current, stage: nextStage });
+    const pending = join(activeDir, 'publication-' + randomUUID() + '.pending');
     writeDurableExclusive(pending, next);
-    renameSync(pending, recordPath);
+    try {
+      // link is an atomic, no-replace publication of already-fsynced bytes.
+      // A competing owner-token retry may win; both describe the same transition.
+      linkSync(pending, join(activeDir, 'published-' + nextStage + '.json'));
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    } finally {
+      unlinkSync(pending);
+    }
     syncDirectory(activeDir);
+    const published = read();
+    if (!published || published.id !== id || stages.indexOf(published.stage) < stages.indexOf(nextStage)) throw databaseMaintenanceError();
     return next;
   };
 
