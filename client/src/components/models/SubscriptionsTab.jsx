@@ -13,7 +13,7 @@ import {
   parseCostInput,
   rowCells,
 } from '../usage/SubscriptionSavingsCard';
-import { useQuotaPendingPoll } from '../../hooks/useQuotaPendingPoll';
+import { useQuotaUpdates } from '../../hooks/useQuotaUpdates';
 import useUrlParams from '../../hooks/useUrlParams';
 import { USAGE_PERIOD_OPTIONS, resolveUsagePeriod, DEFAULT_USAGE_PERIOD } from '../../lib/usagePeriods';
 
@@ -224,11 +224,9 @@ export default function SubscriptionsTab() {
   useEffect(() => { loadSavings(); }, [loadSavings]);
 
   // A quota read never blocks the response: a family whose CLI scrape is still
-  // running answers `pending` and the reading lands behind it. Poll only while
-  // something is pending — without it this tab showed whatever stood in for the
-  // reading (a federated peer's older meters, or a spinner) until the user
-  // navigated away and back. The Usage page does the same.
-  useQuotaPendingPoll(loadQuotas, quotas);
+  // running answers `pending`. Completion events replace that placeholder;
+  // reconnect and tab-show reads recover any missed events.
+  useQuotaUpdates(loadQuotas);
 
   const setPeriod = (id) => updateParams(
     { period: id === DEFAULT_USAGE_PERIOD ? null : id },

@@ -1,3 +1,4 @@
+import { providerQuotaEvents } from './providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // providerUsage imports the provider config service (toolkit-backed) and the
@@ -867,13 +868,29 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     const [pending] = await getProviderQuotas({ wait: 'never' });
     expect(pending).toMatchObject({ family: 'agy', supported: true, pending: true, limits: [] });
 
-    // The scrape was STARTED, not skipped — once it lands the next read is real.
+    const updated = new Promise(resolve => providerQuotaEvents.once('updated', resolve));
     release(AGY_PANEL);
+    expect(await updated).toEqual({});
     await vi.waitFor(async () => {
       const [card] = await getProviderQuotas({ wait: 'never' });
       expect(card.pending).toBeUndefined();
       expect(card.limits).toHaveLength(4);
     });
+    expect(scrapeTuiUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies cold scrape failure so pending cards become errors without retrying', async () => {
+    getAllProviders.mockResolvedValue({ providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy' }] });
+    let reject;
+    scrapeTuiUsage.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    const [pending] = await getProviderQuotas({ wait: 'never' });
+    expect(pending.pending).toBe(true);
+    const updated = new Promise(resolve => providerQuotaEvents.once('updated', resolve));
+    reject(new Error('example scrape failure'));
+    expect(await updated).toEqual({});
+    const [failed] = await getProviderQuotas({ wait: 'never' });
+    expect(failed.pending).toBeUndefined();
+    expect(failed.error).toBeTruthy();
     expect(scrapeTuiUsage).toHaveBeenCalledTimes(1);
   });
 

@@ -9,6 +9,7 @@ const visible = () => document.visibilityState !== 'hidden';
  * Read once, then reconcile a resource on room events, reconnect and tab show.
  * Omit namespace for globally broadcast events. fetchFn receives
  * { reconcile, events: [{ event, payload }], signal } for targeted invalidation reads.
+ * Set immediate=false when the caller already owns its entry read.
  * Keep events stable (module-level). fetchFn returns data without setting state.
  * resourceKey cancels old reads; updateData applies mutation responses and
  * prevents an older in-flight read from overwriting them. enabled=false releases
@@ -16,7 +17,7 @@ const visible = () => document.visibilityState !== 'hidden';
  * Optional requestTimeoutMs bounds a read; navigation/unmount aborts its signal
  * even without a timeout.
  */
-export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare, enabled = true, requestTimeoutMs }) {
+export function useSocketResource(fetchFn, { namespace, events, resourceKey = null, matchesEvent = () => true, compare, enabled = true, requestTimeoutMs, immediate = true }) {
   const [state, setState] = useState({ key: resourceKey, data: null, loading: true, error: null });
   const fetchRef = useRef(fetchFn);
   const matchesRef = useRef(matchesEvent);
@@ -106,7 +107,7 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
     // reconcile through useSocketSubscription, so never attach both paths.
     const reconnect = () => { if (visible()) read(); };
     if (!namespace) socket.on('connect', reconnect);
-    if (visible()) read();
+    if (immediate && visible()) read();
     return () => {
       disposed = true;
       activeRequest?.abort();
@@ -114,7 +115,7 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
       for (const [event, handler] of handlers) socket.off(event, handler);
       if (!namespace) socket.off('connect', reconnect);
     };
-  }, [namespace, events, resourceKey, enabled, requestTimeoutMs]);
+  }, [namespace, events, resourceKey, enabled, requestTimeoutMs, immediate]);
 
   const lastVisibility = useRef(document.visibilityState);
   useVisibilityEvent(state => {
