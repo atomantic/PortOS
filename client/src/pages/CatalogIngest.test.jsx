@@ -355,3 +355,25 @@ it('renders retry button on partial failures which re-extracts without silent au
   expect(commitCatalogScrapDraft).not.toHaveBeenCalled();
 });
 
+
+it('retains the operation key after a lost response and rotates it for edited reviewed content', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'example-retry-scrap' } });
+  pruneCatalogScrap.mockResolvedValue({ scrap: { id: 'example-retry-scrap' }, draft: { ideas: [{ name: 'Example retry idea' }] } });
+  commitCatalogScrapDraft.mockRejectedValue(new Error('Response lost'));
+  render(<MemoryRouter initialEntries={['/catalog/ingest?mode=babble']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Babble freely/), { target: { value: 'Example retry source.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Prune into suggestions' }));
+  await screen.findByDisplayValue('Example retry idea');
+  const commit = () => screen.getByRole('button', { name: /Commit/ });
+  fireEvent.click(commit());
+  await waitFor(() => expect(commit()).not.toBeDisabled());
+  const firstKey = commitCatalogScrapDraft.mock.lastCall[2].operationKey;
+  expect(firstKey).toMatch(/^[0-9a-f-]{36}$/);
+  fireEvent.click(commit());
+  await waitFor(() => expect(commit()).not.toBeDisabled());
+  expect(commitCatalogScrapDraft.mock.lastCall[2].operationKey).toBe(firstKey);
+  fireEvent.change(screen.getByDisplayValue('Example retry idea'), { target: { value: 'Example changed idea' } });
+  fireEvent.click(commit());
+  await waitFor(() => expect(commit()).not.toBeDisabled());
+  expect(commitCatalogScrapDraft.mock.lastCall[2].operationKey).not.toBe(firstKey);
+});

@@ -323,6 +323,14 @@ CREATE TRIGGER trg_memory_updated_at
 -- Federates via sync_sequence BIGSERIAL + LWW on updated_at (same pattern as
 -- the memories table above).
 
+-- Machine-local retry receipts: retained with the database backup, never federated.
+CREATE TABLE IF NOT EXISTS catalog_commit_receipts (
+  operation_key UUID PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  ingredients JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Raw user input preserved verbatim. One scrap can spawn many ingredients.
 CREATE TABLE IF NOT EXISTS catalog_scraps (
   id TEXT PRIMARY KEY,                         -- 'cat-scrap-<uuid>'

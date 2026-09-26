@@ -5,6 +5,9 @@
  * cannot accidentally persist only part of a scrap's accepted extraction.
  */
 
+import { createHash } from 'node:crypto';
+import { canonicalStringify } from '../../lib/objects.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
 import { withTransaction } from '../../lib/db.js';
 import { createIngredient } from './ingredients.js';
@@ -25,12 +28,34 @@ const RELATION_BATCH_LIMIT = 25;
  * mid-batch failure rolls back ingredients, refs, and relations together.
  * Omitting it reproduces prior behavior exactly (source link only).
  */
-export async function commitScrap({ scrapId, accepted = [], embeds = [], universeRef = null, role = null, relationships } = {}) {
+export async function commitScrap({ scrapId, accepted = [], embeds = [], universeRef = null, role = null, relationships, operationKey } = {}) {
   // Service callers receive the same pre-write guarantees as HTTP callers.
   if (relationships !== undefined) {
     ({ accepted, relationships } = catalogScrapCommitSchema.parse({ accepted, relationships }));
   }
+  // Embeddings are derived provider output, not reviewed submission identity.
+  const fingerprint = operationKey
+    ? createHash('sha256').update(canonicalStringify({ scrapId, accepted, universeRef, role, relationships })).digest('hex')
+    : null;
   return withTransaction(async (client) => {
+    if (operationKey) {
+      // A competing INSERT waits for the owner to commit or roll back. The
+      // following SELECT gets a fresh READ COMMITTED snapshot of its receipt.
+      const claim = await client.query(
+        `INSERT INTO catalog_commit_receipts (operation_key, fingerprint)
+         VALUES ($1, $2) ON CONFLICT (operation_key) DO NOTHING RETURNING operation_key`,
+        [operationKey, fingerprint],
+      );
+      if (!claim.rowCount) {
+        const { rows: [receipt] } = await client.query(
+          'SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey],
+        );
+        if (receipt.fingerprint !== fingerprint) {
+          throw new ServerError('Commit operation key was already used for a different submission', { status: 409 });
+        }
+        return receipt.ingredients;
+      }
+    }
     const created = [];
     const ids = new Map();
     for (let i = 0; i < accepted.length; i++) {
@@ -78,6 +103,12 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
       }
     }
 
+    if (operationKey) {
+      await client.query(
+        'UPDATE catalog_commit_receipts SET ingredients = $2::jsonb WHERE operation_key = $1',
+        [operationKey, JSON.stringify(created)],
+      );
+    }
     return created;
   });
 }

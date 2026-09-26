@@ -101,3 +101,14 @@ describe('getCatalogFacets (#1762)', () => {
   });
 });
 // @vitest-environment node
+
+it('serializes the commit operation key into the HTTP body while retaining request options', async () => {
+  const { commitCatalogScrapDraft } = await import('./apiCatalog.js');
+  const operationKey = '11111111-1111-4111-8111-111111111111';
+  await commitCatalogScrapDraft('example-scrap', [], { operationKey, relationships: [], silent: true });
+  const [path, options] = request.mock.lastCall;
+  expect(path).toBe('/catalog/scraps/example-scrap/commit');
+  expect(JSON.parse(options.body)).toEqual({ accepted: [], operationKey, relationships: [] });
+  expect(options.silent).toBe(true);
+  expect(options).not.toHaveProperty('operationKey');
+});
