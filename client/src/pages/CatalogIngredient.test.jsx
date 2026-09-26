@@ -16,7 +16,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: () => {} }));
 vi.mock('react-router', async (io) => {
   const actual = await io();
-  return { ...actual, useParams: () => ({ id: 'cat-chr-1', type: 'character' }), useNavigate: () => navigateMock };
+  return { ...actual, useNavigate: () => navigateMock };
 });
 
 const { CHAR_FIXTURE } = vi.hoisted(() => ({
@@ -251,6 +251,96 @@ describe('CatalogIngredient — character sheet', () => {
       fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
       await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalled());
       await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+    });
+
+    it('keeps edits typed during a save and submits them on the next save', async () => {
+      let finishSave;
+      updateCatalogIngredient.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+      await renderPage();
+      const nameInput = await screen.findByLabelText('Name');
+      const descriptionInput = screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.');
+      const tagButton = screen.getByRole('button', { name: 'Change tag' });
+
+      fireEvent.change(nameInput, { target: { value: 'First draft' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+      fireEvent.change(nameInput, { target: { value: 'Newer draft' } });
+      fireEvent.change(descriptionInput, { target: { value: 'Newer description' } });
+      fireEvent.click(tagButton);
+
+      await act(async () => finishSave({ ...CHAR_FIXTURE, name: 'First draft' }));
+      expect(nameInput.value).toBe('Newer draft');
+      expect(descriptionInput.value).toBe('Newer description');
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+
+      updateCatalogIngredient.mockResolvedValueOnce({
+        ...CHAR_FIXTURE, name: 'Newer draft', tags: [...CHAR_FIXTURE.tags, 'example-tag'],
+        payload: { ...CHAR_FIXTURE.payload, physicalDescription: 'Newer description' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(2));
+      expect(updateCatalogIngredient.mock.calls[1][1]).toMatchObject({
+        name: 'Newer draft', tags: [...CHAR_FIXTURE.tags, 'example-tag'],
+        payload: { physicalDescription: 'Newer description' },
+      });
+      await waitFor(() => expect(screen.queryByText('Unsaved changes')).toBeNull());
+    });
+
+    it('applies server normalization only to fields unchanged since submission', async () => {
+      let finishSave;
+      updateCatalogIngredient.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+      await renderPage();
+      const nameInput = await screen.findByLabelText('Name');
+      const descriptionInput = screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.');
+      fireEvent.change(nameInput, { target: { value: '  Normalized name  ' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+      fireEvent.change(descriptionInput, { target: { value: 'Unsaved description' } });
+
+      await act(async () => finishSave({
+        ...CHAR_FIXTURE, name: 'Normalized name', tags: ['Mentor'],
+      }));
+      expect(nameInput.value).toBe('Normalized name');
+      expect(descriptionInput.value).toBe('Unsaved description');
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+      updateCatalogIngredient.mockResolvedValueOnce({
+        ...CHAR_FIXTURE, name: 'Normalized name', tags: ['Mentor'],
+        payload: { ...CHAR_FIXTURE.payload, physicalDescription: 'Unsaved description' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(2));
+      expect(updateCatalogIngredient.mock.calls[1][1].tags).toEqual(['Mentor']);
+    });
+
+    it('keeps the draft dirty after a failed save', async () => {
+      let failSave;
+      updateCatalogIngredient.mockImplementationOnce(() => new Promise((_resolve, reject) => { failSave = reject; }));
+      await renderPage();
+      const nameInput = await screen.findByLabelText('Name');
+      fireEvent.change(nameInput, { target: { value: 'Unsaved draft' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+      await act(async () => failSave(new Error('Save failed')));
+      expect(nameInput.value).toBe('Unsaved draft');
+      expect(screen.getByText('Unsaved changes')).toBeTruthy();
+    });
+
+    it('ignores a save response after switching to another record', async () => {
+      let finishSave;
+      updateCatalogIngredient.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+      getCatalogIngredientDetails.mockImplementation(async (id) => detailsOf({
+        ...CHAR_FIXTURE, id, name: id === 'cat-chr-1' ? 'First ingredient' : 'Second ingredient',
+      }));
+      const { router } = await renderPage();
+      await screen.findByDisplayValue('First ingredient');
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+      await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+      await act(async () => router.navigate('/catalog/character/cat-chr-2'));
+      await screen.findByDisplayValue('Second ingredient');
+
+      await act(async () => finishSave({ ...CHAR_FIXTURE, name: 'Stale response' }));
+      expect(screen.getByLabelText('Name').value).toBe('Second ingredient');
+      expect(screen.queryByText('Stale response')).toBeNull();
     });
   });
 

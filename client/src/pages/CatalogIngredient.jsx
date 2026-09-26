@@ -5,7 +5,7 @@
  * pipeline series / issues / writers-room). Full-width page; owns its scroll.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router';
 import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -127,6 +127,8 @@ function ingredientPayload(value) {
 
 export default function CatalogIngredient() {
   const { id } = useParams();
+  const activeIdRef = useRef(id);
+  activeIdRef.current = id;
   const navigate = useNavigate();
   // Merged type registry (system + user-defined). Falls back synchronously to
   // the static built-ins so the editor renders before the fetch resolves.
@@ -163,6 +165,7 @@ export default function CatalogIngredient() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSaving(false);
     getCatalogIngredientDetails(id, { silent: true })
       .then((d) => {
         if (cancelled) return;
@@ -327,39 +330,40 @@ export default function CatalogIngredient() {
 
   const handleSave = async () => {
     if (!record) return;
+    const submittedId = record.id;
+    const submittedName = name;
+    const submittedTags = tags;
+    const submittedPayload = payload;
     const trimmedName = name.trim();
     if (!trimmedName) {
       toast.error('Name is required');
       return;
     }
     setSaving(true);
-    const updated = await updateCatalogIngredient(record.id, {
+    const updated = await updateCatalogIngredient(submittedId, {
       name: trimmedName,
-      payload,
-      tags,
+      payload: submittedPayload,
+      tags: submittedTags,
     }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Save failed');
       return null;
     });
+    if (activeIdRef.current !== submittedId) return;
     setSaving(false);
     if (!updated) return;
     const persistedName = typeof updated.name === 'string' ? updated.name : trimmedName;
-    const persistedTags = Array.isArray(updated.tags) ? updated.tags : tags;
+    const persistedTags = Array.isArray(updated.tags) ? updated.tags : submittedTags;
     const persistedPayload = Object.hasOwn(updated, 'payload')
       ? ingredientPayload(updated.payload)
-      : ingredientPayload(payload);
-    setRecord((prev) => ({
-      ...prev,
-      ...updated,
-      name: persistedName,
-      tags: persistedTags,
-      payload: persistedPayload,
-    }));
-    setName(persistedName);
+      : ingredientPayload(submittedPayload);
+    setRecord((prev) => prev?.id === submittedId ? ({
+      ...prev, ...updated, name: persistedName, tags: persistedTags, payload: persistedPayload,
+    }) : prev);
+    setName((current) => activeIdRef.current === submittedId && current === submittedName ? persistedName : current);
     // The server normalizes tags through the canonical table (casing/whitespace
     // collapse), so reflect the persisted set back into the chips.
-    setTags(persistedTags);
-    setPayload({ ...persistedPayload });
+    setTags((current) => activeIdRef.current === submittedId && sameValue(current, submittedTags) ? persistedTags : current);
+    setPayload((current) => activeIdRef.current === submittedId && sameValue(current, submittedPayload) ? { ...persistedPayload } : current);
     toast.success('Saved');
     refreshRevisions();
   };
