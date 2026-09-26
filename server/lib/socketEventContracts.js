@@ -57,6 +57,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   },
+  'jev:policy': {
+    direction: 'server-to-client',
+    summary: 'Invalidate Jev integration policy after settings persistence or restore invalidation; no settings content.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'laya:status': {
     direction: 'server-to-client',
     summary: 'Invalidate Laya runtime status after install progress, completion, failure or scoring transitions; no experiment content.',

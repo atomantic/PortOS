@@ -1,7 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useState } from 'react';
 import { getJevPolicy, updateJevPolicy, updateInstanceFeature } from '../../services/api';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { publishInstanceFeatures, useInstanceFeatures } from '../../hooks/useInstanceFeatures';
+
+const POLICY_EVENTS = ['jev:policy'];
+const loadPolicy = ({ signal }) => getJevPolicy({ silent: true, signal });
 
 const SOURCES = [
   ['github-issue', 'Issue replies and forge maintenance'],
@@ -14,19 +17,10 @@ const MODES = { disabled: 'Disabled', off: 'Shadow', prefer: 'Prefer local', onl
 export default function JevIntegrations({ registry, status }) {
   const { features, error: featureError } = useInstanceFeatures();
   const feature = features?.find(item => item.id === 'jev');
-  const generation = useRef(0);
-  const [policy, setPolicy] = useState(null);
+  const { data: policy, updateData: setPolicy, error, refetch } = useSocketResource(loadPolicy, { events: POLICY_EVENTS });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
-  const load = useCallback(() => {
-    const requested = ++generation.current;
-    return getJevPolicy({ silent: true }).then(result => {
-      if (generation.current === requested) setPolicy(result);
-    });
-  }, []);
-  const { error, refetch } = useAutoRefetch(load, 30000, { enabled: !saving });
   const save = (patch) => {
-    generation.current += 1;
     setSaving(true);
     setSaveError('');
     return updateJevPolicy(patch, { silent: true }).then(setPolicy)
