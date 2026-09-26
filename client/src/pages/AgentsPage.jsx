@@ -189,16 +189,18 @@ export function AgentsPage() {
 
         {/* Desktop Table View */}
         <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full min-w-[600px]">
+        <table className="w-full min-w-[600px]" aria-label="Running AI agents">
           <thead>
             <tr className="border-b border-port-border">
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400 w-8"></th>
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">PID</th>
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Runtime</th>
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">CPU %</th>
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Memory %</th>
-              <th className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Command</th>
-              <th className="px-4 py-4 text-center text-sm font-semibold text-gray-400">Actions</th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400 w-8">
+                <span className="sr-only">Details</span>
+              </th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400">PID</th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Runtime</th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400">CPU %</th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Memory %</th>
+              <th scope="col" className="px-4 py-4 text-left text-sm font-semibold text-gray-400">Command</th>
+              <th scope="col" className="px-4 py-4 text-center text-sm font-semibold text-gray-400">Actions</th>
             </tr>
           </thead>
           <tbody>

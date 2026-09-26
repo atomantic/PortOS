@@ -88,18 +88,20 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full min-w-[700px]" aria-label="PM2 processes">
             <thead className="bg-port-border/50">
               <tr>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8"></th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Status</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">PID</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">CPU</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Memory</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Uptime</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Restarts</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">Actions</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8">
+                  <span className="sr-only">Details</span>
+                </th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Name</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Status</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">PID</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">CPU</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Memory</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Uptime</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Restarts</th>
+                <th scope="col" className="px-4 py-3 text-right text-sm font-medium text-gray-400">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-port-border">
