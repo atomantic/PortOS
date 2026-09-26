@@ -56,9 +56,10 @@ const TIMER_CALL = /\bsetInterval\s*\(/;
 
 /**
  * Files allowed to schedule an interval directly, each with the reason it is
- * not a data-fetch poll. Adding a row is the point at which to ask whether
- * `useAutoRefetch` fits instead — a poll that talks to the server does not
- * belong here.
+ * not a data-fetch poll. Adding a row is the point at which to ask whether a
+ * socket event fits instead — a poll that talks to the server does not belong
+ * here, and polling is an anti-pattern even through `useAutoRefetch` (see
+ * "Realtime updates, not polling" in docs/UX_DESIGN_GUIDE.md).
  */
 const ALLOWED = {
   'src/components/BrailleSpinner.jsx': 'advances the spinner glyph; no I/O',
