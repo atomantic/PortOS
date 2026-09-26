@@ -16,7 +16,7 @@ import { PR_REVIEW_MODES, PR_REVIEW_MODE_OPTIONS, DEFAULT_PR_REVIEW_MODE, prRevi
 import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
-import useProviderModels from '../../../hooks/useProviderModels';
+import useRunWithPicker from '../../../hooks/useRunWithPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../../hooks/useCodeReviewDefaults';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../lib/reviewerModels';
@@ -350,11 +350,7 @@ export default function PullRequestsTab({ appId, appName }) {
   // follows its own scheduled stages unless the user explicitly opts this pin in.
   // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
-  const {
-    providers, selectedProviderId, selectedModel, availableModels,
-    setSelectedProviderId, setSelectedModel
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
-  const [effort, setEffort] = useState('');
+  const picker = useRunWithPicker();
   const [applyRunWithToPrReview, setApplyRunWithToPrReview] = useState(false);
 
   // WHO reviews, for the two actions PortOS composes here. `delegated` keeps the
@@ -506,11 +502,7 @@ export default function PullRequestsTab({ appId, appName }) {
   const unavailable = data?.transient === true;
 
   // Submit the visible session selection; clearing Auto restores server routing.
-  const providerSettings = {
-    provider: selectedProviderId || undefined,
-    model: selectedModel || undefined,
-    effort: effort || undefined,
-  };
+  const providerSettings = picker.pin;
 
   // This run's review settings. The mode always rides along (the server needs an
   // explicit answer, and its own default is `delegated` either way); the roster
@@ -688,18 +680,8 @@ export default function PullRequestsTab({ appId, appName }) {
           </span>
           <div className="flex-1">
             <ProviderModelSelector
-              providers={providers}
-              selectedProviderId={selectedProviderId}
-              selectedModel={selectedModel}
-              availableModels={availableModels}
-              onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
-              onModelChange={setSelectedModel}
-              effort={effort}
-              onEffortChange={setEffort}
-              emptyProviderOption="Auto (default)"
-              emptyModelOption="Default model"
+              {...picker.selectorProps}
               compact
-              highlightToolUse
             />
           </div>
         </div>

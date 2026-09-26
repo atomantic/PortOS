@@ -12,7 +12,7 @@ import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { useThemeContext } from '../../ThemeContext';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
-import useProviderModels from '../../../hooks/useProviderModels';
+import useRunWithPicker from '../../../hooks/useRunWithPicker';
 import useClaimReviewers from '../../../hooks/useClaimReviewers';
 import ClaimReviewerSource from '../ClaimReviewerSource';
 import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
@@ -289,11 +289,7 @@ export default function IssuesTab({ appId, appName }) {
   // This picker never persists across a reload; it's a session convenience for
   // "claim the next several issues with model X" without reopening the Agent
   // Operations drawer each time.
-  const {
-    providers, selectedProviderId, selectedModel, availableModels,
-    setSelectedProviderId, setSelectedModel
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
-  const [effort, setEffort] = useState('');
+  const picker = useRunWithPicker();
   const [overrideContext, setOverrideContext] = useState('');
   // The reviewers a Claim launched from this tab will actually run — NOT the
   // Models → Code Reviewers list, whenever a claim-work override is in play (see
@@ -495,9 +491,7 @@ export default function IssuesTab({ appId, appName }) {
         body: issue.body || '',
         ...(issue.url ? { url: issue.url } : {})
       },
-      provider: selectedProviderId || undefined,
-      model: selectedModel || undefined,
-      effort: effort || undefined,
+      ...picker.pin,
       ...(action === 'claim' ? {
         prCompletion,
         ...(prCompletion === 'review-then-merge' ? reviewOverrides : {}),
@@ -672,18 +666,8 @@ export default function IssuesTab({ appId, appName }) {
           </span>
           <div className="flex-1">
             <ProviderModelSelector
-              providers={providers}
-              selectedProviderId={selectedProviderId}
-              selectedModel={selectedModel}
-              availableModels={availableModels}
-              onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
-              onModelChange={setSelectedModel}
-              effort={effort}
-              onEffortChange={setEffort}
-              emptyProviderOption="Auto (default)"
-              emptyModelOption="Default model"
+              {...picker.selectorProps}
               compact
-              highlightToolUse
             />
           </div>
         </div>

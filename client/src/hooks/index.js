@@ -85,6 +85,7 @@ export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderCatalog } from './useProviderCatalog.js';
 export * from './useProviderCatalog.js';
 export { default as useProviderModels } from './useProviderModels.js';
+export { default as useRunWithPicker } from './useRunWithPicker.js';
 export * from './useRecentImageGallery.js';
 export { default as useReviewerModelOptions } from './useReviewerModelOptions.js';
 export { default as useRowDraft } from './useRowDraft.js';
