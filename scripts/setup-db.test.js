@@ -22,17 +22,6 @@ describe('Docker PostgreSQL host binding', () => {
   });
 });
 
-describe('native setup migration guidance', () => {
-  it('warns that migrating immediately after native setup overwrites Docker data', () => {
-    const dbScript = readFileSync(join(here, 'db.sh'), 'utf8');
-    const nativeSetup = dbScript.split('cmd_setup_native() {')[1].split('\n}\n')[0];
-    expect(nativeSetup).toContain('set_mode native');
-    expect(nativeSetup).not.toContain('To migrate data from Docker: scripts/db.sh migrate');
-    expect(nativeSetup).toContain('copy native data OVER Docker data');
-    expect(nativeSetup).toContain('docs/STORAGE.md#moving-between-docker-and-native');
-  });
-});
-
 describe('setup-db menu choice resolver (Phase 1: Postgres mandatory)', () => {
   it('maps "2" to native', () => {
     expect(resolveStorageMenuChoice('2')).toBe('native');
