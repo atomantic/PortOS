@@ -69,7 +69,6 @@ vi.mock('../services/socket', () => ({
     emit: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
-    emit: vi.fn(),
   },
 }));
 vi.mock('../hooks/useLocalModels', () => ({
