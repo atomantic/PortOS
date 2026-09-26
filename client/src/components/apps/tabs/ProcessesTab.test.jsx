@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
-  executeCommand: vi.fn(),
+  applyProcessAction: vi.fn(),
   getProcessesList: vi.fn(),
 }));
 
-vi.mock('../../../hooks/useAutoRefetch', () => ({
-  useAutoRefetch: () => ({
+vi.mock('../../../hooks/useProcessSnapshot', () => ({
+  useProcessSnapshot: () => ({
     data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
     loading: false,
     refetch: vi.fn(),

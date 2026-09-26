@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
@@ -15,10 +15,13 @@ const instanceFeatureMock = vi.hoisted(() => ({
 vi.mock('../../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
   getApp: vi.fn(),
+  getProcessesList: vi.fn(),
+  launchNativeApp: vi.fn(),
 }));
 
 vi.mock('../../services/socket', () => ({
   default: {
+    emit: vi.fn(),
     on: vi.fn((event, handler) => socketHandlers.set(event, handler)),
     off: vi.fn((event, handler) => {
       if (socketHandlers.get(event) === handler) socketHandlers.delete(event);
@@ -41,7 +44,7 @@ vi.mock('../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../StatusBadge', () => ({ default: () => null }));
 vi.mock('./DeployPanel', () => ({ default: () => null }));
 vi.mock('./EditAppDrawer', () => ({ default: () => null }));
-vi.mock('./DesktopLaunchProgress', () => ({ default: () => null }));
+vi.mock('./DesktopLaunchProgress', () => ({ default: ({ online }) => <output data-testid="native-state">{online ? 'Running' : 'Exited'}</output> }));
 vi.mock('./tabs/OverviewTab', () => ({ default: ({ app }) => <output data-testid="overview-app">{app.id}</output> }));
 vi.mock('./tabs/TasksTab', () => ({ default: () => null }));
 vi.mock('./tabs/AutomationTab', () => ({ default: () => null }));
@@ -310,5 +313,36 @@ describe('AppDetailView fetch lifecycle', () => {
     api.getApp.mockResolvedValueOnce(APP);
     await act(async () => changed());
     expect(api.getApp).toHaveBeenCalledTimes(4);
+  });
+});
+
+
+describe('native launch realtime status', () => {
+  afterEach(() => vi.useRealTimers());
+  it('applies process pushes without polling and reconciles reconnect/reshow once', async () => {
+    vi.clearAllMocks();
+    socketHandlers.clear();
+    vi.useFakeTimers();
+    api.getApp.mockResolvedValue({ ...APP, nativeLaunch: { label: 'Native', processName: 'example-native' } });
+    api.launchNativeApp.mockResolvedValue({ processName: 'example-native' });
+    api.getProcessesList.mockResolvedValue([{ name: 'example-native', status: 'online' }]);
+    const view = renderDetail();
+    await act(async () => {});
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Launch Native for Example App' })));
+    expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
+    expect(api.getProcessesList).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(15000));
+    expect(api.getProcessesList).toHaveBeenCalledTimes(1);
+    await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: null }));
+    expect(screen.getByTestId('native-state')).toHaveTextContent('Running');
+    await act(async () => socketHandlers.get('processes:changed')({ appIds: [APP.id], processes: [{ name: 'example-native', status: 'stopped' }] }));
+    expect(screen.getByTestId('native-state')).toHaveTextContent('Exited');
+    await act(async () => socketHandlers.get('connect')());
+    expect(api.getProcessesList).toHaveBeenCalledTimes(2);
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+    expect(api.getProcessesList).toHaveBeenCalledTimes(3);
+    view.unmount();
+    expect(socketHandlers.has('processes:changed')).toBe(false);
+    expect(socketHandlers.has('connect')).toBe(false);
   });
 });

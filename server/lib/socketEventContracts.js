@@ -37,6 +37,22 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     payloadSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
   },
 
+  'processes:changed': Object.freeze({
+    direction: 'server-to-client',
+    summary: 'PM2 snapshot for registered apps sharing a home; null means the probe failed.',
+    payloadSchema: {
+      type: 'object', required: ['appIds', 'defaultHome', 'processes'],
+      properties: {
+        appIds: { type: 'array', items: { type: 'string' } },
+        defaultHome: { type: 'boolean' },
+        processes: { type: ['array', 'null'], items: { type: 'object', properties: {
+          name: { type: 'string' }, status: { type: 'string' }, pid: { type: 'number' },
+          pm_id: { type: 'number' }, cpu: { type: 'number' }, memory: { type: 'number' },
+          uptime: { type: ['number', 'null'] }, restarts: { type: 'number' }, unstableRestarts: { type: 'number' }
+        } } }
+      }
+    }
+  }),
   'app:deploy': input(appDeploySchema, 'Deploy a managed app with allowlisted flags.'),
   'app:standardize': input(appStandardizeSchema, 'Standardize one registered app.'),
   'app:update': input(appUpdateSchema, 'Run the update lifecycle for one registered app.'),

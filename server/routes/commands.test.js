@@ -7,6 +7,10 @@ import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import { ALLOWED_COMMANDS } from '../lib/commandSecurity.js';
 
+vi.mock('../services/apps.js', () => ({ getAppById: vi.fn() }));
+import { getAppById } from '../services/apps.js';
+import * as pm2Service from '../services/pm2.js';
+
 const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({
@@ -20,6 +24,10 @@ vi.mock('../services/history.js', () => ({
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([]),
+  listProcessesStrict: vi.fn().mockResolvedValue([]),
+  stopApp: vi.fn().mockResolvedValue({ success: true }),
+  restartApp: vi.fn().mockResolvedValue({ success: true }),
+  clearJlistCache: vi.fn(),
 }));
 
 vi.mock('../lib/workspaceRoots.js', () => ({
@@ -116,6 +124,29 @@ describe('commands routes', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('reads the selected PM2 home, preserves unavailable status, and applies scoped actions', async () => {
+    getAppById.mockResolvedValue({ id: 'app-a', pm2Home: '/example/pm2' });
+    pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'example-api', status: 'online' }]);
+    const { app } = createApp(undefined, { remoteAddress: '127.0.0.1' });
+    const list = await request(app).get('/api/commands/processes?appId=app-a');
+    expect(list.status).toBe(200);
+    expect(pm2Service.listProcessesStrict).toHaveBeenLastCalledWith('/example/pm2');
+    const result = await request(app).post('/api/commands/processes/example-api/action').send({ action: 'stop', appId: 'app-a' });
+    expect(result.status).toBe(200);
+    expect(pm2Service.stopApp).toHaveBeenCalledWith('example-api', '/example/pm2');
+    expect(result.body.processes).toEqual(list.body);
+    pm2Service.listProcessesStrict.mockResolvedValue(null);
+    expect((await request(app).get('/api/commands/processes?appId=app-a')).status).toBe(503);
+  });
+
+  it('preserves host-control and command-policy gates on process actions', async () => {
+    const remote = createApp(undefined, { remoteAddress: '192.0.2.10' }).app;
+    expect((await request(remote).post('/api/commands/processes/example-api/action').send({ action: 'stop' })).status).toBe(403);
+    const local = createApp(undefined, { remoteAddress: '127.0.0.1' }).app;
+    expect((await request(local).post('/api/commands/processes/all/action').send({ action: 'stop' })).status).toBe(403);
+    expect(pm2Service.stopApp).not.toHaveBeenCalled();
   });
 
   describe('host-control authorization through the real auth gate', () => {

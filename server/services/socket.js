@@ -34,6 +34,7 @@ import {
   errorRecoverSchema
 } from '../lib/socketValidation.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
+import { registerProcessHandlers } from '../sockets/processes.js';
 import { registerAppHandlers } from '../sockets/apps.js';
 import { registerFableLoomHostedNamespace } from '../sockets/fableLoomHosted.js';
 import { cleanupSocketStreams, registerLogHandlers } from '../sockets/logs.js';
@@ -195,6 +196,7 @@ const SOCKET_HANDLER_REGISTRARS = [
   registerBuildHandlers,
   registerImporterHandlers,
   registerAppHandlers,
+  registerProcessHandlers,
   registerLogHandlers,
   registerSubscriptionHandlers,
   registerErrorHandlers,
