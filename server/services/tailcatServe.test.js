@@ -22,6 +22,7 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
 }));
+import { instanceEvents } from './instanceEvents.js';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 
 vi.mock('../lib/bufferedSpawn.js', async (original) => ({
@@ -54,7 +55,9 @@ function fakeChild() {
 describe('tailcatServe helpers', () => {
   beforeEach(() => {
     _resetLiveServeForTests();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.spyOn(instanceEvents, 'emit');
     readJSONFile.mockResolvedValue({ version: 1, serve: null });
   });
 
@@ -142,6 +145,7 @@ describe('tailcatServe helpers', () => {
     expect(_liveServeForTests()?.child).toBe(child);
     expect(saved?.serve?.enabled).toBe(true);
     expect(saved?.serve?.tcAddress).toBe(EXAMPLE_TC);
+    expect(instanceEvents.emit.mock.calls).toEqual([['tailcat:serve:changed'], ['tailcat:serve:changed']]);
   });
 
   it('records an unexpected exit without overwriting a later retry or stop', async () => {
@@ -156,10 +160,12 @@ describe('tailcatServe helpers', () => {
       startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: DEFAULT_KEY_NAME }),
     };
     await ensureTailcatServe(deps);
+    instanceEvents.emit.mockClear();
     child.emit('exit', 1, null);
     await vi.waitFor(() => expect(saved.serve.status).toBe('failed'));
     expect(await getTailcatServeStatus()).toMatchObject({ live: false, status: 'failed', enabled: true });
     expect(saved.serve.lastError).toContain('code=1');
+    expect(instanceEvents.emit).toHaveBeenCalledWith('tailcat:serve:changed');
 
     const replacement = fakeChild();
     await retryTailcatServe({ ...deps, startServe: async () => ({ child: replacement, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: DEFAULT_KEY_NAME }) });
@@ -168,6 +174,24 @@ describe('tailcatServe helpers', () => {
     await stopTailcatServe();
     replacement.emit('exit', 0, 'SIGTERM');
     expect(await getTailcatServeStatus()).toMatchObject({ live: false, status: 'stopped', enabled: false, lastError: null });
+  });
+
+  it('invalidates process loss even when recording the failure fails', async () => {
+    let saved = { version: 1, serve: null };
+    readJSONFile.mockImplementation(async () => saved);
+    atomicWrite.mockImplementation(async (_path, data) => { saved = data; });
+    const child = fakeChild();
+    await ensureTailcatServe({
+      ensureInstalled: async () => ({ bin: '/example/tailcat' }),
+      primeDerpMap: async () => ({}),
+      ensureKey: async () => ({}),
+      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: DEFAULT_KEY_NAME }),
+    });
+    atomicWrite.mockRejectedValueOnce(new Error('Example disk failure'));
+    instanceEvents.emit.mockClear();
+    child.emit('exit', 1, null);
+    await vi.waitFor(() => expect(instanceEvents.emit).toHaveBeenCalledWith('tailcat:serve:changed'));
+    expect(await getTailcatServeStatus()).toMatchObject({ live: false, status: 'stopped' });
   });
 
   it('stopTailcatServe disables restore-on-boot', async () => {
@@ -228,6 +252,7 @@ describe('tailcatServe helpers', () => {
       startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api' }),
     });
     expect(ok).toEqual({ restored: true });
+    expect(instanceEvents.emit).toHaveBeenCalledWith('tailcat:serve:changed');
     expect(_liveServeForTests()?.child).toBe(child);
 
     _resetLiveServeForTests();

@@ -60,6 +60,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Local queue or usage ledger changed; read the authenticated usage report.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'tailcat:serve:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate machine-local Tailcat serve status after persistence or process lifecycle changes; no address or diagnostics.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'reference-sheet:changed': {
     direction: 'server-to-client',
     summary: 'Correlated sheet publication outcome after the image copy and character pointer write finish.',

@@ -58,7 +58,8 @@ vi.mock('./beeperSocketEvents.js', async () => {
   const { EventEmitter } = await import('events');
   return { beeperSocketEvents: new EventEmitter() };
 });
-vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
+vi.mock('./instanceEvents.js', async () => ({ instanceEvents: new (await import('node:events')).EventEmitter() }));
+import { instanceEvents } from './instanceEvents.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
 vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
@@ -163,6 +164,7 @@ describe('socket.js — initSocket', () => {
     jevEvents.removeAllListeners();
     providerQuotaEvents.removeAllListeners();
     usageBackfillEvents.removeAllListeners();
+    instanceEvents.removeAllListeners();
   });
 
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
@@ -201,6 +203,12 @@ describe('socket.js — initSocket', () => {
       ['image-to-3d:changed', { id: 'example-image-model' }],
       ['threejs-model:changed', { id: 'example-procedural-model' }],
     ]);
+  });
+
+  it('forwards Tailcat status invalidation without its serve capability', () => {
+    io.emitted.length = 0;
+    instanceEvents.emit('tailcat:serve:changed', { tcAddress: 'tcEXAMPLE-private', lastError: 'Example diagnostic' });
+    expect(io.emitted).toEqual([['tailcat:serve:changed', {}]]);
   });
 
   it('forwards historical usage progress without worker details', () => {

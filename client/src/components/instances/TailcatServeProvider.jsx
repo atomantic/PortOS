@@ -1,25 +1,29 @@
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { getTailcatServe } from '../../services/api';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
+import useMounted from '../../hooks/useMounted';
 import toast from '../ui/Toast';
 
 const ServeContext = createContext(null);
+const SERVE_EVENTS = ['tailcat:serve:changed'];
 
-// One owner for both controls. Polls cannot overwrite a newer mutation receipt.
+// One owner for both controls. Status reads cannot overwrite a newer mutation receipt.
 export function TailcatServeProvider({ children }) {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  // useAutoRefetch is single-flight, so polls never overlap each other; the
-  // generation only has to fence a poll against a mutation that started while
-  // it was pending.
-  const operation = useRef({ busy: false, generation: 0 });
-  const load = useCallback(async () => {
-    if (operation.current.busy) return;
+  const mounted = useMounted();
+  // Keep the mutation fence independently of socket read coalescing.
+  const operation = useRef({ busy: false, generation: 0, dirty: false });
+  const load = useCallback(async ({ signal }) => {
+    if (operation.current.busy) {
+      operation.current.dirty = true;
+      return;
+    }
     const generation = operation.current.generation;
-    const data = await getTailcatServe({ silent: true });
-    if (!operation.current.busy && generation === operation.current.generation) setStatus(data);
+    const data = await getTailcatServe({ silent: true, signal });
+    if (!signal.aborted && !operation.current.busy && generation === operation.current.generation) setStatus(data);
   }, []);
-  useAutoRefetch(load, 10_000, { pollOnly: true });
+  const { refetch } = useSocketResource(load, { events: SERVE_EVENTS });
 
   const run = async (fn, successMessage) => {
     if (operation.current.busy) return null;
@@ -28,9 +32,15 @@ export function TailcatServeProvider({ children }) {
     setBusy(true);
     // API wrappers own failure toasts. A failed action keeps the last receipt.
     const result = await Promise.resolve().then(fn).catch(() => null);
-    if (result) setStatus(result);
+    if (result && mounted.current) setStatus(result);
     operation.current.busy = false;
+    if (!mounted.current) return result;
     setBusy(false);
+    // A change during a mutation (including its failure) must not be lost.
+    if (operation.current.dirty) {
+      operation.current.dirty = false;
+      void refetch();
+    }
     if (result && successMessage) toast.success(successMessage);
     return result;
   };
