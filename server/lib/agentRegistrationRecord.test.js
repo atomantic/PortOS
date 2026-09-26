@@ -89,3 +89,14 @@ it('projects non-secret provider route provenance for active and archived cards'
   expect(record).not.toHaveProperty('envVars');
   expect(record).not.toHaveProperty('credentialBootstrap');
 });
+
+it('preserves scheduled reconciliation identity through persistence and registration', () => {
+  const queued = buildQueuedTask({ description: 'Reconcile named branches', metadata: {
+    analysisType: 'branch-reconcile', useWorktree: false, openPR: false,
+  } }, 'internal');
+  const [task] = parseTasksMarkdown(generateTasksMarkdown([queued]));
+  const record = buildAgentRegistration({ ...args({}), task });
+  expect(task.metadata.analysisType).toBe('branch-reconcile');
+  expect(record.taskAnalysisType).toBe('branch-reconcile');
+  expect(record.isWorktree).toBe(false);
+});

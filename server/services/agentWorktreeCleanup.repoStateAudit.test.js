@@ -67,6 +67,14 @@ beforeEach(() => {
 });
 
 describe('cleanupAgentWorktree → repo-state audit', () => {
+  it('does not merge or remove a reconciliation coordinator without a worktree', async () => {
+    const originalTask = { id: 'reconcile-task', metadata: {
+      analysisType: 'branch-reconcile', useWorktree: false, openPR: false,
+    } };
+    await expect(cleanupAgentWorktree('reconcile-agent', true, { originalTask })).resolves.toEqual([]);
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
   it('audits after cleanup, carrying the task, the run verdict and the PR expectation', async () => {
     const originalTask = { id: 'task-1', metadata: { app: 'demo-app', openPR: true } };
 

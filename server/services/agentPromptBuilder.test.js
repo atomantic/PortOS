@@ -3593,6 +3593,42 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     });
   });
 
+  // Assert the composed prompt: individually correct sections can contradict.
+  describe.each([
+    { metadata: { analysisType: 'branch-reconcile' } },
+    { metadata: { taskAnalysisType: 'branch-reconcile' } },
+    { taskType: 'branch-reconcile', metadata: {} },
+  ])('reconciliation identity %j', (identity) => {
+    it.each(['tui', 'cli', 'api'])('preserves scoped delivery on %s', async (providerType) => {
+      const prompt = await buildAgentPrompt(makeTask({
+        ...identity,
+        description: 'Reconcile only claim/issue-42. Push the named branch, open its PR, and merge after review and CI.',
+        metadata: {
+          ...sanitizeTaskMetadata({ useWorktree: false, openPR: false, worktreeChangesExpected: false, simplify: true }),
+          ...identity.metadata,
+        },
+      }), {}, '/r', null, isTruthyMeta,
+      { providerType, providerId: 'codex', providerCommand: 'codex', agentId: 'reconcile-test' });
+      expect(prompt).toContain('Reconcile only claim/issue-42');
+      expect(prompt).toContain('## Branch Reconciliation Handoff');
+      expect(prompt).toContain('current-head CI');
+      expect(prompt).toContain('review-only and superseded no-mutation rules');
+      expect(prompt).toContain('no implicit commit, push, or merge-back of the coordinator checkout');
+      expect(prompt).toContain('.agent-done-reconcile-test');
+      expect(prompt).not.toMatch(/Do NOT push|do NOT push|PortOS will (?:push|merge)|commit directly to the current branch/);
+      expect(prompt).not.toContain('## Completion Workflow');
+      expect(prompt).not.toContain('## Simplify Step');
+    });
+  });
+
+  it('keeps explicit read-only reconciliation restricted', async () => {
+    const prompt = await buildAgentPrompt(makeTask({
+      metadata: { analysisType: 'branch-reconcile', readOnly: true, openPR: false },
+    }), {}, '/r', null, isTruthyMeta, { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toMatch(/read.only/i);
+    expect(prompt).not.toContain('## Branch Reconciliation Handoff');
+  });
+
   it('recovers the bundled release for an older queued task whose command was stripped', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
