@@ -103,6 +103,7 @@ export async function claimDraftForSend(id) {
     if (draft.status !== 'approved') {
       throw new ServerError('Draft must be approved and not already sending or sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
+    // Keep uncertain delivery blocked after a crash; never silently retry it.
     draft.status = 'sending';
     draft.updatedAt = new Date().toISOString();
     await saveDrafts(drafts);
@@ -132,6 +133,9 @@ export async function approveDraft(id) {
 export async function deleteDraftsByAccountId(accountId) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
+    if (drafts.some(d => d.accountId === accountId && d.status === 'sending')) {
+      throw new ServerError('Account has a draft being sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
     const remaining = drafts.filter(d => d.accountId !== accountId);
     if (remaining.length < drafts.length) {
       await saveDrafts(remaining);
@@ -145,6 +149,9 @@ export async function deleteDraft(id) {
     const drafts = await loadDrafts();
     const idx = drafts.findIndex(d => d.id === id);
     if (idx === -1) return false;
+    if (drafts[idx].status === 'sending') {
+      throw new ServerError('Draft is being sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
     drafts.splice(idx, 1);
     await saveDrafts(drafts);
     console.log(`🗑️ Message draft deleted: ${id}`);
