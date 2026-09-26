@@ -31,13 +31,13 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
   const tokenResult = await getToken('outlook');
 
   if (tokenResult.error) {
-    console.log(`📧 API sync unavailable for ${account.email}: ${tokenResult.message}`);
+    console.log(`📧 API sync unavailable for account ${account.id}: TOKEN_UNAVAILABLE`);
     return null; // Signal to fall back to Playwright
   }
 
   const token = tokenResult.token;
   const maxMessages = mode === 'full' ? 200 : 100;
-  console.log(`📧 API sync (${mode}) for ${account.email}`);
+  console.log(`📧 API sync (${mode}) for account ${account.id}`);
 
   // Build query — unread mode filters to unread only
   let filter = '';
@@ -63,8 +63,8 @@ export async function syncOutlookApi(account, cache, io, options = {}) {
     }, GRAPH_API_TIMEOUT_MS);
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      console.log(`📧 API sync failed (${response.status}): ${text.slice(0, 200)}`);
+      await response.text().catch(() => ''); // Drain the body without logging provider content.
+      console.warn(`📧 API sync failed for account ${account.id}: HTTP ${response.status}`);
       if (response.status === 401) {
         // Token expired — clear cache so next sync re-extracts
         clearTokenCache('outlook');

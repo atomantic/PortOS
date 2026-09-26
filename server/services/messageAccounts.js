@@ -65,7 +65,7 @@ export async function createAccount(data) {
       createdAt: new Date().toISOString()
     };
     await saveAccounts(accounts);
-    console.log(`📧 Message account created: ${data.name} (${data.type})`);
+    console.log(`📧 Message account created: ${id} (${data.type})`);
     return accounts[id];
   });
 }
