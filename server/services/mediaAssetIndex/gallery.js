@@ -1,6 +1,6 @@
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isTestRunner } from '../../lib/runtimeEnv.js';
-import { listAssets, countAssets, galleryFacets, listMixedGalleryPage } from './db.js';
+import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
 
 const escapeHatch = () => process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
@@ -133,7 +133,7 @@ export async function listGalleryFacets(diskReader) {
     if (text(row.entryKind)) kinds.add(row.entryKind);
   }
   const collections = await (await import('../mediaCollections.js')).listCollections();
-  const populated = await mapWithConcurrency(collections, 4, async collection => {
+  const populated = !escapeHatch() ? await visibleImageCollections(collections) : await mapWithConcurrency(collections, 4, async collection => {
     const page = await listGalleryPage({ collectionId: collection.id, collectionSnapshot: collections, hidden: false, limit: 1 }, diskReader);
     return page.total ? { id: collection.id, name: collection.name } : null;
   });
@@ -145,6 +145,20 @@ export async function listGalleryFacets(diskReader) {
 export async function listGalleryCollectionSummaries(diskReader) {
   const collections = await (await import('../mediaCollections.js')).listCollections();
   const videoSnapshot = await (await import('../videoGen/history.js')).loadHistory();
+  if (!escapeHatch()) {
+    const rows = await collectionCovers(collections.map(collection => ({
+      id: collection.id, coverKey: collection.coverKey,
+      keys: [...(collection.items || [])].sort((a, b) => time(b.addedAt) - time(a.addedAt)).map(keyForRef),
+    })), videoSnapshot);
+    const covers = new Map(rows.map(row => [row.id, row]));
+    return [{ id: 'unsorted' }, ...collections].map(collection => {
+      const row = covers.get(collection.id);
+      const counts = collection.id === 'unsorted'
+        ? { image: Number(row.image), video: Number(row.video), all: Number(row.image) + Number(row.video) }
+        : (collection.items || []).reduce((result, item) => { result[item.kind]++; return result; }, { image: 0, video: 0 });
+      return { id: collection.id, counts, total: counts.image + counts.video, cover: row?.cover ?? null };
+    });
+  }
   const summaries = await mapWithConcurrency([{ id: 'unsorted' }, ...collections], 4, async collection => {
     const page = await listGalleryPage({ collectionId: collection.id, media: true, kind: 'all', limit: 1, summary: collection.id === 'unsorted', cover: true, videoSnapshot, collectionSnapshot: collections }, diskReader);
     let cover = page.items[0];
