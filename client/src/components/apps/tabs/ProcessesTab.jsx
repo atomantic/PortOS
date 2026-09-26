@@ -7,6 +7,7 @@ import { FormField } from '../../ui/FormField';
 import ProcessLogLines from '../../ui/ProcessLogLines';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
+import useFocusTrap from '../../../hooks/useFocusTrap';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { formatBytes, formatCount, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
 
@@ -26,6 +27,11 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
   const fullscreenLogsRef = useRef(null);
+  const fullscreenModalRef = useRef(null);
+  const fullscreenButtonRef = useRef(null);
+
+  // Focus trap for fullscreen modal: trap Tab/Shift+Tab and restore focus on close
+  useFocusTrap(fullscreen, fullscreenModalRef);
 
   // Socket log lifecycle lives in the shared hook so this tab and the desktop
   // launch-progress panel can't drift.
@@ -61,6 +67,13 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
       .map(({ line, type, timestamp }) => `[${formatTimeOfDaySeconds(timestamp)}] [${type}] ${line}`)
       .join('\n');
     copyToClipboard(text, 'Logs copied');
+  };
+
+  const handleFullscreenEscape = (e) => {
+    if (e.key === 'Escape' && fullscreen) {
+      e.preventDefault();
+      setFullscreen(false);
+    }
   };
 
   const filteredProcesses = filterFn
@@ -205,6 +218,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                                 Copy logs
                               </button>
                               <button
+                                ref={fullscreenButtonRef}
                                 onClick={() => setFullscreen(true)}
                                 className="min-h-[44px] px-1 text-xs text-gray-500 hover:text-white flex items-center gap-1"
                                 title="Fullscreen"
@@ -251,7 +265,14 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         directly because this overlay isn't a <Modal>.
       */}
       {fullscreen && expandedProcess && createPortal(
-        <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
+        <div
+          ref={fullscreenModalRef}
+          className="fixed inset-0 bg-port-bg z-50 flex flex-col"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Logs for ${expandedProcess}`}
+          onKeyDown={handleFullscreenEscape}
+        >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
