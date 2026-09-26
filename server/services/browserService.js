@@ -5,7 +5,7 @@
  */
 
 import { readdir, stat, unlink } from 'fs/promises';
-import { join, basename, resolve, extname } from 'path';
+import { join, basename, dirname, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
 import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from '../lib/fileUtils.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
@@ -849,7 +849,7 @@ export async function resolveDownload(name) {
   const safeName = basename(name || '');
   if (!safeName || safeName.startsWith('.') || safeName.endsWith('.crdownload')) return null;
   const absPath = resolve(downloadDir, safeName);
-  if (!absPath.startsWith(downloadDir + '/')) return null;
+  if (dirname(absPath) !== downloadDir) return null;
   const info = await stat(absPath).catch(() => null);
   if (!info?.isFile()) return null;
   const ext = extname(safeName).toLowerCase();
