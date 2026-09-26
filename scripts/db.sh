@@ -539,31 +539,50 @@ run_pg_dump() {
   elif command -v pg_dump >/dev/null 2>&1; then
     PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
   else
-    err "pg_dump not found on host and Docker DB is not running"
-    exit 1
+    err "pg_dump not found on host and Docker DB is not running" >&2
+    # return (not exit) so cmd_export can clean up its temp file
+    return 1
   fi
 }
 
-# Export database to SQL dump
+# Export database to SQL dump. Prints the dump path on stdout ONLY on success.
+# Every step is checked explicitly: cmd_migrate calls this inside a command
+# substitution, where set -e is not inherited (and inherit_errexit is missing
+# from older supported Bash), so a failed pg_dump must not fall through to the
+# rename + success echo (#8781).
 cmd_export() {
   local label="${1:-$(date +%Y%m%d-%H%M%S)}"
 
   # Sanitize label to prevent path traversal
   if echo "$label" | grep -qE '[^A-Za-z0-9._-]'; then
-    err "Invalid label: only alphanumeric, dots, hyphens, and underscores are allowed"
-    exit 1
+    err "Invalid label: only alphanumeric, dots, hyphens, and underscores are allowed" >&2
+    return 1
   fi
 
-  mkdir -p "$DUMP_DIR"
+  if ! mkdir -p "$DUMP_DIR"; then
+    err "Could not create dump directory: $DUMP_DIR" >&2
+    return 1
+  fi
   local dumpfile="$DUMP_DIR/portos-$label.sql"
 
   info "Exporting database to $dumpfile..." >&2
 
-  # Dump to a temp file first to avoid leaving a partial/corrupt dump on failure
+  # Dump to a temp file first so a failed dump never replaces an existing one
   local tmpfile
-  tmpfile="$(mktemp "$DUMP_DIR/portos-export.XXXXXX")"
-  run_pg_dump --no-owner --no-privileges --if-exists --clean > "$tmpfile"
-  mv "$tmpfile" "$dumpfile"
+  if ! tmpfile="$(mktemp "$DUMP_DIR/portos-export.XXXXXX")"; then
+    err "Could not create a temporary dump file in $DUMP_DIR" >&2
+    return 1
+  fi
+  if ! run_pg_dump --no-owner --no-privileges --if-exists --clean > "$tmpfile"; then
+    rm -f "$tmpfile"
+    err "pg_dump failed — no dump was written" >&2
+    return 1
+  fi
+  if ! mv "$tmpfile" "$dumpfile"; then
+    rm -f "$tmpfile"
+    err "Could not move the dump into place: $dumpfile" >&2
+    return 1
+  fi
 
   log "Exported to: $dumpfile" >&2
   echo "$dumpfile"
@@ -636,8 +655,12 @@ cmd_migrate() {
   info "Source has $count memories"
 
   # Export from source
+  # Abort before touching the target or the mode when the export fails (#8781)
   local dumpfile
-  dumpfile=$(cmd_export "migrate-$(date +%Y%m%d-%H%M%S)")
+  if ! dumpfile=$(cmd_export "migrate-$(date +%Y%m%d-%H%M%S)") || [ ! -f "$dumpfile" ]; then
+    err "Export from $current_mode failed — migration aborted; $target_mode was not modified and mode remains $current_mode"
+    exit 1
+  fi
 
   # Determine target port
   local target_port
