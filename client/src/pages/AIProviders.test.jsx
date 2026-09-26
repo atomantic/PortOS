@@ -66,7 +66,6 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 vi.mock('../services/socket', () => ({
   default: {
-    emit: vi.fn(),
     on: vi.fn(),
     off: vi.fn(),
     emit: vi.fn(),
