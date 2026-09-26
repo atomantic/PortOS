@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { createReadStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join as joinPath } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -80,7 +80,7 @@ vi.mock('./memoryBackend.js', () => ({
 import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
@@ -93,6 +93,12 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 // Mock fs/promises so stat/readFile are spyable in ESM (the real namespace
 // is non-configurable). Spread the original first so every other fs helper
 // used by backup.js + fileUtils.js keeps its real implementation.
+// createReadStream is spyable for the streamed database-dump admission
+// (#8782); every other caller keeps the real implementation.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
+});
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -1050,16 +1056,40 @@ describe('dumpPostgres status classification', () => {
   });
 });
 
+// A complete plain pg_dump envelope as pg_dump 17.6+ writes it. Only the two
+// tables every PortOS dump has ever contained — newer tables are optional.
+const DUMP_HEADER = '--\n-- PostgreSQL database dump\n--\n\n\\restrict k3y\n\nSET statement_timeout = 0;\n';
+const DUMP_TABLES = 'CREATE TABLE public.memories (\n    id uuid NOT NULL\n);\n\nCREATE TABLE public.memory_links (\n    source_id uuid NOT NULL\n);\n\nCOPY public.memories (id) FROM stdin;\n\\.\n\n';
+const DUMP_TRAILER = '\n--\n-- PostgreSQL database dump complete\n--\n\n\\unrestrict k3y\n\n';
+const COMPLETE_DUMP = DUMP_HEADER + DUMP_TABLES + DUMP_TRAILER;
+
+// Serve the dump bytes from the mocked stream. Each entry answers one read of
+// the snapshot dump in order; the last repeats. An Error entry fails that read.
+const realFsSync = await vi.importActual('fs');
+function mockDumpStream(...reads) {
+  const queue = reads.length ? reads : [COMPLETE_DUMP];
+  createReadStream.mockImplementation((path, ...rest) => {
+    if (!String(path).endsWith('portos-db.sql')) return realFsSync.createReadStream(path, ...rest);
+    const next = queue.length > 1 ? queue.shift() : queue[0];
+    if (next instanceof Error) {
+      return new Readable({ read() { this.destroy(next); } });
+    }
+    return Readable.from([Buffer.from(next)]);
+  });
+}
+
 describe('restorePostgres', () => {
   let restorePostgres;
-  const mockLegacyDumpRead = (sql = 'CREATE TABLE a (...);\n') => {
+  const mockLegacyDumpRead = (...reads) => {
     vi.spyOn(fs, 'readFile').mockImplementation(async (path) => {
       if (String(path).endsWith('manifest.json')) {
         throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       }
-      return sql;
+      throw new Error(`unexpected readFile ${path}`);
     });
+    mockDumpStream(...reads);
   };
+  afterAll(() => createReadStream.mockImplementation(realFsSync.createReadStream));
   beforeEach(async () => {
     vi.clearAllMocks();
     // listSnapshots installs a persistent readdir spy that returns Dirents.
@@ -1109,7 +1139,7 @@ describe('restorePostgres', () => {
     expect(result.status).toBe('ok');
     expect(result.dryRun).toBe(true);
     expect(result.sizeBytes).toBe(4096);
-    expect(result.tableCount).toBe(1);
+    expect(result.tableCount).toBe(2);
     expect(spawn).not.toHaveBeenCalled();
     expect(ensureSchema).not.toHaveBeenCalled();
     expect(runDbMigrations).not.toHaveBeenCalled();
@@ -1173,7 +1203,7 @@ describe('restorePostgres', () => {
     });
     try {
       const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 2, syncCursorsRewound: 2 });
       const [bin, args, opts] = spawn.mock.calls[0];
       expect(bin).toBe('psql');
       expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
@@ -1278,7 +1308,7 @@ describe('restorePostgres', () => {
 
     it('floors feed sequences at their pre-replay value and rewinds peer cursors after reconciliation', async () => {
       const result = await runRestore();
-      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1, syncCursorsRewound: 2 });
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 2, syncCursorsRewound: 2 });
       // Captured inside maintenance, before psql replays the dump.
       expect(captureCalls()).toHaveLength(1);
       expect(captureCalls()[0][1][0]).toContain('catalog_ingredients_sync_feed_seq');
@@ -1309,15 +1339,82 @@ describe('restorePostgres', () => {
     });
   });
 
+  // Dump completeness admission (#8782). Historical snapshots carry no hash, so
+  // a truncated-but-parseable dump must be caught from its own envelope before
+  // the full reset — ON_ERROR_STOP cannot see a file that simply stops early.
+  describe('dump admission', () => {
+    beforeEach(() => {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    });
+    const expectRefusedBeforeReset = () => {
+      expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
+    };
+
+    it.each([
+      ['a header-only legacy dump', DUMP_HEADER, /completion marker.*memories.*memory_links/],
+      ['a dump truncated between complete statements', DUMP_HEADER + DUMP_TABLES, /completion marker/],
+      ['a complete envelope without the core PortOS tables', DUMP_HEADER + DUMP_TRAILER, /table memories, table memory_links/],
+      ['content after the completion marker', `${COMPLETE_DUMP}DROP TABLE public.memories;\n`, /completion marker/],
+    ])('refuses %s in preview and execution before any reset', async (_case, sql, missing) => {
+      mockLegacyDumpRead(sql);
+      for (const dryRun of [true, false]) {
+        const result = await restorePostgres('/dest', 'snap-1', { dryRun });
+        expect(result).toMatchObject({ status: 'failed', reason: 'dump_incomplete' });
+        expect(result.error).toMatch(missing);
+      }
+      expectRefusedBeforeReset();
+    });
+
+    it('refuses an unreadable dump instead of treating it as empty', async () => {
+      mockLegacyDumpRead(Object.assign(new Error('media I/O failure'), { code: 'EIO' }));
+      for (const dryRun of [true, false]) {
+        expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+          .toMatchObject({ status: 'failed', reason: 'dump_unreadable' });
+      }
+      expectRefusedBeforeReset();
+    });
+
+    it('admits a complete legacy dump of empty tables written by an older pg_dump', async () => {
+      // No \\restrict/\\unrestrict, CRLF-free, empty COPY blocks, no newer tables.
+      mockLegacyDumpRead(`--\n-- PostgreSQL database dump\n--\n\n${DUMP_TABLES}--\n-- PostgreSQL database dump complete\n--\n\n`);
+      expect(await restorePostgres('/dest', 'snap-1', { dryRun: true }))
+        .toEqual({ status: 'ok', dryRun: true, sizeBytes: 4096, tableCount: 2 });
+    });
+
+    // A later swap on the backup media must not reach psql: it replays the
+    // private copy the admission read wrote, and the copy is removed afterwards.
+    it('replays exactly the admitted bytes from a private spool, never the snapshot path', async () => {
+      mockLegacyDumpRead(COMPLETE_DUMP, `${DUMP_HEADER}COMMIT;\n${DUMP_TRAILER}`);
+      const proc = fakeProc();
+      let replayed;
+      spawn.mockImplementation((_bin, args) => {
+        const spoolPath = args[args.indexOf('-f') + 1];
+        replayed = { spoolPath, sql: readFileSync(spoolPath, 'utf8'), mode: statSync(spoolPath).mode & 0o777 };
+        return proc;
+      });
+      const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+      await flush();
+      proc.emit('close', 0);
+      expect(await pending).toMatchObject({ status: 'ok', dryRun: false, tableCount: 2 });
+      expect(replayed.sql).toBe(COMPLETE_DUMP);
+      expect(replayed.spoolPath).not.toContain('snap-1');
+      expect(createReadStream.mock.calls.filter(([path]) => String(path).endsWith('portos-db.sql'))).toHaveLength(1);
+      if (process.platform !== 'win32') expect(replayed.mode).toBe(0o600);
+      expect(existsSync(replayed.spoolPath)).toBe(false);
+    });
+  });
+
   // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest
   // under the parent-relative key '../portos-db.sql' — these tests assert the
   // exact key, the mismatch refusal, and the backward-compat skip paths.
   //
-  // sha256File reads the dump via fs.readFile (small-file path). We mock
-  // readFile path-aware: manifest.json returns the manifest JSON, the dump path
-  // returns the SQL bytes that sha256File hashes. The dump content here is the
-  // small string 'CREATE TABLE a;' — its real sha256 is the constant below.
-  const DUMP_SQL = 'CREATE TABLE a;';
+  // The dump is hashed from the same stream admission reads (#8782). readFile
+  // is mocked path-aware for manifest.json; the dump bytes come from the
+  // mocked stream, and their real sha256 is the constant below.
+  const DUMP_SQL = COMPLETE_DUMP;
   // Compute the genuine hash so the "match" test verifies real bytes, not a
   // hard-coded string that could drift from sha256File's implementation.
   const REAL_DUMP_SHA256 = createHash('sha256').update(Buffer.from(DUMP_SQL)).digest('hex');
@@ -1334,8 +1431,9 @@ describe('restorePostgres', () => {
         }
         return JSON.stringify(manifestObj);
       }
-      return DUMP_SQL;
+      throw new Error(`unexpected readFile ${path}`);
     });
+    mockDumpStream(DUMP_SQL);
   }
 
   it('proceeds when the dump hash matches the manifest (match)', async () => {
@@ -1343,7 +1441,7 @@ describe('restorePostgres', () => {
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result.status).toBe('ok');
     expect(result.dryRun).toBe(true);
-    expect(result.tableCount).toBe(1);
+    expect(result.tableCount).toBe(2);
   });
 
   it('refuses with manifest_mismatch when the dump hash differs (mismatch)', async () => {
@@ -1358,14 +1456,14 @@ describe('restorePostgres', () => {
     mockDumpAndManifest(null);
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result.status).toBe('ok');
-    expect(result.tableCount).toBe(1);
+    expect(result.tableCount).toBe(2);
   });
 
   it('skips verification when the manifest lacks the dump key (pre-#976 manifest)', async () => {
     mockDumpAndManifest({ files: { 'instances.json': 'abc123' } });
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result.status).toBe('ok');
-    expect(result.tableCount).toBe(1);
+    expect(result.tableCount).toBe(2);
   });
 
   it.each([
@@ -1374,10 +1472,11 @@ describe('restorePostgres', () => {
   ])('refuses dry-run and real restore when manifest.json has %s', async (_case, manifestResult) => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
     vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
-      if (!String(p).endsWith('manifest.json')) return DUMP_SQL;
+      if (!String(p).endsWith('manifest.json')) throw new Error(`unexpected readFile ${p}`);
       if (manifestResult instanceof Error) throw manifestResult;
       return manifestResult;
     });
+    mockDumpStream(DUMP_SQL);
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
 
     await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true }))
@@ -1448,7 +1547,7 @@ describe('restorePostgres', () => {
       await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
 
       expect(proc.kill).not.toHaveBeenCalled();
-      proc.emit('close', 0);
+    proc.emit('close', 0);
       await expect(pending).resolves.toMatchObject({ status: 'ok' });
     } finally {
       vi.useRealTimers();

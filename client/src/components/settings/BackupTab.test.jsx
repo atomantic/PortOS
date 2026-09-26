@@ -415,6 +415,22 @@ describe('BackupTab', () => {
       );
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
+
+    // #8782: an incomplete legacy dump is refused at preview, so the operator
+    // learns nothing changed instead of seeing an opaque reason code.
+    it('explains an incomplete dump and does not open confirmation', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'dump_incomplete' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/incomplete.*Nothing was changed/));
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
   });
 
   describe('snapshot deletion (#8334)', () => {

@@ -96,7 +96,9 @@ After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore 
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back.
+
+**Dump admission (#8782).** Because the replay starts by resetting every application table, a dump that parses but stops early would commit an empty database — `ON_ERROR_STOP` cannot see a file that simply ends between complete statements, and historical snapshots carry no checksum to catch it. Before preview or execution touch the database, PortOS streams the dump once and requires the plain `pg_dump` envelope: the terminal `-- PostgreSQL database dump complete` block as the last content (only the `\unrestrict` line newer `pg_dump` writes may follow it) and the `CREATE TABLE` definitions for `memories` and `memory_links`, which every PortOS dump has contained. Tables introduced later are not required, and a complete dump of empty tables is valid. A header-only or truncated dump is refused as `dump_incomplete`, and a read failure as `dump_unreadable` — never as an empty successful restore. The same streamed read supplies the manifest checksum. For execution it also writes the bytes it checked to an owner-only copy in a fresh `portos-restore-*` directory under the OS temp dir, and `psql` replays that copy rather than the snapshot path, so a dump that changes on the backup media after admission cannot be what gets restored. The copy is removed when the restore finishes, whatever the outcome; staging it needs free temp space about the size of the dump. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
@@ -105,6 +107,8 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'skipped', reason: 'not_configured' }` | Real restore requested but Postgres is unreachable — refuses to half-restore |
 | `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
+| `{ status: 'failed', reason: 'dump_unreadable', error }` | `portos-db.sql` could not be read, or its private restore copy could not be written — refused before any reset |
+| `{ status: 'failed', reason: 'dump_incomplete', error }` | The dump lacks the `pg_dump` completion marker or a core PortOS table (header-only or truncated) — refused before any reset |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
 | `{ status: 'failed', reason: 'restore_sync_resync', error }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) |
