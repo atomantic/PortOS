@@ -49,6 +49,16 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate Digital Twin status/settings after persistence or completed peer sync; contains no personal data.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'meatspace:death-clock:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate death-clock projection after local or federated inputs change.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:goals:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate operational goal progress after learning statistics persist.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'portos:auto-update:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate updater status after runtime, configuration or external git ref changes.',
