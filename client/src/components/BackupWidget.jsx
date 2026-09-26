@@ -248,7 +248,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
   // Let errors throw — `useSocketResource` preserves the last-good data on
   // transient failures. A `.catch(() => null)` here would wipe the snapshot
   // list on every blip per the hook's documented gotcha.
-  const { data: snapshots, loading } = useSocketResource(
+  const { data: snapshots, loading, error, refetch } = useSocketResource(
     () => api.getBackupSnapshots({ silent: true }),
     {
       events: RESOURCE_EVENTS,
@@ -285,7 +285,17 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
     );
   }
 
+  const inventoryError = error && (
+    <div role="alert" className="mt-3 text-xs text-port-warning">
+      <p>Snapshot inventory unavailable.{snapshots !== null ? ' Previously loaded inventory is stale.' : ''}</p>
+      <button onClick={() => refetch()} className="mt-1 min-h-[32px] text-port-accent">
+        Retry snapshot inventory
+      </button>
+    </div>
+  );
+
   if (!snapshots || snapshots.length === 0) {
+    if (error) return inventoryError;
     return (
       <p className="mt-3 text-xs text-gray-500">No snapshots found.</p>
     );
@@ -293,6 +303,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
 
   return (
     <div className="mt-3 space-y-1">
+      {inventoryError}
       {snapshots.map(snap => (
         <div key={snapshotIdentity(snap)}>
           <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded bg-port-bg/50 hover:bg-port-bg/80 transition-colors">
