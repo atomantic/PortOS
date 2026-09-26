@@ -4,11 +4,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import MediaPreview from './MediaPreview';
 import usePreviewRoute from '../../hooks/usePreviewRoute';
-import { updateVideoPrompt, listImageVariants, listMediaGalleryPage } from '../../services/apiImageVideo';
+import { updateVideoPrompt, updateVideoPoster, listImageVariants, listMediaGalleryPage } from '../../services/apiImageVideo';
 
 vi.mock('../../services/apiImageVideo', () => ({
   updateImagePrompt: vi.fn(),
   updateVideoPrompt: vi.fn(),
+  updateVideoPoster: vi.fn(),
   listImageVariants: vi.fn(),
   listMediaGalleryPage: vi.fn(),
 }));
@@ -17,8 +18,10 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, onPromptChange, variantGroup, onSelectVariant }) => item ? (
+  default: ({ item, onPromptChange, onPosterChange, variantGroup, onSelectVariant }) => item ? (
     <div data-testid="lightbox">
+      <span data-testid="lightbox-poster">{item.previewUrl}</span>
+      <button onClick={() => onPosterChange(item, 12.4)}>Save poster</button>
       <span data-testid="lightbox-prompt">{item.prompt}</span>
       <span data-testid="lightbox-filename">{item.filename}</span>
       <button type="button" onClick={() => onPromptChange(item, 'a saved prompt')}>
@@ -276,4 +279,13 @@ describe('MediaPreview variant toggle', () => {
     await waitFor(() => expect(screen.getByTestId('lightbox')).toBeInTheDocument());
     expect(listImageVariants).not.toHaveBeenCalled();
   });
+});
+
+it('applies a saved poster immediately and reports the updated history fields to the host', async () => {
+  updateVideoPoster.mockResolvedValue({ id: VIDEO.id, thumbnail: 'new-poster.jpg', posterSec: 12.4 });
+  const saved = vi.fn();
+  render(<MediaPreview preview={VIDEO} setPreview={() => {}} items={[VIDEO]} onPosterSaved={saved} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Save poster' }));
+  await waitFor(() => expect(screen.getByTestId('lightbox-poster')).toHaveTextContent('/data/video-thumbnails/new-poster.jpg'));
+  expect(saved).toHaveBeenCalledWith(VIDEO, { id: VIDEO.id, thumbnail: 'new-poster.jpg', posterSec: 12.4 });
 });

@@ -61,7 +61,7 @@ vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})) }));
 
 import { renderMusicVideo, getRenderJobStatus } from './render.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject } from './projects.js';
@@ -245,4 +245,19 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     errorSpy.mockRestore();
     logSpy.mockRestore();
   });
+});
+
+it('chooses the loudest section midpoint within the rendered duration', async () => {
+  prime('poster-section');
+  const project = await getProject();
+  getProject.mockResolvedValue({ ...project, audioAnalysis: { sections: [
+    { startSec: 0, endSec: 1, energy: 0.2 },
+    { startSec: 1, endSec: 2, energy: 0.9 },
+  ] } });
+  const { jobId } = await renderMusicVideo('poster-section');
+  lastProc().emit('spawn');
+  lastProc().emit('close', 0, null);
+  await tick();
+  expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1.5 });
+  expect(getRenderJobStatus(jobId).status).toBe('complete');
 });

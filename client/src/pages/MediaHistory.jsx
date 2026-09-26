@@ -264,6 +264,8 @@ export default function MediaHistory() {
         annotations={annotations}
         updateAnnotation={updateAnnotation}
         onPromptSaved={handlePromptSaved}
+        onPosterSaved={(item, result) => setItems(all => all.map(current => current.key === item.key
+          ? { ...current, raw: { ...current.raw, thumbnail: result.thumbnail, posterSec: result.posterSec } } : current))}
         onRemix={handleRemix}
         onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}
