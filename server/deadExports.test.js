@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,11 @@ function addedExportNamesFromDiff(diff) {
 }
 
 function addedExportNames() {
-  const base = process.env.CI_BASE_SHA || execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: ROOT, encoding: 'utf8' }).trim();
+  // Pull-request CI supplies its exact merge-ref base. A workflow_dispatch
+  // full run has no origin/main ref in actions/checkout's depth-2 clone; use
+  // the previous commit there so this guard still examines the new exports.
+  const hasOriginMain = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/main'], { cwd: ROOT, stdio: 'ignore' }).status === 0;
+  const base = process.env.CI_BASE_SHA || execFileSync('git', hasOriginMain ? ['merge-base', 'HEAD', 'origin/main'] : ['rev-parse', 'HEAD^1'], { cwd: ROOT, encoding: 'utf8' }).trim();
   const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: ROOT, encoding: 'utf8' });
   return addedExportNamesFromDiff(diff);
 }

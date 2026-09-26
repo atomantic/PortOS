@@ -150,7 +150,7 @@ describe('pregate hidden-content invocation', () => {
   });
 
   afterAll(async () => {
-    await destroyGitSandbox(template.scratch);
+    if (template?.scratch) await destroyGitSandbox(template.scratch);
   });
 
   it.each(['committed', 'staged', 'unstaged', 'untracked'])(
