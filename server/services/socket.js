@@ -461,7 +461,13 @@ function setupCosEventForwarding() {
   for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
-  settingsEvents.on('settings:updated', () => ioInstance?.emit('backup:changed', {}));
+  settingsEvents.on('settings:updated', () => {
+    ioInstance?.emit('backup:changed', {});
+    ioInstance?.emit('jev:policy', {});
+  });
+  // A failed restore also invalidates policy: clients must show the strict
+  // read failure instead of continuing to offer stale safety settings.
+  settingsEvents.on('settings:invalidated', () => ioInstance?.emit('jev:policy', {}));
   for (const [source, target] of [
     ['scheduler:scheduled', 'cos:scheduler:changed'],
     ['scheduler:ran', 'cos:scheduler:changed'],

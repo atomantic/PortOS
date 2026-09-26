@@ -205,6 +205,12 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['usage-backfill:updated', {}]]);
   });
 
+  it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
+    expect(io.emitted).toEqual([['jev:policy', {}]]);
+  });
+
   it('forwards Laya status without experiment content', () => {
     io.emitted.length = 0;
     layaMlxEvents.emit('updated', { premise: 'Example private experiment' });
@@ -274,12 +280,12 @@ describe('socket.js — initSocket', () => {
     previousIo.emitted.length = 0;
     io.emitted.length = 0;
     settingsEvents.emit('settings:updated', { privateContent: 'Example settings' });
-    expect(io.emitted).toEqual([['backup:changed', {}]]);
+    expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}]]);
     dashboardEvents.emit('goals:changed', { privateContent: 'Example goal' });
     dashboardEvents.emit('cos:day:changed', { privateContent: 'Example day' });
     const taskChange = { action: 'updated', task: { id: 'example-task', status: 'pending' } };
     queueListeners.cos.filter(([event]) => event === 'tasks:changed').forEach(([, handler]) => handler(taskChange));
-    expect(io.emitted).toEqual([['backup:changed', {}], ['goals:changed', {}], ['review:queue:changed']]);
+    expect(io.emitted).toEqual([['backup:changed', {}], ['jev:policy', {}], ['goals:changed', {}], ['review:queue:changed']]);
     expect(previousIo.emitted).toEqual([]);
     expect(subscriber.emitted).toEqual([
       ['cos:day:changed', {}],
