@@ -431,6 +431,12 @@ export default function PipelineManuscriptEditor() {
     });
     setSwitching(false);
     if (!manuscript) return;
+    // Editing remains available during the GET. Recheck the live owners before
+    // replacing them: a new save can be pending even if the draft looks clean.
+    if (pendingSaves.current.size > 0 || liveSectionsRef.current.some((s) => isSectionDirty(baselineRef.current, s))) {
+      toast('Kept this format open — save your latest edits, then retry switching formats');
+      return;
+    }
     const nextSections = Array.isArray(manuscript.sections) ? manuscript.sections : [];
     setSections(nextSections);
     seedBaselines(nextSections);

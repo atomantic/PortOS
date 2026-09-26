@@ -300,6 +300,83 @@ describe('PipelineManuscriptEditor', () => {
       .toBeLessThan(api.getPipelineManuscript.mock.invocationCallOrder.at(-1));
   });
 
+  it.each(['Live', 'Review'])('%s mode retains edits made during the format fetch and allows retry after saving (#8525)', async (mode) => {
+    mockBothFormats();
+    const loadFormat = api.getPipelineManuscript.getMockImplementation();
+    let resolveFormat;
+    api.getPipelineManuscript.mockImplementation((id, type) => type === 'teleplay'
+      ? new Promise((resolve) => { resolveFormat = resolve; })
+      : loadFormat(id, type));
+    api.savePipelineManuscriptSection.mockResolvedValue(savedProse);
+    const toast = (await import('../components/ui/Toast')).default;
+    renderEditor();
+    await screen.findByDisplayValue('The hero walked in. She left.');
+    if (mode === 'Review') {
+      fireEvent.click(screen.getByRole('button', { name: /Review/ }));
+      fireEvent.click(screen.getByRole('button', { name: /Edit/ }));
+    }
+    const textarea = screen.getByDisplayValue('The hero walked in. She left.');
+    const switchButton = screen.getByRole('button', { name: 'Teleplay' });
+    fireEvent.click(switchButton);
+    await waitFor(() => expect(resolveFormat).toBeTypeOf('function'));
+    fireEvent.focus(textarea);
+    fireEvent.change(textarea, { target: { value: savedProse.section.content } });
+    await act(async () => { resolveFormat(await loadFormat('ser-1', 'teleplay')); });
+
+    expect(screen.getByDisplayValue(savedProse.section.content)).toBe(textarea);
+    expect(screen.getByLabelText('Issue 1 has unsaved edits')).toBeInTheDocument();
+    expect(switchButton).toBeEnabled();
+    expect(toast).toHaveBeenCalledWith('Kept this format open — save your latest edits, then retry switching formats');
+    expect(api.savePipelineManuscriptSection).not.toHaveBeenCalled();
+
+    fireEvent.blur(textarea);
+    await waitFor(() => expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument());
+    expect(api.savePipelineManuscriptSection).toHaveBeenCalledWith(
+      'ser-1', 'iss-1', { stageId: 'prose', output: savedProse.section.content }, { silent: true },
+    );
+    api.getPipelineManuscript.mockImplementation(loadFormat);
+    fireEvent.click(switchButton);
+    if (mode === 'Review') {
+      expect(await screen.findByText('INT. ROOM - DAY')).toBeInTheDocument();
+    } else {
+      expect(await screen.findByDisplayValue('INT. ROOM - DAY')).toBeInTheDocument();
+    }
+  });
+
+  it('retains the outgoing format when a new save is pending even if its draft matches the baseline (#8525)', async () => {
+    mockBothFormats();
+    const loadFormat = api.getPipelineManuscript.getMockImplementation();
+    let resolveFormat;
+    let resolveSave;
+    api.getPipelineManuscript.mockImplementation((id, type) => type === 'teleplay'
+      ? new Promise((resolve) => { resolveFormat = resolve; })
+      : loadFormat(id, type));
+    api.savePipelineManuscriptSection.mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    renderEditor();
+    const original = 'The hero walked in. She left.';
+    const textarea = await screen.findByDisplayValue(original);
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    await waitFor(() => expect(resolveFormat).toBeTypeOf('function'));
+    fireEvent.change(textarea, { target: { value: savedProse.section.content } });
+    fireEvent.blur(textarea);
+    await waitFor(() => expect(resolveSave).toBeTypeOf('function'));
+    fireEvent.change(textarea, { target: { value: original } });
+    expect(screen.queryByLabelText('Issue 1 has unsaved edits')).not.toBeInTheDocument();
+    await act(async () => { resolveFormat(await loadFormat('ser-1', 'teleplay')); });
+
+    expect(screen.getByDisplayValue(original)).toBe(textarea);
+    expect(screen.getByRole('button', { name: 'Teleplay' })).toBeEnabled();
+    await act(async () => { resolveSave(savedProse); });
+    expect(screen.getByLabelText('Issue 1 has unsaved edits')).toBeInTheDocument();
+    api.savePipelineManuscriptSection.mockResolvedValue({ section: { ...savedProse.section, content: original } });
+    api.getPipelineManuscript.mockImplementation(loadFormat);
+    fireEvent.click(screen.getByRole('button', { name: 'Teleplay' }));
+    expect(await screen.findByDisplayValue('INT. ROOM - DAY')).toBeInTheDocument();
+    expect(api.savePipelineManuscriptSection).toHaveBeenLastCalledWith(
+      'ser-1', 'iss-1', { stageId: 'prose', output: original }, { silent: true },
+    );
+  });
+
   it('does not double-PATCH when the blur save and the format flush race (#3399)', async () => {
     mockBothFormats();
     api.savePipelineManuscriptSection.mockResolvedValue(savedProse);
