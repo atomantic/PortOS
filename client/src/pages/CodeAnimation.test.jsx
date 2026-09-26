@@ -172,6 +172,20 @@ describe('Code Animation page', () => {
     expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
   });
 
+  it('offers recovery when the final event read fails without discarding the displayed job', async () => {
+    getCodeAnimationJob.mockResolvedValue(runningJob);
+    await renderPage('/code-animation/job-1');
+    getCodeAnimationJob.mockRejectedValueOnce(new Error('Temporary outage'));
+    await emitSocket('code-animation:changed', { id: 'job-1' });
+    expect(screen.getByText(/displayed status may be out of date/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generating…' })).toBeDisabled();
+    getCodeAnimationJob.mockResolvedValue(completedJob);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry job status' }));
+    expect(getCodeAnimationJob).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('button', { name: 'Run with audio' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry job status' })).not.toBeInTheDocument();
+  });
+
   it('drops a pending response after selecting another job and releases listeners on unmount', async () => {
     let resolveFirst;
     getCodeAnimationJob.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))

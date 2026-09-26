@@ -375,7 +375,7 @@ export default function CodeAnimation() {
   const jobResource = useSocketResource(async () => {
     if (!jobId) return null;
     // Only a 404 means the job is gone. Transient failures retain the current
-    // output and recover on the next event, reconnect or tab re-show.
+    // output and offer retry, with recovery on events, reconnect or tab re-show.
     return getCodeAnimationJob(jobId, { silent: true }).catch((error) => {
       if (error.status === 404) return { id: jobId, status: 'missing', error: error.message };
       throw error;
@@ -862,6 +862,12 @@ export default function CodeAnimation() {
               {job?.status === 'failed' && <span className="text-xs text-port-error">Generation failed: {job.error}</span>}
               {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available.</span>}
             </div>
+            {jobResource.error && (
+              <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-error">
+                <span>Could not refresh this generation. Its displayed status may be out of date.</span>
+                <button type="button" onClick={jobResource.refetch} className={buttonSecondary}>Retry job status</button>
+              </div>
+            )}
             <details className="text-xs text-gray-400">
               <summary className="cursor-pointer select-none">Preview HTML from another LLM</summary>
               <div className="mt-2 space-y-2">
