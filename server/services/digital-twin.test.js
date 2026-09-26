@@ -336,7 +336,10 @@ describe('digital-twin.js', () => {
       const meta = makeMeta();
       await setupMetaFile(meta);
 
+      const listener = vi.fn();
+      digitalTwinEvents.once('meta:changed', listener);
       const result = await updateSettings({ maxContextTokens: 8000 });
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ settings: result }));
       expect(result.maxContextTokens).toBe(8000);
       expect(result.autoInjectToCoS).toBe(true);
     });

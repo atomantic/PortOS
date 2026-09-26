@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
 // clearing, just as the process-wide event buses retain their subscriptions.
-const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [] }));
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [], brain: [], twin: [] }));
 
 /**
  * Tests for socket.js initSocket behavior.
@@ -37,6 +37,7 @@ vi.mock('./updateChecker.js', () => ({ updateEvents: { on: vi.fn() } }));
 vi.mock('../lib/buildId.js', () => ({ getBuildId: vi.fn(() => 'test-build-id') }));
 vi.mock('./automationScheduler.js', () => ({ scheduleEvents: { on: vi.fn() } }));
 vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
+vi.mock('./digital-twin-meta.js', () => ({ digitalTwinEvents: { on: vi.fn((...args) => queueListeners.twin.push(args)) } }));
 vi.mock('./brainStorage.js', () => ({ BRAIN_ENTITY_TYPES: ['links', 'inbox', 'memories'], brainEvents: { on: vi.fn((...args) => queueListeners.brain.push(args)) } }));
 vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
@@ -145,6 +146,16 @@ describe('socket.js — initSocket', () => {
     }
     createdSockets.length = 0;
     authEvents.removeAllListeners('sessions:revoked-all');
+  });
+
+  it('forwards Digital Twin changes without leaking source records', () => {
+    io.emitted.length = 0;
+    for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+      const handler = queueListeners.twin.find(([name]) => name === event)?.[1];
+      expect(handler).toBeTypeOf('function');
+      handler({ privateContent: 'example private record' });
+    }
+    expect(io.emitted).toEqual(Array.from({ length: 5 }, () => ['digital-twin:changed', {}]));
   });
 
   it('forwards persisted Brain changes as bounded invalidations', () => {

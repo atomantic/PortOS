@@ -11,6 +11,7 @@ import { platformAccountEvents } from './platformAccounts.js';
 import { updateEvents } from './updateChecker.js';
 import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
+import { digitalTwinEvents } from './digital-twin-meta.js';
 import { brainEvents, BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
@@ -226,6 +227,7 @@ function setupEventForwarding() {
   setupNotificationEventForwarding();
   setupAgentEventForwarding();
   setupBrainEventForwarding();
+  setupDigitalTwinEventForwarding();
   setupMoltworldWsEventForwarding();
   setupMoltworldQueueEventForwarding();
   setupInstanceEventForwarding();
@@ -533,6 +535,14 @@ function setupAgentEventForwarding() {
   // Activity events
   activityEvents.on('activity', (data) => broadcastToAgents('agents:activity', data));
   activityEvents.on('activity:updated', (data) => broadcastToAgents('agents:activity:updated', data));
+}
+
+// Forward only invalidations, never private traits, interview text or settings.
+// All status/settings writers save meta; sync also signals after document I/O.
+function setupDigitalTwinEventForwarding() {
+  for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+    digitalTwinEvents.on(event, () => ioInstance?.emit('digital-twin:changed', {}));
+  }
 }
 
 // Set up brain event forwarding - broadcast to all clients

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
 import SectionNav from '../components/digital-twin/SectionNav';
@@ -31,6 +31,8 @@ const ExportTab = lazy(() => import('../components/digital-twin/tabs/ExportTab')
 const LegacyExportTab = lazy(() => import('../components/digital-twin/tabs/LegacyExportTab'));
 const TimeCapsuleTab = lazy(() => import('../components/digital-twin/tabs/TimeCapsuleTab'));
 
+const SNAPSHOT_EVENTS = ['digital-twin:changed'];
+
 export default function DigitalTwin() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -39,9 +41,7 @@ export default function DigitalTwin() {
   // showing no section selected under the first group.
   const activeTab = TABS.some((t) => t.id === tab) ? tab : 'overview';
 
-  // Let errors throw — `useAutoRefetch` preserves the last-good data on
-  // transient failures. `silent: true` keeps the 30s poll from spamming
-  // toasts when a single blip would otherwise fire two of them.
+  // Failed reconciliation preserves the last good snapshot without duplicate toasts.
   const fetchData = useCallback(async () => {
     const [status, settings] = await Promise.all([
       api.getDigitalTwinStatus({ silent: true }),
@@ -50,11 +50,20 @@ export default function DigitalTwin() {
     return { status, settings };
   }, []);
 
-  const { data, loading, refetch } = useAutoRefetch(fetchData, 30_000, {
+  const { data, loading, refetch, updateData } = useSocketResource(fetchData, {
+    events: SNAPSHOT_EVENTS,
     compare: sameJsonShape,
   });
   const status = data?.status ?? null;
   const settings = data?.settings ?? null;
+
+  const handleSettingsChange = (settings) => {
+    updateData(previous => ({
+      ...previous,
+      settings,
+      status: previous?.status ? { ...previous.status, settings } : null,
+    }));
+  };
 
   const handleTabChange = (tabId) => {
     navigate(`/digital-twin/${tabId}`);
@@ -63,7 +72,7 @@ export default function DigitalTwin() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
-        return <OverviewTab status={status} settings={settings} onRefresh={refetch} />;
+        return <OverviewTab status={status} settings={settings} onRefresh={refetch} onSettingsChange={handleSettingsChange} />;
       case 'documents':
         return <DocumentsTab onRefresh={refetch} />;
       case 'test':
@@ -101,7 +110,7 @@ export default function DigitalTwin() {
       case 'time-capsule':
         return <TimeCapsuleTab onRefresh={refetch} />;
       default:
-        return <OverviewTab status={status} settings={settings} onRefresh={refetch} />;
+        return <OverviewTab status={status} settings={settings} onRefresh={refetch} onSettingsChange={handleSettingsChange} />;
     }
   };
 

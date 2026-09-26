@@ -32,7 +32,7 @@ import ConfidenceGauge from '../ConfidenceGauge';
 import GapRecommendations from '../GapRecommendations';
 import NextActionBanner from '../NextActionBanner';
 
-export default function OverviewTab({ status, settings, onRefresh }) {
+export default function OverviewTab({ status, settings, onRefresh, onSettingsChange }) {
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
   const [settingsForm, setSettingsForm] = useState(settings || {});
@@ -48,6 +48,10 @@ export default function OverviewTab({ status, settings, onRefresh }) {
   const [traits, setTraits] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [gaps, setGaps] = useState([]);
+
+  useEffect(() => {
+    if (!showSettings) setSettingsForm(settings || {});
+  }, [settings, showSettings]);
 
   useEffect(() => {
     loadCompleteness();
@@ -106,7 +110,10 @@ export default function OverviewTab({ status, settings, onRefresh }) {
     // request() owns the failure toast, but the spinner must clear either way:
     // an uncaught rejection here left `saving` true, stranding the button
     // permanently disabled on "Saving..." with no way to retry.
-    const ok = await api.updateSoulSettings(settingsForm).then(() => true).catch(() => false);
+    const ok = await api.updateSoulSettings(settingsForm).then(saved => {
+      onSettingsChange?.(saved);
+      return true;
+    }).catch(() => false);
     setSaving(false);
     if (!ok) return;
     toast.success('Settings updated');

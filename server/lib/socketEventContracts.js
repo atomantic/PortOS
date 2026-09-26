@@ -44,6 +44,11 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'digital-twin:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate Digital Twin status/settings after persistence or completed peer sync; contains no personal data.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'portos:auto-update:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate updater status after runtime, configuration or external git ref changes.',
