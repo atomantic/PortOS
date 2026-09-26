@@ -50,7 +50,7 @@ export const MAX_DIRECTIVE_GOAL_LEN = COMMISSION_INTENT_MAX
   + MAX_STYLE_SOURCE_LEN
   + MAX_SYSTEM_PREFIX_LEN;
 
-const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
+export const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
 const clampNote = (note) => clamp(note, MAX_DIGEST_NOTE_LEN);
 
 const MONTHLY_DAY_RANGES = Object.freeze({

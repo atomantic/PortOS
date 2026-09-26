@@ -28,7 +28,8 @@ import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { CODE_ANIMATION_LIMITS, PACING_RULE, moodBoardSection, universeStyleLines } from './prompt.js';
+import { moodBoardSection, universeStyleLines } from '../../lib/styleSourcePrompt.js';
+import { CODE_ANIMATION_LIMITS, PACING_RULE } from './prompt.js';
 
 // What separates a studio short from a moving screensaver, distilled from how
 // strong animation briefs are written. Static text — the per-film specifics

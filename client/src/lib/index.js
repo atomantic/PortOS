@@ -245,3 +245,4 @@ export * from './songBookDraft.js';
 export * from './layoutRoutes.js';
 export * from './navPresentation.js';
 export * from './squarifyTreemap.js';
+export * from './styleSourceChoice.js';

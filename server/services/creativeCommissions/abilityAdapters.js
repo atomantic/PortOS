@@ -219,11 +219,10 @@ const videoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission, options = {}) {
-    const { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = options;
     const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate duration between 5 and 600 seconds for the brief.' : '';
     const { lines, digest, constraints } = briefContext(commission, `Create a short-form video piece.${duration}`, options);
-    lines.unshift(videoPromptGuidanceFor(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId }));
+    lines.unshift(videoPromptGuidanceFor(commission, options));
     return { goal: composeDirectiveGoal(lines, digest), deliverables: ['One rendered video matching the brief'], constraints };
   },
 };
@@ -272,12 +271,11 @@ const musicVideoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('music-video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission, options = {}) {
-    const { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = options;
     const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate video duration between 5 and 600 seconds for the brief.' : '';
     const lead = `Create a short-form music video:${duration} Generate an original music bed AND a matching video scored to it.`;
     const { lines, digest, constraints } = briefContext(commission, lead, options);
-    lines.unshift(videoPromptGuidanceFor(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId }));
+    lines.unshift(videoPromptGuidanceFor(commission, options));
     return {
       goal: composeDirectiveGoal(lines, digest),
       deliverables: ['One original music bed', 'One video matching the brief, scored to the music bed'],

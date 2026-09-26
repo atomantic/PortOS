@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import CommissionConfigForm from './CommissionConfigForm.jsx';
 import { patchFormState, toForm } from './commissionForm.js';
@@ -12,6 +13,9 @@ const api = vi.hoisted(() => ({
 vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ providers: [] })) }));
 
+
+// The style-source picker links to universe / mood-board pages.
+const render = (ui) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>);
 
 function Harness({ assignment } = {}) {
   const [form, setForm] = useState(toForm({

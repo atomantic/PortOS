@@ -8,6 +8,7 @@
  */
 
 import { describeRecurrence } from '../../utils/cronHelpers.js';
+import { BOARD_FOLLOW_UNIVERSE, BOARD_NONE } from '../../lib/styleSourceChoice.js';
 
 // The brief field caps are the server's own (server/lib/creativeBriefLimits.js),
 // used here as the inputs' `maxLength`.
@@ -231,12 +232,11 @@ export function generationToPayload(ability, generation) {
   return out;
 }
 
-// Mood-board choice sentinels for the style-source picker (form-only values —
-// never real board ids). The wire contract is the server's
-// (services/creativeCommissions/styleSource.js): a null moodBoardId follows the
-// universe's linked board, '' means no board, any other string names one.
-export const BOARD_FOLLOW_UNIVERSE = '__universe__';
-export const BOARD_NONE = '__none__';
+// The style-source picker's board choice, mapped onto the server's wire
+// contract (services/creativeCommissions/styleSource.js): a null moodBoardId
+// follows the universe's linked board, '' means no board, any other string
+// names one.
+export { BOARD_FOLLOW_UNIVERSE, BOARD_NONE };
 
 function boardChoiceFromRecord(moodBoardId) {
   if (moodBoardId == null) return BOARD_FOLLOW_UNIVERSE;

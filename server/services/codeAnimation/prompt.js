@@ -24,6 +24,7 @@
  */
 
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
+import { moodBoardSection, universeStyleLines } from '../../lib/styleSourcePrompt.js';
 
 // The postMessage vocabulary between the preview host (parent) and the
 // generated page (sandboxed iframe). Served to the client through the options
@@ -88,24 +89,6 @@ export function resolveFrameSize(aspectRatio, resolution) {
   return { width: shortSide, height: even((shortSide * ratio.height) / ratio.width) };
 }
 
-const bulletList = (values) => values.map((value) => `- ${value}`).join('\n');
-
-/**
- * The universe's curated style, as prompt lines. Shared with the brief writer
- * so the two prompts describing one universe can't drift in what they show the
- * model. Excludes the free-text `styleNotes`, which each caller frames itself.
- */
-export function universeStyleLines(universe) {
-  const lines = [];
-  if (universe.embrace?.length) lines.push(`Visual style to embrace: ${universe.embrace.join(', ')}`);
-  if (universe.avoid?.length) lines.push(`Visual style to avoid: ${universe.avoid.join(', ')}`);
-  if (universe.styleReferences?.length) {
-    lines.push('Style references curated for this universe:');
-    lines.push(bulletList(universe.styleReferences.map((ref) => (ref.title ? `${ref.title}: ${ref.prompt}` : ref.prompt))));
-  }
-  return lines;
-}
-
 // The art direction. The universe's style guide IS the look — the same curated
 // tokens every other Create surface renders that world with — so the film
 // matches the universe's stills and videos; the per-animation notes only
@@ -128,24 +111,6 @@ function artDirectionSection({ universe, styleNotes, hasMoodBoard }) {
   if (lines.length || hasMoodBoard) {
     lines.push('Translate the style into drawing technique: decide how its medium, line quality, texture, palette, and lighting are produced procedurally (layered translucent fills for washes, pressure-modulated strokes for ink, low-res upscaling with dithering for pixel art, additive glow passes for neon, noise-driven grain for paper or film), then apply that technique consistently to every element.');
   }
-  return lines.join('\n');
-}
-
-/** The board's style context as prompt text (`''` when there is no board). */
-export function moodBoardSection(board) {
-  if (!board) return '';
-  const lines = [`Mood board: "${board.name || 'Untitled board'}" — distill its through-line (palette, texture, lighting, rhythm, mood), not any single item.`];
-  if (isNonBlankStr(board.description)) lines.push(`Board description: ${board.description}`);
-  const fragments = (board.items || []).map((item) => {
-    const parts = [];
-    if (item.note) parts.push(`note: ${item.note}`);
-    if (item.caption) parts.push(`caption: ${item.caption}`);
-    if (item.analyzedPrompt) parts.push(`visual analysis: ${item.analyzedPrompt}`);
-    if (item.analyzedNegative) parts.push(`avoid: ${item.analyzedNegative}`);
-    return parts.join('; ');
-  }).filter(Boolean);
-  if (fragments.length) lines.push(bulletList(fragments));
-  if (board.droppedItems) lines.push(`(${board.droppedItems} more board items omitted for length.)`);
   return lines.join('\n');
 }
 

@@ -20,16 +20,14 @@
  */
 
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
-import { moodBoardSection, universeStyleLines } from '../codeAnimation/prompt.js';
+import { moodBoardSection, universeStyleLines } from '../../lib/styleSourcePrompt.js';
 import { resolveMoodBoardStyleSource, resolveUniverseStyleSource } from '../creativeStyleSources.js';
 import { COMMISSION_STYLE_SPEC_MAX } from '../../lib/creativeBriefLimits.js';
-import { MAX_STYLE_SOURCE_LEN } from './directive.js';
+import { MAX_STYLE_SOURCE_LEN, clamp } from './directive.js';
 
 export const COMMISSION_STYLE_REFERENCE_IMAGES_MAX = 4;
 const IMAGE_LABEL_MAX = 60;
 const STYLE_SOURCE_HEADER = "Art direction base (from the commission's universe / mood board — ground every render in it):";
-
-const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
 
 // A universe or board deleted after the commission was configured must not
 // kill every future fire: skip it with a warning and render from what is left.
@@ -83,15 +81,17 @@ export async function resolveCommissionStyleSource(commission) {
     ? await orSkipMissing(`universe ${universeId}`, resolveUniverseStyleSource(universeId, { imageSlots: slots }), null)
     : null;
   const boardChoice = constraints.moodBoardId;
-  const moodBoardId = boardChoice == null ? universe?.moodBoardId || null : (isNonBlankStr(boardChoice) ? boardChoice : null);
+  const explicitBoard = isNonBlankStr(boardChoice) ? boardChoice : null;
+  const moodBoardId = boardChoice == null ? universe?.moodBoardId || null : explicitBoard;
   const universeImages = universe?.images || [];
+  const noBoard = { board: null, images: [] };
   const { board, images: boardImages } = moodBoardId
     ? await orSkipMissing(
       `mood board ${moodBoardId}`,
       resolveMoodBoardStyleSource(moodBoardId, { imageSlots: Math.max(0, slots - universeImages.length) }),
-      { board: null, images: [] },
+      noBoard,
     )
-    : { board: null, images: [] };
+    : noBoard;
   if (!universe && !board) return null;
   const text = renderCommissionStyleSource({ universe, board, images: [...universeImages, ...boardImages] });
   return {
