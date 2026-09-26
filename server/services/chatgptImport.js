@@ -22,8 +22,8 @@
 import { join } from 'path';
 import { stripChatgptCitations } from '../lib/chatgptText.js';
 import { unlink } from 'fs/promises';
-import { atomicWrite, ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { createMemoryEntry } from './brainStorage.js';
+import { atomicWrite, ensureDir, PATHS, tryReadFile, safeJSONParse, safeDate } from '../lib/fileUtils.js';
+import { createMemoryEntry, updateMemoryEntry, query as queryBrain } from './brainStorage.js';
 
 const MAX_MEMORY_CONTENT = 9800;
 const MAX_TITLE_LEN = 200;
@@ -376,11 +376,11 @@ const assetNamesForMemory = async (record) => {
  *
  * `survivors` is every OTHER live import memory. Neither the archive nor an
  * asset is unlinked while a survivor still references it:
- *   - The transcript JSON is keyed on the conversation id (`sourceRef`), so
- *     importing the same export twice yields two memories pointing at ONE
- *     archive — deleting one must not strand the other's "View full
- *     conversation" / re-summarize path. Keep the archive while any survivor
- *     shares its `sourceRef`.
+ *   - `importConversations` now upserts by conversation id, so re-importing
+ *     the same export can no longer CREATE a second memory sharing an
+ *     archive. Installs that imported the same export twice before that fix
+ *     shipped can still hold such a pair, so the survivor check stays: keep
+ *     the archive while any survivor shares its `sourceRef`.
  *   - An asset id can likewise recur across conversations (ChatGPT reuses a
  *     `file-service://` id), so an asset is only unlinked when NO survivor
  *     still references it — compared via the FULL archived transcript, not the
@@ -426,16 +426,25 @@ export async function deleteMemoryAssets(record, survivors = []) {
 }
 
 /**
+ * The archive filename (and therefore the `sourceRef` a Memory entry carries)
+ * for one conversation summary. Deterministic when `summary.id` is present —
+ * that's the ChatGPT-assigned conversation id, so re-importing the same
+ * export (or a newer export that overlaps it) resolves to the same name and
+ * `importConversations` can upsert instead of duplicating. A summary with no
+ * id (malformed export row) falls back to a timestamp, which is NOT stable
+ * across calls — such a conversation always imports as new.
+ */
+const conversationArchiveName = (summary) => `${safeFilename(summary.id || `conv-${Date.now()}`)}.json`;
+
+/**
  * Persist one conversation's full transcript + structured messages to the
  * import archive directory.
  */
-async function archiveConversation(summary) {
+async function archiveConversation(summary, fname = conversationArchiveName(summary)) {
   await ensureDir(importRoot());
-  const id = summary.id || `conv-${Date.now()}`;
-  const fname = `${safeFilename(id)}.json`;
   const filePath = join(importRoot(), fname);
   const payload = {
-    id,
+    id: summary.id || `conv-${Date.now()}`,
     title: summary.title,
     createTime: summary.createTime,
     updateTime: summary.updateTime,
@@ -483,8 +492,19 @@ export async function importConversations(parsed, options = {}) {
 
   await ensureDir(importRoot());
 
+  // Upsert by conversation id (sourceRef == archive filename), keyed BEFORE the
+  // loop so a re-import of the same export — or a newer export overlapping
+  // it — updates the existing memory instead of creating a duplicate. See
+  // `conversationArchiveName` for why a summary with no id can't be matched.
+  const existingBySourceRef = new Map();
+  for (const memory of await queryBrain('memories', { source: 'chatgpt-import' })) {
+    if (memory.sourceRef) existingBySourceRef.set(memory.sourceRef, memory);
+  }
+
   const results = [];
   let imported = 0;
+  let updated = 0;
+  let unchanged = 0;
   let skipped = 0;
   let archived = 0;
 
@@ -495,7 +515,26 @@ export async function importConversations(parsed, options = {}) {
       continue;
     }
 
-    const archiveName = await archiveConversation(summary);
+    const archiveName = conversationArchiveName(summary);
+    const existingMemory = existingBySourceRef.get(archiveName);
+    const isNewer = existingMemory
+      && safeDate(summary.updateTime) > safeDate(existingMemory.sourceUpdatedAt);
+
+    if (existingMemory && !isNewer) {
+      results.push({
+        id: summary.id,
+        memoryId: existingMemory.id,
+        title: summary.title,
+        messageCount: summary.messageCount,
+        assetCount: summary.assetCount,
+        archiveName,
+        status: 'unchanged'
+      });
+      unchanged += 1;
+      continue;
+    }
+
+    await archiveConversation(summary, archiveName);
     archived += 1;
 
     const tags = [
@@ -503,7 +542,7 @@ export async function importConversations(parsed, options = {}) {
       summary.gizmoId ? sanitizeTag(`gizmo-${summary.gizmoId}`) : null
     ].filter(Boolean);
 
-    const entry = await createMemoryEntry({
+    const memoryData = {
       title: summary.title,
       content: buildContent(summary),
       tags,
@@ -514,7 +553,24 @@ export async function importConversations(parsed, options = {}) {
       // shared bulk-import timestamp. See `memoryRecencyMs` in brainStorage.js.
       sourceCreatedAt: summary.createTime || null,
       sourceUpdatedAt: summary.updateTime || null
-    });
+    };
+
+    if (existingMemory) {
+      const entry = await updateMemoryEntry(existingMemory.id, memoryData);
+      results.push({
+        id: summary.id,
+        memoryId: entry.id,
+        title: summary.title,
+        messageCount: summary.messageCount,
+        assetCount: summary.assetCount,
+        archiveName,
+        status: 'updated'
+      });
+      updated += 1;
+      continue;
+    }
+
+    const entry = await createMemoryEntry(memoryData);
 
     results.push({
       id: summary.id,
@@ -531,6 +587,8 @@ export async function importConversations(parsed, options = {}) {
   return {
     ok: true,
     imported,
+    updated,
+    unchanged,
     skipped,
     archived,
     archiveDir: importRoot(),

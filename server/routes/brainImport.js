@@ -76,7 +76,7 @@ router.post('/chatgpt', asyncHandler(async (req, res) => {
   }
   console.log(`📥 ChatGPT import start: ${parsed.summary.totalConversations} conversations`);
   const result = await importConversations(parsed, { tags, skipEmpty });
-  console.log(`✅ ChatGPT import complete: imported=${result.imported} skipped=${result.skipped} archived=${result.archived}`);
+  console.log(`✅ ChatGPT import complete: imported=${result.imported} updated=${result.updated} unchanged=${result.unchanged} skipped=${result.skipped} archived=${result.archived}`);
   res.json(result);
 }));
 
@@ -112,7 +112,7 @@ router.post('/chatgpt/zip', uploadZip, asyncHandler(async (req, res) => {
     if (!result.ok) {
       throw new ServerError(result.error, { status: 400, code: 'INVALID_CHATGPT_EXPORT' });
     }
-    console.log(`✅ ChatGPT ZIP import complete: imported=${result.imported} skipped=${result.skipped} assets=${result.assetStats?.assetCount}`);
+    console.log(`✅ ChatGPT ZIP import complete: imported=${result.imported} updated=${result.updated} unchanged=${result.unchanged} skipped=${result.skipped} assets=${result.assetStats?.assetCount}`);
     res.json(result);
   } finally {
     await unlink(filePath).catch(() => {});

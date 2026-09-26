@@ -30,7 +30,7 @@
  */
 
 import { createReadStream } from 'fs';
-import { rename } from 'fs/promises';
+import { rename, lstat } from 'fs/promises';
 import { join } from 'path';
 import { Writable } from 'stream';
 import { PATHS, getMimeType, ensureDir, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
@@ -334,6 +334,25 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
         continue;
       }
       const filePath = join(assetDir, fileName);
+      // Asset ids are content ids (ChatGPT reuses the same file-service id for
+      // the same bytes), so a file already at this name belongs to an earlier
+      // successful import — keep it rather than overwriting, and mark
+      // `created: false` so a later failure in THIS run's cleanup path never
+      // deletes a file THIS run didn't write.
+      // eslint-disable-next-line no-await-in-loop -- same sequential loop
+      const alreadyExists = await lstat(filePath).then(() => true, () => false);
+      if (alreadyExists) {
+        // eslint-disable-next-line no-await-in-loop -- same sequential loop
+        await unlinkGuarded(tempPath).catch(() => {});
+        assets.set(assetId, {
+          url: `/data/brain-imports/${fileName}`,
+          name: friendlyName || fileName,
+          mime: getMimeType(ext),
+          file: fileName,
+          created: false,
+        });
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop -- sequential rename keeps peak
       // disk/IO bounded; an export has a few hundred assets, not millions.
       await rename(tempPath, filePath);
@@ -342,6 +361,7 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
         name: friendlyName || fileName,
         mime: getMimeType(ext),
         file: fileName,
+        created: true,
       });
     }
   } catch (err) {
@@ -393,14 +413,25 @@ export function makeAssetResolver(assets) {
   };
 }
 
-// Remove the asset files extractChatgptZip() wrote to the served dir. Called on
+// Remove the asset files THIS extraction run wrote to the served dir. Called on
 // any FAILED import path: extraction writes assets to `/data/brain-imports/`
 // before conversations are validated, so a ZIP with assets but no valid
 // conversation shards (corrupt/wrong upload) would otherwise leave orphaned
 // served files behind, and repeated bad uploads could fill the disk.
+//
+// Only unlinks entries with `created: true`. An asset id can recur across
+// separate imports (ChatGPT reuses a `file-service://` id for the same
+// bytes) — when the rename step above found the file already on disk, it
+// kept the earlier import's copy and marked `created: false`; deleting it
+// here on a LATER failure in this run would strand that earlier import's
+// memory with a broken image/audio link, which is exactly the data loss this
+// guards against. `created` defaults true for callers/fixtures built before
+// this distinction existed.
 async function cleanupExtractedAssets(assets, assetDir = PATHS.brainImportAssets) {
   await Promise.all(
-    [...assets.values()].map((a) => unlinkGuarded(`${assetDir}/${a.file}`).catch(() => {}))
+    [...assets.values()]
+      .filter((a) => a.created !== false)
+      .map((a) => unlinkGuarded(`${assetDir}/${a.file}`).catch(() => {}))
   );
 }
 

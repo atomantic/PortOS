@@ -568,7 +568,10 @@ function StepDone({ result, onExit, navigate }) {
         <CheckCircle2 size={48} className="text-port-success mx-auto mb-3" aria-hidden="true" />
         <h3 className="text-lg font-semibold text-white">Import complete</h3>
         <p className="text-sm text-gray-400 mt-1">
-          {result.imported} imported · {result.skipped} skipped · {result.archived} archived
+          {result.imported} imported
+          {result.updated ? ` · ${result.updated} updated` : ''}
+          {result.unchanged ? ` · ${result.unchanged} unchanged` : ''}
+          {' '}· {result.skipped} skipped · {result.archived} archived
           {result.assetStats?.assetCount ? ` · ${result.assetStats.assetCount} assets` : ''}
         </p>
       </div>
@@ -594,9 +597,9 @@ function StepDone({ result, onExit, navigate }) {
           {result.results.map((r, i) => (
             <li key={r.id || i} className="px-2 py-1 flex items-center justify-between gap-2">
               <span className="truncate text-gray-300">{r.title || '(untitled)'}</span>
-              <span className={r.status === 'imported' ? 'text-port-success' : 'text-gray-500'}>
-                {r.status === 'imported'
-                  ? `${r.messageCount} msg${r.assetCount ? ` · ${r.assetCount} assets` : ''}`
+              <span className={r.status === 'imported' || r.status === 'updated' ? 'text-port-success' : 'text-gray-500'}>
+                {r.status === 'imported' || r.status === 'updated'
+                  ? `${r.status} · ${r.messageCount} msg${r.assetCount ? ` · ${r.assetCount} assets` : ''}`
                   : r.reason || r.status}
               </span>
             </li>
