@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mergeJsonStarter } from './mergeJsonStarter.js';
+import { mergeJsonStarter, mergeJsonStarterTargets } from './mergeJsonStarter.js';
 
 const targets = [
   ['prompts/stage-config.json', 'stages'],
@@ -67,5 +67,55 @@ describe('mergeJsonStarter', () => {
 
     expect(result.added).toEqual(['shipped']);
     expect(JSON.parse(readFileSync(dataPath, 'utf8'))).toEqual({ custom: true, entries: { shipped: { enabled: true } } });
+  });
+
+  describe('seed ledger across updates (#8712)', () => {
+    let referenceDir;
+    let dataDir;
+    let ledgerPath;
+    const targets = [{ relPath: 'providers.json', mergeKey: 'providers' }];
+    const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value));
+    const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
+    const run = () => mergeJsonStarterTargets({ targets, referenceDir, dataDir, ledgerPath, log: (message) => messages.push(message) });
+
+    beforeEach(() => {
+      referenceDir = join(root, 'reference');
+      dataDir = join(root, 'data');
+      mkdirSync(referenceDir);
+      mkdirSync(dataDir);
+      ledgerPath = join(dataDir, 'setup-data-seeded.json');
+      writeJson(join(referenceDir, 'providers.json'), { providers: { codex: { enabled: true }, lmstudio: { enabled: true } } });
+    });
+
+    it('bootstraps an install with no ledger: adds missing keys once and records the sample keys', () => {
+      writeJson(join(dataDir, 'providers.json'), { providers: { lmstudio: { enabled: false } } });
+
+      run();
+
+      expect(readJson(join(dataDir, 'providers.json')).providers).toEqual({ lmstudio: { enabled: false }, codex: { enabled: true } });
+      expect(readJson(ledgerPath)).toEqual({ 'providers.json': ['codex', 'lmstudio'] });
+    });
+
+    it('keeps a deleted shipped key deleted and still adds a key new in a later release', () => {
+      writeJson(join(dataDir, 'providers.json'), { providers: { lmstudio: { enabled: true } } });
+      writeJson(ledgerPath, { 'providers.json': ['codex', 'lmstudio'] });
+      writeJson(join(referenceDir, 'providers.json'), { providers: { codex: { enabled: true }, lmstudio: { enabled: true }, newcomer: { enabled: true } } });
+
+      run();
+      run();
+
+      expect(Object.keys(readJson(join(dataDir, 'providers.json')).providers)).toEqual(['lmstudio', 'newcomer']);
+      expect(readJson(ledgerPath)).toEqual({ 'providers.json': ['codex', 'lmstudio', 'newcomer'] });
+    });
+
+    it('leaves an invalid merge map byte-for-byte unchanged and does not record the target', () => {
+      const original = '{ "providers": ["custom"] }\n';
+      writeFileSync(join(dataDir, 'providers.json'), original);
+
+      run();
+
+      expect(readFileSync(join(dataDir, 'providers.json'), 'utf8')).toBe(original);
+      expect(existsSync(ledgerPath)).toBe(false);
+    });
   });
 });
