@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deps = vi.hoisted(() => ({
+  watch: vi.fn(),
+  git: vi.fn(),
   settings: vi.fn(),
   settingsWithStatus: vi.fn(),
   processing: vi.fn(),
@@ -15,6 +17,9 @@ const deps = vi.hoisted(() => ({
   schedule: vi.fn(),
   cancel: vi.fn(),
 }));
+
+vi.mock('chokidar', () => ({ watch: deps.watch }));
+vi.mock('../lib/execGit.js', () => ({ execGit: deps.git }));
 
 vi.mock('./eventScheduler.js', () => ({ schedule: deps.schedule, cancel: deps.cancel }));
 vi.mock('./settings.js', () => ({
@@ -36,7 +41,7 @@ vi.mock('./updateChecker.js', () => ({
   recordAutoUpdateRuntime: deps.recordRuntime,
 }));
 
-const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
+const { startAutoUpdateScheduler, runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
   await import('./autoUpdateScheduler.js');
 
 const HOUR = 60 * 60 * 1000;
@@ -531,5 +536,57 @@ describe('repair-dispatch cooldown', () => {
 
   it('allows the first dispatch when nothing has ever been queued', () => {
     expect(repairDispatchDue({}, MIN_INTERVAL_MS, Date.now())).toBe(true);
+  });
+});
+
+
+describe('updater status invalidation', () => {
+  afterEach(() => {
+    __resetAutoUpdateSchedulerForTests();
+    vi.useRealTimers();
+  });
+
+  it('coalesces persisted runtime/config changes and external refs without polling status', async () => {
+    vi.useFakeTimers();
+    const listeners = new Map();
+    const watcher = { on: vi.fn((event, handler) => { listeners.set(event, handler); return watcher; }), close: vi.fn() };
+    deps.watch.mockReturnValue(watcher);
+    deps.git.mockResolvedValue({ stdout: '.git' });
+    const io = { emit: vi.fn() };
+    await startAutoUpdateScheduler(io);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledWith('portos:auto-update:changed', {});
+    io.emit.mockClear();
+
+    // A channel/interval edit must invalidate even though registration still
+    // has enabled:true. An unrelated save must remain silent.
+    const changed = { autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 12 } };
+    await syncAutoUpdateSchedule(changed);
+    await syncAutoUpdateSchedule(changed);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    await syncAutoUpdateSchedule(changed);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    io.emit.mockClear();
+
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now()) }, lastUpdateResult: null, updateInProgress: false,
+    });
+    await runAutoUpdateTick();
+    await runAutoUpdateTick();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.readRepo).not.toHaveBeenCalled();
+    io.emit.mockClear();
+
+    listeners.get('all')('change', 'HEAD');
+    listeners.get('all')('change', 'refs/heads/main');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    expect(deps.watch.mock.calls[0][0].every(path => !path.endsWith('index'))).toBe(true);
+    __resetAutoUpdateSchedulerForTests();
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 });

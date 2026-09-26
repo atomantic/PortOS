@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bot, Check, Clock, GitBranch, Loader, Tag } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { formatDateTime, timeAgo } from '../../../utils/formatters';
 
 // Why the updater is standing by, in the user's words rather than the
@@ -20,6 +20,8 @@ const SKIP_LABELS = {
   'runtime-persistence-unavailable': 'Could not save the updater state',
 };
 
+const STATUS_EVENTS = ['portos:auto-update:changed', 'portos:update:checked', 'system:activity'];
+
 const CHANNELS = [
   { id: 'release', label: 'Releases', icon: Tag, hint: 'Same as “Update Now” — updates when a newer GitHub release is published.' },
   { id: 'main', label: 'origin/main', icon: GitBranch, hint: 'Same as App Management’s “Update app” — updates whenever origin’s default branch moves ahead.' },
@@ -34,10 +36,9 @@ const CHANNELS = [
  * sitting behind says so here.
  */
 export default function AutoUpdatePanel() {
-  // Polls on its own rather than riding the Update tab's /status refetch: this
-  // payload walks git status and the activity snapshot, so it is deliberately
-  // the slower of the two.
-  const { data: status, refetch } = useAutoRefetch(() => api.getAutoUpdateStatus({ silent: true }), 15000);
+  const { data: status, refetch, updateData } = useSocketResource(
+    () => api.getAutoUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
+  );
   const config = status?.config;
   const runtime = status?.runtime;
   const repo = status?.repo;
@@ -50,8 +51,8 @@ export default function AutoUpdatePanel() {
 
   // Re-seed when the SERVER's value changes — compared against the last config
   // it sent, not against the draft. Comparing against the draft would read the
-  // user's half-typed interval as staleness and overwrite it on the next 15s
-  // poll, which is the opposite of what this effect is for.
+  // user's half-typed interval as staleness and overwrite it on the next
+  // invalidation, which is the opposite of what this effect is for.
   const lastServerConfig = useRef(null);
   useEffect(() => {
     if (!config) return;
@@ -72,7 +73,7 @@ export default function AutoUpdatePanel() {
     next.minIntervalHours = Math.min(bounds.max, Math.max(bounds.min, Number(next.minIntervalHours) || bounds.min));
     setDraft(next);
     setSaving(true);
-    const saved = await api.patchSettingsSlice('autoUpdate', next).catch((err) => {
+    const saved = await api.patchSettingsSlice('autoUpdate', next, { silent: true }).catch((err) => {
       toast.error(`Could not save automatic updates: ${err.message}`);
       return null;
     });
@@ -81,6 +82,7 @@ export default function AutoUpdatePanel() {
       setDraft(config);
       return;
     }
+    updateData(previous => ({ ...previous, config: saved.autoUpdate || next }));
     refetch();
   };
 

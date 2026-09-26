@@ -8,8 +8,10 @@ import AutoUpdatePanel from './AutoUpdatePanel';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
-import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../../hooks/useSocketResource';
 import { usePortosRestartWatch } from '../../../hooks/usePortosRestartWatch';
+
+const STATUS_EVENTS = ['portos:update:checked', 'portos:update:available', 'portos:auto-update:changed', 'system:activity'];
 
 const STEP_LABELS = {
   starting: 'Starting update',
@@ -38,8 +40,9 @@ function StepIndicator({ status }) {
 }
 
 export default function UpdateTab() {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: status, loading, refetch: fetchStatus, updateData: setStatus } = useSocketResource(
+    () => api.getUpdateStatus({ silent: true }), { events: STATUS_EVENTS }
+  );
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [steps, setSteps] = useState([]);
@@ -58,17 +61,6 @@ export default function UpdateTab() {
       if (message) setUpdateError(message);
     },
   });
-
-  const fetchStatus = useCallback(async () => {
-    const data = await api.getUpdateStatus().catch(() => null);
-    if (data) setStatus(data);
-    setLoading(false);
-    return data;
-  }, []);
-
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
 
   // Step frames for the activity list. The restart handoff these frames end in
   // is the shared watch's job, not this component's.
@@ -91,19 +83,6 @@ export default function UpdateTab() {
   }, []);
 
 
-  // Keep the status fresh while there's an update/reconcile surface on screen,
-  // so the agent block appears AND clears without a manual re-check: if an agent
-  // starts (from a schedule or another tab) while the buttons are showing, the
-  // next poll suppresses them; when the last agent finishes, it restores them.
-  // Gated to only run when there's something actionable (agents live, or an
-  // update/reconcile is available) and no update is already underway.
-  useAutoRefetch(fetchStatus, 4000, {
-    enabled: ((status?.activeCosAgents || 0) > 0 ||
-      !!status?.installState?.outOfSync ||
-      !!status?.updateAvailable) && !updating && !polling,
-    pollOnly: true
-  });
-
   const handleCheck = async () => {
     setChecking(true);
     const result = await api.checkForUpdate().catch(() => null);
@@ -113,8 +92,7 @@ export default function UpdateTab() {
 
   // `fromStatus` lets callers (e.g. handleSyncForkAndUpdate) pass the freshly
   // fetched status object instead of relying on the closure capture — `setStatus`
-  // only schedules a render and the awaited fetchStatus() return value is the
-  // single source of truth for the just-loaded state.
+  // only schedules a render; the action passes its fresh response directly.
   const runUpdate = useCallback(async (opts = {}, fromStatus = null) => {
     const s = fromStatus || status;
     // Record the version and uptime of the still-running server, so even an
@@ -158,7 +136,9 @@ export default function UpdateTab() {
     } else {
       toast.success(`Synced ${synced.fullName} from ${synced.source}`);
     }
-    const fresh = await fetchStatus();
+    const fresh = await api.getUpdateStatus({ silent: true }).catch(() => null);
+    if (!fresh) return;
+    setStatus(fresh);
     await runUpdate(extraOpts, fresh);
   };
 

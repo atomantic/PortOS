@@ -44,6 +44,11 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'portos:auto-update:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate updater status after runtime, configuration or external git ref changes.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'brain:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate Brain summary/settings after a persisted change.',

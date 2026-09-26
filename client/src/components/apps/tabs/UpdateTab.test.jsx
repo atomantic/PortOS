@@ -29,6 +29,8 @@ vi.mock('../../../services/api', () => ({
   syncPortosFork: vi.fn(),
 }));
 
+vi.mock('./AutoUpdatePanel', () => ({ default: () => null }));
+
 const UpdateTab = (await import('./UpdateTab')).default;
 
 const OUT_OF_SYNC_STATUS = {
@@ -270,11 +272,7 @@ describe('UpdateTab — active CoS agent suppression', () => {
     expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
   });
 
-  it('suppresses restart buttons when an agent starts while the update surface is showing (4s poll)', async () => {
-    // Codex P2: tab loads with 0 agents and an available update, then a scheduled
-    // task (or another browser tab) starts an agent. The poll — enabled whenever
-    // there's an actionable update surface — picks it up and suppresses "Update
-    // Now" instead of leaving a button that 409s on click.
+  it('suppresses restart buttons when an agent starts while the update surface is showing (activity event)', async () => {
     let agentCount = 0;
     mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
       currentVersion: '2.24.0',
@@ -286,28 +284,19 @@ describe('UpdateTab — active CoS agent suppression', () => {
     vi.useFakeTimers();
     render(<UpdateTab />);
 
-    // Initially updatable — button present, no notice.
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByRole('button', { name: 'Update Now' })).toBeTruthy();
     expect(screen.queryByText(/Update paused/i)).toBeNull();
 
-    // An agent starts; the next poll observes it.
     agentCount = 1;
-    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    await act(async () => { handlers.get('system:activity')({}); });
     vi.useRealTimers();
 
     expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
     expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
   });
 
-  it('auto-clears the paused notice when the last agent finishes (4s status poll)', async () => {
-    // Pins the notice's "this notice clears automatically" claim: while agents
-    // are live the tab polls status every 4s (useAutoRefetch), so when the last
-    // agent finishes the block lifts without the user re-checking.
-    // Fake timers must be active BEFORE render so they own the poll interval the
-    // effect schedules; and we drive re-renders with advanceTimersByTimeAsync
-    // (flushes microtasks) instead of findBy/waitFor, which use real timers and
-    // would hang against fake ones.
+  it('auto-clears the paused notice when the last agent finishes (activity event)', async () => {
     let agentCount = 1;
     mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
       ...OUT_OF_SYNC_STATUS,
@@ -316,17 +305,14 @@ describe('UpdateTab — active CoS agent suppression', () => {
     vi.useFakeTimers();
     render(<UpdateTab />);
 
-    // Flush the on-mount status fetch → blocked while the one agent runs.
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
 
-    // The agent finishes; the next 4s poll observes activeCosAgents: 0.
     agentCount = 0;
-    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    await act(async () => { handlers.get('system:activity')({}); });
     vi.useRealTimers();
 
-    // Notice cleared, reconcile action restored — no manual re-check needed.
     expect(screen.queryByText(/Update paused/i)).toBeNull();
     expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
   });
@@ -359,4 +345,32 @@ describe('UpdateTab — last update log', () => {
     // A multi-thousand-line log must not push the rest of the tab off-screen.
     expect(pre.className).toContain('overflow-y-auto');
   });
+});
+
+it('reads once per recovery, coalesces events, never polls, and releases listeners', async () => {
+  vi.useFakeTimers();
+  mockGetUpdateStatus.mockReset().mockResolvedValue(OUT_OF_SYNC_STATUS);
+  const view = render(<UpdateTab />);
+  await act(async () => {});
+  expect(mockGetUpdateStatus).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+  expect(mockGetUpdateStatus).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    handlers.get('portos:update:checked')({});
+    handlers.get('portos:auto-update:changed')({});
+  });
+  expect(mockGetUpdateStatus).toHaveBeenCalledTimes(2);
+  await act(async () => { handlers.get('connect')(); });
+  expect(mockGetUpdateStatus).toHaveBeenCalledTimes(3);
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+  act(() => document.dispatchEvent(new Event('visibilitychange')));
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(mockGetUpdateStatus).toHaveBeenCalledTimes(4);
+  view.unmount();
+  expect(handlers.size).toBe(0);
+  vi.useRealTimers();
 });

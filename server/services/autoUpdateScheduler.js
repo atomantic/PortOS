@@ -34,6 +34,10 @@
  * one that can occur is the repair agent in step 4, which is itself switchable.
  */
 
+import { watch } from 'chokidar';
+import { join, resolve } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
+import { execGit } from '../lib/execGit.js';
 import { schedule, cancel } from './eventScheduler.js';
 import { getSettings, getSettingsWithStatus, settingsEvents } from './settings.js';
 import { getSystemActivity } from './activeProcessing.js';
@@ -66,6 +70,43 @@ let corruptRetryTimer = null;
 // `portos:update:*` / `app:update:*` frames a click would — a user watching the
 // Update page sees the automatic run stream like any other.
 let ioRef = null;
+
+// Payload-free invalidations: never broadcast configuration, repo paths or
+// activity records. A short fixed window bounds bursts without starving reads.
+let statusTimer = null;
+let configSignature = null;
+let repoWatcher = null;
+let watcherStart = null;
+
+function invalidateStatus() {
+  if (!ioRef || statusTimer) return;
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    try {
+      ioRef?.emit('portos:auto-update:changed', {});
+    } catch (err) {
+      console.error(`❌ Auto-update status notify failed: ${err.message}`);
+    }
+  }, 100);
+  statusTimer.unref?.();
+}
+
+// Git operations performed outside PortOS have no service event. Watch only
+// committed ref metadata, including worktree/common-dir layouts. Exclude index:
+// git status itself can refresh it, which would make a read/notify feedback loop.
+// Working-tree-only edits reconcile on activity, scheduler ticks and tab show.
+async function watchRepoChanges() {
+  const [{ stdout: gitDir }, { stdout: commonDir }] = await Promise.all([
+    execGit(['rev-parse', '--absolute-git-dir'], PATHS.root),
+    execGit(['rev-parse', '--git-common-dir'], PATHS.root),
+  ]);
+  const roots = [...new Set([gitDir.trim(), resolve(PATHS.root, commonDir.trim())])];
+  repoWatcher = watch(roots.flatMap(root => [
+    join(root, 'HEAD'), join(root, 'refs'), join(root, 'packed-refs'),
+  ]), { ignoreInitial: true, persistent: false, ignored: /\.lock$/ });
+  repoWatcher.on('all', invalidateStatus);
+  repoWatcher.on('error', err => console.error(`❌ Auto-update repo watcher failed: ${err.message}`));
+}
 
 /**
  * When the clock for the minimum interval starts.
@@ -138,6 +179,7 @@ const failingRuntimeWrites = new Set();
 async function writeRuntime(patch, operation) {
   return updateChecker.recordAutoUpdateRuntime(patch).then(
     () => {
+      invalidateStatus();
       if (failingRuntimeWrites.delete(operation)) {
         console.log(`✅ Auto-update runtime write recovered (${operation})`);
       }
@@ -371,6 +413,11 @@ export async function syncAutoUpdateSchedule(settings) {
   }
   const current = settings;
   const config = resolveAutoUpdateConfig(current?.autoUpdate);
+  const nextConfigSignature = JSON.stringify(config);
+  if (configSignature !== nextConfigSignature) {
+    configSignature = nextConfigSignature;
+    invalidateStatus();
+  }
   // Only the enabled flag shapes the REGISTRATION; the channel and the interval
   // are re-read inside the handler, so changing either takes effect on the next
   // tick without a re-register.
@@ -436,13 +483,26 @@ settingsEvents.on('settings:invalidated', () => {
  * its progress to whoever is watching, then registers the poll if the feature
  * is on. Later enable/disable edits are picked up by the subscription above.
  */
-export function startAutoUpdateScheduler(io) {
+export async function startAutoUpdateScheduler(io) {
   ioRef = io || null;
+  if (!watcherStart) {
+    watcherStart = watchRepoChanges().catch(err => {
+      watcherStart = null;
+      console.error(`❌ Auto-update repo watcher unavailable: ${err.message}`);
+    });
+  }
+  await watcherStart;
   return syncAutoUpdateSchedule();
 }
 
 /** Test-only: drop the cached registration signature. */
 export function __resetAutoUpdateSchedulerForTests() {
+  if (statusTimer) clearTimeout(statusTimer);
+  statusTimer = null;
+  configSignature = null;
+  repoWatcher?.close();
+  repoWatcher = null;
+  watcherStart = null;
   registrationSignature = null;
   lastLoggedSkip = null;
   ioRef = null;
