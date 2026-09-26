@@ -51,7 +51,10 @@ function writeDurableExclusive(path, value) {
 /**
  * The DIRECTORY is the fence, not a successfully parsed journal. In particular,
  * a crash between mkdir and journal publication must never reopen admission.
- * Synchronous checks keep admission before the first pool checkout/await.
+ * Admission linearizes at the synchronous filesystem check, before the first
+ * pool checkout/await. A call admitted just before publication may acquire its
+ * connection or spawn afterward. This is NOT a quiescence/snapshot guarantee:
+ * the coordinator must drain/stop every writer and in-flight spawn before dump.
  */
 export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const activeDir = join(dataDir, 'database-maintenance');
@@ -75,6 +78,9 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const read = () => {
     if (!isFenced()) return null;
     try {
+      if (!lstatSync(activeDir).isDirectory() || !lstatSync(recordPath).isFile()) {
+        throw databaseMaintenanceError();
+      }
       return journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
     } catch {
       throw databaseMaintenanceError();

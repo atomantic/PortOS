@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -90,11 +90,11 @@ describe('persistent database maintenance boundary', () => {
     expect(journal.read().id).toBe(operation.id);
   });
 
-  it('lets an admitted transaction finish but refuses new work after another process fences it', () => {
+  it('allows admitted work to finish when checkout completes after the fence', () => {
     const loader = join(root, 'transaction-loader.mjs');
     const stub = `const log=[]; globalThis.sqlLog=log; export default {
       types:{setTypeParser(){}},Pool:class {
-        on(){} async connect(){return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
+        on(){} async connect(){globalThis.beforeCheckout(); return {query:async sql=>{log.push(sql); return {rows:[]}},release(){}}}
         query(){throw Error('NEW_QUERY_REACHED')}
       }};`;
     writeFileSync(loader, `export async function resolve(s,c,n) {
@@ -102,10 +102,12 @@ describe('persistent database maintenance boundary', () => {
     }`);
     const code = `import {spawnSync} from 'node:child_process';
       import {withTransaction,query} from ${JSON.stringify(new URL('./db.js', import.meta.url).href)};
-      await withTransaction(async client=>{
+      globalThis.beforeCheckout=()=>{
         const result=spawnSync(process.execPath,['--input-type=module','-e',
           ${JSON.stringify('import {createDatabaseMaintenanceJournal} from '+JSON.stringify(moduleUrl)+'; createDatabaseMaintenanceJournal('+JSON.stringify(data)+').begin('+JSON.stringify({source,target})+');')}]);
         if(result.status!==0) throw Error('FENCE_FAILED');
+      };
+      await withTransaction(async client=>{
         await client.query('INSERT INTO example_record VALUES (1)');
         try {await query('INSERT INTO example_record VALUES (2)'); throw Error('NEW_WRITE_ACCEPTED')}
         catch(e){if(e.code!=='DATABASE_MAINTENANCE') throw e}
@@ -183,6 +185,25 @@ describe('persistent database maintenance boundary', () => {
     writeFileSync(join(root, '.env'), config);
     expect(JSON.parse(run('cancel', operation.id).stdout)).toEqual({ id: operation.id, stage: 'cancelled' });
     expect(JSON.parse(run('status').stdout)).toEqual({ stage: 'idle' });
+  });
+
+  it.skipIf(process.platform === 'win32')('never releases a symlinked active directory or journal', () => {
+    const operation = journal.begin({ source, target });
+    const active = join(data, 'database-maintenance');
+    const outside = join(root, 'outside.json');
+    writeFileSync(outside, JSON.stringify(operation));
+    rmSync(join(active, 'operation.json'));
+    symlinkSync(outside, join(active, 'operation.json'));
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(journal.isFenced()).toBe(true);
+    rmSync(active, { recursive: true });
+    const outsideDir = join(root, 'outside');
+    mkdirSync(outsideDir);
+    writeFileSync(join(outsideDir, 'operation.json'), JSON.stringify(operation));
+    symlinkSync(outsideDir, active);
+    expect(() => journal.cancel(operation.id, source)).toThrow();
+    expect(journal.isFenced()).toBe(true);
+    expect(readdirSync(outsideDir)).toEqual(['operation.json']);
   });
 
   it('refuses same-endpoint and credential-bearing journals before fencing', () => {
