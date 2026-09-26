@@ -1,11 +1,28 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync, existsSync } from 'fs';
+import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { runMigrations, listPendingMigrations } from './run-migrations.js';
 
-describe('runMigrations corrupt applied-list recovery', () => {
+const fsMocks = vi.hoisted(() => ({ readFailures: new Map(), realRename: null }));
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  fsMocks.realRename = actual.rename;
+  return {
+    ...actual,
+    readFile: vi.fn(async (path, ...args) => {
+      const failure = fsMocks.readFailures.get(String(path));
+      if (failure) throw failure;
+      return actual.readFile(path, ...args);
+    }),
+    rename: vi.fn((...args) => actual.rename(...args)),
+  };
+});
+
+describe('runMigrations applied-list handling', () => {
   let rootDir;
   let dataDir;
   let migrationsDir;
@@ -39,6 +56,8 @@ export default {
 
   afterEach(() => {
     rmSync(rootDir, { recursive: true, force: true });
+    fsMocks.readFailures.clear();
+    vi.mocked(fsPromises.rename).mockImplementation((...args) => fsMocks.realRename(...args));
     warnSpy.mockRestore();
     logSpy.mockRestore();
   });
@@ -92,6 +111,65 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
     expect(corruptSiblings()).toHaveLength(0);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects unreadable ledgers without running migrations or changing their bytes', async () => {
+    const original = '["001-fixture.js"]\n';
+    writeFileSync(appliedFile, original);
+    fsMocks.readFailures.set(appliedFile, Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toMatchObject({ code: 'EACCES' });
+
+    expect(readFileSync(appliedFile, 'utf-8')).toBe(original);
+    expect(existsSync(join(dataDir, 'fixture-marker.txt'))).toBe(false);
+  });
+
+  it('keeps listPendingMigrations tolerant of an unreadable ledger', async () => {
+    const original = '["001-fixture.js"]\n';
+    writeFileSync(appliedFile, original);
+    fsMocks.readFailures.set(appliedFile, Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+
+    await expect(listPendingMigrations({ rootDir, migrationsDir })).resolves.toEqual(['001-fixture.js']);
+
+    expect(readFileSync(appliedFile, 'utf-8')).toBe(original);
+    expect(corruptSiblings()).toHaveLength(0);
+  });
+
+  it('writes both the purge-disarm and migration ledger through temp-file renames', async () => {
+    writeFileSync(appliedFile, '[]\n');
+    writeFileSync(join(migrationsDir, '002-purge.js'), `
+export default {
+  purge: true,
+  async up() { throw new Error('disarmed purge migration must not run'); }
+};
+`);
+
+    const renameMock = vi.mocked(fsPromises.rename);
+    const observations = [];
+    renameMock.mockImplementation(async (source, destination) => {
+      if (destination === appliedFile) {
+        observations.push({
+          source,
+          targetBefore: readFileSync(destination, 'utf-8'),
+          tempContents: readFileSync(source, 'utf-8'),
+        });
+      }
+      return fsMocks.realRename(source, destination);
+    });
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1);
+    expect(observations).toHaveLength(2);
+    for (const observation of observations) {
+      expect(observation.source).toBe(`${appliedFile}.tmp-${process.pid}`);
+      expect(Array.isArray(JSON.parse(observation.targetBefore))).toBe(true);
+      expect(Array.isArray(JSON.parse(observation.tempContents))).toBe(true);
+    }
+    expect(JSON.parse(observations[0].tempContents)).toEqual(['002-purge.js']);
+    expect(JSON.parse(observations[1].tempContents)).toEqual(['002-purge.js', '001-fixture.js']);
+    expect(existsSync(`${appliedFile}.tmp-${process.pid}`)).toBe(false);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['002-purge.js', '001-fixture.js']);
   });
 
   it('skips `_`-prefixed shared-helper files (never imports them as migrations)', async () => {
