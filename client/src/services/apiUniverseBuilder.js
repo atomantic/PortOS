@@ -495,3 +495,6 @@ export const autoSortBuckets = (universeId, { providerId, model } = {}, options 
     body: JSON.stringify({ providerId, model }),
     ...options,
   }));
+
+export const getCharacterReferenceSheet = (universeId, entryId, variant, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet?variant=${encodeURIComponent(variant)}`, options);

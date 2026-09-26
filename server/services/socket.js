@@ -855,6 +855,9 @@ function setupMediaGenEventForwarding() {
     });
   }
 
+  mediaJobEvents.on('reference-sheet:changed', ({ universeId, entryId, jobId, variant, status }) => {
+    ioInstance?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
+  });
   mediaJobEvents.on('changed', () => {
     ioInstance?.emit('media-jobs:changed', {});
   });

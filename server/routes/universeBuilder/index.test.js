@@ -164,10 +164,12 @@ vi.mock('../../services/universeCharacterExpand.js', () => ({
 const renderCharacterReferenceSheetMock = vi.fn();
 const deleteCharacterReferenceSheetMock = vi.fn();
 const listSheetVariantsMock = vi.fn();
+const getCharacterReferenceSheetMock = vi.fn();
 vi.mock('../../services/universeCharacterSheet.js', () => ({
   renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
   deleteCharacterReferenceSheet: (...args) => deleteCharacterReferenceSheetMock(...args),
   listSheetVariants: (...args) => listSheetVariantsMock(...args),
+  getCharacterReferenceSheet: (...args) => getCharacterReferenceSheetMock(...args),
 }));
 
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
@@ -1109,6 +1111,16 @@ describe('universe-builder routes', () => {
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('UNIVERSE_CANON_NOT_FOUND');
     });
+  });
+
+  it('reads the scoped persisted reference sheet and validates the variant', async () => {
+    getCharacterReferenceSheetMock.mockResolvedValue({ filename: 'sheet.png', pendingJobId: null });
+    const res = await request(buildApp()).get('/api/universe-builder/u-1/characters/c-1/reference-sheet?variant=standard');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ filename: 'sheet.png', pendingJobId: null });
+    expect(getCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', { variant: 'standard' });
+    const invalid = await request(buildApp()).get('/api/universe-builder/u-1/characters/c-1/reference-sheet?variant=');
+    expect(invalid.status).toBe(400);
   });
 
   describe('POST /:id/characters/:entryId/render-reference-sheet', () => {
