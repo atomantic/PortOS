@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'child_process';
+import { stripVTControlCharacters } from 'node:util';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
@@ -28,7 +29,7 @@ const WORKER_CRASH_PATTERN = /Worker exited unexpectedly with exit code \d+.*?wh
 const MAX_CAPTURED_OUTPUT = 200_000;
 
 export function extractCrashedTestFile(output) {
-  const match = WORKER_CRASH_PATTERN.exec(String(output || ''));
+  const match = WORKER_CRASH_PATTERN.exec(stripVTControlCharacters(String(output || '')));
   return match ? match[1].trim() : null;
 }
 
@@ -82,7 +83,7 @@ const ERRORS_SUMMARY_PATTERN = /Errors\s+(\d+)\s+errors?/;
  * miss can never mask a real regression.
  */
 export function hasOtherTestFailures(output) {
-  const text = String(output || '');
+  const text = stripVTControlCharacters(String(output || ''));
   const filesSummary = TEST_FILES_SUMMARY_PATTERN.exec(text);
   const testsSummary = TESTS_SUMMARY_PATTERN.exec(text);
   const errorsSummary = ERRORS_SUMMARY_PATTERN.exec(text);
