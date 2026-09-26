@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
-import { HOST_CONTROL_ROUTES, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
+import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
 describe('HOST_CONTROL_ROUTES (#8716)', () => {
   it('names only mounted routes, so a rename cannot silently ungate one', () => {
@@ -21,5 +21,9 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(isHostControlRoute('GET', '/api/git/submodules/status')).toBe(false);
     expect(isHostControlRoute('POST', '/api/apps/example-app/start-example')).toBe(false);
     expect(isHostControlRoute('POST', '/api/apps/example-app/archive')).toBe(false);
+    // The policy-store body gate matches the same spellings (#8721).
+    expect(hostControlBodyKeys('put', '/API/Settings/', { harnesses: {}, location: {} })).toEqual(['harnesses']);
+    expect(hostControlBodyKeys('PUT', '/api/COS/config', { avatarStyle: 'svg', mcpServers: [] })).toEqual(['mcpServers']);
+    expect(hostControlBodyKeys('PUT', '/api/settings/credentials/example', { harnesses: {} })).toEqual([]);
   });
 });
