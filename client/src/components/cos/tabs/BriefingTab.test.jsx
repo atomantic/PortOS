@@ -156,3 +156,19 @@ it('keeps the selected historical briefing when a daily job completes', async ()
   expect(api.getCosLatestBriefing).toHaveBeenCalledTimes(1);
   expect(api.getCosBriefing).toHaveBeenLastCalledWith('2026-09-11');
 });
+
+it('reconciles completion received while the post-trigger read is still pending', async () => {
+  let resolvePending;
+  api.getCosLatestBriefing
+    .mockResolvedValueOnce(null)
+    .mockReturnValueOnce(new Promise(resolve => { resolvePending = resolve; }))
+    .mockResolvedValueOnce({ date: '2026-09-12', content: '# Finished during read' });
+  renderTab();
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Generate today’s briefing' }));
+  await act(async () => {});
+  await act(async () => socket.receive('cos:agent:completed', { metadata: { jobId: 'job-daily-briefing' } }));
+  await act(async () => resolvePending(null));
+  expect(screen.getByText('Finished during read')).toBeInTheDocument();
+  expect(api.getCosLatestBriefing).toHaveBeenCalledTimes(3);
+});
