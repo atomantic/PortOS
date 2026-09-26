@@ -505,6 +505,8 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     });
     const restartedResult = JSON.parse(stdout.split('\n').find(line => line.startsWith('RECEIPT:')).slice(8));
     expect(restartedResult).toEqual(first.body.ingredients);
+    const { embedBatch } = await import('../services/embeddings.js');
+    const embedCalls = embedBatch.mock.calls.length;
     const replay = await post({ ...body, accepted: [
       { ...body.accepted[0], payload: { b: 2, a: 1 } }, body.accepted[1],
     ] });
@@ -513,6 +515,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     expect(await counts()).toEqual(originalCounts);
     expect((await post({ ...body, accepted: [{ type: 'idea', name: 'Changed' }] })).status).toBe(409);
     expect(await counts()).toEqual(originalCounts);
+    expect(embedBatch.mock.calls.length).toBe(embedCalls);
     const nextKey = randomUUID();
     receiptKeys.add(nextKey);
     const intentional = await post({ ...body, operationKey: nextKey });

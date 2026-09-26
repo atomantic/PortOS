@@ -166,6 +166,11 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
 
+  if (body.operationKey) {
+    const replay = await catalogDB.getScrapCommitReceipt({ ...body, scrapId: scrap.id });
+    if (replay) return res.status(201).json({ scrap, ingredients: replay });
+  }
+
   // Embed all drafts in parallel (concurrency-4 inside embedBatch) before
   // sequentially writing — LLM round-trips dominate, DB inserts don't. Embeds
   // stay OUTSIDE the transaction: they're network round-trips to the provider,
@@ -176,7 +181,7 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
 
   const created = await catalogDB.commitScrap({
     scrapId: scrap.id,
-    operationKey: body.operationKey,
+    ...(body.operationKey ? { operationKey: body.operationKey } : {}),
     accepted: body.accepted,
     ...(body.relationships !== undefined ? { relationships: body.relationships } : {}),
     embeds,

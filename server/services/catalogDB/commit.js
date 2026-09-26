@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../../lib/objects.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
-import { withTransaction } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { createIngredient } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
 
@@ -18,6 +18,32 @@ import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, un
 // size mints none — the schema allows up to 200 accepted rows, which would be
 // 19,900 edges for every unordered pair at the cap.
 const RELATION_BATCH_LIMIT = 25;
+
+function commitFingerprint({ scrapId, accepted = [], universeRef = null, role = null, relationships }) {
+  if (relationships !== undefined) {
+    ({ accepted, relationships } = catalogScrapCommitSchema.parse({ accepted, relationships }));
+  }
+  // Derived embedding output never changes a reviewed submission's identity.
+  return createHash('sha256').update(canonicalStringify({ scrapId, accepted, universeRef, role, relationships })).digest('hex');
+}
+
+async function readReceipt(exec, operationKey, fingerprint) {
+  const { rows: [receipt] } = await exec(
+    'SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey],
+  );
+  if (!receipt) return null;
+  if (receipt.fingerprint !== fingerprint) {
+    throw new ServerError('Commit operation key was already used for a different submission', { status: 409 });
+  }
+  return receipt.ingredients;
+}
+
+// Fast replay before provider work. The transactional claim below remains the
+// authority when two requests race before either has a committed receipt.
+export async function getScrapCommitReceipt(input) {
+  if (!input.operationKey) return null;
+  return readReceipt(query, input.operationKey, commitFingerprint(input));
+}
 
 /**
  * Persist every accepted extraction draft and its source link atomically.
@@ -33,9 +59,8 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
   if (relationships !== undefined) {
     ({ accepted, relationships } = catalogScrapCommitSchema.parse({ accepted, relationships }));
   }
-  // Embeddings are derived provider output, not reviewed submission identity.
   const fingerprint = operationKey
-    ? createHash('sha256').update(canonicalStringify({ scrapId, accepted, universeRef, role, relationships })).digest('hex')
+    ? commitFingerprint({ scrapId, accepted, universeRef, role, relationships })
     : null;
   return withTransaction(async (client) => {
     if (operationKey) {
@@ -47,13 +72,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
         [operationKey, fingerprint],
       );
       if (!claim.rowCount) {
-        const { rows: [receipt] } = await client.query(
-          'SELECT fingerprint, ingredients FROM catalog_commit_receipts WHERE operation_key = $1', [operationKey],
-        );
-        if (receipt.fingerprint !== fingerprint) {
-          throw new ServerError('Commit operation key was already used for a different submission', { status: 409 });
-        }
-        return receipt.ingredients;
+        return readReceipt(client.query.bind(client), operationKey, fingerprint);
       }
     }
     const created = [];
