@@ -33,7 +33,7 @@ vi.mock('../taste-questionnaire.js', () => ({
   getTasteProfile: vi.fn(async () => ({ completedCount: 0, totalSections: 0, lastSessionAt: null })),
 }));
 
-const { saveJSON, loadJSON, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
+const { saveJSON, loadJSON, mutateGoals, normalizeGoal, GOALS_FILE, LONGEVITY_FILE, DEFAULT_GOALS, DEFAULT_LONGEVITY, PORTOS_GOAL_DEFAULTS } = await import('./store.js');
 const { getIdentityStatus } = await import('./status.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
@@ -213,4 +213,53 @@ it('announces goal persistence only after the readable store has changed', async
   } finally {
     dashboardEvents.off('goals:changed', listener);
   }
+});
+
+// Regression (#8755): goalCheckIn.js and goalCalendarScheduler.js used to read
+// goals.json once, await slow work (an LLM call / a Google Calendar
+// round-trip), then write back the stale snapshot — clobbering any concurrent
+// edit. `mutateGoals` serializes every read-modify-write against the shared
+// 'goals' key so two in-flight mutators can't interleave their load/save
+// pairs and always see each other's committed writes.
+describe('mutateGoals — serialized read-modify-write (#8755)', () => {
+  it('runs each mutator against the freshest goals document, not a stale capture', async () => {
+    await saveJSON(GOALS_FILE, { goals: [{ id: 'g1', tag: 'initial' }] });
+
+    // First mutator holds the queue open until we tell it to proceed, so the
+    // second mutator's call is definitely queued behind it, not racing it.
+    let releaseFirst;
+    const firstStarted = new Promise((resolveStarted) => {
+      mutateGoals(async (goals) => {
+        resolveStarted();
+        await new Promise((r) => { releaseFirst = r; });
+        goals.goals[0].tag = 'from-first';
+        return goals;
+      });
+    });
+    await firstStarted;
+
+    const second = mutateGoals((goals) => {
+      // If this ran against a snapshot captured before the first mutator's
+      // write landed, it would still see tag: 'initial' here.
+      goals.goals[0].seenTag = goals.goals[0].tag;
+      return goals;
+    });
+
+    releaseFirst();
+    await second;
+
+    const final = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+    expect(final.goals[0].tag).toBe('from-first');
+    expect(final.goals[0].seenTag, 'second mutator must observe the first mutator\'s committed write').toBe('from-first');
+  });
+
+  it('mirrors the result to MortalLoom when enabled, like a direct saveJSON call', async () => {
+    ml.goals = [];
+    await mutateGoals((goals) => {
+      goals.goals.push({ id: 'g1' });
+      return goals;
+    });
+    const { mlReplace } = await import('../mortalLoomStore.js');
+    expect(mlReplace).toHaveBeenCalledWith('goals', [expect.objectContaining({ id: 'g1' })]);
+  });
 });

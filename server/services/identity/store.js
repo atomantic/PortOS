@@ -3,6 +3,7 @@ import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 
 // === Goal normalization defaults ===
 
@@ -155,4 +156,30 @@ export async function saveJSON(filePath, data) {
     await mlReplace('goals', data.goals);
   }
   if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
+}
+
+// Serializes goals.json read-modify-write across every caller that must run slow
+// work (an LLM call per goal, Google Calendar round-trips) BEFORE the write.
+// Doing the slow work first, then re-reading goals.json inside `fn` right before
+// saving, is what keeps a concurrent edit (a new progress entry, a goal edit or
+// create) from being clobbered by a stale snapshot captured before the slow work
+// started (#8755). The single shared queue key ('goals') also protects two
+// concurrent mutators (e.g. check-in + calendar scheduler) from interleaving
+// their own reads/writes.
+const goalsQueue = createKeyCachedQueue();
+
+/**
+ * @param {(goals: object) => (object | Promise<object>)} fn - receives a freshly
+ *   loaded goals document (post any earlier slow work in the caller) and returns
+ *   the document to persist. Run serialized against every other `mutateGoals`
+ *   call so two in-flight mutations can't race a load/save pair.
+ * @returns {Promise<object>} the saved goals document.
+ */
+export function mutateGoals(fn) {
+  return goalsQueue('goals', async () => {
+    const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
+    const next = await fn(goals);
+    await saveJSON(GOALS_FILE, next);
+    return next;
+  });
 }
