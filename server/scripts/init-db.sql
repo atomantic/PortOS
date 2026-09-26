@@ -2244,3 +2244,13 @@ DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed ON catalog_ingredi
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed AFTER INSERT OR DELETE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION sync_feed_capture();
 DROP TRIGGER IF EXISTS trg_catalog_ingredient_media_sync_feed_update ON catalog_ingredient_media;
 CREATE CONSTRAINT TRIGGER trg_catalog_ingredient_media_sync_feed_update AFTER UPDATE ON catalog_ingredient_media DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (OLD.sync_sequence IS DISTINCT FROM NEW.sync_sequence) EXECUTE FUNCTION sync_feed_capture();
+
+-- Durable receiver-local Catalog dependency inbox (#8683).
+CREATE TABLE IF NOT EXISTS catalog_pending_applies (
+      kind TEXT NOT NULL CHECK (kind IN ('tags', 'scraps')),
+      id TEXT NOT NULL,
+      parent_id TEXT NOT NULL,
+      source_updated_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (kind, id)
+    );

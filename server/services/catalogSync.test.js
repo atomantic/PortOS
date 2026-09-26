@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./catalogDB.js', () => ({
+  drainPendingCatalogApplies: vi.fn(async () => {}),
   getScrapChangesSince: vi.fn(),
   getIngredientChangesSince: vi.fn(),
   getSourceChangesSince: vi.fn(),

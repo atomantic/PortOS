@@ -32,7 +32,7 @@ init-db.sql, each with a one-line reason.
 | `reviewQueueTriage.js` | `reviewQueueTriageDdl` | Machine-local Review Hub presentation markers — snooze, optional dismissal, and delivery generation keyed by canonical action identity |
 | `cosAgentFeedback.js` | `cosAgentFeedbackDdl` | Durable machine-local references to completed manual CoS runs awaiting a rating (agent id + archive locator only) |
 | `aiGraph.js` | `aiGraphDdl` | AI provider connection graph — connections, harness bindings, executable route bindings (machine-local) |
-| `catalog.js` | `catalogDdl`, `catalogUserTypesDdl` | Catalog scraps/ingredients/tags/media + user-defined types |
+| `catalog.js` | `catalogDdl`, `catalogUserTypesDdl`, `catalogPendingAppliesDdl` | Catalog scraps/ingredients/tags/media + user-defined types + receiver-local dependency inbox |
 | `media.js` | `mediaDdl` | Creative-director / music-video projects, mood boards, media assets, and Code Animation jobs |
 | `universes.js` | `universesDdl` | Universes, machine-local character voice profiles/renders, + universe run history |
 | `library.js` | `libraryDdl` | Authors, artists, albums, tracks |

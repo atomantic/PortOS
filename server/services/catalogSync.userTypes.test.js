@@ -18,6 +18,7 @@ vi.mock('./settings.js', () => ({
 // catalogDB upserts/changes are no-ops here — we only exercise the catalogTypes
 // path, but applyRemoteChanges dispatches every kind, so stub them all.
 vi.mock('./catalogDB.js', () => ({
+  drainPendingCatalogApplies: vi.fn(async () => {}),
   getScrapChangesSince: vi.fn(async () => ({ items: [], hasMore: false })),
   getIngredientChangesSince: vi.fn(async () => ({ items: [], hasMore: false })),
   getSourceChangesSince: vi.fn(async () => ({ items: [], hasMore: false })),

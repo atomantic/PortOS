@@ -6,7 +6,19 @@
 // catalog_user_types is a separate export because in the original array it sits
 // AFTER the media block, not adjacent to the other catalog tables — the composer
 // (index.js) inserts it at that same position so the DDL order is byte-identical.
+export const catalogPendingAppliesDdl = [
+    `CREATE TABLE IF NOT EXISTS catalog_pending_applies (
+      kind TEXT NOT NULL CHECK (kind IN ('tags', 'scraps')),
+      id TEXT NOT NULL,
+      parent_id TEXT NOT NULL,
+      source_updated_at TIMESTAMPTZ NOT NULL,
+      payload JSONB NOT NULL,
+      PRIMARY KEY (kind, id)
+    )`,
+];
+
 export const catalogDdl = [
+    ...catalogPendingAppliesDdl,
     `CREATE TABLE IF NOT EXISTS catalog_scraps (
       id TEXT PRIMARY KEY,
       title TEXT,
