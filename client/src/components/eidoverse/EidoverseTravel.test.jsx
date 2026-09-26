@@ -123,3 +123,18 @@ it('keeps a pushed destination snapshot when an older read finishes later', asyn
   await act(async () => finish({ destinations: [] }));
   expect(screen.getByRole('button', { name: 'Current world' })).toBeInTheDocument();
 });
+
+it('retries a deferred world update when the parent becomes ready without another destination event', async () => {
+  const travelRef = createRef();
+  const deferred = vi.fn(() => false);
+  const ready = vi.fn(() => true);
+  const view = render(<EidoverseTravel enabled travelRef={travelRef} onDestinationsChange={deferred} />);
+  await screen.findByRole('button', { name: 'Example world' });
+  await act(async () => socket.receive('eidoverse-travel:destinations', {
+    destinations: [{ peerId: 'next-peer', label: 'Next world' }],
+  }));
+  expect(deferred).toHaveBeenCalledTimes(1);
+  view.rerender(<EidoverseTravel enabled travelRef={travelRef} onDestinationsChange={ready} />);
+  expect(ready).toHaveBeenCalledTimes(1);
+  expect(getEidoverseDestinations).toHaveBeenCalledTimes(1);
+});

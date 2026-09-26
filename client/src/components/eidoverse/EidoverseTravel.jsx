@@ -13,8 +13,6 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
   const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
   const generation = useRef(0);
-  const destinationsChanged = useRef(onDestinationsChange);
-  destinationsChanged.current = onDestinationsChange;
   const lastDestinations = useRef(null);
   const busy = useRef(false);
   const mounted = useMounted();
@@ -27,9 +25,18 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     if (!Array.isArray(result?.destinations)) return;
     setDestinations(result.destinations);
     const fingerprint = JSON.stringify(result.destinations.map((entry) => entry.peerId).sort());
-    if (lastDestinations.current === null || fingerprint === lastDestinations.current
-      || destinationsChanged.current?.() !== false) lastDestinations.current = fingerprint;
+    if (lastDestinations.current === null) lastDestinations.current = fingerprint;
   }, []);
+  useEffect(() => {
+    if (!watching || lastDestinations.current === null) return;
+    const fingerprint = JSON.stringify(destinations.map((entry) => entry.peerId).sort());
+    // The parent can defer while projecting or editing. Retry when its
+    // callback changes after that gate clears, without waiting for a poll
+    // or another (possibly unchanged) server snapshot.
+    if (fingerprint !== lastDestinations.current && onDestinationsChange?.() !== false) {
+      lastDestinations.current = fingerprint;
+    }
+  }, [destinations, onDestinationsChange, watching]);
   const refresh = useCallback(async () => {
     const current = generation.current;
     const sequence = ++fetchSequence.current;
