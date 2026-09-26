@@ -323,12 +323,17 @@ describe('spawnDetached', () => {
     expect(getOut()).toBe('a b "c"\n');
   });
 
-  it.runIf(!IS_POSIX)('reports a real supervisor bootstrap failure without private paths', async () => {
+  it.skipIf(IS_POSIX).each([1, 2, 3])('reports a real supervisor bootstrap failure without private paths (launch %i)', async () => {
     const controlDir = await tmpControlDir();
-    const handle = await spawnDetached('portos-nonexistent-example-command', [], { controlDir });
+    // Each independent supervisor pays the cold PowerShell/Start-Process cost.
+    // Use the stream fixture's bounded CI budget so we test the command error,
+    // not host startup speed; a PID timeout still fails the assertions below.
+    const handle = await spawnDetached('portos-nonexistent-example-command', [], {
+      controlDir, pidTimeoutMs: 30000,
+    });
     await expect(onClose(handle)).rejects.toThrow(/supervisor-stage=failed hresult=-?\d+/);
     expect(await readFile(join(controlDir, 'supervisor-bootstrap.log'), 'utf8')).toMatch(/^failed hresult=-?\d+$/);
-  });
+  }, 45_000);
 
   it.runIf(!IS_POSIX)('cancels a cold supervisor after PID acquisition times out', async () => {
     const controlDir = await tmpControlDir();
