@@ -16,7 +16,7 @@ vi.mock('./messageGmailSync.js', () => ({ sendGmail: doubles.sendGmail }));
 vi.mock('./messagePlaywrightSync.js', () => ({ sendPlaywright: doubles.sendPlaywright }));
 
 import { sendDraft } from './messageSender.js';
-import { getDraft, approveDraft, updateDraft } from './messageDrafts.js';
+import { getDraft, approveDraft, updateDraft, deleteDraft, deleteDraftsByAccountId } from './messageDrafts.js';
 
 function barrier() {
   let resolve;
@@ -61,6 +61,8 @@ describe('draft send workflow', () => {
     expect((await getDraft('draft-1')).status).toBe('sending');
     await expect(approveDraft('draft-1')).rejects.toMatchObject({ status: 409, code: 'DRAFT_STATE_CONFLICT' });
     await expect(updateDraft('draft-1', { status: 'draft', body: 'Changed' })).rejects.toMatchObject({ status: 409 });
+    await expect(deleteDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    await expect(deleteDraftsByAccountId('account-1')).rejects.toMatchObject({ status: 409 });
     releaseDispatch.resolve();
     const results = await sends;
     expect(results.filter(result => result.status === 'fulfilled')).toEqual([{ status: 'fulfilled', value: { success: true } }]);
