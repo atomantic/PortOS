@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path';
-import { copyFile, writeFile, realpath } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { PATHS, ensureDir, unlinkGuarded } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchema, htmlCompositionRenderSchema, validateRequest } from '../../lib/validation.js';
 import { generateThumbnail } from '../../lib/ffmpeg.js';
@@ -31,6 +32,12 @@ export async function renderComposition({ jobId, ...input }) {
   let result;
   let failure;
   const deliveredPaths = [];
+  const deliver = async (target, write) => {
+    const handle = await open(target, 'wx');
+    // Record ownership after exclusive creation, before any fallible I/O.
+    deliveredPaths.push(target);
+    try { await write(handle); } finally { await handle.close(); }
+  };
   try {
     const { directory, musicTrack, launchVideo } = validateRequest(htmlCompositionRenderSchema, input);
     const musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
@@ -79,13 +86,11 @@ export async function renderComposition({ jobId, ...input }) {
       // validated snapshot, never re-read source prose after rendering.
       for (const name of ['plan.md', 'storyboard.json', 'caption.txt']) {
         const target = join(deliveryRoot, name);
-        await writeFile(target, launchAssets.get(`/${name}`), { flag: 'wx' });
-        deliveredPaths.push(target);
+        await deliver(target, handle => handle.writeFile(launchAssets.get(`/${name}`)));
       }
       for (const [source, name] of [[outputPath, 'video.mp4'], [join(PATHS.videoThumbnails, thumbnail), 'poster.jpg']]) {
         const target = join(deliveryRoot, name);
-        await copyFile(source, target, constants.COPYFILE_EXCL);
-        deliveredPaths.push(target);
+        await deliver(target, handle => pipeline(createReadStream(source), handle.createWriteStream()));
       }
       launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
         caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };

@@ -123,6 +123,12 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
       '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     expect(pixel[0]).toBeGreaterThan(220);
     expect(pixel[2]).toBeLessThan(30);
+    // Exclusive delivery cannot replace an earlier successful run on retry.
+    const retryId = randomUUID();
+    await expect(renderComposition({ ...input, jobId: retryId, launchVideo: { targetDurationSec: 15, appId: 'example', runId } })).rejects.toThrow(/EEXIST/);
+    expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
+    expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
+    expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
   }, 60000);
 
   it('refuses a remote request by its full URL and removes partial artifacts', async () => {
