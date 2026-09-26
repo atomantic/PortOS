@@ -1121,6 +1121,7 @@ export async function promoteCheckpoint(runId, step) {
       autoSelectedCheckpoint: false,
     },
   }));
+  trainingEvents.emit('checkpoints:changed', { runId });
   await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   console.log(`📌 training [${shortId(runId)}] promoted checkpoint step ${step} → ${filename}`);
   // If the promoted checkpoint had no preview (its step didn't land on the
@@ -1203,6 +1204,7 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
     return { ...current, artifacts: { ...current.artifacts, samples: [...samples, name] } };
   });
   trainingEvents.emit('checkpoint-preview', { generationId: run.jobId || runId, runId, step });
+  trainingEvents.emit('checkpoints:changed', { runId });
   console.log(`🖼️ training [${shortId(runId)}] preview attached for step ${step}`);
 }
 
