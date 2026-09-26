@@ -170,7 +170,7 @@ async function safeUnlinkUpload(path) {
 // KNOWN_MEDIA_KINDS in federatedMedia/) are closed lists that do not name it,
 // so shipping a user's source video across the wire would take a deliberate
 // edit to one of them rather than a mode string slipping through.
-export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'image', 'training', 'audio']);
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'html-composition', 'image', 'training', 'audio']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -183,6 +183,7 @@ function getGenModuleForJob(job) {
   // later local branch would happily claim it and render a second time on this
   // machine.
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
+  if (job.kind === 'html-composition') return import('../htmlComposition/index.js');
   if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
@@ -1123,7 +1124,7 @@ async function runJob(job) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' || job.kind === 'video-upscale' ? videoGenEvents
+  const emitter = job.kind === 'video' || job.kind === 'video-upscale' || job.kind === 'html-composition' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' ? audioGenEvents
     : imageGenEvents;
@@ -1226,6 +1227,8 @@ async function runJob(job) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'html-composition') {
+      await mod.renderComposition({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video-upscale') {
       await mod.runVideoUpscale({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'training') {

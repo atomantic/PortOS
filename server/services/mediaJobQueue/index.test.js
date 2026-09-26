@@ -79,6 +79,8 @@ const stubs = {
   hasSurvivingTrainer: vi.fn(async () => false),
   runVideoUpscale: vi.fn(() => new Promise(() => {})),
   cancelVideoUpscale: vi.fn(),
+  renderComposition: vi.fn(async () => ({})),
+  cancelComposition: vi.fn(),
 };
 
 vi.mock('../creativeDirector/videoExecution.js', () => ({
@@ -90,6 +92,11 @@ vi.mock('../videoGen/local.js', () => ({
   generateVideo: (...args) => stubs.generateVideo(...args),
   generateChainedVideo: (...args) => stubs.generateChainedVideo(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../htmlComposition/index.js', () => ({
+  renderComposition: (...args) => stubs.renderComposition(...args),
+  cancel: (...args) => stubs.cancelComposition(...args),
 }));
 
 vi.mock('../videoGen/upscaleJob.js', () => ({
@@ -237,6 +244,19 @@ describe('mediaJobQueue', () => {
   // The generative video upscale (#6511) rides the queue as its own kind, on
   // the serialized GPU lane and the videoGen event bus, so it can be watched,
   // cancelled and watchdogged exactly like a render.
+  it('dispatches HTML compositions locally, forwards progress and cancellation, and settles the queue', async () => {
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'html-composition', params: { directory: 'compositions/example' } });
+    await waitFor(() => stubs.renderComposition.mock.calls.length === 1);
+    expect(stubs.renderComposition).toHaveBeenCalledWith(expect.objectContaining({ directory: 'compositions/example', jobId }));
+    expect(mediaJobQueue.isRemoteMediaJob(mediaJobQueue.getJob(jobId))).toBe(false);
+    videoGenEvents.emit('progress', { generationId: jobId, progress: 0.5 });
+    expect(mediaJobQueue.getJob(jobId).progress).toBe(0.5);
+    await mediaJobQueue.cancelJob(jobId);
+    expect(stubs.cancelComposition).toHaveBeenCalledWith(jobId);
+    videoGenEvents.emit('failed', { generationId: jobId, error: 'Render canceled' });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+  });
+
   describe('video-upscale kind', () => {
     const upscaleParams = { historyId: 'src-1', sourceFilename: 'src-1.mp4', runtime: 'ltx25', seed: 7 };
 
