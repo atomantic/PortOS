@@ -118,18 +118,16 @@ export async function getMessages(options = {}) {
 
 export async function deleteCache(accountId) {
   if (!UUID_RE.test(accountId)) return;
-  const { unlink } = await import('fs/promises');
-  const filePath = join(CACHE_DIR, `${accountId}.json`);
-  try {
-    await unlink(filePath);
+  // Drain cache writers before erasing; a writer already in flight must not
+  // recreate the file after deletion reports success.
+  return queueAccountWrite(accountId, async () => {
+    const { unlink } = await import('fs/promises');
+    const filePath = join(CACHE_DIR, `${accountId}.json`);
+    await unlink(filePath).catch(err => {
+      if (err.code !== 'ENOENT') throw err;
+    });
     console.log(`🗑️ Message cache deleted for account ${accountId}`);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      console.log(`🗑️ No message cache to delete for account ${accountId}`);
-    } else {
-      console.error(`❌ Failed to delete message cache for account ${accountId}: ${err.message}`);
-    }
-  }
+  });
 }
 
 export async function getMessage(accountId, messageId) {
@@ -164,6 +162,11 @@ export async function syncAccount(accountId, io, options = {}) {
   console.log(`📧 Starting ${mode} sync for ${account.name} (${account.type})`);
 
   const providerSync = async () => {
+    // The initial read may predate queued deletion. Recheck under the cache
+    // queue before a stale sync can write after cleanup.
+    const currentAccount = await getAccount(accountId);
+    if (!currentAccount) return { error: 'Account not found' };
+    if (!currentAccount.enabled) return { error: 'Account is disabled', status: 400 };
     const cache = await loadCache(accountId);
     let providerResult;
     if (account.type === 'gmail') {

@@ -112,11 +112,12 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400 });
   }
-  const deleted = await messageAccounts.deleteAccount(req.params.id);
-  if (!deleted) throw new ServerError('Account not found', { status: 404 });
-  // Clean up related data
-  await messageSync.deleteCache(req.params.id).catch(() => {});
-  await messageDrafts.deleteDraftsByAccountId(req.params.id).catch(() => {});
+  // Stop scheduled ingestion, retaining the account for retry if cleanup fails.
+  // Missing accounts still need cleanup: older deletions may have left orphans.
+  await messageAccounts.updateAccount(req.params.id, { enabled: false });
+  await messageSync.deleteCache(req.params.id);
+  await messageDrafts.deleteDraftsByAccountId(req.params.id);
+  await messageAccounts.deleteAccount(req.params.id);
   req.app.get('io')?.emit('messages:changed', {});
   res.status(204).send();
 }));

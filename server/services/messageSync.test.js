@@ -382,6 +382,48 @@ describe('deleteCache', () => {
     expect(unlink).toHaveBeenCalledWith(expect.stringContaining(`${VALID_UUID}.json`));
   });
 
+  it('waits for an in-flight cache writer before erasing its result', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let stored = { messages: [{ id: 'msg-1' }] };
+    readFile.mockImplementation(async () => stored ? JSON.stringify(stored) : null);
+    readdir.mockResolvedValue([`${VALID_UUID}.json`]);
+    atomicWrite.mockImplementationOnce(async (_path, data) => {
+      entered.resolve();
+      await release.promise;
+      stored = data;
+    });
+    unlink.mockImplementationOnce(async () => { stored = null; });
+
+    const writer = updateMessageEvaluations({ 'msg-1': { score: 9 } });
+    await entered.promise;
+    const cleanup = deleteCache(VALID_UUID);
+    expect(stored).not.toBeNull();
+    release.resolve();
+    await Promise.all([writer, cleanup]);
+    expect(stored).toBeNull();
+    expect(await getMessages({ accountId: VALID_UUID })).toEqual({ messages: [], total: 0 });
+  });
+
+  it('rejects a sync with a stale enabled-account read after cleanup', async () => {
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    getAccount.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { id: VALID_UUID, name: 'Example', type: 'gmail', enabled: true };
+    }).mockResolvedValue(null);
+    unlink.mockResolvedValue();
+    const syncing = syncAccount(VALID_UUID);
+    await entered.promise;
+    await deleteCache(VALID_UUID);
+    release.resolve();
+
+    expect(await syncing).toEqual({ error: 'Account not found' });
+    expect(syncGmail).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
   it('should silently skip invalid accountId', async () => {
     await deleteCache('not-a-uuid');
     expect(unlink).not.toHaveBeenCalled();
