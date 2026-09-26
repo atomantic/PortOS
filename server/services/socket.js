@@ -445,8 +445,11 @@ function invalidateMindVisibility() {
   mindVisibilityTimer.unref?.();
 }
 
-// Set up CoS event forwarding
+// Process-wide listeners forward through the current IO and subscriber sets.
+let cosForwardingSetup = false;
 function setupCosEventForwarding() {
+  if (cosForwardingSetup) return;
+  cosForwardingSetup = true;
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
   for (const event of ['goals:changed', 'backup:changed']) {
     dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
