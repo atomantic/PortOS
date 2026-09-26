@@ -209,6 +209,19 @@ afterEach(async () => {
 });
 
 describe('mediaJobQueue', () => {
+  it('invalidates snapshots after enqueue and cancellation so idle clients see changes', async () => {
+    const changed = vi.fn();
+    mediaJobQueue.mediaJobEvents.on('changed', changed);
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'example' } });
+    await flush();
+    expect(changed).toHaveBeenCalledWith({});
+    changed.mockClear();
+    await mediaJobQueue.cancelJob(jobId);
+    await flush();
+    expect(changed).toHaveBeenCalledWith({});
+    mediaJobQueue.mediaJobEvents.off('changed', changed);
+  });
+
   it('enqueueJob returns jobId + queued status + position', async () => {
     // Block the worker so the second enqueue lands behind the first in the
     // pipeline rather than entering an empty queue after the first ran.

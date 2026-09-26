@@ -1,5 +1,6 @@
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
+import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -412,6 +413,13 @@ describe('socket.js — initSocket', () => {
   // media-job cancellation bridge (#1791): mediaJobEvents 'canceled' → a
   // generationId-keyed *-gen:canceled broadcast so stuck render spinners clear.
   // ===========================================================================
+  it('broadcasts bounded queue and checkpoint invalidations', () => {
+    mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
+    trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
+    expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);
+    expect(io.emitted).toContainEqual(['training:checkpoints:changed', { runId: 'example-run' }]);
+  });
+
   it('bridges a canceled image job to image-gen:canceled keyed by generationId', () => {
     mediaJobEvents.emit('canceled', { id: 'job-xyz', kind: 'image' });
     expect(io.emitted).toContainEqual(['image-gen:canceled', { generationId: 'job-xyz' }]);

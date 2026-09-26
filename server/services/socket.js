@@ -21,6 +21,7 @@ import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
+import { trainingEvents } from './loraTraining/events.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
@@ -759,6 +760,13 @@ function setupMediaGenEventForwarding() {
       : kind === 'image' ? 'image-gen'
         : kind === 'audio' ? 'audio-gen'
           : null;
+
+  mediaJobEvents.on('changed', () => {
+    ioInstance?.emit('media-jobs:changed', {});
+  });
+  trainingEvents.on('checkpoints:changed', ({ runId }) => {
+    ioInstance?.emit('training:checkpoints:changed', { runId });
+  });
 
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
   // `generationId` (#1791). The internal gen modules emit started/progress/

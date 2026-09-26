@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
@@ -14,9 +14,8 @@ import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
   resolveI2vReferenceStrength, runtimeSupportsI2vReferenceMode,
 } from '../../lib/videoReferenceModes';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import useMounted from '../../hooks/useMounted';
 import { formatTimeOfDaySeconds } from '../../utils/formatters';
 import { getVideoGenStatus } from '../../services/apiImageVideo.js';
 import { listLorasFull } from '../../services/api';
@@ -33,6 +32,9 @@ import {
 import { isDeliveryVideoModel } from '../../lib/videoFinish';
 import { loraFamilyOf, videoLoraFamily } from '../../lib/runnerFamilies';
 import LoraPicker from '../imageGen/LoraPicker';
+
+const QUEUE_EVENTS = ['media-jobs:changed'];
+const CHECKPOINT_EVENTS = ['training:checkpoints:changed'];
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -132,35 +134,26 @@ function modelLabel(params, renderer) {
 // Completed jobs are excluded from the recent reel — those render as preview
 // cards on the gen page already, so listing them here is duplicate noise.
 export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' }) {
-  const [jobs, setJobs] = useState([]);
-  const [holds, setHolds] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [hasSnapshot, setHasSnapshot] = useState(false);
-  const [loadError, setLoadError] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
   const [resumingHold, setResumingHold] = useState(null);
-
-  const fetchJobs = useCallback(async () => {
-    const outcome = await Promise.all([
+  const { data, loading, error, refetch: fetchJobs, updateData } = useSocketResource(async () => {
+    const [jobs, holds] = await Promise.all([
       listQueueMediaJobs({ ...(kind ? { kind } : {}), limit: recentLimit }),
       !kind || kind === 'video' ? listMediaVideoHolds() : [],
-    ]).then(
-      (value) => ({ value }),
-      () => ({ error: true }),
-    );
-    if (outcome.error || !outcome.value.every(Array.isArray)) {
-      setLoadError(true);
-      setLoading(false);
-      return;
-    }
-    setJobs(outcome.value[0]);
-    setHolds(outcome.value[1]);
-    setHasSnapshot(true);
-    setLoadError(false);
-    setLoading(false);
-  }, [kind, recentLimit]);
-
-  useAutoRefetch(fetchJobs, 3000, { pollOnly: true });
+    ]);
+    if (!Array.isArray(jobs) || !Array.isArray(holds)) throw new Error('Invalid queue snapshot');
+    return { jobs, holds };
+  }, { events: QUEUE_EVENTS, resourceKey: JSON.stringify([kind, recentLimit]) });
+  const jobs = data?.jobs ?? [];
+  const holds = data?.holds ?? [];
+  const hasSnapshot = data !== null;
+  const loadError = !!error;
+  const setJobs = (updater) => updateData(previous => ({
+    jobs: updater(previous?.jobs ?? []), holds: previous?.holds ?? [],
+  }));
+  const setHolds = (updater) => updateData(previous => ({
+    jobs: previous?.jobs ?? [], holds: updater(previous?.holds ?? []),
+  }));
 
   const handleCancel = (id) => cancelMediaJob(id, { silent: true })
     .then(() => {
@@ -209,7 +202,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       toast.success(`Re-queued as ${jobId.slice(0, 8)}${overrides ? ' (edited)' : ''}`);
       // Optimistic: drop the original failed/canceled row immediately. The
       // server's retry endpoint already prunes it from the archive, but the
-      // next 3s poll would otherwise leave the stale row + button visible.
+      // next event read would otherwise leave the stale row + button visible.
       setJobs((prev) => prev.filter((j) => j.id !== id));
       fetchJobs();
     })
@@ -250,7 +243,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     cancelQueuedMediaJobs(kind ? { kind } : {}, { silent: true })
       .then(({ canceled }) => {
         // Optimistic flip: queued → canceled (running jobs stay untouched).
-        // The next 3s poll will reconcile if anything raced through.
+        // The queue change event reconciles anything that raced through.
         setJobs((prev) => prev.map((j) => (j.status === 'queued' ? { ...j, status: 'canceled' } : j)));
         toast.success(`Cleared ${canceled} queued job${canceled === 1 ? '' : 's'}`);
       })
@@ -391,27 +384,19 @@ function trainingSummary(params) {
 // plus the latest sample thumbnails. The media-job record carries no loss /
 // sample data, so fetch the run's checkpoint list (step + loss + previewUrl).
 // Re-fetches while the run is live so the curve grows as checkpoints land.
-function TrainingJobDetail({ runId, status }) {
-  const [checkpoints, setCheckpoints] = useState(null); // null = loading; [] = none yet
-  const mountedRef = useMounted();
-
-  const load = useCallback(() => {
-    listLoraTrainingCheckpoints(runId)
-      .then((res) => {
-        if (mountedRef.current) setCheckpoints(Array.isArray(res?.checkpoints) ? res.checkpoints : []);
-      })
-      .catch(() => { if (mountedRef.current) setCheckpoints([]); });
-  }, [runId]);
-
-  useEffect(() => { load(); }, [load]);
-  // Poll only while the run is live — a terminal run's checkpoints are fixed.
-  // `immediate: false` because the effect above already owns the first load.
-  useAutoRefetch(load, 5000, {
-    enabled: status === 'running' || status === 'queued',
-    immediate: false,
-    pollOnly: true,
+function TrainingJobDetail({ runId }) {
+  const { data: checkpoints, error } = useSocketResource(async () => {
+    const res = await listLoraTrainingCheckpoints(runId);
+    return Array.isArray(res?.checkpoints) ? res.checkpoints : [];
+  }, {
+    events: CHECKPOINT_EVENTS,
+    resourceKey: runId,
+    matchesEvent: event => event?.runId === runId,
   });
 
+  if (error && checkpoints === null) {
+    return <div className="mt-2 text-[11px] text-port-warning">Checkpoints unavailable.</div>;
+  }
   if (checkpoints === null) {
     return <div className="mt-2 text-[11px] text-port-text-muted">Loading checkpoints…</div>;
   }

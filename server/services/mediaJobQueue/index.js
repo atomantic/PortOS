@@ -460,8 +460,16 @@ let persistBlocked = false;
 function persist() {
   // Blocked: nothing is written, but callers awaiting durability (enqueueJob)
   // must not inherit a stale rejection from a write that predates the latch.
-  if (persistBlocked) return persistChain.catch(() => {});
-  persistChain = persistChain.then(persistImpl, persistImpl);
+  if (persistBlocked) {
+    mediaJobEvents.emit('changed', {});
+    return persistChain.catch(() => {});
+  }
+  // Every queue mutation, including holds, deletion and debounced progress,
+  // converges here. Invalidate after the write settles so readers see the final
+  // in-memory state even when persistence is unavailable.
+  persistChain = persistChain.then(persistImpl, persistImpl).finally(() => {
+    mediaJobEvents.emit('changed', {});
+  });
   return persistChain;
 }
 async function persistImpl() {

@@ -167,6 +167,16 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       additionalProperties: false,
     },
   }),
+  'media-jobs:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'training:checkpoints:changed': {
+    direction: 'server-to-client',
+    summary: 'Training checkpoints or samples were persisted; reread this run.',
+    payloadSchema: { type: 'object', properties: { runId: { type: 'string' } }, required: ['runId'], additionalProperties: false },
+  },
   'logs:subscribe': input(logsSubscribeSchema, 'Subscribe to a bounded process-log tail.'),
   'logs:unsubscribe': input(logsUnsubscribeSchema, 'Release one process-log subscription or all legacy subscriptions.'),
   'processes:changed': Object.freeze({

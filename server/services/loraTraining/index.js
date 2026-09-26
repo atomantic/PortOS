@@ -736,7 +736,9 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
         ...(flushing.checkpoints ? { checkpoints: dedupeCheckpointsByStep([...current.artifacts.checkpoints, ...flushing.checkpoints]) } : {}),
         ...(flushing.samples ? { samples: [...new Set([...current.artifacts.samples, ...flushing.samples])] } : {}),
       },
-    })).catch((err) => console.error(`❌ training [${shortId(jobId)}] progress persist failed: ${err?.message}`));
+    })).then(() => {
+      if (flushing.checkpoints || flushing.samples) trainingEvents.emit('checkpoints:changed', { runId });
+    }).catch((err) => console.error(`❌ training [${shortId(jobId)}] progress persist failed: ${err?.message}`));
   };
   // Checkpoints/samples accumulate as arrays so two that land in one debounce
   // window (common in the final post-exit scan) both survive — a single-value
@@ -1119,6 +1121,7 @@ export async function promoteCheckpoint(runId, step) {
       autoSelectedCheckpoint: false,
     },
   }));
+  trainingEvents.emit('checkpoints:changed', { runId });
   await flipDatasetAfterRun(run, { trained: true, loraFilename: filename });
   console.log(`📌 training [${shortId(runId)}] promoted checkpoint step ${step} → ${filename}`);
   // If the promoted checkpoint had no preview (its step didn't land on the
@@ -1201,6 +1204,7 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
     return { ...current, artifacts: { ...current.artifacts, samples: [...samples, name] } };
   });
   trainingEvents.emit('checkpoint-preview', { generationId: run.jobId || runId, runId, step });
+  trainingEvents.emit('checkpoints:changed', { runId });
   console.log(`🖼️ training [${shortId(runId)}] preview attached for step ${step}`);
 }
 
