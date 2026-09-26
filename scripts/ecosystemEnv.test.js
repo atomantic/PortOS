@@ -65,7 +65,7 @@ function loadConfig(envContent, overrideEnv = {}) {
 
 // Clear any real PG* vars the host shell/CI runner might have exported, so
 // the "neither set" cases actually exercise the default branch.
-const PG_KEYS = ['PGPASSWORD', 'PGUSER', 'PGDATABASE', 'PGHOST', 'PGPORT', 'PGPORT_DOCKER', 'PGMODE'];
+const PG_KEYS = ['PGPASSWORD', 'PGUSER', 'PGDATABASE', 'PGHOST', 'PGPORT', 'PGPORT_DOCKER', 'PGMODE', 'PORTOS_NATIVE_PGPORT'];
 const clearedPgEnv = Object.fromEntries(PG_KEYS.map((k) => [k, undefined]));
 
 describe('ecosystem.config.cjs PostgreSQL env', () => {
@@ -100,6 +100,23 @@ describe('ecosystem.config.cjs PostgreSQL env', () => {
     const native = loadConfig('PGMODE=native\n', clearedPgEnv);
     expect(docker.apps.find((a) => a.name === 'portos-server').env.PGPORT).toBe(5561);
     expect(native.apps.find((a) => a.name === 'portos-server').env.PGPORT).toBe(5432);
+  });
+
+  it.each(['portos-server', 'portos-cos'])('preserves both endpoints when reloaded from %s across a mode change', (name) => {
+    const saved = 'PGMODE=docker\nPGPORT=5433\nPGPORT_DOCKER=5570\n';
+    const initial = loadConfig(saved, clearedPgEnv);
+    const inherited = { ...clearedPgEnv, ...initial.apps.find(app => app.name === name).env };
+    expect(inherited.PGPORT).toBe(5570);
+    const reloaded = loadConfig(saved, inherited);
+    expect(reloaded.DATABASE_ENDPOINTS).toEqual(initial.DATABASE_ENDPOINTS);
+    const switched = loadConfig(saved.replace('docker', 'native'), inherited);
+    expect(switched.DATABASE_ENDPOINTS).toEqual(initial.DATABASE_ENDPOINTS);
+    expect(switched.apps.find(app => app.name === name).env.PGPORT).toBe(5433);
+    const returned = loadConfig(saved, {
+      ...clearedPgEnv, ...switched.apps.find(app => app.name === name).env,
+    });
+    expect(returned.DATABASE_ENDPOINTS).toEqual(initial.DATABASE_ENDPOINTS);
+    expect(returned.apps.find(app => app.name === name).env.PGPORT).toBe(5570);
   });
 
   it('forwards PGUSER/PGDATABASE from .env to portos-server, keeping the portos default otherwise', () => {

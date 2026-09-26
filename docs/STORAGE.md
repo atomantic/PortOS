@@ -96,6 +96,21 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 ---
 
+### Database endpoints in managed processes
+
+The ecosystem resolves native `PGPORT` and Docker `PGPORT_DOCKER` from the
+launching environment, then `.env`, then their defaults. It passes `PGPORT`
+to the server and CoS runner as the **active pool port**. It also passes the
+resolved native port as internal `PORTOS_NATIVE_PGPORT` and the resolved Docker
+port as `PGPORT_DOCKER`. Child maintenance/configuration processes preserve
+those backend identities when reloading the ecosystem or preparing native
+setup, even when the parent's active pool is Docker. Do not put the internal
+variable in `.env`; configure the native port with `PGPORT` in the ordinary
+launching shell or `.env`. Inherited endpoint identity takes precedence over
+a later file edit: restart from the intended launch environment to apply changed
+connection settings. A coordinator must still compare saved configuration,
+recorded endpoints, and the running pool before cutover.
+
 ### Database maintenance journal
 
 `data/database-maintenance/operation.json` is `file-primary`, machine-local recovery state: it must be readable before PostgreSQL, including while either backend is unavailable. Its enclosing directory is the admission fence. The versioned record contains an operation UUID, accepted stage, timestamp, and explicit source/target connection identities; it contains no password, token, or application records. It is never federated and has no reference seed. Missing state is idle; an incomplete, malformed, unreadable, or newer-version operation stays fenced. No install migration is needed for an initially absent operation.

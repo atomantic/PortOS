@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
+import { runInNewContext } from 'node:vm';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -67,5 +68,22 @@ describe('setup-db docker-port resolver (success log accuracy)', () => {
   it('setup-db.js interpolates the resolved docker port, not a hardcoded 5561', () => {
     expect(setupDbSrc).toContain('PostgreSQL ready on port ${PG_PORT_DOCKER}');
     expect(setupDbSrc).not.toContain("'✅ PostgreSQL ready on port 5561'");
+  });
+});
+
+describe('native setup inherited endpoint', () => {
+  it('builds native subprocess settings from native identity, not the active Docker port', () => {
+    // Execute the real setup configuration boundary without starting its menu,
+    // probing PostgreSQL, or loading the install's .env.
+    const start = setupDbSrc.indexOf('const envVar =');
+    const end = setupDbSrc.indexOf('function getMode()');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const configure = (env) => runInNewContext(
+      setupDbSrc.slice(start, end) + '\nPG_CHILD_ENV',
+      { process: { env }, envFile: {}, parseNativePort, parseDockerPort },
+    );
+    expect(configure({ PGPORT: '5570', PORTOS_NATIVE_PGPORT: '5433' }).PGPORT).toBe('5433');
+    expect(configure({ PGPORT: '5434' }).PGPORT).toBe('5434');
   });
 });
