@@ -1,3 +1,4 @@
+import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/providerModePairing.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
@@ -319,6 +320,14 @@ export function createPortOSProviderRoutes(aiToolkit) {
 
   const providerService = aiToolkit.services.providers;
   const providerStatusService = aiToolkit.services.providerStatus;
+  router.use(observeModelMutations('provider-readiness', 'provider-status', 'codex-account'));
+  const readinessObservation = observeModelResource('provider-readiness', async () => {
+    const data = await providerService.getAllProviders();
+    return { readiness: await getProviderReadinessMap(data.providers) };
+  });
+  const accountObservation = observeModelResource('codex-account', async ({ fresh }) => ({
+    readiness: await getCodexAccountReadiness({ fresh }),
+  }));
 
   // Sanitized GET routes — intercept toolkit GET endpoints to strip secrets
   /**
@@ -681,8 +690,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       res.json({ readiness: provider ? await getProviderReadinessMap([provider]) : {} });
       return;
     }
-    const data = await providerService.getAllProviders();
-    res.json({ readiness: await getProviderReadinessMap(data.providers) });
+    res.json(await readinessObservation.read());
   }));
 
   /**
@@ -777,7 +785,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * no account id, no email, no credential path.
    */
   router.get('/codex/account', asyncHandler(async (req, res) => {
-    res.json({ readiness: await getCodexAccountReadiness({ fresh: req.query.fresh === '1' }) });
+    res.json(await accountObservation.read({ fresh: req.query.fresh === '1' }));
   }));
 
   /**
@@ -1065,17 +1073,20 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(await clearModelPin(pinId));
   }));
 
-  router.get('/status', asyncHandler(async (req, res) => {
+  const statusObservation = observeModelResource('provider-status', async () => {
     const statuses = providerStatusService.getAllStatuses();
     // Enrich with time until recovery
-    const enriched = { ...statuses };
+    const enriched = { ...statuses, providers: { ...statuses.providers } };
     for (const [providerId, status] of Object.entries(enriched.providers)) {
       enriched.providers[providerId] = {
         ...presentProviderStatus(status),
         timeUntilRecovery: providerStatusService.getTimeUntilRecovery(providerId)
       };
     }
-    res.json(enriched);
+    return enriched;
+  });
+  router.get('/status', asyncHandler(async (_req, res) => {
+    res.json(await statusObservation.read());
   }));
 
   router.get('/:id/status', asyncHandler(async (req, res) => {

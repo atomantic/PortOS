@@ -1,3 +1,4 @@
+import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
@@ -219,6 +220,7 @@ function registerLifecycleHandlers(socket, _io) {
 const SOCKET_HANDLER_REGISTRARS = [
   registerAuthHandlers,
   registerReadinessSocket,
+  registerModelObservationSocket,
   registerBrowserStatusSocket,
   registerVoiceHandlers,
   registerBuildHandlers,
