@@ -524,11 +524,20 @@ cmd_setup_native() {
   info "Coordinated backend migration is not yet available. Keep using the current backend."
 }
 
+# Scope inherited libpq endpoint overrides out of explicit transfers. In
+# particular PGHOSTADDR takes precedence over -h's network destination.
+run_explicit_pg() (
+  unset PGHOSTADDR PGSERVICE PGSERVICEFILE
+  local binary="$1"
+  shift
+  PGPASSWORD="$PGPASSWORD" "$binary" -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+)
+
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
 run_psql() {
   if [ "$EXPLICIT_ENDPOINT" = true ]; then
     # Never fall back to container-local psql: that is a different endpoint.
-    PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+    run_explicit_pg psql "$@"
     return $?
   fi
   local mode
@@ -546,7 +555,7 @@ run_psql() {
 # Run pg_dump, preferring Docker exec in Docker mode to avoid version mismatch
 run_pg_dump() {
   if [ "$EXPLICIT_ENDPOINT" = true ]; then
-    PGPASSWORD="$PGPASSWORD" pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+    run_explicit_pg pg_dump "$@"
     return $?
   fi
   local mode

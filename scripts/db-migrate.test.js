@@ -40,6 +40,7 @@ exit 0
 
 const PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
+echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}" >> "$STUB_LOG"
 case "$*" in *--single-transaction*) cat >> "$IMPORT_LOG"; exit "\${IMPORT_EXIT:-0}" ;; esac
 case "$*" in *count*) echo 3 ;; esac
 exit 0
@@ -47,6 +48,7 @@ exit 0
 
 const PG_DUMP_STUB = `#!/bin/sh
 echo "pg_dump $*" >> "$STUB_LOG"
+echo "endpoint-env \${PGHOSTADDR-unset}|\${PGSERVICE-unset}|\${PGSERVICEFILE-unset}" >> "$STUB_LOG"
 case "$DUMP_MODE" in
   partial) printf 'DROP TABLE example_record;\\n'; exit 1 ;;
   empty) exit 1 ;;
@@ -152,19 +154,22 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     writeFileSync(envFile, `PGMODE=${mode}\n`);
     const source = ['--endpoint', 'source.example.invalid', '6543', 'example_user', 'example source'];
     const target = ['--endpoint', 'target.example.invalid', '6544', 'example_user', 'example target'];
-    const exported = run(['export', ...source, 'explicit'], 'ok', { PGPORT: '9999' });
+    const inherited = { PGPORT: '9999', PGHOSTADDR: '192.0.2.10', PGSERVICE: 'other', PGSERVICEFILE: '/example/service.conf' };
+    const exported = run(['export', ...source, 'explicit'], 'ok', inherited);
     expect(exported.status, exported.stderr).toBe(0);
     const dump = join(dumpDir, 'portos-explicit.sql');
     expect(exported.stdout.trim()).toBe(dump);
     expect(readFileSync(dump, 'utf8')).toBe(FULL_DUMP);
     writeFileSync(dump, `\\restrict example\nSET transaction_timeout = 0;\n${FULL_DUMP}\\unrestrict example\n`);
-    const imported = run(['import', ...target, dump], 'ok');
+    const imported = run(['import', ...target, dump], 'ok', inherited);
     expect(imported.status, imported.stderr).toBe(0);
     expect(readFileSync(importLog, 'utf8')).toBe(FULL_DUMP);
     const log = readFileSync(stubLog, 'utf8');
     expect(log).toContain('pg_dump -h source.example.invalid -p 6543 -U example_user -d example source');
     expect(log).toContain('psql -h target.example.invalid -p 6544 -U example_user -d example target -v ON_ERROR_STOP=1 --single-transaction');
     expect(log).not.toMatch(/docker|SOURCE_STOP|test-only/);
+    expect(log.match(/endpoint-env unset\|unset\|unset/g)).toHaveLength(2);
+    expect(log).not.toContain('192.0.2.10');
     expect(readFileSync(envFile, 'utf8')).toBe(`PGMODE=${mode}\n`);
   });
 
