@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Download } from 'lucide-react';
+import { Download, Images, Upload, X } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
+import FilePickerButton from '../ui/FilePickerButton';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -10,8 +13,11 @@ import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
 import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
+import { uploadFile } from '../../services/apiMedia';
 import { trackAudioUrl } from '../../services/apiTracks';
+import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../../utils/fileUpload';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
+import toast from '../ui/Toast';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
@@ -25,6 +31,11 @@ const FORMATS = [
   ['square', 'Square 1:1'],
 ];
 const formatLabel = format => FORMATS.find(([value]) => value === format)?.[1] ?? format;
+// A style-reference upload is capped server-side to what `detectImageFormat`
+// recognizes (PNG/JPEG/WEBP/GIF) or a video ffmpeg can decode — matching the
+// picker's `accept` to that keeps the OS file dialog from offering a format
+// (SVG, HEIC) that would upload fine and then 400 when the run is queued.
+const REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov,.m4v';
 const MOTION_STYLES = [
   ['walkthrough', 'Product walkthrough', 'A paced tour of the key flow, a cursor driving real actions on springs.'],
   ['showreel', 'Motion-graphics showreel', 'Beat-cut kinetic type, color-field swaps and generative shapes around the key flow.'],
@@ -48,6 +59,14 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [musicMethod, setMusicMethod] = useState('agent');
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
+  // A style reference (#8961): either an existing Media History image/video
+  // (`source: 'gallery'`) or a fresh upload into the generic uploads store
+  // (`source: 'upload'`) — kept out of the gallery so a one-off reference
+  // doesn't clutter it. `label` and `previewUrl` are display-only.
+  const [reference, setReference] = useState(null);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [videoPickerOpen, setVideoPickerOpen] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
   const [error, setError] = useState('');
   const submitting = useRef(false);
   const picker = useRunWithPicker();
@@ -65,6 +84,28 @@ function LaunchVideoForm({ appId, onQueued }) {
   const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
   const consultSkills = motionSkills && installedSkills.length > 0;
 
+  const handleReferenceUpload = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    // Matches REFERENCE_ACCEPT: PNG/JPEG/WEBP/GIF for an image (what the
+    // server's magic-byte sniff recognizes) or an MP4/WebM/QuickTime/M4V
+    // container for a video. `accept` only filters the OS picker, not a
+    // drag-drop, so this is the real gate against a format that would
+    // otherwise upload fine and then 400 when the run is queued.
+    const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+    const kind = VIDEO_TYPES.includes(file.type) ? 'video' : IMAGE_TYPES.includes(file.type) ? 'image' : null;
+    if (!kind) { toast.error('Choose a PNG, JPEG, WEBP, GIF, MP4, WebM, MOV or M4V file'); return; }
+    if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) { toast.error(`File is too large (${formatBytes(file.size)}). Max ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)}.`); return; }
+    setReferenceUploading(true);
+    const base64 = await readFileAsBase64(file).catch(() => null);
+    if (!base64) { setReferenceUploading(false); toast.error(`Failed to read ${file.name}`); return; }
+    const saved = await uploadFile(base64, file.name, { silent: true }).catch(err => { toast.error(err?.message || 'Upload failed'); return null; });
+    setReferenceUploading(false);
+    if (!saved?.filename) return;
+    setReference({ kind, source: 'upload', filename: saved.filename, label: file.name, previewUrl: null });
+  };
+
   const [submit, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
@@ -73,6 +114,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       tone, direction, ...(formats.length === 1 ? { format: formats[0] } : { formats }), targetDurationSec: duration, motionStyle, critiqueRounds,
       ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
+      ...(reference ? { styleReference: { kind: reference.kind, source: reference.source, filename: reference.filename } } : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
   });
@@ -85,6 +127,31 @@ function LaunchVideoForm({ appId, onQueued }) {
     </section>
     <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
+    <fieldset className="space-y-2">
+      <legend>Style reference (optional)</legend>
+      <p className="text-sm text-port-text-muted">A frame, a short clip, or a Media History image or video. The agent studies its palette, type, shot lengths, transitions, camera and texture before writing a style guide — never its content, logos or characters.</p>
+      {reference ? (
+        <div className="flex items-center gap-2 rounded border border-port-border p-2">
+          {reference.previewUrl
+            ? <img src={reference.previewUrl} alt="" className="h-12 w-12 rounded object-cover" />
+            : <div className="flex h-12 w-12 items-center justify-center rounded bg-port-bg text-xs text-port-text-muted">{reference.kind === 'video' ? 'Video' : 'Image'}</div>}
+          <span className="min-w-0 flex-1 truncate text-sm text-port-text">{reference.label}</span>
+          <button type="button" aria-label="Clear style reference" onClick={() => setReference(null)} className="text-port-text-muted hover:text-port-error"><X size={16} /></button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setImagePickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick an image…</button>
+          <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setVideoPickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick a video…</button>
+          <FilePickerButton accept={REFERENCE_ACCEPT} onChange={handleReferenceUpload} disabled={referenceUploading} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent">
+            <Upload size={14} aria-hidden="true" /> {referenceUploading ? 'Uploading…' : 'Upload a reference…'}
+          </FilePickerButton>
+        </div>
+      )}
+      <GalleryImagePicker open={imagePickerOpen} onClose={() => setImagePickerOpen(false)}
+        onSelect={item => setReference({ kind: 'image', source: 'gallery', filename: item.filename, label: item.filename, previewUrl: item.thumbnailUrl || item.previewUrl })} />
+      <GalleryVideoPicker open={videoPickerOpen} onClose={() => setVideoPickerOpen(false)}
+        onSelect={item => setReference({ kind: 'video', source: 'gallery', filename: item.filename, label: item.filename, previewUrl: item.previewUrl })} />
+    </fieldset>
     <fieldset>
       <legend>Formats</legend>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -148,7 +215,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       </ul>}
     </fieldset>}
     <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-    <button type="submit" className={buttonClass} disabled={running || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+    <button type="submit" className={buttonClass} disabled={running || referenceUploading || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
   </form>;
 }
 

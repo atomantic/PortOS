@@ -2,7 +2,7 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { findFfmpeg, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
 
 // Size the viewport for this format, then let the composition reframe itself
 // (#8960) before any seek captures it. A composition without a layout hook
@@ -146,6 +146,34 @@ export async function encodeContactSheet(page, contract, outputPath, { times, si
       await new Promise(resolve => proc.once('close', resolve));
     }
   }
+}
+
+/**
+ * Sample a REFERENCE video file (not a browser composition) every `everySec`
+ * into the same phone-sized, six-across contact sheet as `encodeContactSheet`
+ * (#8961), so a launch-video agent that cannot play video can still study one
+ * as a single image. Reuses `proofTimes`'s uniform-step/frame-cap math so a
+ * long reference degrades to a wider step rather than an unreadably tall sheet.
+ * Throws when ffmpeg is missing or the file has no readable duration; the
+ * caller treats a style reference as a hard input, not a best-effort extra.
+ */
+export async function encodeReferenceContactSheet(videoPath, outputPath, { everySec = 0.5 } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  const durationSec = await probeVideoDuration(videoPath);
+  if (!durationSec) throw new Error('Could not read the style reference video duration');
+  const times = proofTimes(durationSec, everySec);
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  const step = times.length > 1 ? times[1] - times[0] : durationSec;
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
+      `fps=1/${step},scale=360:-2,tile=${columns}x${rows}:padding=4:color=black`,
+      '-frames:v', '1', '-y', outputPath],
+  });
+  if (!result.ok) throw new Error(`Style reference contact sheet failed: ${result.reason}`);
+  return { columns, rows, times };
 }
 
 // Source remains subject to the composition sandbox and launch privacy gate;
