@@ -9,7 +9,7 @@ const fail = message => { throw new ServerError(message, { status: 400, code: 'L
 const safeName = name => redactPii(scrubSecretTokens(name));
 
 /** Check the exact in-memory assets the browser will consume, before any script runs. */
-export function validateLaunchVideoAssets(assets, options) {
+export function validateLaunchVideoAssets(assets, options, compositionMusic) {
   const { targetDurationSec } = validateRequest(launchVideoOptionsSchema, options);
   const texts = new Map();
   for (const [name, bytes] of assets) {
@@ -23,7 +23,7 @@ export function validateLaunchVideoAssets(assets, options) {
       if (bytes.subarray(0, 4).toString('ascii') !== (type === '.woff' ? 'wOFF' : 'wOF2')) fail(`Invalid font: ${filename}`);
       continue;
     }
-    if (name === '/soundtrack.wav') {
+    if (name === '/soundtrack.wav' && compositionMusic === 'soundtrack.wav') {
       // Reject metadata chunks and non-PCM containers, including disguised playlists.
       if (bytes.length < 48 || bytes.toString('ascii', 0, 4) !== 'RIFF'
         || bytes.readUInt32LE(4) !== bytes.length - 8 || bytes.toString('ascii', 8, 16) !== 'WAVEfmt '

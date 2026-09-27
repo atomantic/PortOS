@@ -57,7 +57,7 @@ export async function renderComposition({ jobId, ...input }) {
     }
     const needsLaunchGate = launchVideo || directory.split('/')[0] === 'launch-videos';
     page = await openComposition(directory, { signal, validateAssets: assets => {
-      if (needsLaunchGate) { launchPlan = validateLaunchVideoAssets(assets, launchVideo); launchAssets = assets; }
+      if (needsLaunchGate) { launchPlan = validateLaunchVideoAssets(assets, launchVideo, compositionMusic); launchAssets = assets; }
       if (compositionMusic) {
         if (!needsLaunchGate) throw new Error('compositionMusic requires a launch video');
         if (!assets.has('/soundtrack.wav')) throw new Error('compositionMusic is missing soundtrack.wav');
@@ -121,7 +121,7 @@ export async function renderComposition({ jobId, ...input }) {
   } catch (error) {
     failure = error;
   } finally {
-    await page?.close();
+    await page?.close().catch(error => { failure ??= error; });
     if (audioTemp) await rm(audioTemp, { recursive: true, force: true });
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});

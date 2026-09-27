@@ -2483,7 +2483,8 @@ export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-}).refine(value => !(value.musicTrack && value.compositionMusic), 'Choose library or composition music, not both');
+}).refine(value => !(value.musicTrack && value.compositionMusic), 'Choose library or composition music, not both')
+  .refine(value => !value.compositionMusic || value.launchVideo, 'compositionMusic requires launchVideo options');
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),

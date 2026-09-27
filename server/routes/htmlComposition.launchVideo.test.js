@@ -95,6 +95,20 @@ describe('launch-video render admission', () => {
     expect((await submit({ launchVideo: undefined })).status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
+  it('admits canonical PCM only when composition music is explicitly selected', async () => {
+    const wav = Buffer.alloc(48);
+    wav.write('RIFF'); wav.writeUInt32LE(40, 4); wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(44100, 24); wav.writeUInt32LE(88200, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(4, 40);
+    await put('soundtrack.wav', wav);
+    expect((await submit()).status).toBe(400);
+    expect((await submit({ compositionMusic: 'soundtrack.wav', directory: 'compositions/example', launchVideo: undefined })).status).toBe(400);
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect((await submit({ compositionMusic: 'soundtrack.wav' })).status).toBe(202);
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
   it('rejects missing, malformed and conflicting composition soundtracks before enqueue', async () => {
     expect((await submit({ compositionMusic: 'soundtrack.wav' })).status).toBe(400);
     await put('soundtrack.wav', Buffer.from('not PCM audio'));

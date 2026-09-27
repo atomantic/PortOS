@@ -126,7 +126,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect(pixel[2]).toBeLessThan(30);
     // Exclusive delivery cannot replace an earlier successful run on retry.
     const retryId = randomUUID();
-    await expect(renderComposition({ ...input, jobId: retryId, launchVideo: { targetDurationSec: 15, appId: 'example', runId } })).rejects.toThrow(/EEXIST/);
+    await expect(renderComposition({ ...input, jobId: retryId, compositionMusic: 'soundtrack.wav', launchVideo: { targetDurationSec: 15, appId: 'example', runId } })).rejects.toThrow(/EEXIST/);
     expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
     expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
     expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
