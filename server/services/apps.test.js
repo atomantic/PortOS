@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('fs/promises', () => ({
@@ -438,5 +439,39 @@ describe('__PORTOS_ROOT__ placeholder expansion on load', () => {
     const persisted = atomicWrite.mock.calls.at(-1)[1];
     expect(persisted.apps['other-app'].repoPath).toBe('/mock/root/../sibling');
     expect(persisted.apps['other-app'].appIconPath).toBe('/mock/root/icon.png');
+  });
+});
+
+
+describe('PortOS production process manifest', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it.each([false, true])('matches production startup and repairs legacy manifests (existing: %s)', async (existing) => {
+    const seed = JSON.parse(readFileSync(new URL('../../data.reference/apps.json', import.meta.url), 'utf8')).apps[PORTOS_APP_ID];
+    const scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts;
+    const expectedNames = scripts.start.match(/--only "([^"]+)"/)[1].split(',');
+    readJSONFile.mockResolvedValue({ apps: existing ? {
+      [PORTOS_APP_ID]: {
+        ...seed,
+        description: 'Custom description',
+        pm2ProcessNames: [...expectedNames, 'portos-ui'],
+        processes: [...seed.processes, { name: 'portos-ui', port: 5554 }],
+      },
+    } : {} });
+
+    const app = (await getAllApps()).find(({ id }) => id === PORTOS_APP_ID);
+    expect(app.pm2ProcessNames).toEqual(expectedNames);
+    expect(app.processes.map(({ name }) => name)).toEqual(expectedNames);
+    expect(app).toMatchObject({ uiPort: 5555, apiPort: 5555, devUiPort: 5554, startCommands: ['npm start'] });
+    expect(app.processes[0]).toMatchObject({ name: 'portos-server', port: 5555, ports: { api: 5555 } });
+    expect(seed.pm2ProcessNames).toEqual(expectedNames);
+    expect(seed.processes.map(({ name }) => name)).toEqual(expectedNames);
+    expect(seed).toMatchObject({ uiPort: app.uiPort, apiPort: app.apiPort, devUiPort: app.devUiPort, startCommands: app.startCommands, buildCommand: app.buildCommand });
+    expect(seed.processes[0]).toEqual(app.processes[0]);
+    if (existing) expect(app.description).toBe('Custom description');
+    expect(atomicWrite.mock.calls.at(-1)[1].apps[PORTOS_APP_ID].pm2ProcessNames).toEqual(expectedNames);
   });
 });
