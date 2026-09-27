@@ -68,6 +68,9 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
 export async function synthesizeCompositionMusic(page, durationSec) {
   const sampleRate = 24000;
   const length = Math.round(sampleRate * durationSec);
+  // browser.js evaluate -> send supplies a 30-second command deadline and
+  // rejects all pending commands on the render signal abort; index.js closes
+  // the disposable context in finally, including a never-settling score.
   const samples = await page.evaluate(`(async () => {
     const renderAudio = globalThis.portosComposition.renderAudio;
     if (typeof renderAudio !== 'function') throw new Error('portosComposition.renderAudio is required for synthesized music');
