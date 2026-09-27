@@ -11,7 +11,7 @@
 //   databaseCutoverHandshake + databaseBootFence against a pool configured
 //   from its environment, then records `server booted` (or `server refused`).
 import { appendFileSync, chmodSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn } from '../../lib/childProcess.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
