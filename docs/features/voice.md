@@ -72,8 +72,10 @@ alone never enables the route. A one-use receipt expires after two minutes, bind
 the measurement to the rendered profile revision, and saves its boundary, model
 revision and route decision together. Restarting the server or changing the
 profile requires a fresh benchmark. Playback rejection or timeout cannot qualify.
-The browser reports its own playback event; this is an operator measurement,
-not an attestation of another machine's audio output. No similarity score is
+The browser reports its own playback event; this is a trusted operator-reported
+measurement, not an attestation of another machine's audio output. The receipt
+binds the report to a current probe but cannot prove that a remote client played
+it. Qualification changes profile routing, not execution authority. No similarity score is
 invented, and passing this latency gate does not establish intelligibility or
 speaker identity.
 

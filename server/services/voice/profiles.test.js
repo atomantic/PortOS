@@ -270,7 +270,7 @@ describe('voice profile contract', () => {
     expect(saved.routes.interactive).toEqual(interactive);
     const [sql, args] = queryMock.mock.calls[0];
     expect(sql).toContain("(data->>'version')::int = $3");
-    expect(sql).toContain("COALESCE(data->'benchmark', '{}'::jsonb) || ($2::jsonb->'benchmark')");
+    expect(sql).toContain("COALESCE(NULLIF(data->'benchmark', 'null'::jsonb), '{}'::jsonb) || ($2::jsonb->'benchmark')");
     expect(JSON.parse(args[1]).benchmark).not.toHaveProperty('lines');
     expect(JSON.parse(args[1]).benchmark.interactiveMeasurement).toEqual(benchmark.interactiveMeasurement);
     expect(args[2]).toBe(PROFILE.version);

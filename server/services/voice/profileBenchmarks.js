@@ -98,7 +98,9 @@ export async function benchmarkProfileInteractive(profileId, { maxFirstAudioMs =
   return { benchmarkId, profileRevision: profile.version, audioBase64: result.wav.toString('base64') };
 }
 
-/** Save only a receipt for the probe actually played by the browser. */
+/** Save the operator-reported playback measurement for this rendered probe.
+ * The nonce binds revision/lifecycle, not an attestation of a remote audio device.
+ */
 export async function completeProfileInteractiveBenchmark(profileId, { benchmarkId, renderRequestLatencyMs, playbackStartupMs }) {
   const pending = playbackBenchmarks.get(benchmarkId);
   if (!pending || pending.profile.id !== profileId || pending.expiresAt <= performance.now()) {

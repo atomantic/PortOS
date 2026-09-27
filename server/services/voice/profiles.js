@@ -589,7 +589,7 @@ export async function saveProfileBenchmark(profile, benchmark, { interactive } =
          CASE WHEN $4::jsonb IS NULL THEN data || $2::jsonb
          ELSE jsonb_set(data || $2::jsonb, '{routes}',
            COALESCE(data->'routes', '{}'::jsonb) || jsonb_build_object('interactive', $4::jsonb)) END,
-         '{benchmark}', COALESCE(data->'benchmark', '{}'::jsonb) || ($2::jsonb->'benchmark')),
+         '{benchmark}', COALESCE(NULLIF(data->'benchmark', 'null'::jsonb), '{}'::jsonb) || ($2::jsonb->'benchmark')),
        updated_at = $5
      WHERE id = $1 AND (data->>'version')::int = $3
      RETURNING data`,
