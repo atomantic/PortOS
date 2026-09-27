@@ -500,6 +500,49 @@ describe('useVideoGenForm', () => {
     expect(result.current.modelId).toBe(H3.id);
   });
 
+  it('uses the new model native canvas before an image loads, then snaps its aspect without overriding custom sizes', async () => {
+    const pendingImages = [];
+    vi.stubGlobal('Image', class {
+      naturalWidth = 576;
+      naturalHeight = 1024;
+      constructor() { pendingImages.push(this); }
+    });
+    try {
+      const { result } = render({
+        models: [MLX, H3],
+        url: '/media/video?sourceImageFile=example-source.png',
+      });
+      await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+      const previousModelImage = pendingImages.at(-1);
+      act(() => result.current.handleModelChange(H3.id));
+      await waitFor(() => expect(result.current.buildGeneratePayload()).toMatchObject({
+        mode: 'image', width: 1344, height: 768,
+      }));
+
+      // A superseded source callback cannot restore the prior model canvas.
+      act(() => previousModelImage.onload());
+      expect(result.current.buildGeneratePayload()).toMatchObject({ width: 1344, height: 768 });
+      act(() => pendingImages.at(-1).onload());
+      expect(result.current.buildGeneratePayload()).toMatchObject({ width: 768, height: 1344 });
+      act(() => result.current.clearSourceImage());
+      expect(result.current.buildGeneratePayload()).toMatchObject({ width: 1344, height: 768 });
+      act(() => result.current.pickSourceImage('another-example-source.png'));
+
+      // Explicit size choice survives both a model switch and its late image load.
+      act(() => {
+        result.current.handleResolutionChange(576, 1024);
+        result.current.handleModelChange(MLX.id);
+      });
+      await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
+      act(() => result.current.handleModelChange(H3.id));
+      await waitFor(() => expect(result.current.modelId).toBe(H3.id));
+      act(() => pendingImages.at(-1).onload());
+      expect(result.current.buildGeneratePayload()).toMatchObject({ width: 576, height: 1024 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps the advisory last-frame note on a single-frame mlx_video runtime', async () => {
     const { result } = render({ models: [MLX, H3] });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
