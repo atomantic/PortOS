@@ -115,7 +115,13 @@ recorded endpoints, and the running pool before cutover.
 
 `data/database-maintenance/operation.json` is `file-primary`, machine-local recovery state: it must be readable before PostgreSQL, including while either backend is unavailable. Its enclosing directory is the admission fence. The versioned record contains an operation UUID, lifecycle stage, timestamp, and explicit source/target connection identities; it contains no password, token, or application records. It is never federated and has no reference seed. Missing state is idle; an incomplete, malformed, unreadable, or newer-version operation stays fenced. No install migration is needed for an initially absent operation.
 
-Coordinator ownership and cancellation share one exclusive durable claim. Once owned, an operation advances only through `accepted → quiescing → exporting → importing → committing → verifying → verified`; each transition requires the same operation, ownership token, and expected previous stage. Per-stage claims serialize even concurrent calls with the same token. Interrupted claims are never stolen on a timer or inferred PID death, and every stage (including `verified`) retains the admission fence. Stage names record coordinator progress; they do not independently prove quiescence, transfer, or healthy target startup. No lifecycle coordinator or ownership-recovery command is exposed yet. Verification-only server startup can read the recorded target through its actual pool at the `verifying` or `verified` stage; its bounded result is transient, creates no new store, and never advances the journal or reopens admission.
+Coordinator ownership and cancellation share one exclusive durable initial claim. Once owned, an operation advances only through `accepted → quiescing → exporting → importing → committing → verifying → verified`; each transition requires the same operation, current ownership token, and expected previous stage. Immutable stage publications tolerate a retry of the same transition. Every stage (including `verified`) retains the admission fence. Stage names record coordinator progress; they do not independently prove quiescence, transfer, or healthy target startup. Verification-only server startup can read the recorded target through its actual pool at the `verifying` or `verified` stage; its bounded result is transient, creates no new store, and never advances the journal or reopens admission.
+
+The journal also supplies an **internal ownership-recovery foundation**, not a callable transfer workflow. `reserveCoordinatorWorker(id, token)` atomically publishes a complete, one-use `worker-<token>/` directory bound to that operation and owner. A crash while preparing its binding leaves only an unpublished temporary directory, so the same owner can retry reservation. A future coordinator launches its worker through `spawnDetached` with this directory and `cleanup: false`. `recoverCoordinator(id, previousToken, recoveryToken)` accepts only the recorded operation and current token, at `accepted`, `quiescing`, `exporting`, or `importing`, after the detached supervisor has published a complete numeric `exit` receipt. The caller durably records its unique recovery token before attempting recovery. An immutable successor publication chooses exactly one winner across competing recoveries and revokes the old token; retrying that same recorded request returns its published token after a crash between publication and acknowledgement. A different claimant cannot recover or reuse the winner's token. A shared per-owner/per-stage decision publication serializes ownership handoff with stage transitions. Recovery completes an already-decided forward stage before choosing its successor; a predecessor that lost the decision cannot publish a new stage. Each successor reserves a new worker directory; old logs and completion evidence remain intact. Recovery preserves the source, target, operation ID, and stage. It does not treat an interrupted import as source success or advance to committing.
+
+There is deliberately no PID-death, elapsed-time, or force recovery. A launch interrupted before its supervisor records an exit stays fenced, even if its PID appears dead. A worker exit does **not** prove its descendants stopped: before any export or import, the future execution coordinator must inventory and stop/drain PM2 server and CoS processes, admitted spawns, and owned detached writers, refusing unknown state. It must retain the complete source dump and re-establish quiescence before retrying the same target transaction. Those execution and transfer steps remain tracked by #8850; verified target restart, saved-mode commit, and admission release remain #8851.
+
+For local diagnostics at any stage, run `node scripts/database-maintenance.mjs status`. An owned operation adds a bounded `coordinator` result: `unregistered` means no worker reservation; `awaiting-exit` means no supervisor completion proof (either running or interrupted); `exited` includes the supervisor exit code. Neither is a transfer-success verdict. Malformed ownership, binding, or exit records fail closed. Only an **unowned accepted** operation can use `node scripts/database-maintenance.mjs cancel <operation-id>` after checking saved source configuration. There is no operator recovery command for an owned/interrupted operation yet: preserve its journal, worker records, source, and any dump; do not delete markers or call `scripts/db.sh migrate` (still refused). No public lifecycle coordinator or ownership-recovery command is exposed by this foundation.
 
 A cancelled unowned accepted operation moves to `data/database-maintenance-cancelled/<operation-id>/` as local recovery evidence. These records remain filesystem-backed and included in backups; they are not a growing application collection. Restoring an active journal deliberately restores its fence: do not delete it merely to make startup succeed. See [database maintenance admission](BACKUP.md#database-maintenance-admission) for the operator contract and current limitations.
 
@@ -595,3 +601,40 @@ before manually retiring history.
 Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
 
 `passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.
+
+### CoS raw recording maintenance
+
+CoS historical `metadata.json`, prompts, parsed `output.txt`, feedback and history
+indexes have no automatic age expiry. `cosAgentIndex.pruneOldAgentArchives` is a
+compatibility no-op. Data Management → Chief of Staff → Recording cleanup offers
+verified gzip compression and separately opted-in deletion of **raw terminal
+recordings only**. Unknown files, parsed output, prompts and metadata are never
+removed by this maintenance. The separate explicit Delete/Clear history actions
+remain destructive; they are not storage maintenance.
+
+The existing machine-local CoS config owns `agentStorage` and a bounded
+`lastAgentStorageJob` audit. Defaults compress after seven days, with irreversible
+deletion off. Migration 416 adopts those defaults for existing config without
+converting any recording or overwriting user policy. While CoS is running, hourly maintenance handles
+at most 25 eligible runs; manual previews handle at most 1,000 per batch and
+expire after 15 minutes. Saving policy reconciles it immediately. No provider
+calls occur. A cancellation preserves the original until verified publication.
+
+`raw.txt.gz` is a lossless local asset alternative to `raw.txt`; a same-directory
+`raw-storage.json` is **file-primary asset lifecycle metadata**, inseparable from
+that archive's pin, checksum and disposition. It is not a new relational history
+store. A plain file wins if interrupted publication leaves both forms; a later
+maintenance pass verifies and converges them. History and learning consumers keep
+reading unchanged metadata/output/prompt files. The download endpoint serves the
+available raw or gzip asset without loading it into memory; deleted recordings
+return an explicit unavailable response. The flat active-run layout is excluded.
+
+Compression requires an old, completed, state-evicted, unpinned run with regular,
+unmodified artifacts and no preserved worktree or known live/resume/pipeline
+reference. Deletion additionally requires a retained task summary and nonempty
+parsed output. A stale preview is revalidated before publication/deletion. The
+raw sidecar and compressed asset stay machine-local; existing peer CoS sync
+continues its unchanged allowlist (`metadata.json`, `output.txt`, `prompt.txt`).
+Filesystem backups include both gzip assets and their sidecars, and restore keeps
+them readable without a conversion. Data Management's backup export keeps its
+originals and is distinct from space reclamation.

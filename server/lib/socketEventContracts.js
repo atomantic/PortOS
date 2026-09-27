@@ -143,6 +143,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate upcoming tasks after scheduler registration, cancellation or execution.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'cos:storage:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate CoS recording maintenance progress and policy.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'cos:agents:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate agent aggregates after deletion or cleanup.',

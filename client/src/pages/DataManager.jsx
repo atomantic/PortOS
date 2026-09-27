@@ -13,6 +13,7 @@ import useMounted from '../hooks/useMounted';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import DataTreemap from '../components/dataManager/DataTreemap';
+import CosStoragePanel from '../components/dataManager/CosStoragePanel';
 import DataSelectionPanel from '../components/dataManager/DataSelectionPanel';
 import { DATA_KINDS, DATA_KIND_ORDER, HATCH_STYLE, dataKindOf } from '../components/dataManager/dataKinds';
 
@@ -145,7 +146,7 @@ function SizeBar({ size, maxSize, color }) {
   );
 }
 
-function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, deletingItem, confirmingPurge, archiving, purging }) {
+function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, deletingItem, confirmingPurge, archiving, purging }) {
   // Directories with no CATEGORIES entry come back with `classified: false` and
   // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
   // the row reads as a deliberate safety stance, not a broken row (#3285).
@@ -189,7 +190,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
         </div>
         <div className="text-right shrink-0 ml-2">
           <div className="text-sm font-mono text-white">{formatBytes(cat.size)}</div>
-          <div className="text-xs text-gray-500">{formatCount(cat.fileCount)} files</div>
+          <div className="text-xs text-gray-500">{cat.fileCount == null ? 'File count unavailable — refresh to retry' : `${formatCount(cat.fileCount)} files`}</div>
         </div>
       </button>
 
@@ -199,7 +200,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
           {confirmingPurge && !busy ? (
             <InlineConfirmRow
               variant="separator"
-              question={`Purge all ${formatCount(cat.fileCount)} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
+              question={`Purge ${cat.fileCount == null ? 'all files' : `all ${formatCount(cat.fileCount)} files`} (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
               confirmText="Purge"
               confirmTitle="Confirm purge"
               cancelTitle="Cancel purge"
@@ -215,7 +216,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
                 >
                   <Archive size={12} />
-                  {archiving ? 'Archiving...' : 'Archive'}
+                  {archiving ? 'Archiving...' : cat.key === 'cos' ? 'Export backup (keeps originals)' : 'Archive'}
                 </button>
               )}
               {categoryPurgeable && (busy ? (
@@ -245,6 +246,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
             </div>
           )}
 
+          {cat.key === 'cos' && <CosStoragePanel onMaintenanceComplete={onMaintenanceComplete} />}
           {/* Detail items */}
           {detail ? (
             <div className="max-h-64 overflow-auto">
@@ -268,7 +270,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                           <span className="truncate">{item.name}</span>
                         </td>
                         <td className="p-2 text-right text-gray-400 font-mono">{formatBytes(item.size)}</td>
-                        <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? formatCount(item.fileCount) : '—'}</td>
+                        <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? (item.fileCount == null ? 'Unavailable' : formatCount(item.fileCount)) : '—'}</td>
                         {itemScoped && (
                           <td className="p-2 pr-3 text-right">
                             {item.type === 'directory' ? (
@@ -393,14 +395,21 @@ export default function DataManager() {
   const [confirmPurge, setConfirmPurge] = useState(null);
   const [deletingItem, setDeletingItem] = useState(null);
 
-  const fetchOverview = useCallback(async () => {
-    const [data, bk] = await Promise.all([
+  const overviewRequestRef = useRef(0);
+  const overviewReadRef = useRef(null);
+  const fetchOverview = useCallback(() => {
+    const token = ++overviewRequestRef.current;
+    const read = Promise.all([
       api.getDataOverview().catch(() => null),
       api.getDataBackups().catch(() => [])
-    ]);
-    setOverview(data);
-    setBackups(bk);
-    setLoading(false);
+    ]).then(([data, bk]) => {
+      if (token !== overviewRequestRef.current) return;
+      setOverview(data);
+      setBackups(bk);
+      setLoading(false);
+    });
+    overviewReadRef.current = read;
+    return read.finally(() => { if (overviewReadRef.current === read) overviewReadRef.current = null; });
   }, []);
 
   useEffect(() => { fetchOverview(); }, [fetchOverview]);
@@ -451,6 +460,36 @@ export default function DataManager() {
     fetchOverview();
     if (expandedCatRef.current === key) await loadDetail(key);
   };
+
+  // A recording job changes this category plus disk space. Re-measure only
+  // CoS, preserving unrelated categories and the user's current selection.
+  const reconcileCosStorage = useCallback(async () => {
+    // Let full reads publish unrelated fields (including new backup exports)
+    // before this narrower measurement. A later full read still supersedes it.
+    while (overviewReadRef.current) await overviewReadRef.current;
+    const token = ++overviewRequestRef.current;
+    const detailToken = expandedCatRef.current === 'cos' ? ++detailRequestRef.current : null;
+    const refreshed = await api.getDataCategory('cos', { measure: true, silent: true }).catch(() => null);
+    if (!refreshed?.measurement || token !== overviewRequestRef.current) return;
+    if (expandedCatRef.current === 'cos' && detailToken === detailRequestRef.current) {
+      setDetail(refreshed);
+    }
+    const measurement = refreshed.measurement;
+    setOverview(previous => {
+      if (!previous) return previous;
+      const old = previous.categories.find(category => category.key === 'cos');
+      if (!old) return previous;
+      return {
+        ...previous,
+        totalSize: Math.max(0, previous.totalSize - old.size + measurement.size),
+        totalFileCount: previous.totalFileCount == null || old.fileCount == null || measurement.fileCount == null
+          ? null : previous.totalFileCount - old.fileCount + measurement.fileCount,
+        disk: measurement.disk,
+        categories: previous.categories.map(category => category.key === 'cos'
+          ? { ...category, size: measurement.size, fileCount: measurement.fileCount } : category),
+      };
+    });
+  }, []);
 
   const handleArchive = async (key) => {
     setArchiving(key);
@@ -512,8 +551,8 @@ export default function DataManager() {
   const looseBytes = Math.max(0, (overview?.totalSize || 0) - categoryBytes);
   // Older servers omit totalFileCount; the category sum then undercounts only
   // the files sitting directly in data/.
-  const totalFiles = overview?.totalFileCount
-    ?? categories.reduce((sum, c) => sum + (c.fileCount || 0), 0);
+  const totalFiles = overview?.totalFileCount !== undefined ? overview.totalFileCount
+    : categories.some(c => c.fileCount == null) ? null : categories.reduce((sum, c) => sum + c.fileCount, 0);
   const presentKinds = DATA_KIND_ORDER.filter((k) => categories.some((c) => dataKindOf(c) === k));
   const selectedCat = categories.find((c) => c.key === expandedCat) || null;
 
@@ -555,7 +594,7 @@ export default function DataManager() {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
               <span className="text-gray-300">
                 <span className="font-mono text-white">{formatBytes(overview?.totalSize || 0)}</span>
-                {' · '}{formatCount(totalFiles, { fallback: '0' })} files
+                {' · '}{totalFiles == null ? 'File count unavailable' : `${formatCount(totalFiles)} files`}
                 {' · '}{formatCount(categories.length, { fallback: '0' })} categories
                 {' · '}{formatCount(backups.length, { fallback: '0' })} backups
               </span>
@@ -589,6 +628,7 @@ export default function DataManager() {
                   detail={expandedCat === cat.key ? detail : null}
                   onExpand={handleExpand}
                   onArchive={handleArchive}
+                  onMaintenanceComplete={reconcileCosStorage}
                   onPurge={setConfirmPurge}
                   onConfirmPurge={executePurge}
                   onCancelPurge={() => setConfirmPurge(null)}
