@@ -23,10 +23,10 @@ export default function TaskHeader({ taskType, config, orderStep }) {
   const branchBatchOn = taskType === 'branch-reconcile' && Number.isInteger(branchesPerAgent) && branchesPerAgent > 0;
   return (
     <div className="space-y-1.5 min-w-0">
-      <div className="flex items-center justify-between gap-2 min-w-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 min-w-0">
+        <div className="flex items-center gap-2 min-w-fit max-w-full flex-1">
           <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot(group)}`} title={group} aria-hidden="true" />
-          <span className="font-mono text-sm text-white truncate leading-tight" title={taskType}>{config.displayName || taskType}</span>
+          <span className="font-mono text-sm text-white truncate leading-tight" title={config.displayName || taskType}>{config.displayName || taskType}</span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
           {automationOnly && (
