@@ -22,8 +22,9 @@ const npmSpawn = (args, options) => {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Persisted package.json hashes (per workspace) from the last successful install.
-// A changed hash means the manifest moved since we last resolved the tree, so an
+// Persisted dependency-input hashes (per workspace) from the last successful install.
+// Both package.json and package-lock.json select the installed tree.
+// A changed hash means an input moved since we last resolved the tree. An
 // in-place `npm install` over the existing node_modules could leave a stale /
 // duplicated tree (e.g. a react@18 copy lingering beside react@19 after a major
 // bump) — which builds fine but throws "Invalid hook call" at runtime. When the
@@ -39,10 +40,15 @@ export const WORKSPACES = [
   { dir: join(ROOT, 'autofixer'), label: 'autofixer' }
 ];
 
-function pkgHash(dir) {
+function dependencyHash(dir) {
   const pkgPath = join(dir, 'package.json');
   if (!existsSync(pkgPath)) return null;
-  return createHash('sha256').update(readFileSync(pkgPath)).digest('hex');
+  const lockPath = join(dir, 'package-lock.json');
+  // Legacy receipts hashed only package.json and cannot prove which lockfile
+  // was installed. The v2 prefix forces one reconciliation on upgrade.
+  const hash = createHash('sha256').update(readFileSync(pkgPath)).update('\0');
+  hash.update(existsSync(lockPath) ? readFileSync(lockPath) : '<no-lockfile>');
+  return `v2:${hash.digest('hex')}`;
 }
 
 function loadHashes() {
@@ -66,16 +72,20 @@ function saveHashes(hashes) {
 // Filesystem fallback for the no-baseline case (first run after this feature
 // lands, or a fresh manual checkout): npm writes node_modules/.package-lock.json
 // at the end of every install, so its mtime is the last-install time. If
-// package.json was modified more recently — e.g. a `git pull` just brought a
-// new manifest over a still-present node_modules — the tree is stale and must
-// be clean-reinstalled even though we have no stored hash to compare against.
+// either dependency input was modified more recently — e.g. a `git pull`
+// brought a new lockfile over a still-present node_modules — clean-reinstall
+// even though we have no stored hash to compare against.
 // Returns false when we can't tell (missing marker, stat error) so we never
 // wipe a tree we can't prove is stale.
-function manifestNewerThanInstall(dir) {
+function dependenciesNewerThanInstall(dir) {
   const markerPath = join(dir, 'node_modules', '.package-lock.json');
   const installMarker = existsSync(markerPath) ? markerPath : join(dir, 'node_modules');
   try {
-    return statSync(join(dir, 'package.json')).mtimeMs > statSync(installMarker).mtimeMs;
+    const installedAt = statSync(installMarker).mtimeMs;
+    return ['package.json', 'package-lock.json'].some((name) => {
+      const input = join(dir, name);
+      return existsSync(input) && statSync(input).mtimeMs > installedAt;
+    });
   } catch {
     return false;
   }
@@ -133,24 +143,24 @@ function main() {
   let needed = false;
 
   for (const { dir, label } of WORKSPACES) {
-    const currentHash = pkgHash(dir);
+    const currentHash = dependencyHash(dir);
     const nodeModulesMissing = !existsSync(join(dir, 'node_modules'));
     const storedHash = storedHashes[label];
-    // With a stored baseline, a differing hash means the manifest moved since the
-    // last install. Without one (first run after this feature lands, or a fresh
+    // With a stored baseline, a differing hash means a dependency input moved
+    // since the last install. Without one (first run after this feature lands, or a fresh
     // manual checkout), fall back to the install-marker mtime so a `git pull` +
-    // `npm start` that changed package.json over a present node_modules is still
-    // caught — instead of silently seeding the stale tree.
+    // `npm start` catches a changed manifest or lockfile over a present
+    // node_modules instead of silently seeding the stale tree.
     const depsChanged = storedHash != null
       ? currentHash != null && storedHash !== currentHash
-      : !nodeModulesMissing && manifestNewerThanInstall(dir);
+      : !nodeModulesMissing && dependenciesNewerThanInstall(dir);
 
     if (nodeModulesMissing || depsChanged) {
       if (depsChanged) {
-        // Clean whenever the manifest changed — even if node_modules is already
-        // gone — so npm rebuilds the tree from the committed lockfile instead of
+        // Clean whenever dependency inputs changed — even if node_modules is
+        // already gone — so npm rebuilds the tree from the committed lockfile instead of
         // layering onto a tree resolved against the previous manifest.
-        console.log(`🧹 ${label} package.json changed since last install — clean reinstall...`);
+        console.log(`🧹 ${label} dependency inputs changed since last install — clean reinstall...`);
         cleanWorkspaceDeps(dir);
       } else {
         console.log(`📦 Missing node_modules for ${label} — installing...`);
