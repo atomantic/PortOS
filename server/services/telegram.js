@@ -498,10 +498,11 @@ async function handleCheckinResponse(msg) {
     const checkins = await loadCheckins();
     // Bail rather than write: pushing onto the empty default would atomicWrite a
     // one-entry log over the whole history. The pending check-in stays pending so
-    // the answer can be re-sent once the file is readable again.
+    // the answer can be re-sent once the file is readable again — including
+    // when `pending` was superseded by a new question during this same await
+    // (the compare-and-delete below leaves that new entry untouched either way).
     if (!checkins) return 'unreadable';
 
-    pendingCheckins.delete(chatId);
     checkins.checkins.push({
       id: uuidv4(),
       question: pending.question,
@@ -517,6 +518,13 @@ async function handleCheckinResponse(msg) {
     }
 
     await saveCheckins(checkins);
+
+    // Consume `pending` only now that it's durably persisted, and only if it's
+    // still the current entry — `loadCheckins`/`saveCheckins` both await, so a
+    // new question could have replaced pendingCheckins for this chat while we
+    // were reading/writing; an unconditional delete here would wipe THAT
+    // still-unanswered question instead of the one we just recorded.
+    if (pendingCheckins.get(chatId) === pending) pendingCheckins.delete(chatId);
     return 'recorded';
   });
 

@@ -555,5 +555,83 @@ describe('telegram service', () => {
       expect(finalCheckins[0]).toMatchObject({ id: 'seed', response: 'Old A' });
       expect(finalCheckins[1]).toMatchObject({ goalId: 'g1', response: 'first response' });
     });
+
+    it('keeps the pending question intact for a retry when the save itself fails', async () => {
+      const telegram = await loadTelegramActive();
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
+      await telegram.init(false);
+      await telegram.sendCheckin();
+      h.sendMessage.mockClear();
+
+      const { atomicWrite } = await import('../lib/fileUtils.js');
+      atomicWrite.mockRejectedValueOnce(new Error('disk full'));
+
+      const msgHandler = h.eventHandlers.message[0];
+      // The rejection propagates out of handleCheckinResponse; safeHandler (the
+      // #8907 handler guard) is what keeps it from becoming an unhandled
+      // rejection here, exactly like a real bot.on('message') dispatch.
+      await expect(msgHandler({ chat: { id: 42 }, text: 'first attempt' })).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('handler error'));
+      // The failed save must not have consumed the pending check-in — the
+      // delete only runs after `saveCheckins` succeeds — so a retry with the
+      // same text still finds a pending question and records it.
+      h.sendMessage.mockClear();
+      await msgHandler({ chat: { id: 42 }, text: 'retry attempt' });
+
+      expect(fu.writes).toHaveLength(1);
+      expect(fu.writes[0].data.checkins[0]).toMatchObject({ goalId: 'g1', response: 'retry attempt' });
+      expect(h.sendMessage).toHaveBeenCalledWith('42', expect.stringContaining('Check-in recorded'), expect.anything());
+    });
+
+    it('does not clobber a new question armed while a prior response is still saving', async () => {
+      const telegram = await loadTelegramActive();
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({
+        goals: [
+          { id: 'g1', title: 'First Goal', status: 'active', progress: 10 },
+          { id: 'g2', title: 'Second Goal', status: 'active', progress: 20 },
+        ],
+      });
+      await telegram.init(false);
+      await telegram.sendCheckin(); // arms g1 (oldest/only-ranked checkin so far)
+      h.sendMessage.mockClear();
+
+      const { readJSONFileStrict } = await import('../lib/fileUtils.js');
+      let releaseRead;
+      readJSONFileStrict.mockImplementationOnce(() => new Promise((resolve) => {
+        releaseRead = () => resolve({ ok: true, value: fu.store ?? { checkins: [] } });
+      }));
+
+      const msgHandler = h.eventHandlers.message[0];
+      // Answer g1; its loadCheckins() is now blocked on the deferred read above.
+      const firstResponse = msgHandler({ chat: { id: 42 }, text: 'g1 answer' });
+      // Let the handler's microtask chain actually reach the deferred read
+      // (queueCheckinsWrite schedules the critical section a tick later) before
+      // arming the new question below.
+      await vi.waitFor(() => expect(releaseRead).toBeTypeOf('function'));
+
+      // While that read is still in flight, a new question is armed for the
+      // SAME chat (explicit goalId skips loadCheckins entirely, so this isn't
+      // blocked by the deferred read).
+      await telegram.sendCheckin('g2');
+      expect(h.sendMessage).toHaveBeenCalledWith('42', expect.stringContaining('Second Goal'), expect.anything());
+
+      // Release the delayed read and let the first response finish persisting.
+      releaseRead();
+      await firstResponse;
+
+      // g1's answer still recorded (captured synchronously at dispatch, before
+      // g2 was armed) …
+      expect(fu.writes).toHaveLength(1);
+      expect(fu.writes[0].data.checkins[0]).toMatchObject({ goalId: 'g1', response: 'g1 answer' });
+
+      // … and g2's pending question survived — an unconditional delete here
+      // would have wiped it, silencing the still-unanswered second prompt.
+      fu.writes = [];
+      await msgHandler({ chat: { id: 42 }, text: 'g2 answer' });
+      expect(fu.writes).toHaveLength(1);
+      expect(fu.writes[0].data.checkins[1]).toMatchObject({ goalId: 'g2', response: 'g2 answer' });
+    });
   });
 });
