@@ -681,6 +681,10 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // Scoped to the app being released, never the install's other repos.
     expect(current).toContain('"taskType":"branch-reconcile","appId":"{appId}"');
     expect(current).toContain('Do not wait for the triggered agent');
+    // External contributors' PRs stay behind the review/admission flow, and the
+    // sweep targets the development branch, not the release branch.
+    expect(current).toContain('Only trusted work is yours');
+    expect(current).toContain('--base <DEV_BRANCH>');
     expect(current).toContain('Merge dependency updates');
     // v15: a blocker that outlasts the fix loop goes to a sub-agent; filing an
     // issue and leaving the release PR open is no longer an exit (v14 stopped

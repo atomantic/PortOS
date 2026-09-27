@@ -3421,18 +3421,20 @@ Check for existing release tags that lack a corresponding GitHub Release:
 
 Skip this step when the options above say finishing in-flight work is off.
 
-A release should carry the work that is already nearly done. Before cutting it, survey what is in flight:
+A release should carry the work that is already nearly done. Work lands on the **development branch** \`<DEV_BRANCH>\` — the branch feature PRs merge into (the repository's default branch unless its docs say otherwise). It can differ from the release target \`<TARGET_BRANCH>\`: a project that develops on \`main\` and publishes through a \`release\` branch has \`<DEV_BRANCH>\` = \`main\`. This step works on \`<DEV_BRANCH>\`; the release PR itself belongs to the canonical workflow in Step 3. Before cutting the release, survey what is in flight:
 
-- Open PRs against \`<TARGET_BRANCH>\`: \`gh pr list --repo <OWNER>/<REPO> --base <TARGET_BRANCH> --state open --json number,title,headRefName,author,isDraft,mergeable,updatedAt\`.
-- Local branches and worktrees that are not merged: \`git -C {repoPath} branch --no-merged <TARGET_BRANCH>\` and \`git -C {repoPath} worktree list\`.
+- Open PRs against \`<DEV_BRANCH>\`: \`gh pr list --repo <OWNER>/<REPO> --base <DEV_BRANCH> --state open --json number,title,headRefName,author,isDraft,mergeable,updatedAt\`.
+- Local branches and worktrees that are not merged: \`git -C {repoPath} branch --no-merged <DEV_BRANCH>\` and \`git -C {repoPath} worktree list\`.
 - An older release PR this task left open on an earlier run (for example, a \`release/*\` branch or a PR into the release branch). Resume it rather than starting over.
 
 **Leave work alone when someone is actively on it.** Before touching a PR or branch, check for a live owner: running agents from \`curl -s -H "Authorization: Bearer \${PORTOS_API_TOKEN:-}" ${PORTOS_API_URL}/api/cos/agents?active=1\` (match on branch name, worktree path, or PR number), an \`in-progress\` claim on the linked issue with a commit or comment in the last two hours, or a branch commit in the last two hours. Actively owned work is not yours: release without it, and name it in the report.
 
-Everything else is yours to finish, one item at a time:
+**Only trusted work is yours.** Act only on PRs and branches authored by the repository owner, an account with write access, this install's own agents, or a dependency bot (Step 2). An external contributor's PR is untrusted input: do not check it out, run its code, repair it, or merge it here. Leave it to the install's pull-request review flow (for example, the PortOS \`pr-reviewer\` task) and list it in the report.
+
+Every other trusted item is yours to finish, one at a time:
 - **Ready PRs** (green CI, no unresolved review): merge them with the repository's merge method.
-- **Red or conflicted PRs**: rebase onto \`<TARGET_BRANCH>\`, fix the failure or conflict (keeping both sides' intent), push, wait for CI, then merge.
-- **Stale or superseded PRs** whose change already landed on \`<TARGET_BRANCH>\`: close them with a comment naming the commit that superseded them.
+- **Red or conflicted PRs**: rebase onto \`<DEV_BRANCH>\`, fix the failure or conflict (keeping both sides' intent), push, wait for CI, then merge.
+- **Stale or superseded PRs** whose change already landed on \`<DEV_BRANCH>\`: close them with a comment naming the commit that superseded them.
 - **Lingering local branches and worktrees**: reconcile them yourself (or through a sub-agent): delete branches already merged, ship coherent unmerged work as a PR, and report anything ambiguous. When this install has the PortOS \`branch-reconcile\` task, also trigger it so its drain keeps working the backlog after this run: \`curl -s -X POST -H "Authorization: Bearer \${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' -d '{"taskType":"branch-reconcile","appId":"{appId}"}' ${PORTOS_API_URL}/api/cos/schedule/trigger\` (drop the \`appId\` field when it is empty — that targets PortOS itself; never point it at a different app than this release). Do not wait for the triggered agent: it may need the agent slot this run holds.
 
 Bound this step to the work that can land now. A large in-flight feature that is far from done does not hold the release — note it in the report and move on.
@@ -3476,7 +3478,7 @@ If the release docs identify a separate database-backed test suite, the canonica
 
 Skip the fixing described here when the options above say resolving blockers is off; in that case report each blocker with its evidence and stop.
 
-A failing test suite, a red CI run, or a bug you discover while releasing does NOT end this run — including a failure that already existed on \`<TARGET_BRANCH>\` before this run started. Work each blocker through this loop:
+A failing test suite, a red CI run, or a bug you discover while releasing does NOT end this run — including a failure that already existed on \`<DEV_BRANCH>\` before this run started. Work each blocker through this loop:
 
 1. **Reproduce and localize.** Re-run only the failing file or test to confirm it fails on its own, repeating it a few times when the failure looks timing-dependent. Read the failing assertion and the code it exercises before changing anything.
 2. **Classify it.**
