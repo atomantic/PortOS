@@ -11,6 +11,22 @@ import { uploadGalleryImage } from '../services/apiSystem.js';
 import { uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 import { readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload.js';
+import { formatBytes } from '../utils/formatters.js';
+
+// Mirrors the server's handoff import cap, checked BEFORE uploading so an
+// oversized pick can't leave a gallery full of files nothing imported.
+const MAX_HANDOFF_FILES = 200;
+// The video formats the gallery video upload can container-sniff.
+const HANDOFF_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
+
+// Why a picked file can't be uploaded, or null. Both uploads are one base64
+// JSON body, so both share the wire cap.
+function handoffFileProblem(file, isVideo) {
+  if (!isVideo) return validateImageFile(file, JSON_UPLOAD_MAX_FILE_SIZE);
+  if (!HANDOFF_VIDEO_TYPES.has(file.type)) return `File "${file.name}" is not an MP4, MOV, or WebM video`;
+  if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) return `File "${file.name}" exceeds the ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)} limit`;
+  return null;
+}
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const handoffFilename = (name) => `${String(name || 'music-video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'music-video'}-handoff.json`;
@@ -73,13 +89,17 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
 
   const importHandoffFiles = async (files, provider) => {
     if (!files.length) return;
+    if (files.length > MAX_HANDOFF_FILES) {
+      toast.error(`Import at most ${MAX_HANDOFF_FILES} files at a time (picked ${files.length})`);
+      return;
+    }
     const projectId = project.id;
     setBusy(true);
     const items = [];
     const failures = [];
     for (const file of files) {
       const isVideo = typeof file.type === 'string' && file.type.startsWith('video/');
-      const invalid = isVideo ? null : validateImageFile(file, JSON_UPLOAD_MAX_FILE_SIZE);
+      const invalid = handoffFileProblem(file, isVideo);
       if (invalid) { failures.push(invalid); continue; }
       const base64 = await readFileAsBase64(file).catch(() => null);
       if (!base64) { failures.push(`Failed to read ${file.name}`); continue; }
