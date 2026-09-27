@@ -1267,3 +1267,44 @@ print('OK')
 `);
   expect(output.trim()).toBe('OK');
 });
+
+// #8867: the FL2VA reference feeds its vision tower the keyframes it already put
+// onto the canvas. The pinned port prepares them only for the VAE, so without
+// this the text encoder would read the raw upload at a different size and token
+// grid than the conditioning rows it is paired with.
+it.skipIf(!pyBin)('conditions the vision encoder on canvas-prepared keyframes, as the reference does', () => {
+  const output = runPython(`${importRunner}
+import contextlib, io, sys, tempfile, types
+from types import SimpleNamespace as NS
+runner.heartbeat = lambda *_: contextlib.nullcontext()
+runner._install_h3_stepwise_preview = lambda *_: None
+prepared = []
+def prepare_keyframe_image(image, height, width, stretch):
+    prepared.append((image.size, stretch))
+    return NS(size=(width, height), source=image.size)
+packing = types.ModuleType('minimax_h3_mlx.packing')
+packing.prepare_keyframe_image = prepare_keyframe_image
+sys.modules['minimax_h3_mlx'] = types.ModuleType('minimax_h3_mlx')
+sys.modules['minimax_h3_mlx.packing'] = packing
+seen = {}
+def encode(prompt, images):
+    seen['encoder'] = [(image.size, image.source) for image in images]
+    return ('embeddings', 'tags')
+class Pipe:
+    text_encoder = NS(encode=encode)
+    def __call__(self, prompt, **kwargs):
+        # The pinned pipeline hands its images to the text encoder unchanged.
+        self.text_encoder.encode(prompt, kwargs['images'])
+        return NS(video=NS(shape=[124]), fps=24, audio=None, sample_rate=32000)
+with tempfile.TemporaryDirectory() as tmp:
+    args = NS(output=str(Path(tmp) / 'clip.mp4'), seed=0, prompt='Example shot', num_frames=124, steps=8,
+              anchor=['first', 'last'], height=1344, width=768)
+    with contextlib.redirect_stdout(io.StringIO()):
+        runner.render_outputs(Pipe(), args, [NS(size=(3000, 4000)), NS(size=(1920, 1080))],
+                              lambda path, *_: path.write_bytes(b'example-video'))
+assert prepared == [((3000, 4000), True), ((1920, 1080), False)], prepared
+assert seen['encoder'] == [((768, 1344), (3000, 4000)), ((768, 1344), (1920, 1080))], seen
+print('OK')
+`);
+  expect(output.trim()).toBe('OK');
+});

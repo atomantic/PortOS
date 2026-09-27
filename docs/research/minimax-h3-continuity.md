@@ -53,6 +53,38 @@ Lazy work may be charged to the boundary that materializes it. Failed worker
 runs retain a failed report and log; never interpret partial outputs as success.
 Logs may contain local paths; redact them before publishing evidence.
 
+## Reference parity finding: vision input geometry
+
+A static comparison of the pinned MLX port against the vendored FL2VA reference
+(`reference/diffusers/modular/` in the runtime checkout) found one divergence
+on the image path. The reference setup step replaces its keyframes with
+canvas-prepared copies (`prepare_keyframe_image`: stretch the first keyframe,
+cover-crop a follower), and **both** the Qwen3-VL text encoder and the video VAE
+read those prepared images. The port prepares keyframes only inside
+`_encode_keyframes`; its text encoder received the raw upload.
+
+With the checkpoint's processor (patch 16, merge 2, up to 16.7M pixels) each
+vision token covers 32×32 pixels, the same footprint as a VAE latent patch. A
+canvas-prepared 576×1024 keyframe therefore yields an 18×32 vision grid that
+matches the 18×32 conditioning rows. A raw 3024×4032 photo yields about 11,800
+vision tokens, and a 1920×1080 frame roughly 2,000 tokens at the wrong aspect.
+Both are unlike anything the reference presents.
+
+`generate_minimax_h3.py` now places keyframes on the canvas before calling the
+pipeline, using the port's own `prepare_keyframe_image`. That function returns
+a canvas-sized image unchanged, so VAE conditioning is byte-for-byte what it was
+before. The vision features now follow the reference contract. Prompt-embedding
+cache keys follow the prepared pixels, so older raw-image entries age out.
+
+This fixes a real integration defect, but it is **not a confirmed root cause**
+of the scene change: no render has compared the two inputs. The synthetic source
+from the diagnostic is already 768×1344, so its native cases never took this
+path. VAE normalization/posterior sampling, packed tags and rotary positions
+matched the reference in structure and are covered by the runtime's own parity
+tests. The only other difference found is the PIL twin of the image processor,
+used when torch is absent, whose resampling differs numerically from the
+torchvision processor.
+
 ## What remains to establish
 
 No real render results accompany this harness. `continuity: not_assessed` stays
