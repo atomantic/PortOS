@@ -1163,7 +1163,7 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
     // diagnosis — even though the SSE broadcast to this client threw.
     const failure = await failed;
     expect(failure.error).toContain('invalid value for --steps');
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
     errSpy.mockRestore();
   });
 
@@ -1193,7 +1193,7 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
     // Gallery indexing / peer-sync (driven by 'completed') still fires even
     // though the SSE 'complete' frame threw delivering to this client.
     await expect(completed).resolves.toMatchObject({ mode: 'local' });
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
     errSpy.mockRestore();
   });
 });

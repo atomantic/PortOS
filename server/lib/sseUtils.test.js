@@ -63,6 +63,23 @@ describe('broadcastSse', () => {
     broadcastSse(job, { ok: true });
     expect(job.lastPayload).toEqual({ ok: true });
   });
+
+  // Regression (#8915 review follow-up): a single dead client's res.write
+  // throwing used to abort the `for` loop outright, so every LATER client in
+  // job.clients never received the frame at all — not just the throwing one.
+  it('isolates one client throwing on write so later clients still receive the frame', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dead = { write: vi.fn(() => { throw new Error('write after end'); }) };
+    const alive = makeRes();
+    const job = { clients: [dead, alive] };
+    const payload = { type: 'complete' };
+
+    expect(() => broadcastSse(job, payload)).not.toThrow();
+
+    expect(alive.write).toHaveBeenCalledWith(`data: ${JSON.stringify(payload)}\n\n`);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
+    errSpy.mockRestore();
+  });
 });
 
 describe('attachSseClient', () => {
@@ -360,7 +377,7 @@ describe('createJobFailureFinalizer', () => {
 
     expect(job.status).toBe('error');
     expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'boom' });
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
     errSpy.mockRestore();
   });
 

@@ -39,7 +39,17 @@ export const broadcastSse = (job, payload, { retain = true } = {}) => {
   // run is actually doing.
   if (retain) job.lastPayload = payload;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of job.clients) c.write(msg);
+  // Isolate each client's write — a dead client's `res.write` throwing (a
+  // closed/broken pipe) must not abort the loop and starve every later
+  // client in `job.clients` of a frame their connection is still open for
+  // (#8915).
+  for (const c of job.clients) {
+    try {
+      c.write(msg);
+    } catch (err) {
+      console.error(`❌ SSE client write failed, dropping this subscriber's frame: ${err?.message || err}`);
+    }
+  }
 };
 
 // Dispatches a job's terminal SSE frame and its companion lifecycle event

@@ -416,7 +416,7 @@ describe('grok provider — directed-path harvest', () => {
 
     await vi.waitFor(() => expect(completedListener).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 50 });
     expect(failedListener).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
     errSpy.mockRestore();
   }, 10000);
 });
