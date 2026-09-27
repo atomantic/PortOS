@@ -73,6 +73,7 @@ import databaseRoutes from './database.js';
 import { PATHS } from '../lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 
 afterAll(cleanupTempDataRoots);
 import { isPg17OnlyDirective, importDumpFile } from '../services/dbAdmin.js';
@@ -769,8 +770,14 @@ describe('POST /api/database/sync endpoint safety', () => {
   });
 });
 
-// Host-control gating (#8897): database admin routes require operator authority.
+// Every host-executing database route requires operator authority (#8897).
 describe('database admin routes host-control gating', () => {
+  const gated = express();
+  gated.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+  gated.use(hostControlRouteGate);
+  gated.use(express.json());
+  gated.use('/api/database', databaseRoutes);
+
   it.each([
     ['start', { backend: 'docker' }],
     ['stop', { backend: 'native' }],
@@ -780,37 +787,12 @@ describe('database admin routes host-control gating', () => {
     ['sync', {}],
     ['fix', {}],
     ['switch', { target: 'docker', migrate: false }],
-  ])('requires host-control authority for POST /api/database/%s', async (route, body) => {
-    const gated = express();
-    gated.use((req, _res, next) => {
-      req.portosAuthContext = { enabled: true, authenticated: false };
-      next();
-    });
-    const { hostControlRouteGate } = await import('../services/authGate.js');
-    gated.use(hostControlRouteGate);
-    gated.use(express.json());
-    gated.use('/api/database', databaseRoutes);
+  ])('refuses POST /api/database/%s without host control and runs nothing', async (route, body) => {
     const res = await request(gated).post(`/api/database/${route}`).send(body);
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
     expect(execFile).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
-  });
-
-  it('allows preflight without host-control authority (advisory only)', async () => {
-    const gated = express();
-    gated.use((req, _res, next) => {
-      req.portosAuthContext = { enabled: true, authenticated: false };
-      next();
-    });
-    const { hostControlRouteGate } = await import('../services/authGate.js');
-    gated.use(hostControlRouteGate);
-    gated.use(express.json());
-    gated.use('/api/database', databaseRoutes);
-    const res = await request(gated).post('/api/database/maintenance/preflight').send({ source: 'native', target: 'docker' });
-    // preflight is read-only advisory, but returns 400 for this test input
-    // (no actual system idle) rather than 403.
-    expect(res.status).not.toBe(403);
   });
 });
