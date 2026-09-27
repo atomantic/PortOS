@@ -289,6 +289,7 @@ export * from './downloadPreflight.js';
 export * from './agentInstructionsFile.js';
 export * from './scaffoldSnippets.js';
 export * from './failureLogging.js';
+export * from './faultIsolatedEmitter.js';
 export * from './fileCore.js';
 export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
