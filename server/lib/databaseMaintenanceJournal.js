@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -29,6 +29,13 @@ const coordinatorSchema = z.object({
   token: z.string().uuid(),
 }).strict();
 const successorSchema = coordinatorSchema.extend({ previousToken: z.string().uuid() });
+const decisionSchema = coordinatorSchema.extend({
+  stage: z.enum(stages),
+  action: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('transition'), nextStage: z.enum(stages) }).strict(),
+    z.object({ kind: z.literal('recovery'), recoveryToken: z.string().uuid() }).strict(),
+  ]),
+});
 
 const normalizedHost = host => ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())
   ? 'loopback' : host.toLowerCase();
@@ -190,10 +197,21 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance worker reservation');
     const owner = assertCoordinator(id, token);
     const directory = workerDirectory(token);
-    mkdirSync(directory, { mode: 0o700 });
-    syncDirectory(activeDir);
-    writeDurableExclusive(join(directory, 'owner.json'), owner);
-    syncDirectory(directory);
+    try { lstatSync(directory); throw databaseMaintenanceError(); } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    const pending = join(activeDir, 'worker-pending-' + randomUUID());
+    mkdirSync(pending, { mode: 0o700 });
+    try {
+      writeDurableExclusive(join(pending, 'owner.json'), owner);
+      syncDirectory(pending);
+      // The complete, nonempty reservation is published at once. Another
+      // launch cannot replace it (rename refuses a nonempty destination).
+      renameSync(pending, directory);
+      syncDirectory(activeDir);
+    } finally {
+      rmSync(pending, { recursive: true, force: true });
+    }
     return directory;
   };
 
@@ -223,6 +241,29 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return { state: 'exited', exitCode };
   };
 
+  // A durable CAS for EACH outgoing (owner, stage) state. Transition and
+  // recovery compete on the SAME file, so a predecessor paused after checking
+  // its token cannot publish a new stage after losing ownership. Interrupted
+  // stage decisions can be completed identically before attempting recovery.
+  const decide = (id, token, stage, action) => {
+    const value = decisionSchema.parse({ id, token, stage, action });
+    const destination = join(activeDir, 'decision-' + stage + '-' + token + '.json');
+    const pending = join(activeDir, 'decision-' + randomUUID() + '.pending');
+    writeDurableExclusive(pending, value);
+    try {
+      linkSync(pending, destination);
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    } finally {
+      unlinkSync(pending);
+    }
+    syncDirectory(activeDir);
+    if (!lstatSync(destination).isFile()) throw databaseMaintenanceError();
+    const winner = decisionSchema.parse(JSON.parse(readFileSync(destination, 'utf8')));
+    if (winner.id !== id || winner.token !== token || winner.stage !== stage) throw databaseMaintenanceError();
+    return winner.action;
+  };
+
   // This transfers journal ownership only, NEVER database authority. Before
   // export/import a successor must re-establish writer/child quiescence: the
   // worker's exit says nothing about descendants it might have left behind.
@@ -244,9 +285,19 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       return recoveryToken;
     }
     assertCoordinator(id, previousToken);
-    const current = read();
-    if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(current.stage)
-      || coordinatorStatus(id).state !== 'exited') throw databaseMaintenanceError();
+    if (coordinatorStatus(id).state !== 'exited') throw databaseMaintenanceError();
+    // Only four transfer stages can advance here; each interrupted transition
+    // completion moves strictly forward, never reverses an import to success.
+    while (true) {
+      const current = read();
+      if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(current.stage)) throw databaseMaintenanceError();
+      const decision = decide(id, previousToken, current.stage, { kind: 'recovery', recoveryToken });
+      if (decision.kind === 'recovery') {
+        if (decision.recoveryToken !== recoveryToken) throw databaseMaintenanceError();
+        break;
+      }
+      if (read().stage === current.stage) transition(id, previousToken, current.stage, decision.nextStage);
+    }
     const directory = workerDirectory(previousToken);
     const fd = openSync(join(directory, 'exit'), 'r+');
     try { fsyncSync(fd); } finally { closeSync(fd); }
@@ -283,6 +334,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (current.stage !== expectedStage) throw databaseMaintenanceError();
     // Do not reinterpret interrupted writes from the old publication protocol.
     if (existsSync(join(activeDir, 'stage-' + expectedStage + '.claim'))) throw databaseMaintenanceError();
+    const decision = decide(id, token, expectedStage, { kind: 'transition', nextStage });
+    if (decision.kind !== 'transition' || decision.nextStage !== nextStage) throw databaseMaintenanceError();
     const next = journalSchema.parse({ ...current, stage: nextStage });
     const pending = join(activeDir, 'publication-' + randomUUID() + '.pending');
     writeDurableExclusive(pending, next);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -157,6 +157,64 @@ describe('same-operation coordinator recovery', () => {
     expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     expect(journal.read()).toEqual(operation);
     expect(() => journal.assertAdmission()).toThrow();
+  });
+
+  it.each(['before-decision', 'before-stage-publication'])('serializes recovery against a paused predecessor (%s)', async barrier => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const directory = journal.reserveCoordinatorWorker(operation.id, token);
+    writeFileSync(join(directory, 'exit'), '0');
+    const ready = join(root, 'transition-ready');
+    const release = join(root, 'transition-release');
+    const method = barrier === 'before-decision' ? 'openSync' : 'linkSync';
+    const pathIndex = barrier === 'before-decision' ? 0 : 1;
+    const match = barrier === 'before-decision' ? "path.includes('decision-') && path.endsWith('.pending')" : "path.endsWith('published-quiescing.json')";
+    const code = `import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const original=fs[${JSON.stringify(method)}];
+      let paused=false;
+      fs[${JSON.stringify(method)}]=(...args)=>{
+        const path=String(args[${pathIndex}]);
+        if(!paused && (${match})) {
+          paused=true; fs.writeFileSync(${JSON.stringify(ready)},'ready');
+          while(!fs.existsSync(${JSON.stringify(release)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+        }
+        return original(...args);
+      };
+      syncBuiltinESMExports();
+      const {createDatabaseMaintenanceJournal}=await import(${JSON.stringify(moduleUrl)});
+      try {createDatabaseMaintenanceJournal(${JSON.stringify(data)}).transition(${JSON.stringify(operation.id)},${JSON.stringify(token)},'accepted','quiescing');}
+      catch {process.exitCode=1;}`;
+    const handle = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' });
+    const child = { handle, finished: false };
+    child.done = new Promise(resolve => handle.once('close', status => { child.finished = true; resolve(status); }));
+    children.push(child);
+    await vi.waitFor(() => expect(readFileSync(ready, 'utf8')).toBe('ready'), { timeout: 20_000 });
+    const next = journal.recoverCoordinator(operation.id, token, randomUUID());
+    writeFileSync(release, '');
+    expect(await child.done).toBe(barrier === 'before-decision' ? 1 : 0);
+    expect(journal.read()).toEqual({ ...operation, stage: barrier === 'before-decision' ? 'accepted' : 'quiescing' });
+    expect(() => journal.transition(operation.id, token, 'quiescing', 'exporting')).toThrow();
+    expect(journal.reserveCoordinatorWorker(operation.id, next)).not.toBe(directory);
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
+  it('keeps a crashed unpublished worker reservation retryable by the same owner', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const code = `import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const original=fs.renameSync;
+      fs.renameSync=(from,to)=>{if(String(to).endsWith(${JSON.stringify('worker-' + token)})) process.exit(7); return original(from,to);};
+      syncBuiltinESMExports();
+      const {createDatabaseMaintenanceJournal}=await import(${JSON.stringify(moduleUrl)});
+      createDatabaseMaintenanceJournal(${JSON.stringify(data)}).reserveCoordinatorWorker(${JSON.stringify(operation.id)},${JSON.stringify(token)});`;
+    expect(spawnSync(process.execPath, ['--input-type=module', '-e', code], { timeout: 10_000 }).status).toBe(7);
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
+    journal.reserveCoordinatorWorker(operation.id, token);
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'awaiting-exit' });
+    expect(() => journal.reserveCoordinatorWorker(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
   });
 
   it('rejects a reused ancestor token without publishing an ownership cycle', () => {
