@@ -1,10 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+
+// Pass-through fs whose readFileSync can run one hook first: the only way to
+// land a concurrent fence move deterministically between read()'s fence check
+// and its record read (the two are separate syscalls in one sync call).
+const fsHook = vi.hoisted(() => ({ beforeRead: null }));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  const readFileSync = (...args) => {
+    const hook = fsHook.beforeRead;
+    fsHook.beforeRead = null;
+    hook?.(String(args[0]));
+    return actual.readFileSync(...args);
+  };
+  return { ...actual, readFileSync, default: { ...actual, readFileSync } };
+});
 
 const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
 const target = { ...source, mode: 'docker', port: 5561 };
@@ -205,6 +220,22 @@ describe('persistent database maintenance boundary', () => {
       expect(() => journal.assertAdmission()).toThrow();
       expect(() => journal.cancel('unknown', source)).toThrow();
     }
+  });
+
+  // Regression caught (#8904): a coordinator releasing admission between the
+  // fence check and the record read made a booting server's release poll
+  // throw DATABASE_MAINTENANCE and exit fenced although admission was open.
+  it('reports no operation when the fence moves mid-read, but fails closed while still fenced', () => {
+    const operation = journal.begin({ source, target });
+    const active = join(data, 'database-maintenance');
+    fsHook.beforeRead = () => renameSync(active, join(root, 'archived'));
+    expect(journal.read()).toBeNull();
+    expect(() => journal.assertAdmission()).not.toThrow();
+
+    renameSync(join(root, 'archived'), active);
+    expect(journal.read()).toMatchObject({ id: operation.id });
+    fsHook.beforeRead = () => rmSync(join(active, 'operation.json'));
+    expect(() => journal.read()).toThrowError(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
   });
 
   it('cancels only an accepted matching source and retains the immutable operation as local evidence', () => {

@@ -10,7 +10,8 @@
 // - `launchServer(endpoint)` starts a surrogate ordinary server: the REAL
 //   databaseCutoverHandshake + databaseBootFence against a pool configured
 //   from its environment, then records `server booted` (or `server refused`).
-import { appendFileSync, chmodSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+//   Its stderr is kept in `surrogate-stderr.log` as failure evidence.
+import { appendFileSync, chmodSync, closeSync, copyFileSync, existsSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from '../../lib/childProcess.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -65,6 +66,7 @@ try {
   log('server booted ' + process.env.PGPORT);
 } catch (err) {
   log('server refused ' + (err.code ?? 'error'));
+  console.error('surrogate ' + process.pid + ' refused: ' + String(err?.message ?? err).slice(0, 300));
   process.exit(1);
 }
 setInterval(() => {}, 1000);
@@ -100,7 +102,9 @@ export function launchSurrogateServer(root, dir, endpoint) {
     PGHOST: endpoint.host, PGPORT: String(endpoint.port), PGDATABASE: endpoint.database, PGUSER: endpoint.user,
     PGPASSWORD: 'example-password', NODE_OPTIONS: `--import=${pathToFileURL(join(dir, 'pg-register.mjs')).href}` };
   delete env.VITEST;
-  const child = spawn(process.execPath, [join(dir, 'server-surrogate.mjs')], { env, stdio: 'ignore', detached: true });
+  const stderr = openSync(join(dir, 'surrogate-stderr.log'), 'a');
+  const child = spawn(process.execPath, [join(dir, 'server-surrogate.mjs')], { env, stdio: ['ignore', 'ignore', stderr], detached: true });
+  closeSync(stderr);
   child.unref();
   appendFileSync(join(dir, 'surrogates'), `${child.pid}\n`);
   return child.pid;
