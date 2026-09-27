@@ -13,16 +13,25 @@ Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/ser
 
 ## Database backend migration
 
-Migration and switching between Docker and native PostgreSQL are temporarily
-unavailable in Settings. `scripts/db.sh migrate`, `use-native`, and `use-docker`
-also refuse. Native setup provisions without selecting a backend. Copying a live database and switching
-mode can strand writes accepted after the snapshot. Backups and standalone
-exports remain available; they do not make a new backend authoritative.
+Settings (Database tab) offers a coordinated offline cutover between Docker and
+native PostgreSQL. It stops/drains every PortOS writer (including the CoS
+runner), transfers the data, commits the new backend, restarts, and verifies
+the restarted server's target connection before reporting success — the same
+lifecycle `scripts/database-maintenance.mjs` drives from the CLI (see
+[Database maintenance admission](#database-maintenance-admission) below).
+`scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse directly;
+native setup provisions without selecting a backend. Do not substitute Sync
+followed by Switch — that copies data without stopping writers or verifying
+the restart, and can strand writes accepted after the snapshot.
 
-Keep using the current backend until the coordinated offline cutover ships
-(#8797 / #8805). It must stop/drain every PortOS writer, including the CoS
-runner, then verify the restarted server's target connection before declaring
-success. Expect downtime. Do not substitute Sync followed by Switch.
+Expect brief downtime while PortOS restarts. The Database tab shows the
+operation's stage (preparing, exporting/importing, restarting and verifying),
+never reports success from an accepted request, a reconnect, or a saved-mode
+change alone, and reconciles the outcome from the durable maintenance journal
+on socket reconnect and page reload — because the server it is watching is the
+one restarting. If the cutover worker exits before finishing, the tab shows an
+interrupted state with a Resume control that continues the same recorded
+operation; there is no rollback, force, or skip.
 
 If a previous migration left records missing, preserve both backend databases
 and the migration dump. The source may hold accepted writes absent from the
@@ -50,8 +59,9 @@ Import retains the dump and uses one transaction with `ON_ERROR_STOP`.
 An explicit endpoint only selects where a standalone transfer runs. Import
 replaces database objects present in the dump: keep recovery copies and stop
 the target's writers before restoring. These commands do not stop PortOS,
-change saved mode, verify a restarted pool, or authorize a backend cutover.
-The complete offline migration lifecycle remains unavailable under #8816.
+change saved mode, verify a restarted pool, or authorize a backend cutover —
+use the coordinated cutover above (Settings Database tab or
+`scripts/database-maintenance.mjs`) for that.
 
 ## What gets backed up
 
@@ -260,7 +270,7 @@ node scripts/database-maintenance.mjs cancel <operation-id>
 
 Cancellation supports only the initial accepted stage, preserves the journal in the machine-local cancelled archive, and never switches mode or reverses direction. Restart managed processes through the existing PM2 ecosystem workflow after cancellation if their normal boot was refused. CLI configuration follows the ecosystem's environment precedence; run from the same configured operator environment. Changed source configuration, a different operation ID, an unknown stage/version, and a competing operation are refused.
 
-An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command; `node scripts/database-maintenance.mjs recover <operation-id>` only resumes the recorded operation after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings recovery feedback is #8811. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
+An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command; `node scripts/database-maintenance.mjs recover <operation-id>` only resumes the recorded operation after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
 
 Coordinator stage publication uses immutable, atomically linked records. A same-operation retry with the existing owner token can confirm its last transition after a lost response; abandoned temporary files do not advance the stage, and a delayed retry cannot overwrite later progress. Interrupted claims from the older publication protocol still fail closed. This does not permit replacing a coordinator, reopening admission, or retrying SQL import: those require the offline recovery protocol.
 

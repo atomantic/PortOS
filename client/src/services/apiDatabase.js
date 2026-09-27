@@ -21,3 +21,15 @@ export const destroyDatabase = (backend) => request('/database/destroy', {
   method: 'POST',
   body: JSON.stringify({ backend })
 });
+
+// Coordinated offline backend cutover (#8811). The journal survives the
+// server's own restart, so status reads work before/after that gap too.
+export const getDatabaseMaintenanceStatus = (options) => request('/database/maintenance/status', { silent: true, ...options });
+export const cutoverDatabase = (direction) => request('/database/maintenance/cutover', {
+  method: 'POST',
+  body: JSON.stringify(direction)
+});
+export const recoverDatabaseCutover = (id) => request('/database/maintenance/recover', {
+  method: 'POST',
+  body: JSON.stringify({ id })
+});
