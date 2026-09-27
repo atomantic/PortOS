@@ -940,10 +940,16 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // unhandled rejection (process-killing on Node >= 15), leave the job
     // stuck in 'running' forever, and hang any connected SSE client with no
     // terminal frame. Mirrors codex.js / grok.js's finalizeJobFailure.
-    // `terminalEmitted` tracks whether one of the branches below already sent
-    // a terminal SSE frame + imageGenEvents event, so a throw AFTER that
-    // point (e.g. autoCleanGeneratedImage failing once job.status is already
-    // 'complete') can't send a second, contradictory terminal event.
+    // `terminalEmitted` is set right before each branch's `broadcastSse` call
+    // — i.e. once we've committed to a terminal outcome and are about to tell
+    // consumers about it, not after. That ordering matters: it's set BEFORE
+    // the SSE frame goes out, not after imageGenEvents.emit(), so a listener
+    // that itself throws while handling one of these events can't cause the
+    // catch below to retry the very emit that just threw. It's also checked
+    // in the catch so a throw AFTER a terminal event was already dispatched
+    // (e.g. autoCleanGeneratedImage failing once job.status is already
+    // 'complete') logs the secondary failure without re-emitting a
+    // contradictory terminal frame or downgrading a delivered 'complete'.
     let terminalEmitted = false;
     try {
       // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
@@ -956,9 +962,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         job.status = 'error';
         job.error = emptyFrame;
         console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
+        terminalEmitted = true;
         broadcastSse(job, { type: 'error', error: emptyFrame });
         imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame });
-        terminalEmitted = true;
         return;
       }
       if (code !== 0) {
@@ -1036,11 +1042,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         job.error = userMessage || errorText;
         job.errorKind = userKind;
         job.errorRepo = userRepo;
+        terminalEmitted = true;
         broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
         // Propagate the friendly message (not the raw "Exit code 1") to the
         // job queue so its `failed` log line and future SSE replays carry it.
         imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error });
-        terminalEmitted = true;
       } else {
         job.status = 'complete';
         // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
@@ -1106,8 +1112,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         // `outputPath` so the queue/route can read the finished bytes; `path`
         // stays null so nothing treats it as a gallery URL.
         const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
-        broadcastSse(job, { type: 'complete', result });
         terminalEmitted = true;
+        broadcastSse(job, { type: 'complete', result });
         // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
         // (mflux generates a random one if the client didn't pass one). Emit the
         // gallery `completed` (which drives the media-asset index + peer-sync
@@ -1125,9 +1131,15 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     } catch (err) {
       const reason = err?.message || String(err);
       console.error(`❌ Image generation post-exit handler failed [${jobId.slice(0, 8)}]: ${reason}`);
-      job.status = 'error';
-      job.error = reason;
+      // `terminalEmitted` is already true here only when the throw came from
+      // dispatching a terminal event itself (a downstream broadcastSse/
+      // imageGenEvents listener throwing) — that event already reached
+      // consumers, so don't downgrade a delivered outcome (e.g. a 'complete'
+      // frame the client already saw) to 'error', and don't retry the same
+      // emit that just threw.
       if (!terminalEmitted) {
+        job.status = 'error';
+        job.error = reason;
         broadcastSse(job, { type: 'error', error: reason });
         imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
       }
