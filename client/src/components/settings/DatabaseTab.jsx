@@ -269,7 +269,6 @@ export function DatabaseTab() {
   // the same tab must still recognize its own cutover once it reconciles.
   const ownOperationRef = useRef(safeReadJsonSession(OWN_OPERATION_KEY));
   const wentDownAtRef = useRef(null);
-  const hasConnectedOnceRef = useRef(socket.connected);
 
   const loadStatus = useCallback(() => {
     setDbLoading(true);
@@ -312,7 +311,12 @@ export function DatabaseTab() {
           toast.error('Database cutover was interrupted and needs recovery.', { id: CUTOVER_TOAST_ID });
         }
       })
-      .catch(() => setMaintenance(null))
+      // A failed read (e.g. the server is mid-restart) tells us nothing new —
+      // keep whatever fence state we last confirmed rather than dropping to
+      // null, which would read as idle and re-enable competing actions while
+      // a cutover may still be in flight. Only a first-ever failed read has
+      // nothing to preserve, which correctly renders "unable to check".
+      .catch(() => setMaintenance((prev) => prev))
       .finally(() => setMaintenanceLoading(false));
   }, []);
 
@@ -335,15 +339,12 @@ export function DatabaseTab() {
     // Push, don't poll: the cutover restarts this server, so there is no
     // event stream during that gap. Socket.IO's own reconnect (not a
     // client-driven interval) is the signal that it's safe to re-read the
-    // durable maintenance journal.
+    // durable maintenance journal. Reconcile on EVERY connect, including the
+    // first — a page reloaded while the server was still down gets its
+    // mount-time HTTP reads refused, and this is the only later signal that
+    // it's back. A duplicate read right after a successful mount fetch is
+    // harmless.
     const handleConnect = () => {
-      if (!hasConnectedOnceRef.current) {
-        hasConnectedOnceRef.current = true;
-        return;
-      }
-      // A real reconnect (not the initial connect) — the durable journal may
-      // have moved on while this tab had no socket. Downtime (if any) was
-      // already captured by handleDisconnect below.
       loadStatus();
       reconcileMaintenance();
     };

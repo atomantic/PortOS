@@ -94,19 +94,36 @@ describe('DatabaseTab migration', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: /^Backup$/i })[0]).toBeDisabled());
   });
 
-  it('reconciles the durable journal on socket reconnect, not on a timer', async () => {
-    // Not yet connected at mount, so the socket's own first `connect` is the
-    // initial handshake, not a reconnect worth re-reading the journal for.
-    socket.connected = false;
+  it('reconciles the durable journal on every socket connect, not on a timer', async () => {
     await renderTab();
     expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(1);
 
-    await act(async () => { fireSocketEvent('connect'); }); // the initial connect — ignored (not a reconnect)
-    expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(1);
+    // Reconciling on every connect (not just a later reconnect) matters when a
+    // page reloads while the server is still down: the mount-time HTTP read
+    // fails, and the socket's first successful connect is the only signal
+    // that it's safe to re-read the journal.
+    await act(async () => { fireSocketEvent('connect'); });
+    await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(2));
 
     await act(async () => { fireSocketEvent('disconnect'); });
-    await act(async () => { fireSocketEvent('connect'); }); // a real reconnect after a real disconnect
-    await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(2));
+    await act(async () => { fireSocketEvent('connect'); });
+    await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(3));
+  });
+
+  it('keeps the last known fenced state (fails closed) when a status re-read errors mid-cutover', async () => {
+    getDatabaseMaintenanceStatus.mockResolvedValueOnce({
+      id: 'op-5', stage: 'exporting', coordinator: 'awaiting-exit', source: 'docker', target: 'native', fenced: true,
+    });
+    render(<DatabaseTab />);
+    await waitFor(() => expect(screen.getByText(/Draining writers|Exporting source database/i)).toBeTruthy());
+
+    getDatabaseMaintenanceStatus.mockRejectedValueOnce(new Error('server unreachable'));
+    await act(async () => { fireSocketEvent('disconnect'); });
+    await act(async () => { fireSocketEvent('connect'); });
+
+    // Still shows the fenced state — never silently drops to idle/unknown,
+    // which would re-enable competing backend actions mid-cutover.
+    expect(screen.getByText(/Exporting source database/i)).toBeTruthy();
   });
 
   it('shows an actionable recovery control for an interrupted cutover, and resumes the same operation id', async () => {
