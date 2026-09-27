@@ -80,6 +80,16 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/database/maintenance/cutover',
   'POST /api/database/maintenance/recover',
 
+  // Database admin routes: lifecycle, data integrity, and migration (#8897).
+  'POST /api/database/start',
+  'POST /api/database/stop',
+  'POST /api/database/destroy',
+  'POST /api/database/setup-native',
+  'POST /api/database/export',
+  'POST /api/database/sync',
+  'POST /api/database/fix',
+  'POST /api/database/switch',
+
   // Setting a password mints an operator session: bootstrap must be local,
   // and rotation must already hold operator authority (#8771).
   'POST /api/auth/password',

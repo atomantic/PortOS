@@ -73,6 +73,7 @@ import databaseRoutes from './database.js';
 import { PATHS } from '../lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 
 afterAll(cleanupTempDataRoots);
 import { isPg17OnlyDirective, importDumpFile } from '../services/dbAdmin.js';
@@ -766,5 +767,32 @@ describe('POST /api/database/sync endpoint safety', () => {
     mockExecFile([{ exitCode: 0, stdout: 'Current mode: native' }]);
     const res = await request(app).post('/api/database/destroy').send({ backend: 'docker' });
     expect(res.status).toBe(200);
+  });
+});
+
+// Every host-executing database route requires operator authority (#8897).
+describe('database admin routes host-control gating', () => {
+  const gated = express();
+  gated.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+  gated.use(hostControlRouteGate);
+  gated.use(express.json());
+  gated.use('/api/database', databaseRoutes);
+
+  it.each([
+    ['start', { backend: 'docker' }],
+    ['stop', { backend: 'native' }],
+    ['destroy', { backend: 'docker' }],
+    ['setup-native', {}],
+    ['export', {}],
+    ['sync', {}],
+    ['fix', {}],
+    ['switch', { target: 'docker', migrate: false }],
+  ])('refuses POST /api/database/%s without host control and runs nothing', async (route, body) => {
+    const res = await request(gated).post(`/api/database/${route}`).send(body);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

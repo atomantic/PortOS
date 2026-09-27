@@ -31,7 +31,7 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
 // Every mutation in these audited routers must be gated or explicitly reviewed
 // as a data/inference operation. A new route fails closed at review time instead
 // of silently falling through the inventory's one-way "listed routes exist" check.
-describe('browser/runtime mutation inventory (#8798)', () => {
+describe('browser/runtime/database mutation inventory (#8798, #8897)', () => {
   const dataOrInference = [
     'POST /api/browser/navigate',
     'DELETE /api/browser/downloads/:name',
@@ -49,14 +49,17 @@ describe('browser/runtime mutation inventory (#8798)', () => {
       'mtplx/models/pull', 'mtplx/models/remove',
       'slotstream/models/download', 'slotstream/models/download/cancel',
     ].map(path => `POST /api/local-llm/${path}`),
+    // Advisory and read-only: validates cutover preconditions, runs nothing (#8897).
+    'POST /api/database/maintenance/preflight',
   ];
 
   it('classifies every mounted mutation and keeps reviewed data/inference operations open', () => {
     const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
       /^(POST|PUT|PATCH|DELETE)$/.test(method)
-      && /^\/api\/(browser|harnesses|local-llm)(\/|$)/.test(path));
+      && /^\/api\/(browser|database|harnesses|local-llm)(\/|$)/.test(path));
     const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
       .map(({ method, path }) => `${method} ${path}`);
     expect([...new Set(open)].sort()).toEqual([...dataOrInference].sort());
   });
 });
+
