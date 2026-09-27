@@ -11,7 +11,10 @@
  * planner never sees the project styleSpec) and the project's styleSpec (what
  * the treatment and evaluation stages judge against). Reference images are
  * listed by their served `/data/...` path — the same convention the treatment
- * prompt uses for a starting image — never by an absolute machine path.
+ * prompt uses for a starting image — never by an absolute machine path. They
+ * are also returned as structured `images` (kind + filename) so the CD project
+ * can hand the pixels to the stages that build their own model calls (scene
+ * evaluation) and to local image renders (#8724).
  *
  * Board selection on the stored brief (`brief.constraints.moodBoardId`):
  * absent / null follows the universe's linked board, '' means no board, any
@@ -71,7 +74,9 @@ function renderCommissionStyleSource({ universe = null, board = null, images = [
 /**
  * Resolve a commission's configured universe / mood board. Returns null when
  * neither is configured, else
- * `{ universeId, universeName, moodBoardId, moodBoardName, universeMissing, text }`.
+ * `{ universeId, universeName, moodBoardId, moodBoardName, universeMissing, text, images }`.
+ * `images` is `[{ kind: 'image' | 'image-ref', filename, label, origin }]` —
+ * filenames only, never absolute paths, since it is persisted on the project.
  * `universeMissing` is true when the configured universe no longer exists, so
  * the directive drops it from the planner's scope instead of pointing a series
  * at a deleted universe.
@@ -97,7 +102,8 @@ export async function resolveCommissionStyleSource(commission) {
     : noBoard;
   const universeMissing = !!universeId && !universe;
   if (!universe && !board && !universeMissing) return null;
-  const text = renderCommissionStyleSource({ universe, board, images: [...universeImages, ...boardImages] });
+  const images = [...universeImages, ...boardImages];
+  const text = renderCommissionStyleSource({ universe, board, images });
   return {
     universeId: universe ? universeId : null,
     universeName: universe?.name || null,
@@ -105,6 +111,7 @@ export async function resolveCommissionStyleSource(commission) {
     moodBoardName: board?.name || null,
     universeMissing,
     text,
+    images: images.map(({ kind, filename, label, origin }) => ({ kind, filename, label, origin })),
   };
 }
 

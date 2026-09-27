@@ -15,7 +15,7 @@ vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities
 const { getProviderById, listProviders } = await import('./providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, pickAvailableReviewerGroups, isReviewerQuotaFailure } = await import('./codeReview.js');
+const { pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups, isReviewerQuotaFailure } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -174,25 +174,27 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  // #6338: a reviewer is a feedback agent, never a writer. Antigravity's only
-  // maintained public-review posture may apply edits (`accept-edits`), so it
-  // has no enforced no-tool recipe — every CLI review, tool-free or ordinary,
-  // must refuse it (and any other unrecognized harness) rather than fall back
-  // to that vendor's normal unrestricted argv, which for several CLIs is a
-  // blanket `--dangerously-skip-permissions`-class flag.
-  it('refuses Antigravity and custom harnesses that have no enforced no-tool review posture, in an ordinary review too', async () => {
+  // Antigravity (like any harness with no enforced reviewer mode) reviews code,
+  // ordinary or claim, but never from the caller's checkout: its ordinary argv
+  // may carry a blanket-permission flag, so it runs in a scratch directory with
+  // the diff inlined and the no-tool environment allowlist.
+  it('runs a harness with no enforced reviewer mode confined to a scratch directory', async () => {
     for (const command of ['agy', 'custom-agent']) {
       getProviderById.mockResolvedValue({ ...provider, type: 'cli', command });
       runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
-      expect(await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() })).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
-      expect(runCliProviderPrompt).not.toHaveBeenCalled();
+      const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff' }, process.cwd());
+      for (const request of [{ backend, model: 'pinned-coder', diff: 'example diff', cwd: process.cwd() }, claimRequest]) {
+        expect(await runLocalCodeReview(request)).toMatchObject({ ok: true });
+        const args = runCliProviderPrompt.mock.lastCall[0];
+        expect(args).toMatchObject({ safetyProfile: 'public-review-gate', codeReview: true });
+        expect(args.cwd).not.toBe(process.cwd());
+        await expect(access(args.cwd)).rejects.toThrow();
+      }
     }
   });
 
-  it('keeps explicit tool-free review and public claim screening fail-closed for unsupported harnesses', async () => {
+  it('keeps public-comment screening fail-closed for harnesses with no enforced reviewer mode', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'custom-agent' });
-    const claimRequest = localReviewBridgeRequest({ kind: 'claim-review', backend, diff: 'example diff', toolFree: false }, process.cwd());
-    expect(await runLocalCodeReview(claimRequest)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
     expect(await runLocalClaimCommentReview({ backend, comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] })).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
@@ -222,14 +224,13 @@ describe('configured provider reviewers', () => {
   });
 
   describe('getProviderReviewUnsupported', () => {
-    // #6338: every CLI reviewer now needs a maintained no-tool posture, so a
-    // harness this install doesn't recognize (no `supportsPublicReviewProvider`
-    // recipe) is reported unsupported too — it would otherwise fall back to
-    // that vendor's unrestricted argv.
-    it('names missing CLI commands and unfamiliar harnesses with no enforced no-tool posture', async () => {
+    // Any CLI with a command can review code (confined when it has no enforced
+    // mode), so only a missing command is reported.
+    it('names only providers with no command to run', async () => {
       listProviders.mockResolvedValue([
         provider,
         { ...provider, id: 'supported-cli', type: 'cli', command: 'claude' },
+        { ...provider, id: 'read-only-cli', type: 'cli', command: 'agy' },
         { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' },
         { ...provider, id: 'no-command', type: 'cli' },
         { ...provider, id: 'switched-off', type: 'cli', command: 'custom-agent', enabled: false },
@@ -239,27 +240,49 @@ describe('configured provider reviewers', () => {
       // this map" and "nothing is wrong here" read the same to a picker.
       expect(unsupported).toEqual({
         'provider:no-command': 'REVIEWER_UNSUPPORTED',
-        'provider:hosted-harness': 'REVIEWER_UNSUPPORTED',
       });
       expect(unsupported['provider:example-gpu']).toBeUndefined();
       expect(unsupported['provider:supported-cli']).toBeUndefined();
+      expect(unsupported['provider:read-only-cli']).toBeUndefined();
+      expect(unsupported['provider:hosted-harness']).toBeUndefined();
       // A disabled provider is already badged `disabled` by the picker's own
       // provider-record check; reporting it here would badge one fact twice.
       expect(unsupported['provider:switched-off']).toBeUndefined();
     });
 
+    // A fault stored before the provider gained a reviewer mode would otherwise
+    // keep the health warning up until some later review happened to succeed.
+    it('drops a stored unsupported fault for a provider that can review now', async () => {
+      const { getSettings } = await import('./settings.js');
+      getSettings.mockResolvedValue({ codeReview: { reviewerHealth: {
+        'provider:agy-cli': { code: 'REVIEWER_UNSUPPORTED', lastFailureAt: 1 },
+        'provider:no-command': { code: 'REVIEWER_UNSUPPORTED', lastFailureAt: 1 },
+      } } });
+      listProviders.mockResolvedValue([
+        { ...provider, id: 'agy-cli', type: 'cli', command: 'agy' },
+        { ...provider, id: 'no-command', type: 'cli' },
+      ]);
+      expect(await getReviewerConfigHealth()).toEqual({
+        status: 'warning',
+        configFaults: { 'provider:no-command': { code: 'REVIEWER_UNSUPPORTED', lastFailureAt: 1 } },
+      });
+    });
+
     it('agrees with what the dispatch actually does, rather than keeping its own copy of the rule', async () => {
-      const harness = { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' };
+      const harness = { ...provider, id: 'no-command', type: 'cli' };
       listProviders.mockResolvedValue([harness]);
       getProviderById.mockResolvedValue(harness);
       const warned = await getProviderReviewUnsupported();
-      const ran = await runLocalCodeReview({ backend: 'provider:hosted-harness', diff: 'example diff' });
-      expect(warned['provider:hosted-harness']).toBe(ran.code);
+      const ran = await runLocalCodeReview({ backend: 'provider:no-command', diff: 'example diff' });
+      expect(warned['provider:no-command']).toBe(ran.code);
     });
 
-    it('reports nothing when the provider store cannot be read', async () => {
+    it('reports nothing, and clears no stored fault, when the provider store cannot be read', async () => {
       listProviders.mockRejectedValue(new Error('provider store unreadable'));
       expect(await getProviderReviewUnsupported()).toEqual({});
+      const { getSettings } = await import('./settings.js');
+      getSettings.mockResolvedValue({ codeReview: { reviewerHealth: { 'provider:agy-cli': { code: 'REVIEWER_UNSUPPORTED', lastFailureAt: 1 } } } });
+      expect((await getReviewerConfigHealth()).configFaults).toHaveProperty('provider:agy-cli');
     });
   });
 });

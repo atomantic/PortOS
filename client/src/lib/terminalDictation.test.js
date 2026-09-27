@@ -171,13 +171,28 @@ describe('attachDictationBridge', () => {
     expect(xterm).toHaveBeenCalledTimes(1);
   });
 
-  it('stays out of the way in screen-reader mode', () => {
-    const xterm = attachXtermStub();
+  it('forwards dictation in screen-reader mode', () => {
+    // xterm ignores every insertText in this mode, so the bridge is the only
+    // path a dictated phrase has to the PTY.
     terminal.options.screenReaderMode = true;
     textarea.value = 'abc';
     fireInput('insertText');
+    expect(sent).toEqual(['abc']);
+  });
+
+  it('leaves a keydown-sent insertion to xterm in screen-reader mode', () => {
+    // xterm sends the key from keydown without cancelling it, so the browser
+    // then inserts it into the field — no keypress involved.
+    terminal.options.screenReaderMode = true;
+    fireKey('keydown', 65);
+    textarea.value = 'a';
+    fireInput('insertText');
+    fireKey('keyup', 65);
+    fireKey('keydown', 8);
+    textarea.value = '';
+    fireInput('deleteContentBackward');
+    fireKey('keyup', 8);
     expect(sent).toEqual([]);
-    expect(xterm).toHaveBeenCalledTimes(1);
   });
 
   it('does not claim text the sink reports as dropped', () => {
@@ -377,6 +392,32 @@ describe('attachDictationBridge against a real xterm Terminal', () => {
     typeThroughKeypress(' ');
     dispose();
     expect(sent).toEqual(['T', ' ', 'X', ' ']);
+  });
+
+  // The Shell page runs xterm in screen-reader mode (createShellTerminal), where
+  // xterm drops every insertText event: dictation, which fires no key events,
+  // never reached the PTY at all. If an upgrade starts forwarding these, the
+  // first assertion fails and the bridge would double-send in this mode.
+  it('delivers dictation in screen-reader mode, where xterm alone drops it', () => {
+    terminal.options.screenReaderMode = true;
+    const sent = [];
+    terminal.onData((d) => sent.push(d));
+    dictate(['hello']);
+    expect(sent).toEqual([]);
+
+    terminal.textarea.value = '';
+    const dispose = attachDictationBridge(terminal, (d) => { sent.push(d); });
+    dictate(['dde', 'deter', 'determines']);
+    // A lowercase key xterm sends from keydown without cancelling it: the browser
+    // then inserts it into the field, and it must not go out twice.
+    const { textarea } = terminal;
+    textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', keyCode: 88, bubbles: true }));
+    textarea.value += 'x';
+    textarea.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'x', bubbles: true }));
+    textarea.dispatchEvent(new KeyboardEvent('keyup', { key: 'x', keyCode: 88, bubbles: true }));
+    dispose();
+
+    expect(render(sent)).toBe('determinesx');
   });
 
   it('sends the dictated phrase once, not the accumulated garble', () => {

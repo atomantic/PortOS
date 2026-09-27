@@ -879,6 +879,20 @@ class _H3StepwisePreview:
             * (self.latent_height // patch_h)
             * (self.latent_width // patch_w)
         )
+        # The preview publishes one frame, not a clip. Decode just one VAE
+        # window around the midpoint instead of decoding the entire video on
+        # every diffusion step. Respect the decoder's lead-in/token-drop floor
+        # and slice on temporal patch boundaries so unpatchify stays valid.
+        chunk = pipe.video_vae.tokens_chunk_size
+        drop = pipe.video_vae.config.token_drop
+        minimum = 2 * chunk - drop if drop > 0 else chunk
+        self.preview_latent_frames = min(
+            self.num_latent_frames, ((minimum + patch_t - 1) // patch_t) * patch_t
+        )
+        rows_per_patch_frame = self.target_rows // (self.num_latent_frames // patch_t)
+        start = ((self.num_latent_frames - self.preview_latent_frames) // (2 * patch_t))
+        self.preview_row_start = start * rows_per_patch_frame
+        self.preview_row_end = self.preview_row_start + (self.preview_latent_frames // patch_t) * rows_per_patch_frame
         self._latest_rows = None
         self.saved = 0
 
@@ -894,9 +908,10 @@ class _H3StepwisePreview:
             return
         try:
             rows = self._latest_rows[-self.target_rows:]
+            rows = rows[self.preview_row_start:self.preview_row_end]
             frames = self.pipe._decode_video(
                 rows,
-                self.num_latent_frames,
+                self.preview_latent_frames,
                 self.latent_height,
                 self.latent_width,
             )
@@ -1021,6 +1036,27 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"--draft-decoder-id must be a bare directory-safe name; got {args.draft_decoder_id!r}.")
 
 
+def place_keyframes_on_canvas(images: list, width: int, height: int) -> list:
+    """Put every keyframe onto the render canvas before the pipeline sees it.
+
+    The pinned FL2VA reference prepares keyframes onto the canvas in its setup
+    step, and BOTH consumers read those prepared images: the Qwen3-VL vision
+    tower (via the text encoder) and the video VAE. The pinned MLX port prepares
+    them only inside `_encode_keyframes`, so its text encoder receives the raw
+    upload — the vision tower then sees a different size, aspect and token grid
+    than the VAE rows it is paired with (#8867).
+
+    Uses the port's own `prepare_keyframe_image` (the reference algorithm:
+    stretch the first keyframe, cover-crop any follower), which returns an
+    already-canvas-sized image untouched, so the VAE path is unchanged.
+    """
+    if not images:
+        return images
+    from minimax_h3_mlx.packing import prepare_keyframe_image
+
+    return [prepare_keyframe_image(image, height, width, stretch=index == 0) for index, image in enumerate(images)]
+
+
 def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
     """Render one at a time, retaining weights and only this request's conditioning.
 
@@ -1028,6 +1064,7 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
     encoder's return in memory even when the optional disk cache is unavailable.
     The closed-over prompt and images never change inside this workflow.
     """
+    images = place_keyframes_on_canvas(images, args.width, args.height)
     preview = _install_h3_stepwise_preview(pipe, args)
     encode = pipe.text_encoder.encode
     encoded = None

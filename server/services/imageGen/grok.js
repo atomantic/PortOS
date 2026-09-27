@@ -41,7 +41,7 @@ import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGu
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildNoImageReason } from './noImageReason.js';
@@ -426,8 +426,11 @@ async function runGrok(job, jobId, bin, args, {
       activeJobs.delete(jobId);
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (grok)`);
       const result = { filename, path: `/data/images/${filename}` };
-      broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename });
+      dispatchTerminalEvent(
+        jobId,
+        () => broadcastSse(job, { type: 'complete', result }),
+        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, path: `/data/images/${filename}`, filename }),
+      );
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();

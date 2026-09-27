@@ -1,11 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { Home, Crown } from 'lucide-react';
+import { Home } from 'lucide-react';
 import { SingleNavRow } from './Layout';
 
 const baseItem = { to: '/', label: 'Dashboard', icon: Home, single: true };
-const badgeItem = { to: '/cos', label: 'Chief of Staff', icon: Crown, single: true, showBadge: true };
 
 const renderRow = (props = {}) => render(
   <MemoryRouter>
@@ -13,7 +12,6 @@ const renderRow = (props = {}) => render(
       item={baseItem}
       collapsed={false}
       active={false}
-      badgeCount={0}
       pinned={false}
       onTogglePin={() => {}}
       onNavigate={() => {}}
@@ -67,28 +65,4 @@ describe('SingleNavRow', () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
-  it('renders the unread badge when showBadge and badgeCount > 0', () => {
-    renderRow({ item: badgeItem, badgeCount: 3 });
-    expect(screen.getByText('3')).toBeTruthy();
-  });
-
-  it('caps the badge at 9+', () => {
-    renderRow({ item: badgeItem, badgeCount: 42 });
-    expect(screen.getByText('9+')).toBeTruthy();
-  });
-
-  it('omits the badge when badgeCount is 0', () => {
-    renderRow({ item: badgeItem, badgeCount: 0 });
-    expect(screen.queryByText(/^\d/)).toBeNull();
-  });
-
-  it('omits the badge for items without showBadge even when badgeCount > 0', () => {
-    renderRow({ badgeCount: 5 });
-    expect(screen.queryByText('5')).toBeNull();
-  });
-
-  it('still shows the badge in the collapsed rail (overlaid on the icon)', () => {
-    renderRow({ item: badgeItem, badgeCount: 2, collapsed: true });
-    expect(screen.getByText('2')).toBeTruthy();
-  });
 });

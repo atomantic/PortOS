@@ -515,6 +515,7 @@ function setupCosEventForwarding() {
     ['scheduler:ran', 'cos:scheduler:changed'],
     ['scheduler:cancelled', 'cos:scheduler:changed'],
     ['agents:changed', 'cos:agents:changed'],
+    ['storage:changed', 'cos:storage:changed'],
     ['learning:changed', 'cos:learning:changed'],
   ]) {
     cosEvents.on(source, data => {

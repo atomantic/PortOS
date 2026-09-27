@@ -11,6 +11,58 @@ The dump includes the machine-local `cos_pending_agent_feedback` reference index
 
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 
+## Database backend migration
+
+Settings (Database tab) offers a coordinated offline cutover between Docker and
+native PostgreSQL. It stops/drains every PortOS writer (including the CoS
+runner), transfers the data, commits the new backend, restarts, and verifies
+the restarted server's target connection before reporting success — the same
+lifecycle `scripts/database-maintenance.mjs` drives from the CLI (see
+[Database maintenance admission](#database-maintenance-admission) below).
+`scripts/db.sh migrate`, `use-native`, and `use-docker` still refuse directly;
+native setup provisions without selecting a backend. Do not substitute Sync
+followed by Switch — that copies data without stopping writers or verifying
+the restart, and can strand writes accepted after the snapshot.
+
+Expect brief downtime while PortOS restarts. The Database tab shows the
+operation's stage (preparing, exporting/importing, restarting and verifying),
+never reports success from an accepted request, a reconnect, or a saved-mode
+change alone, and reconciles the outcome from the durable maintenance journal
+on socket reconnect and page reload — because the server it is watching is the
+one restarting. If the cutover worker exits before finishing, the tab shows an
+interrupted state with a Resume control that continues the same recorded
+operation; there is no rollback, force, or skip.
+
+If a previous migration left records missing, preserve both backend databases
+and the migration dump. The source may hold accepted writes absent from the
+target; overwriting or deleting it can destroy that recovery copy. Compare and
+recover the missing records before choosing an authoritative backend.
+See [storage mode guidance](STORAGE.md#moving-between-docker-and-native).
+
+### Explicit database endpoints for standalone transfers
+
+Standalone exports and imports can bind all connection fields explicitly:
+
+```bash
+scripts/db.sh export --endpoint localhost 5432 example_user example_db recovery-copy
+scripts/db.sh import --endpoint localhost 5561 example_user example_db data/db-dumps/portos-recovery-copy.sql
+```
+
+These commands require host `pg_dump` / `psql` and never fall back to a Docker
+container or select a backend from saved mode. Use a `pg_dump` version compatible
+with the source PostgreSQL server. The four endpoint arguments are host, port,
+user, and database name; connection strings are not accepted as database names.
+Supply credentials through `PGPASSWORD`, never as command arguments.
+A failed export does not replace an existing dump.
+Import retains the dump and uses one transaction with `ON_ERROR_STOP`.
+
+An explicit endpoint only selects where a standalone transfer runs. Import
+replaces database objects present in the dump: keep recovery copies and stop
+the target's writers before restoring. These commands do not stop PortOS,
+change saved mode, verify a restarted pool, or authorize a backend cutover —
+use the coordinated cutover above (Settings Database tab or
+`scripts/database-maintenance.mjs`) for that.
+
 ## What gets backed up
 
 A backup run (`runBackup` in `server/services/backup.js`) writes to:
@@ -32,7 +84,9 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 `DEFAULT_EXCLUDES` (in `backup.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
 
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees, cached jev training embeddings — caches with no irreplaceable user data; never backed up.
-- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads, jev training corpora — re-downloadable or rebuildable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
+- **Overridable** (`overridable: true`): intermediate LoRA training checkpoints, cloned repos, reference repos, browser downloads, jev training corpora — re-downloadable or rebuildable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
+
+Deployed LoRA weights in `data/loras/` and their metadata sidecars are included by default, whether trained locally or downloaded. Promoting an earlier checkpoint copies its selected bytes there, so a backup preserves that adapter independently of excluded torch and mflux intermediate checkpoint directories. This deliberately accepts the storage cost of deployed weights. Old `disabledDefaultExcludes` entries for `/loras/*.safetensors` remain harmless; the removed default no longer needs a toggle.
 
 #### jev project heads — excluded bulk, retained artifact
 
@@ -60,7 +114,7 @@ The same rule applies to **user-entered** Additional Exclude Paths, which is the
 
 The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab switches describe default rule state: switching on disables that default exclusion, and switching off re-enables it. The summary counts enabled and disabled default rules, not included files.
 
-Additional Exclude Paths is independent: toggling a default never removes custom patterns, and custom rsync patterns remain accepted even when they overlap defaults. Additional rules still apply when a default is disabled, so disabling `/loras/*.safetensors` does not guarantee weights will be backed up: `*.safetensors` or `/lo*/` can still exclude them. `computeEffectiveExcludes()` produces the filter list; rsync alone decides which paths match. The UI does not predict snapshot contents.
+Additional Exclude Paths is independent: toggling a default never removes custom patterns, and custom rsync patterns remain accepted even when they overlap defaults. Additional rules still apply when a default is disabled, so deployed LoRA weights can still be omitted by explicit custom patterns: `*.safetensors` or `/lo*/` can still exclude them. `computeEffectiveExcludes()` produces the filter list; rsync alone decides which paths match. The UI does not predict snapshot contents.
 
 ## The Postgres dump is mandatory, not optional
 
@@ -96,7 +150,9 @@ After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore 
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back.
+
+**Dump admission (#8782).** Because the replay starts by resetting every application table, a dump that parses but stops early would commit an empty database — `ON_ERROR_STOP` cannot see a file that simply ends between complete statements, and historical snapshots carry no checksum to catch it. Before preview or execution touch the database, PortOS streams the dump once and requires the plain `pg_dump` envelope: the terminal `-- PostgreSQL database dump complete` block as the last content (only the `\unrestrict` line newer `pg_dump` writes may follow it) and the `CREATE TABLE` definitions for `memories` and `memory_links`, which every PortOS dump has contained. Tables introduced later are not required, and a complete dump of empty tables is valid. A header-only or truncated dump is refused as `dump_incomplete`, and a read failure as `dump_unreadable` — never as an empty successful restore. The same streamed read supplies the manifest checksum. For execution it also writes the bytes it checked to an owner-only copy in a fresh `portos-restore-*` directory under the OS temp dir, and `psql` replays that copy rather than the snapshot path, so a dump that changes on the backup media after admission cannot be what gets restored. The copy is removed when the restore finishes, whatever the outcome; staging it needs free temp space about the size of the dump. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish and peer sync is repaired (below); dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
@@ -105,6 +161,8 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'skipped', reason: 'not_configured' }` | Real restore requested but Postgres is unreachable — refuses to half-restore |
 | `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
+| `{ status: 'failed', reason: 'dump_unreadable', error }` | `portos-db.sql` could not be read, or its private restore copy could not be written — refused before any reset |
+| `{ status: 'failed', reason: 'dump_incomplete', error }` | The dump lacks the `pg_dump` completion marker or a core PortOS table (header-only or truncated) — refused before any reset |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
 | `{ status: 'failed', reason: 'restore_sync_resync', error }` | The dump committed and the schema recovered, but peer sync could not be repaired (below) |
@@ -186,3 +244,65 @@ failure. Subsequent partial settings saves preserve restored fields. Transfer
 errors still report that files may have been overwritten; a cache-reload failure
 requires restarting PortOS before using CoS. Dry runs and selective restores
 outside the CoS state/config scope do not acquire this boundary.
+
+## Database maintenance admission
+
+While the server is still running, `GET /api/database/maintenance/status` reads the journal without querying PostgreSQL or launching shell probes. It uses the ordinary instance authentication gate (authentication remains optional) and returns `{ stage: "idle", fenced: false }` when no operation exists, or the operation's `id`, `stage`, source/target mode names, and `fenced: true`. Connection identities and coordinator credentials are never returned. Responses are not cacheable; damaged or unreadable state returns HTTP 503 with `DATABASE_MAINTENANCE`, never idle. A `verified` stage alone still reports fenced: it does not authorize writers or prove admission has reopened. Once the server has stopped or its boot fence refuses startup, use the local status command below; this endpoint does not bypass the boot fence.
+
+The persistent maintenance boundary is a prerequisite for coordinated offline migration (#8805). It does **not** migrate data, change saved mode, stop existing writer processes, or prove a target cutover. In particular, entering maintenance is not permission to invoke an uncoordinated SQL import or backend migration.
+
+From the install root, inspect or establish the fence:
+
+```sh
+node scripts/database-maintenance.mjs status
+node scripts/database-maintenance.mjs begin native docker
+# Or, when the saved source mode is Docker:
+node scripts/database-maintenance.mjs begin docker native
+```
+
+The command returns the operation ID and direction. Plan for downtime: new pooled database operations, database administration mutations/exports, and CoS spawn admission are refused immediately, and both managed server and runner refuse normal boot while fenced. Admission is the synchronous fence check: work admitted just before publication may still obtain a connection or spawn afterward. Already-admitted transactions may finish; this boundary alone is **not a drained snapshot boundary**. The offline coordinator must still stop/drain all owned writers and validate live/spawning work before export. A process-local restore callback cannot bypass this persistent fence.
+
+If no transfer has started and saved source configuration is unchanged, cancel using that exact ID:
+
+```sh
+node scripts/database-maintenance.mjs cancel <operation-id>
+```
+
+Cancellation supports only the initial accepted stage, preserves the journal in the machine-local cancelled archive, and never switches mode or reverses direction. Restart managed processes through the existing PM2 ecosystem workflow after cancellation if their normal boot was refused. CLI configuration follows the ecosystem's environment precedence; run from the same configured operator environment. Changed source configuration, a different operation ID, an unknown stage/version, and a competing operation are refused.
+
+An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. There is no rollback, force or skip command; `node scripts/database-maintenance.mjs recover <operation-id>` only resumes the recorded operation after its worker exited. The offline transfer, its retained `data/db-dumps/portos-maintenance-<operation-id>.sql` recovery dump, mode commit, verified restart and release are described in [offline transfer](STORAGE.md#offline-transfer) and [mode commit, verified restart, and release](STORAGE.md#mode-commit-verified-restart-and-release); Settings (Database tab) surfaces the interrupted state and its Resume control from the same journal. `data/database-authority.json` and `data/database-maintenance-completed/` are local records of a finished cutover — restoring an older backup without them lifts the retired-backend guard. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
+
+Coordinator stage publication uses immutable, atomically linked records. A same-operation retry with the existing owner token can confirm its last transition after a lost response; abandoned temporary files do not advance the stage, and a delayed retry cannot overwrite later progress. Interrupted claims from the older publication protocol still fail closed. This does not permit replacing a coordinator, reopening admission, or retrying SQL import: those require the offline recovery protocol.
+
+### Verification-only server startup
+
+The managed server entrypoint is `server/start.js`. Normal startup checks the
+persistent fence before importing the application graph, so routes, migrations,
+schedulers, and writer modules cannot initialize while maintenance is active.
+The CoS runner retains its separate boot fence.
+
+For an operation already at `verifying` or `verified`, a recovery operator can
+run a read-only target diagnostic from the intended target launch environment:
+
+```sh
+node server/start.js --verify-database <operation-id>
+```
+
+Supply the recorded target's `PGHOST`, `PGPORT`, `PGUSER`, and `PGDATABASE` through
+that environment, and credentials through `PGPASSWORD`. This direct Node command
+does not load `.env`; use the same resolved values the PM2 ecosystem would pass
+to the server. It checks the actual pool's captured connection settings against
+the recorded target before checkout, then checks database/user identity and the
+required memory/catalog schema in one read-only transaction. A stale source
+port, wrong operation, earlier stage, unavailable database, incomplete schema,
+or changed/damaged journal refuses the diagnostic. Raw connection errors and
+credentials are omitted from its response.
+
+Success returns `targetHealthy: true` and `fenced: true`, then closes the pool
+and exits. Repeating the command repeats the probe without changing any journal
+stage. It never imports the application, clears the fence, rewrites saved mode,
+or resumes writers. This is **not completed cutover or proof of a later ordinary
+restart**. The offline coordinator still must own shutdown/drain, transfer,
+interruption recovery, and a verified admission-release handshake (#8816).
+Do not advance journal stages manually to make this diagnostic run; unsupported
+or damaged operations must stay fenced with both database copies preserved.

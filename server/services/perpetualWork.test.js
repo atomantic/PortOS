@@ -85,6 +85,34 @@ function routeSpawn(routes) {
 }
 
 describe('perpetualWork', () => {
+  it.each([
+    ['claim-issue', 'gh'], ['claim-issue-gitlab', 'glab'], ['claim-work', 'gh']
+  ])('excludes structural and user labels before rendering %s agent inputs', async (taskType, cli) => {
+    const { resolveTaskDataInputs } = await import('./taskDataInputs.js');
+    const labels = ['in-progress', 'blocked', 'needs-input', 'future', 'wontfix', 'question', 'discussion', 'Human-Only'];
+    const issues = labels.map((label, index) => ({
+      number: index + 1, iid: index + 1, title: `Excluded ${index}`,
+      labels: [index % 2 ? { name: label.toUpperCase() } : label]
+    }));
+    issues.push({ number: 20, iid: 20, title: 'Eligible work', labels: ['bug'] });
+    routeSpawn({ [`${cli} issue`]: { stdout: JSON.stringify(issues) } });
+    const options = {
+      app: { repoPath: '/repo' }, taskType,
+      taskMetadata: { issueAuthorFilter: 'any', issueExcludeLabels: [' human-only '] },
+      dependencies: {
+        resolveTracker: async () => ({ forge: cli, host: cli === 'gh' ? 'github.com' : 'gitlab.com' }),
+        resolveTokenEnv: async () => ({})
+      }
+    };
+    const [section] = await resolveTaskDataInputs(['open-issues'], options);
+    expect(section.content).toContain('#20 Eligible work');
+    expect(section.content).not.toContain('Excluded');
+    routeSpawn({ [`${cli} issue`]: { stdout: JSON.stringify(issues.slice(0, -1)) } });
+    const [empty] = await resolveTaskDataInputs(['open-issues'], options);
+    expect(empty.content).toContain('No open issues match');
+    expect(empty.content).not.toContain('Excluded');
+  });
+
   describe('isActionableIssue', () => {
     const base = { number: 7, title: 'Fix the thing', assignees: [], labels: [] };
 
@@ -354,6 +382,77 @@ describe('perpetualWork', () => {
       expect(out.total).toBe(7);
       expect(out.inFlightCount).toBe(0);
       expect(out.filteredCount).toBe(7); // the epic (#1) + 6 needs-input/blocked
+      // Per-cause attribution: the park breakdown must say WHY each of the 7 was
+      // filtered, not just how many — "0 of 7 open" alone reads as a broken task.
+      expect(out.skipCauses).toEqual({ 'needs-input': 5, blocked: 1, 'decomposed-epic': 1 });
+    });
+
+    it('carries an empty skipCauses map when issues remain actionable (attribution is park-only)', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'plain', assignees: [], labels: [] },
+          { number: 2, title: 'taken', assignees: [{ login: 'x' }], labels: [] },
+          { number: 3, title: 'in flight', assignees: [], labels: [] },
+          { number: 4, title: 'reserved', assignees: [], labels: [{ name: 'good first issue' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-3\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['good first issue'] });
+      expect(out.actionable).toBe(true);
+      // Attribution is only computed for a park (0 actionable) — an actionable
+      // detection carries an empty map, not a partial one.
+      expect(out.skipCauses).toEqual({});
+    });
+
+    it('attributes every skip cause on a park, including in-flight and configured exclude labels', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 2, title: 'taken', assignees: [{ login: 'x' }], labels: [] },
+          { number: 3, title: 'in flight', assignees: [], labels: [] },
+          { number: 4, title: 'reserved', assignees: [], labels: [{ name: 'good first issue' }] },
+          { number: 5, title: 'waiting on you', assignees: [], labels: [{ name: 'needs-input' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-3\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['good first issue'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      expect(out.inFlightCount).toBe(1);
+      expect(out.filteredCount).toBe(3);
+      expect(out.skipCauses).toEqual({ 'needs-input': 1, assigned: 1, 'in-flight': 1, 'good first issue': 1 });
+    });
+
+    it('counts a cause named after an Object.prototype key (a configured exclude label named "constructor")', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'reserved', assignees: [], labels: [{ name: 'constructor' }] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['constructor'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      // A plain-object counter would read the inherited `constructor` and
+      // produce a garbage string the formatter's Number.isFinite filter
+      // silently drops — the park would explain nothing.
+      expect(out.skipCauses).toEqual({ constructor: 1 });
+    });
+
+    it('disambiguates a configured exclude label that collides with a non-label structural cause', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'reserved', assignees: [], labels: [{ name: 'in-flight' }] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['in-flight'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      // A bare `in-flight` cause would be suppressed by both UI consumers
+      // (the toast and the picker exclude it because counts.inFlight carries
+      // the structural one) — the collision must stay distinguishable.
+      expect(out.skipCauses).toEqual({ 'excluded-label:in-flight': 1 });
     });
 
     it('keeps an issue assigned to the authenticated account claimable', async () => {

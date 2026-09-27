@@ -185,6 +185,7 @@ export const APP_DETAIL_TABS = [
   { id: 'issues', label: 'Issues' },
   { id: 'pull-requests', label: 'PRs / MRs' },
   { id: 'jira', label: 'JIRA', feature: 'jira' },
+  { id: 'launch-video', label: 'Launch Video' },
   { id: 'processes', label: 'Processes' },
   { id: 'quality', label: 'Quality' },
   { id: 'references', label: 'References' },

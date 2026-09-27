@@ -90,7 +90,7 @@ function ThemeModeToggle({ className = '' }) {
 const SECTION_PRESENTATION = {
   Brain: { icon: Brain, defaultTo: '/brain/inbox' },
   Calendar: { icon: CalendarDays },
-  'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks', showBadge: true },
+  'Chief of Staff': { icon: Crown, defaultTo: '/cos/tasks' },
   Comms: { icon: MessagesSquare, defaultTo: '/messages/inbox' },
   Create: { icon: Sparkles, defaultTo: '/media' },
   'Dev Tools': { icon: Terminal },
@@ -215,16 +215,13 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
 
 // A top-level *single* nav row (Dashboard / Review Hub / Eidoverse / Goals). Unlike a
 // section, it links straight to one destination — and unlike WorkingSetRow it
-// carries the heavier top-level row weight plus the optional badge (Chief of
-// Staff unread count) and the collapsed-rail layout (icon-only, centered, badge
-// overlaid on the icon). When expanded it also exposes the same hover/focus
+// carries the heavier top-level row weight and the collapsed-rail layout
+// (icon-only, centered). When expanded it also exposes the same hover/focus
 // pin/unpin affordance as WorkingSetRow so these destinations can be pinned too;
 // the pin button is omitted in the collapsed rail, mirroring the Pinned/Recent
 // sections which only render when the sidebar is expanded.
-export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTogglePin, onNavigate }) {
+export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onNavigate }) {
   const Icon = item.icon;
-  const showBadge = item.showBadge && badgeCount > 0;
-  const badgeText = badgeCount > 9 ? '9+' : badgeCount;
   return (
     <div className={`group relative min-w-0 mx-2 min-h-[44px] lg:min-h-0 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
       <NavLink
@@ -241,25 +238,11 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
         title={item.label}
       >
         <div className="flex items-start gap-3 min-w-0 flex-1">
-          <div className="relative shrink-0">
-            <Icon size={20} className="shrink-0" />
-            {/* Badge for collapsed state */}
-            {showBadge && collapsed && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
-                {badgeText}
-              </span>
-            )}
-          </div>
+          <Icon size={20} className="shrink-0" />
           <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
             {item.label}
           </span>
         </div>
-        {/* Badge for expanded state — sits left of the absolute pin */}
-        {showBadge && !collapsed && (
-          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0 mt-0.5">
-            {badgeText}
-          </span>
-        )}
       </NavLink>
       {!collapsed && (
         <div className="absolute right-0 top-0 bottom-0 flex items-center">
@@ -623,7 +606,6 @@ export default function Layout() {
           item={item}
           collapsed={sidebarCollapsed}
           active={isActive(item.to)}
-          badgeCount={unreadCount}
           pinned={singlePinned}
           onTogglePin={() => (singlePinned ? unpin(item.to) : pin(item.to))}
           onNavigate={() => setMobileOpen(false)}
@@ -674,23 +656,11 @@ export default function Layout() {
             aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="relative">
-                <Icon size={20} className="shrink-0" />
-                {item.showBadge && unreadCount > 0 && sidebarCollapsed && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
-                )}
-              </div>
+              <Icon size={20} className="shrink-0" />
               <span className={`min-w-0 break-words leading-snug ${sidebarCollapsed ? 'lg:hidden' : ''}`}>
                 {item.label}
               </span>
             </div>
-            {!sidebarCollapsed && item.showBadge && unreadCount > 0 && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
-            )}
           </button>
           {!sidebarCollapsed && (
             <button

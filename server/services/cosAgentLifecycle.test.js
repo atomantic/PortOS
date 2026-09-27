@@ -58,10 +58,11 @@ vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([]),
 }));
 
-import { getAgent, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
+import { getAgent, getAgentPrompt, createAgentOutputBatcher, completeAgent, updateAgent, registerAgent, cleanupZombieAgents, filterLiveAgentIds, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, AGENT_OUTPUT_TAIL_LINES } from './cosAgentLifecycle.js';
 import { saveState, loadState, readAgentsStateForSafetyCheck } from './cosState.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { cosEvents } from './cosEvents.js';
+import { loadAgentIndex } from './cosAgentIndex.js';
 import { getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { activeAgents, runnerAgents } from './agentState.js';
 
@@ -77,6 +78,17 @@ describe('cosAgentLifecycle', () => {
 
   afterEach(async () => {
     await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('keeps archived prompts readable after state eviction, with UTF-8 byte counts', async () => {
+    const id = 'agent-archived-prompt';
+    const date = '2026-01-01';
+    const dir = join(mockCosState.agentsDir, date, id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify({ id, status: 'completed', completedAt: `${date}T12:00:00Z` }));
+    await writeFile(join(dir, 'prompt.txt'), 'Example café');
+    (await loadAgentIndex()).set(id, date);
+    await expect(getAgentPrompt(id)).resolves.toEqual({ prompt: 'Example café', bytes: Buffer.byteLength('Example café') });
   });
 
   it('hydrates paused agents with full preserved output from output.txt', async () => {

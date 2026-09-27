@@ -249,37 +249,11 @@ async function migrateAgentsToDateBuckets() {
   return index;
 }
 
-// Prune agent archive date buckets older than retentionDays (default 90).
-// Removes directories + their index entries. Runs after migration on startup.
-export async function pruneOldAgentArchives(retentionDays = 90) {
-  const idx = await loadAgentIndex();
-  if (!idx || idx.size === 0) return;
-
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - retentionDays);
-  const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-  const dateDirPattern = /^\d{4}-\d{2}-\d{2}$/;
-  const entries = await readdir(AGENTS_DIR, { withFileTypes: true }).catch(() => []);
-  const oldDates = entries
-    .filter(e => e.isDirectory() && dateDirPattern.test(e.name) && e.name < cutoffStr)
-    .map(e => e.name);
-
-  if (oldDates.length === 0) return;
-
-  for (const dateStr of oldDates) {
-    await rm(join(AGENTS_DIR, dateStr), { recursive: true }).catch(() => {});
-  }
-
-  // Remove index entries for all old dates in a single pass
-  const oldDateSet = new Set(oldDates);
-  let pruned = 0;
-  for (const [agentId, date] of idx.entries()) {
-    if (oldDateSet.has(date)) { idx.delete(agentId); pruned++; }
-  }
-
-  await saveAgentIndex();
-  console.log(`🗑️ Pruned ${pruned} archived agents older than ${retentionDays} days (${oldDates.length} date buckets)`);
+// Compatibility entry point for older callers. Whole-run age deletion is retired:
+// metadata, feedback and parsed output are permanent. Raw recording maintenance
+// is handled separately by cosAgentStorage, without dropping history indexes.
+export async function pruneOldAgentArchives() {
+  return { pruned: 0 };
 }
 
 // Get available agent date buckets with counts, sorted descending

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
+import { makeEmitterFaultIsolating } from '../lib/faultIsolatedEmitter.js';
 
-export const imageGenEvents = new EventEmitter();
+export const imageGenEvents = makeEmitterFaultIsolating(new EventEmitter());
 // Each in-flight image job attaches ~6 listeners (progress/status/completed/
 // failed + 2 watchdog activity tracers). With CODEX_PARALLEL_MAX = 10 codex
 // renders in flight plus a concurrent local image render, that's 60+ live

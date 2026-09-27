@@ -167,7 +167,7 @@ import {
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
-import { cosEvents } from './cosEvents.js'
+import { cosEvents, emitLog } from './cosEvents.js'
 import { recordUserAction } from './userActions.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
@@ -557,6 +557,17 @@ describe('taskSchedule', () => {
       }
     })
 
+    it('carries pre-rename v1 task config onto the renamed task', async () => {
+      readJSONFile.mockResolvedValue({
+        selfImprovement: { 'release-check': { enabled: false, prompt: 'custom release prompt' } },
+        executions: { 'self-improve:release-check': { count: 2, lastRun: '2026-09-01T00:00:00.000Z' } },
+      })
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['do-release']).toMatchObject({ enabled: false, prompt: 'custom release prompt' })
+      expect(schedule.tasks).not.toHaveProperty('release-check')
+      expect(schedule.executions['task:do-release']).toMatchObject({ count: 2 })
+    })
+
     it('should load and return existing v2 schedule', async () => {
       mockSchedule({
         tasks: { 'security': { type: 'weekly', enabled: true, providerId: 'p1', model: 'm1', prompt: null } }
@@ -627,7 +638,7 @@ describe('taskSchedule', () => {
 
     it('versions the basic self-improvement tasks so deployed installs can auto-upgrade', () => {
       for (const t of ['security', 'code-quality', 'test-coverage', 'performance', 'accessibility',
-        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'release-check']) {
+        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'do-release']) {
         expect(PROMPT_VERSIONS[t], `PROMPT_VERSIONS['${t}']`).toBeGreaterThanOrEqual(2)
       }
     })
@@ -1351,20 +1362,20 @@ describe('taskSchedule', () => {
         getAppTaskTypeInterval.mockResolvedValue(null)
         const lastRun = '2026-09-08T05:01:00Z'
         const schedule = {
-          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
-          executions: { 'task:release-check': { perApp: { 'app-1': { lastRun, count: 1 } } } }
+          tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
+          executions: { 'task:do-release': { perApp: { 'app-1': { lastRun, count: 1 } } } }
         }
         mockSchedule(schedule)
 
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, reason: 'cron-cooldown', nextRunAt: '2026-09-09T11:30:00.000Z'
         })
         vi.setSystemTime(new Date('2026-09-09T11:30:20Z'))
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
 
-        schedule.executions['task:release-check'].perApp['app-1'].lastRun = '2026-09-09T11:30:20Z'
+        schedule.executions['task:do-release'].perApp['app-1'].lastRun = '2026-09-09T11:30:20Z'
         mockSchedule(schedule)
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
         })
       })
@@ -1376,9 +1387,9 @@ describe('taskSchedule', () => {
         parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
         getAppTaskTypeInterval.mockResolvedValue('30 4 * * *')
         mockSchedule({
-          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '0 8 * * *', createdAt: '2026-09-01T00:00:00Z', runAfter: [] } }
+          tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '0 8 * * *', createdAt: '2026-09-01T00:00:00Z', runAfter: [] } }
         })
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
         })
         getAppTaskTypeInterval.mockResolvedValue(null)
@@ -1594,8 +1605,8 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('does NOT touch PLAN.md')
     })
 
-    it('release-check delegates to slashdo release and requires a named release heading', async () => {
-      const prompt = await getTaskPrompt('release-check')
+    it('do-release delegates to slashdo release and requires a named release heading', async () => {
+      const prompt = await getTaskPrompt('do-release')
       expect(prompt).toContain('/do:release')
       expect(prompt).toContain('{reviewers}')
       expect(prompt).toContain('# Release vX.Y.Z - <Fun Name>')
@@ -1635,7 +1646,7 @@ describe('taskSchedule', () => {
         // Locked, so a per-app override can't re-attach what the defaults cleared.
         // worktreeChangesExpected is managed too — see MANAGED_AGENT_OPTIONS.
         const managed = ['useWorktree', 'openPR', 'worktreeChangesExpected']
-        if (taskType === 'release-check') {
+        if (taskType === 'do-release') {
           managed.push('slashdoCommand')
           expect(meta.slashdoCommand).toBe('release')
         }
@@ -1661,7 +1672,7 @@ describe('taskSchedule', () => {
         expect(meta.useWorktree).toBe(false)
         expect(meta.openPR).toBe(false)
         expect(meta.worktreeChangesExpected).toBe(false)
-        if (taskType === 'release-check') expect(meta.slashdoCommand).toBe('release')
+        if (taskType === 'do-release') expect(meta.slashdoCommand).toBe('release')
         if (taskType === 'branch-reconcile') expect(meta.branchesPerAgent).toBe(3)
       }
     )
@@ -1786,6 +1797,20 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('ui-bugs')
       expect(prompt).toContain('mobile-responsive')
       expect(prompt).toContain('accessibility')
+    })
+  })
+
+  describe('media-render-research defaults', () => {
+    it('is an on-demand tracker-filing research task that files labelled media issues', async () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('media-render-research')
+      expect(DEFAULT_TASK_INTERVALS['media-render-research']).toMatchObject({
+        type: INTERVAL_TYPES.ON_DEMAND,
+        enabled: true,
+        taskMetadata: { useWorktree: false, openPR: false, readOnly: false },
+      })
+      const { resolveTrackerFilingBlock } = await import('../lib/workTracker.js')
+      const block = await resolveTrackerFilingBlock({ repoPath: '/tmp/example-repo', workTracker: 'github' }, 'media-render-research')
+      expect(block.trackerInstructions).toContain('--label media-research --label area:media --label plan')
     })
   })
 
@@ -2689,12 +2714,12 @@ describe('taskSchedule', () => {
         for (const app of apps) {
           getAppTaskTypeInterval.mockResolvedValueOnce(cron(app.id))
           getAppTaskTypeOverrides.mockResolvedValueOnce({
-            'release-check': { enabled: true, interval: cron(app.id) }
+            'do-release': { enabled: true, interval: cron(app.id) }
           })
         }
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         const upcoming = await getUpcomingTasks(50)
-        expect(upcoming.find(t => t.taskType === 'release-check')).toMatchObject({
+        expect(upcoming.find(t => t.taskType === 'do-release')).toMatchObject({
           status: 'ready', nextScheduledAt: new Date('2026-01-01T16:05:00Z').getTime()
         })
       })
@@ -2710,13 +2735,13 @@ describe('taskSchedule', () => {
         isTaskTypeEnabledForApp.mockResolvedValueOnce(true)
         getAppTaskTypeInterval.mockResolvedValueOnce('15 9 * * *')
         getAppTaskTypeOverrides.mockResolvedValueOnce({
-          'release-check': { enabled: true, interval: '15 9 * * *' }
+          'do-release': { enabled: true, interval: '15 9 * * *' }
         })
         mockSchedule({
-          tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } }
+          tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } }
         })
         const upcoming = await getUpcomingTasks(50)
-        const release = upcoming.find(t => t.taskType === 'release-check')
+        const release = upcoming.find(t => t.taskType === 'do-release')
 
         expect(release).toMatchObject({
           status: 'scheduled',
@@ -2734,24 +2759,24 @@ describe('taskSchedule', () => {
     describe('getUpcomingTasks — propagates input failures instead of swallowing them (#7527)', () => {
       it('propagates a rejected active-apps read instead of treating it as no apps', async () => {
         getActiveApps.mockRejectedValueOnce(new Error('app inventory unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app inventory unavailable')
       })
 
       it('propagates a rejected app-override read instead of treating it as no overrides', async () => {
         getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
         getAppTaskTypeOverrides.mockRejectedValueOnce(new Error('app overrides unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app overrides unavailable')
       })
 
       it('propagates a rejected per-app readiness read instead of treating the app as not-ready', async () => {
         getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
         getAppTaskTypeOverrides.mockResolvedValueOnce({
-          'release-check': { enabled: true, interval: '15 9 * * *' }
+          'do-release': { enabled: true, interval: '15 9 * * *' }
         })
         isTaskTypeEnabledForApp.mockRejectedValueOnce(new Error('app readiness unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app readiness unavailable')
       })
     })
@@ -2785,11 +2810,11 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
         const status = await getScheduleStatus()
-        expect(status.tasks['release-check'].appSchedules).toEqual([{
+        expect(status.tasks['do-release'].appSchedules).toEqual([{
           appId: 'app-1',
           appName: 'Acme',
           cronExpression: '15 9 * * *',
@@ -2805,10 +2830,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue(null)
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true } })
-        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true } })
+        mockSchedule({ tasks: { 'do-release': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
 
       // An app restating the task's own expression adds no schedule the global
@@ -2819,10 +2844,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
 
       it('omits an app that is disabled for the task', async () => {
@@ -2830,10 +2855,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(false)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: false, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: false, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
     })
 
@@ -2847,17 +2872,42 @@ describe('taskSchedule', () => {
         expect(record.parkCounts).toEqual({ open: 40, inFlight: 2, filtered: 38 })
       })
 
+      // A park on a non-empty queue must carry its WHY: the per-cause skip
+      // attribution ("49 needs-input, 17 blocked") is what tells the operator
+      // their work is waiting on decisions, not that the task is broken — the
+      // exact confusion behind reading a bare `no-actionable-issues` in PM2
+      // output next to 88 open issues.
+      it('parkPerpetual persists the per-cause skip attribution and names the top causes in its log line', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
+        const record = await parkPerpetual('claim-issue', 'app-1', {
+          reason: 'no-actionable-issues', actionableCount: 0,
+          counts: { open: 88, inFlight: 10, filtered: 78 },
+          skipCauses: { 'needs-input': 49, blocked: 17, 'decomposed-epic': 12, assigned: 2 }
+        })
+        expect(record.parkSkipCauses).toEqual({ 'needs-input': 49, blocked: 17, 'decomposed-epic': 12, assigned: 2 })
+        // The log line the operator reads in PM2 names the top 3 causes inline.
+        const logged = emitLog.mock.calls.at(-1);
+        expect(logged[1]).toMatch(/no-actionable-issues — 49 needs-input, 17 blocked, 12 decomposed-epic/);
+        expect(logged[1]).not.toMatch(/2 assigned/);
+      })
+
+      it('parkPerpetual leaves parkSkipCauses absent when the detector reports no attribution', async () => {
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
+        const record = await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, counts: null, skipCauses: null })
+        expect(record.parkSkipCauses).toBeUndefined()
+      })
+
       it('getPerpetualParkInfo reads back the park record (and null when not parked)', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
           tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
-            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } },
+            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 }, parkSkipCauses: { 'needs-input': 30, blocked: 8 } },
             'app-2': { lastRun: null, count: 0 }
           } } }
         })
         const info = await getPerpetualParkInfo('claim-issue', 'app-1')
-        expect(info).toMatchObject({ parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } })
+        expect(info).toMatchObject({ parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 }, parkSkipCauses: { 'needs-input': 30, blocked: 8 } })
         expect(await getPerpetualParkInfo('claim-issue', 'app-2')).toBeNull()
         expect(await getPerpetualParkInfo('claim-issue', 'unknown-app')).toBeNull()
       })
@@ -3152,6 +3202,20 @@ describe('taskSchedule', () => {
         expect(saved.executions['task:security'].perApp['app-1'].consecutiveFailures).toBe(1)
       })
 
+      it('records a task queued under a retired type name on the renamed ledger', async () => {
+        // A release-check task queued before migration 417 finishes after it.
+        mockSchedule({
+          tasks: { 'do-release': { type: 'on-demand', enabled: true } },
+          executions: { 'task:do-release': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 1, lastFailureAt: new Date().toISOString() }
+          } } }
+        })
+        const rec = await recordTaskTypeFailure('release-check', 'app-1', { errorCategory: 'timeout' })
+        expect(rec.consecutiveFailures).toBe(2)
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions).not.toHaveProperty('task:release-check')
+      })
+
       it('auto-parks + notifies after FAILURE_PARK_THRESHOLD consecutive failures', async () => {
         mockSchedule({
           tasks: { security: { type: 'rotation', enabled: true } },
@@ -3380,13 +3444,28 @@ describe('taskSchedule', () => {
         mockSchedule({
           tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
-            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' },
+            'app-1': {
+              lastRun: null,
+              count: 0,
+              parkedUntil: future,
+              parkReason: 'no-actionable-issues',
+              parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+              parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+            },
             'app-2': { lastRun: null, count: 0 }
           } } }
         })
         const status = await getScheduleStatus()
         const p = status.tasks['claim-issue'].perpetualStatus
-        expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
+        expect(p).toMatchObject({
+          parkedAppCount: 1,
+          trackedAppCount: 2,
+          globalParked: false,
+          nextRecheckAt: future,
+          parkReason: 'no-actionable-issues',
+          parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+          parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+        })
       })
     })
 

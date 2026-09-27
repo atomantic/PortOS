@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -6,9 +6,65 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
 
+function DeliveryReconciliation({ draft, onReconciled }) {
+  const [checkedMailbox, setCheckedMailbox] = useState(false);
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
+  const [error, setError] = useState(null);
+
+  const reconcile = async (outcome) => {
+    if (!checkedMailbox || pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    const result = await api.reconcileMessageDraft(draft.id, {
+      attemptId: draft.sendAttemptId, outcome
+    }, { silent: true }).catch(err => {
+      setError(err.message || 'Could not record delivery. Refresh the draft and try again.');
+      return null;
+    }).finally(() => {
+      pendingRef.current = false;
+      setPending(false);
+    });
+    if (result) onReconciled(result);
+  };
+
+  return (
+    <div className="rounded border border-port-warning/40 p-3 space-y-3 text-sm">
+      <p className="text-port-warning">
+        Delivery is unknown because this send was interrupted. It may already have
+        reached the recipient. Check your sent mailbox or conversation before recording
+        the outcome. PortOS will not resend it automatically.
+      </p>
+      <label className="flex items-start gap-2" htmlFor={`checked-mailbox-${draft.id}`}>
+        <input id={`checked-mailbox-${draft.id}`} type="checkbox"
+          checked={checkedMailbox} disabled={pending}
+          onChange={event => setCheckedMailbox(event.target.checked)} />
+        I checked the mailbox or conversation and can confirm the delivery outcome.
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <button disabled={!checkedMailbox || pending} aria-busy={pending}
+          data-voice-guard="confirm" onClick={() => reconcile('sent')}
+          className="min-h-[44px] px-3 rounded bg-port-success/20 text-port-success disabled:opacity-50">
+          Confirm sent
+        </button>
+        <button disabled={!checkedMailbox || pending} aria-busy={pending}
+          data-voice-guard="confirm" onClick={() => reconcile('not_sent')}
+          className="min-h-[44px] px-3 rounded bg-port-warning/20 text-port-warning disabled:opacity-50">
+          Confirm not sent
+        </button>
+      </div>
+      <p className="text-gray-400">Confirmed sent is final. Confirmed not sent restores a draft that needs fresh approval before sending.</p>
+      {error && <p role="alert" className="text-port-error">{error}</p>}
+    </div>
+  );
+}
+
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const sendingRef = useRef(new Set());
+  const [sendingIds, setSendingIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
@@ -40,7 +96,13 @@ export default function DraftsTab({ accounts }) {
   };
 
   const handleSend = async (id) => {
-    const result = await api.sendMessageDraft(id).catch(() => null);
+    if (sendingRef.current.has(id)) return;
+    sendingRef.current.add(id);
+    setSendingIds(new Set(sendingRef.current));
+    const result = await api.sendMessageDraft(id).catch(() => null).finally(() => {
+      sendingRef.current.delete(id);
+      setSendingIds(new Set(sendingRef.current));
+    });
     if (!result || result.success === false) return;
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'sent' } : d));
     toast.success('Message sent');
@@ -65,6 +127,7 @@ export default function DraftsTab({ accounts }) {
     pending_review: 'bg-port-warning/20 text-port-warning',
     approved: 'bg-port-success/20 text-port-success',
     sending: 'bg-port-accent/20 text-port-accent',
+    delivery_unknown: 'bg-port-warning/20 text-port-warning',
     sent: 'bg-port-success/20 text-port-success',
     failed: 'bg-port-error/20 text-port-error'
   };
@@ -99,7 +162,7 @@ export default function DraftsTab({ accounts }) {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className={`px-2 py-0.5 rounded text-xs ${statusColors[draft.status] || ''}`}>
-                  {draft.status}
+                  {draft.status === 'delivery_unknown' ? 'Delivery unknown' : draft.status}
                 </span>
                 <span className="text-xs text-gray-500">{getAccountName(draft.accountId)}</span>
                 {draft.generatedBy === 'ai' && (
@@ -125,9 +188,11 @@ export default function DraftsTab({ accounts }) {
                     onClick={() => handleSend(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
                     title="Send" aria-label="Send"
+                    disabled={sendingIds.has(draft.id)}
+                    aria-busy={sendingIds.has(draft.id)}
                     data-voice-guard="confirm"
                   >
-                    <Send size={16} />
+                    {sendingIds.has(draft.id) ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
                   </button>
                 )}
                 {draft.sendVia === 'review' && (
@@ -168,6 +233,12 @@ export default function DraftsTab({ accounts }) {
             <div className={`text-sm text-gray-400 whitespace-pre-wrap ${draft.sendVia === 'review' ? '' : 'line-clamp-3'}`}>
               {draft.body}
             </div>
+            {draft.status === 'delivery_unknown' && (
+              <DeliveryReconciliation key={draft.sendAttemptId} draft={draft}
+                onReconciled={updated => setDrafts(prev => prev.map(d =>
+                  d.id === updated.id && d.sendAttemptId === updated.sendAttemptId ? updated : d
+                ))} />
+            )}
             {isConfirming(draft.id) && (
               <InlineConfirmRow
                 question="Delete this draft? This cannot be undone."

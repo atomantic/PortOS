@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import DataManager from './DataManager';
+import { formatBytes } from '../utils/formatters';
+vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
 import socket from '../services/socket';
 import { getTombstoneSweepStatus } from '../services/api';
 
@@ -435,4 +437,178 @@ describe('DataManager treemap + selection panel', () => {
     expect(panel).toHaveTextContent('6 GB used');
     expect(panel).toHaveTextContent('10 GB total');
   });
+});
+
+it('shows an unavailable count rather than an empty directory after enumeration failure', async () => {
+  getDataOverview.mockResolvedValue({ ...overview, totalFileCount: null, categories: [{ ...overview.categories[0], fileCount: null }] });
+  render(<DataManager />);
+  await waitFor(() => expect(screen.getByText('File count unavailable — refresh to retry')).toBeInTheDocument());
+  expect(screen.queryByText('0 files')).not.toBeInTheDocument();
+});
+
+it('does not let an older cleanup measurement overwrite a newer full refresh', async () => {
+  const category = { key: 'cos', path: 'data/cos', label: 'Chief of Staff', description: 'Run history', archivable: true, deletable: false, classified: true, size: 4000, fileCount: 20 };
+  getDataOverview.mockResolvedValue({ totalSize: 4000, totalFileCount: 20, categories: [category] });
+  let resolveMeasurement;
+  getDataCategory.mockImplementation((_key, options) => options?.measure
+    ? new Promise(resolve => { resolveMeasurement = resolve; })
+    : Promise.resolve({ key: 'cos', items: [] }));
+  render(<DataManager />);
+  await screen.findAllByText('Chief of Staff');
+  expandRow('Chief of Staff');
+  fireEvent.click(await screen.findByRole('button', { name: 'Complete recording cleanup' }));
+  getDataOverview.mockResolvedValue({ totalSize: 8000, totalFileCount: 25, categories: [{ ...category, size: 8000, fileCount: 25 }] });
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(screen.getAllByText(formatBytes(8000)).length).toBeGreaterThan(0));
+  await act(async () => resolveMeasurement({ key: 'cos', items: [], measurement: { size: 1000, fileCount: 10, disk: null } }));
+  expect(screen.getAllByText(formatBytes(8000)).length).toBeGreaterThan(0);
+  expect(screen.queryByText('10 files')).not.toBeInTheDocument();
+});
+it('prevents an older expanded-detail read from replacing measured cleanup contents', async () => {
+  const category = { key: 'cos', path: 'data/cos', label: 'Chief of Staff', description: 'Run history', archivable: true, deletable: false, classified: true, size: 4000, fileCount: 20 };
+  getDataOverview.mockResolvedValue({ totalSize: 4000, totalFileCount: 20, categories: [category] });
+  let resolveDetail;
+  getDataCategory.mockImplementation((_key, options) => options?.measure
+    ? Promise.resolve({ key: 'cos', items: [{ name: 'fresh-example.txt', type: 'file', size: 1000 }], measurement: { size: 1000, fileCount: 1, disk: null } })
+    : new Promise(resolve => { resolveDetail = resolve; }));
+  render(<DataManager />);
+  await screen.findAllByText('Chief of Staff');
+  expandRow('Chief of Staff');
+  fireEvent.click(await screen.findByRole('button', { name: 'Complete recording cleanup' }));
+  await screen.findAllByText('fresh-example.txt');
+  await act(async () => resolveDetail({ key: 'cos', items: [{ name: 'stale-example.txt', type: 'file', size: 4000 }] }));
+  expect(screen.queryByText('stale-example.txt')).not.toBeInTheDocument();
+  expect(screen.getAllByText('fresh-example.txt')).toHaveLength(2);
+});
+
+describe('DataManager backup deletion (#8922)', () => {
+  const mockBackups = [
+    { name: 'backup-2025-01-01.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' },
+    { name: 'backup-2025-01-02.tar.gz', size: 6000, created: '2025-01-02T10:00:00Z' },
+  ];
+
+  let getDataBackups;
+  let deleteDataBackup;
+
+  beforeEach(async () => {
+    const api = await import('../services/api');
+    getDataBackups = api.getDataBackups;
+    deleteDataBackup = api.deleteDataBackup;
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [] });
+    getDataBackups.mockReset();
+    deleteDataBackup.mockReset();
+  });
+
+  it('keeps a backup row visible when deleteDataBackup is rejected, then allows a retry', async () => {
+    deleteDataBackup.mockRejectedValueOnce(new Error('Network error')).mockResolvedValueOnce({ deleted: 'backup-2025-01-01.tar.gz' });
+    getDataBackups.mockResolvedValue(mockBackups);
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+
+    const deleteButton = screen.getAllByRole('button', { name: 'Delete backup' })[0];
+    fireEvent.click(deleteButton);
+
+    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
+    // The row should still be visible after the failed deletion
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    // The second backup should also remain
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+
+    // Retrying the same row succeeds and removes it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete backup' })[0]);
+    const retryConfirm = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(retryConfirm);
+    });
+    await waitFor(() => expect(screen.queryByText('backup-2025-01-01.tar.gz')).not.toBeInTheDocument());
+    expect(deleteDataBackup).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes a backup row only after deleteDataBackup succeeds', async () => {
+    deleteDataBackup.mockResolvedValue({ success: true });
+    getDataBackups.mockResolvedValue(mockBackups);
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete backup' });
+    fireEvent.click(deleteButtons[0]);
+
+    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
+    // The deleted backup should be gone
+    await waitFor(() => expect(screen.queryByText('backup-2025-01-01.tar.gz')).not.toBeInTheDocument());
+    // The other backup should still be visible
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+  });
+});
+
+describe('DataManager training-run sources and individual cleanup', () => {
+  const runItem = { name: 'example-run', label: 'Example portrait study', sourceHref: '/models/training/example-dataset', description: 'example-model · completed', type: 'directory', size: 1200, fileCount: 3 };
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue({ ...busyOverview, categories: [{ ...busyOverview.categories[0], busy: false }] });
+    getDataCategory.mockReset().mockResolvedValue({ key: 'training-runs', busy: false, items: [runItem, { name: 'another-run', type: 'directory', size: 800, fileCount: 2 }] });
+    purgeDataCategory.mockReset().mockResolvedValue({ category: 'training-runs', subPath: 'example-run' });
+  });
+
+  it('links the named source and deletes only the selected run after confirmation', async () => {
+    render(<DataManager />);
+    await screen.findAllByText('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    expect(await screen.findByRole('link', { name: 'Example portrait study' })).toHaveAttribute('href', '/models/training/example-dataset');
+    expect(screen.getByRole('link', { name: 'Open source: Example portrait study' })).toHaveAttribute('href', '/models/training/example-dataset');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' }));
+    expect(purgeDataCategory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Example portrait study' })).not.toBeInTheDocument());
+    expect(purgeDataCategory).toHaveBeenCalledWith('training-runs', { subPath: 'example-run' });
+    expect(screen.getByRole('button', { name: 'Delete another-run from LoRA Training Runs' })).toBeInTheDocument();
+    expect(getDataCategory).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the row on failure and disables individual deletion while busy', async () => {
+    purgeDataCategory.mockRejectedValue(new Error('busy'));
+    render(<DataManager />);
+    await screen.findAllByText('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete example-run from LoRA Training Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' })).toBeEnabled());
+    expect(screen.getByRole('link', { name: 'Example portrait study' })).toBeInTheDocument();
+    getDataCategory.mockResolvedValue({ key: 'training-runs', busy: true, items: [runItem] });
+    expandRow('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' })).toBeDisabled());
+  });
+});
+
+
+it('prevents overlapping item cleanup and an already-open bucket purge', async () => {
+  getDataOverview.mockResolvedValue({ ...busyOverview, categories: [{ ...busyOverview.categories[1] }] });
+  getDataCategory.mockResolvedValue({ key: 'messages', items: [{ name: 'example-account', type: 'directory', size: 100 }] });
+  purgeDataCategory.mockReset();
+  render(<DataManager />);
+  await screen.findAllByText('Messages');
+  expandRow('Messages');
+  const remove = await screen.findByRole('button', { name: 'Delete example-account from Messages' });
+  fireEvent.click(screen.getByRole('button', { name: 'Purge' }));
+  expect(remove).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  let finish;
+  purgeDataCategory.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  fireEvent.click(remove);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  expect(screen.getByRole('button', { name: 'Purge' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+  await act(async () => finish({ category: 'messages', subPath: 'example-account' }));
 });

@@ -593,7 +593,7 @@ export default function Review() {
                 Daily Briefing
               </h3>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] text-gray-600">
+                <span className="text-[11px] text-gray-400">
                   {briefing.source} &middot; {formatDateTime(briefing.generatedAt)}
                 </span>
                 <button

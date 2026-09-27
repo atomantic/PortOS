@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // Mock only what the media tools reach for. The queue is the observable
 // boundary — every assertion here is about the params that land on it, because
@@ -31,6 +34,7 @@ vi.mock('../../federatedMedia/remoteSubmission.js', () => ({
 
 import { enqueueJob } from '../../mediaJobQueue/index.js';
 import { getProject } from '../../creativeDirector/local.js';
+import { PATHS } from '../../../lib/fileUtils.js';
 import { MEDIA_TOOLS, reconcileVideoParamsWithModel } from './media.js';
 
 const tool = (name) => MEDIA_TOOLS.find((t) => t.name === name);
@@ -252,6 +256,69 @@ describe('render-backend pin — image (#3135)', () => {
     await expect(run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' }))
       .rejects.toMatchObject({ code: 'MEDIA_ROUTING_UNREADABLE' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+});
+
+describe('commission style reference images (#8724)', () => {
+  // Real files under temp gallery / image-ref roots, so the filename → path
+  // resolution the render actually receives is exercised, not stubbed.
+  let tempRoot;
+  const saved = {};
+  beforeAll(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'cd-style-refs-'));
+    saved.images = PATHS.images;
+    saved.imageRefs = PATHS.imageRefs;
+    PATHS.images = join(tempRoot, 'images');
+    PATHS.imageRefs = join(tempRoot, 'image-refs');
+    mkdirSync(PATHS.images, { recursive: true });
+    mkdirSync(PATHS.imageRefs, { recursive: true });
+    writeFileSync(join(PATHS.images, 'board-pin.png'), 'x');
+    writeFileSync(join(PATHS.imageRefs, 'universe-ref.png'), 'x');
+  });
+  afterAll(() => {
+    PATHS.images = saved.images;
+    PATHS.imageRefs = saved.imageRefs;
+    rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  const styledProject = (extra = {}) => ({
+    id: 'cd-1',
+    styleReferenceImages: [
+      { kind: 'image-ref', filename: 'universe-ref.png', label: 'Universe style reference', origin: 'universe' },
+      { kind: 'image', filename: 'board-pin.png', label: 'Pinned image', origin: 'mood-board' },
+      // Deleted since the fire (or never synced to this peer) — skipped.
+      { kind: 'image', filename: 'gone.png', label: 'Missing', origin: 'mood-board' },
+    ],
+    ...extra,
+  });
+
+  it('conditions a local render on the project style references', async () => {
+    getProject.mockResolvedValue(styledProject());
+    await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
+    expect(enqueued().params.referenceImagePaths).toEqual([
+      join(PATHS.imageRefs, 'universe-ref.png'),
+      join(PATHS.images, 'board-pin.png'),
+    ]);
+  });
+
+  it('keeps the references the planner chose itself', async () => {
+    getProject.mockResolvedValue(styledProject());
+    await run('media_enqueueImageJob', { prompt: 'p', referenceImagePaths: ['/planner/pick.png'] }, { projectId: 'cd-1' });
+    expect(enqueued().params.referenceImagePaths).toEqual(['/planner/pick.png']);
+  });
+
+  it('leaves a cloud-pinned render unchanged', async () => {
+    getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true, grokPath: '/bin/grok' } } });
+    getProject.mockResolvedValue(styledProject({ renderBackend: { image: { mode: 'grok' } } }));
+    await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
+    expect(enqueued().params.mode).toBe('grok');
+    expect(enqueued().params).not.toHaveProperty('referenceImagePaths');
+  });
+
+  it('enqueues byte-identical params for a project without style references', async () => {
+    getProject.mockResolvedValue({ id: 'cd-1' });
+    await run('media_enqueueImageJob', { prompt: 'p' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toEqual({ prompt: 'p' });
   });
 });
 

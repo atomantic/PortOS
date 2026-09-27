@@ -9,6 +9,7 @@ import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
+import { PATHS } from '../lib/paths.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -542,6 +543,38 @@ export async function listProcessesStrict(pm2Home = null) {
   const list = await fetchJlist(pm2Home);
   if (!list) return null;
   return list.map(mapProcess);
+}
+
+/** Internal maintenance inventory: fresh daemon read, no UI cache or env dump. */
+export async function listMaintenanceProcesses() {
+  return connectAndRun(pm2 => new Promise((resolve, reject) => {
+    pm2.list((err, list) => {
+      if (err || !Array.isArray(list)) {
+        reject(new Error('PM2 maintenance inventory unavailable.'));
+        return;
+      }
+      resolve(list.map(proc => ({
+        name: proc?.name, pmId: proc?.pm_id, pid: proc?.pid,
+        status: proc?.pm2_env?.status,
+        cwd: proc?.pm2_env?.pm_cwd, script: proc?.pm2_env?.pm_exec_path,
+      })));
+    });
+  }));
+}
+
+/**
+ * Internal maintenance restart of one PortOS producer. Re-evaluates the
+ * install's ecosystem file with --update-env so the app receives the saved
+ * database configuration a cutover just committed, never PM2's cached env.
+ * `env` is the environment the ecosystem file is evaluated in.
+ * PM2 success is not proof of the backend: the restarted process must still
+ * prove its own pool (services/databaseCutoverHandshake.js).
+ */
+export async function restartMaintenanceProducer(name, env = process.env) {
+  if (!['portos-server', 'portos-cos'].includes(name)) throw new Error('Unknown maintenance producer.');
+  await execPm2(['restart', join(PATHS.installRoot, 'ecosystem.config.cjs'), '--only', name, '--update-env'],
+    { cwd: PATHS.installRoot, env });
+  return { success: true };
 }
 
 // Shared shaping for listProcesses / listProcessesStrict so the two never drift.

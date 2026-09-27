@@ -9,9 +9,9 @@
 import { dashboardEvents } from './dashboardEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, lstat, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, mkdtemp, readdir, readFile, rm, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
-import { hostname } from 'os';
+import { hostname, tmpdir } from 'os';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -19,6 +19,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth, ensureSchema, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
+import { inspectDatabaseDump } from './backupDatabaseDump.js';
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
@@ -160,11 +161,10 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
-  { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
   // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer
   // writes training-runs/<id>/checkpoints/, mflux writes
   // training-runs/<id>/mflux/checkpoints/.
-  { path: '/training-runs/**/checkpoints/', reason: 'LoRA training checkpoints — large intermediate adapter state, resumable-but-regenerable. Final trained adapters land in data/loras/ (weights excluded there too); run samples + configs ARE backed up.', overridable: true },
+  { path: '/training-runs/**/checkpoints/', reason: 'LoRA training checkpoints — large intermediate adapter state, resumable-but-regenerable. Deployed adapters in data/loras/, including promoted checkpoints, ARE backed up along with run samples + configs.', overridable: true },
   { path: '/training-runs/*/cache/', reason: 'Precomputed latent/text-embedding training cache — regenerated from the dataset on the next run', overridable: false },
   { path: '/training-runs/*/data/.mflux_cache/', reason: 'mflux low_ram disk-backed encode cache (written inside the staged training data dir) — regenerable', overridable: false },
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
@@ -1478,15 +1478,18 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   return restoreFiles();
 }
 
+const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadable', error: 'The snapshot database dump could not be read or staged for restore. Restore was refused without changing data.' });
+
 /**
  * Restore the PostgreSQL dump from a snapshot. Dry-run by default — mirrors
- * restoreSnapshot's safety default. A real restore pipes the snapshot's
- * portos-db.sql into psql; the dump was written with --no-owner --no-acl so
- * it replays cleanly.
+ * restoreSnapshot's safety default. Both modes first admit the snapshot's
+ * portos-db.sql (complete pg_dump envelope, manifest hash when recorded); a
+ * real restore then replays the admitted private copy into psql. The dump was
+ * written with --no-owner --no-acl so it replays cleanly.
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation'|'restore_sync_resync', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_preflight'|'restore_error'|'timeout'|'restore_schema_reconciliation'|'restore_sync_resync', error? }
  * A successful real restore also carries `syncCursorsRewound` (peer count);
  * see resyncFederationAfterRestore.
  * @param {string} destPath - Backup destination root
@@ -1523,18 +1526,51 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
     console.error(`❌ restore: integrity manifest unreadable for snapshot ${snapshotId}`);
     return { status: 'failed', reason: 'manifest_unreadable' };
   }
-  const manifest = manifestRead.value;
-  const expectedHash = manifest?.files?.['../portos-db.sql'];
-  if (expectedHash) {
-    const actualHash = await sha256File(sqlPath);
-    if (actualHash !== expectedHash) {
-      console.error(`❌ restore: manifest hash mismatch for snapshot ${snapshotId} (expected ${expectedHash}, got ${actualHash})`);
-      return { status: 'failed', reason: 'manifest_mismatch' };
+  const expectedHash = manifestRead.value?.files?.['../portos-db.sql'];
+  // Execution replays a private copy written by the same read that admits the
+  // dump, so the bytes checked are exactly the bytes psql replays even if the
+  // snapshot changes afterwards (#8782). Preview only inspects.
+  const spoolDir = dryRun ? null : await mkdtemp(join(tmpdir(), 'portos-restore-')).catch((err) => {
+    console.error(`❌ restore: cannot stage dump for snapshot ${snapshotId}: ${err.message}`);
+    return false;
+  });
+  if (spoolDir === false) return DUMP_UNREADABLE;
+  try {
+    return await restoreAdmittedDump({ sqlPath, spoolPath: spoolDir && join(spoolDir, 'dump.sql'), expectedHash, snapshotId, dryRun, sizeBytes: info.size });
+  } finally {
+    if (spoolDir) {
+      await rm(spoolDir, { recursive: true, force: true })
+        .catch(err => console.error(`❌ restore: failed to remove dump spool ${spoolDir}: ${err.message}`));
     }
   }
+}
 
-  const sql = await readFile(sqlPath, 'utf-8').catch(() => '');
-  const tableCount = (sql.match(/^CREATE TABLE /gm) || []).length;
+async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotId, dryRun, sizeBytes }) {
+  // One streamed read supplies the checksum and the completeness proof. A read
+  // failure is refused here — never mistaken for an empty dump.
+  const dump = await inspectDatabaseDump(sqlPath, { spoolTo: spoolPath }).catch((err) => {
+    console.error(`❌ restore: dump unreadable for snapshot ${snapshotId}: ${err.message}`);
+    return null;
+  });
+  if (!dump) {
+    return DUMP_UNREADABLE;
+  }
+  if (expectedHash && dump.sha256 !== expectedHash) {
+    console.error(`❌ restore: manifest hash mismatch for snapshot ${snapshotId} (expected ${expectedHash}, got ${dump.sha256})`);
+    return { status: 'failed', reason: 'manifest_mismatch' };
+  }
+  // The restore resets every application table first, so a dump that parses
+  // but stops early (header-only, or truncated between statements) would
+  // commit an empty database. ON_ERROR_STOP cannot see that; the envelope can.
+  if (!dump.complete || dump.missingTables.length) {
+    const missing = [
+      ...(dump.complete ? [] : ['the pg_dump completion marker']),
+      ...dump.missingTables.map(name => `table ${name}`),
+    ].join(', ');
+    console.error(`❌ restore: incomplete dump for snapshot ${snapshotId} (missing ${missing})`);
+    return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
+  }
+  const { tableCount } = dump;
 
   // Preview remains read-only. Recheck inside the replay transaction as well,
   // so a changed catalog cannot turn a previously safe preview into a cascade.
@@ -1546,7 +1582,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   if (preflightError) {
     return { status: 'failed', reason: 'restore_preflight', error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.' };
   }
-  if (dryRun) return { status: 'ok', dryRun: true, sizeBytes: info.size, tableCount };
+  if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
   return withDatabaseMaintenance(async () => {
     // Read before the replay rewinds them to the dump's values.
@@ -1562,12 +1598,13 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
       // prior statement. Together they make the restore atomic: it either fully
       // applies or leaves the live DB untouched — never a mixed snapshot/current
       // state. (The dump is written with --clean --if-exists, so the DROPs and
-      // recreates all commit or roll back as one unit.)
+      // recreates all commit or roll back as one unit.) psql reads the admitted
+      // spool copy, never the snapshot path.
       const proc = spawn('psql', [
         '-X', '-v', 'ON_ERROR_STOP=1',
         '--single-transaction',
         '--echo-all',
-        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', sqlPath
+        '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-c', reset, '-f', spoolPath
       ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
       let stderr = '';
@@ -1591,7 +1628,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
         }
         if (code === 0) {
           console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
-          resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
+          resolveP({ status: 'ok', dryRun: false, sizeBytes, tableCount });
         } else {
           console.warn(`⚠️ psql restore failed (code ${code}): ${stderr.trim()}`);
           resolveP({ status: 'failed', reason: 'restore_error', error: stderr.trim() });

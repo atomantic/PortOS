@@ -1,4 +1,4 @@
-import { readdir, stat, lstat, statfs } from 'fs/promises';
+import { readdir, opendir, stat, lstat, statfs } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from '../lib/childProcess.js';
@@ -41,9 +41,9 @@ const DATA_DIR = PATHS.data;
 //     genuinely reproducible scratch, yet only while nothing is USING them: a
 //     category-wide purge mid-job destroys the working state of a render, a
 //     trainer, or a self-update. A category carrying a `busyCheck` refuses the
-//     directory-wide purge with 409 CATEGORY_BUSY while its probe says busy;
-//     per-item purges (the user named one entry) and categories with no
-//     `busyCheck` are unaffected (issue #3342). Probes live in
+//     purge with 409 CATEGORY_BUSY while its probe says busy, including
+//     per-item deletion: naming a directory does not make a live job safe.
+//     Categories with no `busyCheck` are unaffected. Probes live in
 //     `dataManagerBusy.js`.
 export const CATEGORIES = {
   'agents': { label: 'Agents', description: 'Agent personality data', archivable: false, deletable: false },
@@ -225,6 +225,20 @@ export async function resolveCategoryBusy(categoryKey) {
 // Validate category key contains only safe characters
 const SAFE_NAME = /^[a-z0-9_-]+$/;
 
+// Walk one directory at a time: never buffer an entire tree's path list in a
+// child-process stdout pipe. Failed scans stay unknown, distinct from empty.
+async function countFiles(dirPath, deadline) {
+  if (Date.now() >= deadline) throw new Error('File count timed out');
+  let count = 0;
+  const directory = await opendir(dirPath);
+  for await (const entry of directory) {
+    if (Date.now() >= deadline) throw new Error('File count timed out');
+    if (entry.isDirectory()) count += await countFiles(join(dirPath, entry.name), deadline);
+    else if (entry.isFile()) count++;
+  }
+  return count;
+}
+
 async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
   if (strict) {
     const present = await stat(dirPath).then(
@@ -245,19 +259,17 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
         if (strict) throw err;
         return '0';
       }),
-    execFileAsync('find', [dirPath, '-type', 'f'], { timeout: 30000 })
-      .then(r => r.stdout.trim().split('\n').filter(Boolean).length)
-      .catch((err) => {
-        if (strict) throw err;
-        return 0;
-      })
+    countFiles(dirPath, Date.now() + 30000).catch((err) => {
+      if (strict) throw err;
+      return null;
+    })
   ]);
   const kb = typeof duOut === 'string' ? parseInt(duOut.split('\t')[0], 10) : NaN;
   if (!Number.isFinite(kb) || kb < 0) {
     if (strict) throw new Error(`Could not parse directory size for ${dirPath}`);
-    return { size: 0, fileCount: typeof findOut === 'number' ? findOut : 0 };
+    return { size: 0, fileCount: findOut };
   }
-  const fileCount = typeof findOut === 'number' ? findOut : (parseInt(findOut, 10) || 0);
+  const fileCount = findOut;
   return { size: kb * 1024, fileCount };
 }
 
@@ -304,7 +316,7 @@ export async function getDataOverview({ strict = false } = {}) {
   };
 }
 
-export async function getCategoryDetail(categoryKey) {
+export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   if (!SAFE_NAME.test(categoryKey)) return null;
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) return null;
@@ -328,12 +340,40 @@ export async function getCategoryDetail(categoryKey) {
   });
 
   const items = await Promise.all(itemPromises);
+  // Resolve opaque training-run folders in one bounded-to-the-list
+  // lookup, including old runs beyond the training page's recent-run limit.
+  if (categoryKey === 'training-runs' && items.length) {
+    const { query } = await import('../lib/db.js');
+    const result = await query(
+      'SELECT data FROM lora_training_runs WHERE id = ANY($1::text[])',
+      [items.filter(item => item.type === 'directory').map(item => item.name)],
+    ).catch(() => null);
+    const runs = new Map((result?.rows || []).map(({ data }) => [data.id, data]));
+    for (const item of items) {
+      const run = runs.get(item.name);
+      if (run) {
+        item.label = run.name || run.character?.name || run.baseModelId || item.name;
+        item.description = [run.baseModelId, run.status].filter(Boolean).join(' · ');
+        if (run.datasetId) item.sourceHref = `/models/training/${encodeURIComponent(run.datasetId)}`;
+      }
+      item.sourceUnavailable = result === null ? 'Source lookup unavailable' : !run ? 'Run record no longer available' : null;
+    }
+  }
+  if (categoryKey === 'images' || categoryKey === 'videos') {
+    for (const item of items) {
+      if (item.type === 'file') item.sourceHref = `/data/${categoryKey}/${encodeURIComponent(item.name)}`;
+    }
+  }
   items.sort((a, b) => b.size - a.size);
 
   const totalSize = items.reduce((sum, item) => sum + item.size, 0);
   const busy = await resolveCategoryBusy(categoryKey);
 
-  return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items };
+  const measurement = measure ? {
+    ...await getDirSizeAndCount(dirPath, { strict: true }),
+    disk: await statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null),
+  } : undefined;
+  return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items, ...(measurement && { measurement }) };
 }
 
 export async function archiveCategory(categoryKey, options = {}) {
@@ -424,17 +464,10 @@ export async function purgeCategory(categoryKey, options = {}) {
     throw new ServerError(`Category directory not found: ${categoryKey}`, { status: 404, code: 'NOT_FOUND' });
   }
 
-  // A category-wide purge empties the directory in one action, so a job that is
-  // mid-flight loses its working state with no warning. Refuse outright while a
-  // category's `busyCheck` reports live work, rather than filtering "the busy
-  // files" out of the wipe — a partial purge is harder to reason about, and the
-  // user can retry in seconds once the job finishes (#3342). A per-item purge
-  // is exempt: the user named the one entry they meant. This runs before any
-  // `rm` below.
-  if (!wantsItem) {
-    const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
-    if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
-  }
+  // A named directory can still contain a live job's working state. Apply
+  // the same fail-closed busy probe to both deletion scopes.
+  const { busy, busyReason } = await resolveCategoryBusy(categoryKey);
+  if (busy) throw new ServerError(busyReason, { status: 409, code: 'CATEGORY_BUSY' });
 
   if (wantsItem) {
     const resolvedRoot = resolve(dirPath);

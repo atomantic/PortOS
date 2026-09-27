@@ -21,6 +21,11 @@ describe('normalizeQuotaBurnTaskRef', () => {
     expect(normalizeQuotaBurnTaskRef({ kind: 'custom', jobId: '   ' })).toBeNull();
   });
 
+  it('resolves a step saved under a renamed task type to its current name', () => {
+    expect(normalizeQuotaBurnTaskRef({ kind: 'builtin', taskType: 'release-check', appId: 'app-1' }))
+      .toEqual({ kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType: 'do-release', appId: 'app-1' });
+  });
+
   it('keeps a custom reference free of an app scope the job itself owns', () => {
     expect(normalizeQuotaBurnTaskRef({ kind: 'custom', jobId: 'job-7', appId: 'app-1' }))
       .toEqual({ kind: QUOTA_BURN_TASK_REF_KIND.CUSTOM, jobId: 'job-7' });

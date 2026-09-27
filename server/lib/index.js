@@ -216,6 +216,7 @@ export * from './videoStreamingMode.js';
 export * from './videoTextEncoders.js';
 export * from './promptFencing.js';
 export * from './promptPartials.js';
+export * from './promptSectionRenderer.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './credentialBootstrap.js';
@@ -288,6 +289,7 @@ export * from './downloadPreflight.js';
 export * from './agentInstructionsFile.js';
 export * from './scaffoldSnippets.js';
 export * from './failureLogging.js';
+export * from './faultIsolatedEmitter.js';
 export * from './fileCore.js';
 export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
@@ -420,6 +422,7 @@ export * from './peerProbeDiagnostics.js';
 export * from './peerSelfHost.js';
 export * from './protobufWire.js';
 export * from './peerUrl.js';
+export * from './perpetualSkipCauses.js';
 export * from './pinterestFeed.js';
 export * from './readResponseJson.js';
 export * from './safeUrlFetch.js';
@@ -622,6 +625,7 @@ export * from './eidoverseControllers.js';
 export * from './eidoverseFoundationSandbox.js';
 export * from './eidoverseFoundations.js';
 export * from './eidoverseObservation.js';
+export * from './eidoversePort.js';
 export * from './federationSafety.js';
 export * from './secretKeys.js';
 export * from './eidoverseWorldDesign.js';
@@ -745,3 +749,11 @@ export * from './messageLogError.js';
 
 export * from './launchVideoValidation.js';
 export * from './styleSourcePrompt.js';
+
+export * from './messageBrowserIdentity.js';
+
+export * from './databaseAuthority.js';
+
+export * from './databaseMaintenanceJournal.js';
+
+export * from './databaseWriterRegistry.js';

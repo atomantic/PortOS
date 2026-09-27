@@ -14,6 +14,7 @@ import { notificationEvents, getNotifications } from './notifications.js';
 import { forwardNotification as forwardToTelegram } from './telegramForward.js';
 import { approveMemory, rejectMemory } from './memoryBackend.js';
 import { ensureDir, PATHS, readJSONFileStrict, formatDuration, atomicWrite } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createTokenBucket } from '../lib/telegramRateLimit.js';
 import { escapeHtml, CALLBACK_APPROVE, CALLBACK_REJECT } from '../lib/telegramMessage.js';
 import { getActiveAgents } from './agentManagement.js';
@@ -45,6 +46,26 @@ const CHECKIN_TTL = 10 * 60 * 1000;
 const CHECKINS_DIR = join(PATHS.data, 'telegram');
 const CHECKINS_FILE = join(CHECKINS_DIR, 'checkins.json');
 const MAX_CHECKINS = 500;
+
+// Serializes the checkins.json load -> mutate -> save cycle (handleCheckinResponse)
+// against concurrent Telegram messages/callbacks, matching voice/timers.js's use of
+// the same helper for its single JSON state file.
+const queueCheckinsWrite = createFileWriteQueue();
+
+/**
+ * Wrap an async `bot.onText`/`bot.on(...)` callback so a rejection is caught
+ * and logged instead of leaking as an unhandled rejection. node-telegram-bot-api's
+ * EventEmitter never awaits these callbacks, so an uncaught throw/rejection
+ * bypasses every caller and lands on `process.on('unhandledRejection')`.
+ */
+function safeHandler(fn) {
+  return (...args) =>
+    Promise.resolve()
+      .then(() => fn(...args))
+      .catch((err) => {
+        console.error(`📱 Telegram: handler error — ${err?.message || String(err)}`);
+      });
+}
 
 function cleanExpiredCheckins() {
   const now = Date.now();
@@ -95,37 +116,37 @@ export async function init(sendTestMessage = false) {
   console.log(`📱 Telegram: connected as @${botUsername}`);
 
   // Register /start handler (always works, no auth required)
-  bot.onText(/\/start/, async (msg) => {
+  bot.onText(/\/start/, safeHandler(async (msg) => {
     const fromChatId = String(msg.chat.id);
     await bot.sendMessage(fromChatId,
       `Your Chat ID: <code>${fromChatId}</code>\n\n` +
       'Paste this into the PortOS Settings → Telegram → Chat ID field, then click Save & Test.',
       { parse_mode: 'HTML' }
     );
-  });
+  }));
 
   // Register command handlers
-  bot.onText(/\/status/, async (msg) => {
+  bot.onText(/\/status/, safeHandler(async (msg) => {
     if (!isAuthorized(msg)) return;
     await handleStatusCommand(msg);
-  });
+  }));
 
-  bot.onText(/\/goals/, async (msg) => {
+  bot.onText(/\/goals/, safeHandler(async (msg) => {
     if (!isAuthorized(msg)) return;
     await handleGoalsCommand(msg);
-  });
+  }));
 
-  bot.onText(/\/agents/, async (msg) => {
+  bot.onText(/\/agents/, safeHandler(async (msg) => {
     if (!isAuthorized(msg)) return;
     await handleAgentsCommand(msg);
-  });
+  }));
 
-  bot.onText(/\/checkin/, async (msg) => {
+  bot.onText(/\/checkin/, safeHandler(async (msg) => {
     if (!isAuthorized(msg)) return;
     await handleCheckinCommand(msg);
-  });
+  }));
 
-  bot.onText(/\/help/, async (msg) => {
+  bot.onText(/\/help/, safeHandler(async (msg) => {
     if (!isAuthorized(msg)) return;
     await bot.sendMessage(String(msg.chat.id),
       '<b>PortOS Bot Commands</b>\n\n' +
@@ -136,23 +157,23 @@ export async function init(sendTestMessage = false) {
       '/help — Show this message',
       { parse_mode: 'HTML' }
     );
-  });
+  }));
 
   // Handle non-command messages (check-in responses)
-  bot.on('message', async (msg) => {
+  bot.on('message', safeHandler(async (msg) => {
     if (msg.text?.startsWith('/')) return;
     if (!isAuthorized(msg)) return;
     await handleCheckinResponse(msg);
-  });
+  }));
 
   // Handle inline keyboard button clicks (memory approve/reject)
-  bot.on('callback_query', async (query) => {
+  bot.on('callback_query', safeHandler(async (query) => {
     if (String(query.message?.chat?.id) !== authorizedChatId) {
       await bot.answerCallbackQuery(query.id, { text: 'Unauthorized' }).catch(() => {});
       return;
     }
     await handleCallbackQuery(query);
-  });
+  }));
 
   // Start health check. setInterval doesn't await the async callback, so a
   // rejection would leak as an unhandled rejection — catch it here.
@@ -457,33 +478,61 @@ async function handleCheckinCommand(msg) {
 async function handleCheckinResponse(msg) {
   const chatId = String(msg.chat.id);
   cleanExpiredCheckins();
+  // Captured synchronously, at dispatch time — this is THIS message's
+  // outstanding question, independent of whatever else mutates
+  // pendingCheckins before the queued critical section below actually runs.
   const pending = pendingCheckins.get(chatId);
   if (!pending) return;
 
-  const checkins = await loadCheckins();
-  // Bail rather than write: pushing onto the empty default would atomicWrite a
-  // one-entry log over the whole history. The pending check-in stays pending so
-  // the answer can be re-sent once the file is readable again.
-  if (!checkins) {
+  // Serialize the load -> mutate -> save cycle on a single tail so two
+  // concurrent responses can't interleave and drop or duplicate a record
+  // (createFileWriteQueue, matching voice/timers.js's use of the same helper
+  // for its single JSON state file). The re-check below consumes `pending`
+  // exactly once: if a second message raced this one for the SAME question,
+  // whichever's critical section runs first deletes it, so the other finds it
+  // already gone and skips — otherwise both would append an answer to one
+  // prompt.
+  const status = await queueCheckinsWrite(async () => {
+    if (pendingCheckins.get(chatId) !== pending) return 'stale';
+
+    const checkins = await loadCheckins();
+    // Bail rather than write: pushing onto the empty default would atomicWrite a
+    // one-entry log over the whole history. The pending check-in stays pending so
+    // the answer can be re-sent once the file is readable again — including
+    // when `pending` was superseded by a new question during this same await
+    // (the compare-and-delete below leaves that new entry untouched either way).
+    if (!checkins) return 'unreadable';
+
+    checkins.checkins.push({
+      id: uuidv4(),
+      question: pending.question,
+      response: msg.text,
+      goalId: pending.goalId,
+      askedAt: pending.askedAt,
+      answeredAt: new Date().toISOString()
+    });
+
+    // Cap at MAX_CHECKINS entries
+    if (checkins.checkins.length > MAX_CHECKINS) {
+      checkins.checkins = checkins.checkins.slice(-MAX_CHECKINS);
+    }
+
+    await saveCheckins(checkins);
+
+    // Consume `pending` only now that it's durably persisted, and only if it's
+    // still the current entry — `loadCheckins`/`saveCheckins` both await, so a
+    // new question could have replaced pendingCheckins for this chat while we
+    // were reading/writing; an unconditional delete here would wipe THAT
+    // still-unanswered question instead of the one we just recorded.
+    if (pendingCheckins.get(chatId) === pending) pendingCheckins.delete(chatId);
+    return 'recorded';
+  });
+
+  if (status === 'stale') return; // another response already answered this question
+  if (status === 'unreadable') {
     await bot.sendMessage(chatId, "⚠️ Couldn't read your check-in history, so I didn't record that. Nothing was overwritten — send it again once it's readable.", { parse_mode: 'HTML' });
     return;
   }
-  checkins.checkins.push({
-    id: uuidv4(),
-    question: pending.question,
-    response: msg.text,
-    goalId: pending.goalId,
-    askedAt: pending.askedAt,
-    answeredAt: new Date().toISOString()
-  });
-
-  // Cap at MAX_CHECKINS entries
-  if (checkins.checkins.length > MAX_CHECKINS) {
-    checkins.checkins = checkins.checkins.slice(-MAX_CHECKINS);
-  }
-
-  await saveCheckins(checkins);
-  pendingCheckins.delete(chatId);
 
   await bot.sendMessage(chatId, '✅ Check-in recorded. Thanks!', { parse_mode: 'HTML' });
 }

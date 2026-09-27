@@ -27,8 +27,10 @@ function queueAccountWrite(accountId, work) {
 }
 
 const MESSAGE_SEARCH_FIELDS = ['subject', 'from.name', 'from.email', 'bodyText'];
-function filterBySearch(messages, search) {
-  return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS);
+function filterMessages(messages, { search, unevaluatedOnly, messageIds }) {
+  const ids = messageIds ? new Set(messageIds) : null;
+  return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS)
+    .filter(message => (!unevaluatedOnly || !message.evaluation) && (!ids || ids.has(message.id)));
 }
 
 /**
@@ -47,7 +49,7 @@ function filterBySearch(messages, search) {
  * Pure helper (no I/O) so the paging math is unit-testable; the caller loads the
  * caches.
  */
-export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 } = {}) {
+export function aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit = 50, offset = 0 } = {}) {
   const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
   const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 50;
   const perAccountCap = safeOffset + safeLimit;
@@ -55,7 +57,7 @@ export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 
   let total = 0;
   const heads = [];
   for (const { id, cache } of caches) {
-    const filtered = filterBySearch(cache.messages, search);
+    const filtered = filterMessages(cache.messages, { search, unevaluatedOnly, messageIds });
     total += filtered.length;
     if (perAccountCap === 0) continue;
     const top = [...filtered]
@@ -87,12 +89,12 @@ async function saveCache(accountId, cache) {
 }
 
 export async function getMessages(options = {}) {
-  const { accountId, search, limit = 50, offset = 0 } = options;
+  const { accountId, search, unevaluatedOnly, messageIds, limit = 50, offset = 0 } = options;
   // If specific account, just load that cache
   if (accountId) {
     const cache = await loadCache(accountId);
     let messages = cache.messages.map(m => ({ ...m, accountId: m.accountId || accountId }));
-    messages = filterBySearch(messages, search);
+    messages = filterMessages(messages, { search, unevaluatedOnly, messageIds });
     return {
       messages: messages.sort((a, b) => safeDate(b.date) - safeDate(a.date)).slice(offset, offset + limit),
       total: messages.length
@@ -114,7 +116,17 @@ export async function getMessages(options = {}) {
   );
   // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
   // of spreading + globally sorting every message across every account (#2540).
-  return aggregatePagedMessages(caches, { search, limit, offset });
+  return aggregatePagedMessages(caches, { search, unevaluatedOnly, messageIds, limit, offset });
+}
+
+/** Remove only a confirmed action target, serialized with sync/refresh writes. */
+export async function removeMessageFromCache(accountId, messageId) {
+  if (!UUID_RE.test(accountId)) throw new Error('Invalid accountId');
+  return queueAccountWrite(accountId, async () => {
+    const cache = await loadCache(accountId);
+    cache.messages = cache.messages.filter(message => message.id !== messageId);
+    await saveCache(accountId, cache);
+  });
 }
 
 export async function deleteCache(accountId) {
@@ -209,14 +221,29 @@ export async function syncAccount(accountId, io, options = {}) {
     const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
 
     // Deduplicate by externalId; update flags and body on existing messages
-    const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
+    const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.providerRowId ? `${m.externalId}|${m.providerRowId}` : m.externalId, m]));
+    const uniqueByExternalId = new Map();
+    for (const message of cache.messages) {
+      uniqueByExternalId.set(message.externalId, uniqueByExternalId.has(message.externalId) ? null : message);
+    }
+    const incomingCounts = new Map();
+    for (const message of newMessages) {
+      incomingCounts.set(message.externalId, (incomingCounts.get(message.externalId) || 0) + 1);
+    }
     const uniqueNew = [];
     for (const msg of newMessages) {
-      if (!msg.externalId || !existingMap.has(msg.externalId)) {
+      const identityKey = msg.providerRowId ? `${msg.externalId}|${msg.providerRowId}` : msg.externalId;
+      // A missing row ID on either side permits a summary fallback only
+      // when both sides are unique; never overwrite a different known row ID.
+      const fallback = uniqueByExternalId.get(msg.externalId);
+      const canMatchSummary = fallback && incomingCounts.get(msg.externalId) === 1
+        && (!msg.providerRowId || !fallback.providerRowId);
+      const existing = existingMap.get(identityKey) || (canMatchSummary ? fallback : null);
+      if (!msg.externalId || !existing) {
         uniqueNew.push(msg);
       } else {
-        // Update flags on existing message
-        const existing = existingMap.get(msg.externalId);
+        // Update flags and provider identity on existing message
+        if (msg.providerRowId) existing.providerRowId = msg.providerRowId;
         if (msg.isUnread !== undefined) existing.isUnread = msg.isUnread;
         if (msg.isRead !== undefined) existing.isRead = msg.isRead;
         if (msg.isPinned !== undefined) existing.isPinned = msg.isPinned;

@@ -4,11 +4,52 @@ import {
   validateRequest,
   databaseSwitchSchema,
   databaseBackendSchema,
-  databaseExportSchema
+  databaseExportSchema,
+  databaseMaintenancePreflightSchema,
+  databaseMaintenanceCutoverSchema,
+  databaseMaintenanceRecoverSchema
 } from '../lib/validation.js';
 import * as dbAdmin from '../services/dbAdmin.js';
 
 const router = Router();
+
+// GET /api/database/maintenance/status — local journal, no pool/shell probes.
+// The ordinary instance auth gate applies; this is not a public health route.
+router.get('/maintenance/status', asyncHandler(async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(dbAdmin.getMaintenanceStatus());
+}));
+
+// Advisory validation only: acceptance must repeat this under the admission fence.
+router.post('/maintenance/preflight', asyncHandler(async (req, res) => {
+  const direction = validateRequest(databaseMaintenancePreflightSchema, req.body);
+  res.set('Cache-Control', 'no-store');
+  res.json(await dbAdmin.preflightDatabaseMaintenance(direction));
+}));
+
+// Accept the offline cutover. 202: the detached worker then stops PortOS,
+// transfers, commits mode and restarts; progress is the status route above
+// (and scripts/database-maintenance.mjs status while the server is down).
+// The worker's first act stops this server, so it launches only once the
+// response has closed; an unlaunched owner is resumable via recover.
+router.post('/maintenance/cutover', asyncHandler(async (req, res) => {
+  const direction = validateRequest(databaseMaintenanceCutoverSchema, req.body);
+  const { accepted, launch } = await dbAdmin.acceptDatabaseCutover(direction);
+  res.once('close', launch);
+  res.set('Cache-Control', 'no-store');
+  res.status(202).json(accepted);
+}));
+
+// Relaunch the worker for the SAME recorded operation after its exit receipt.
+router.post('/maintenance/recover', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(databaseMaintenanceRecoverSchema, req.body);
+  const { status, launch } = await dbAdmin.beginDatabaseCutoverRecovery(id);
+  if (launch) {
+    res.once('close', () => launch().catch(() => console.error('❌ Database cutover recovery worker could not be launched')));
+  }
+  res.set('Cache-Control', 'no-store');
+  res.status(202).json(status);
+}));
 
 // GET /api/database/status — current mode, connectivity, row counts, resource stats
 router.get('/status', asyncHandler(async (_req, res) => {

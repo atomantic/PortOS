@@ -1,3 +1,4 @@
+import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -60,4 +61,27 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));
   }
+}
+
+// Source remains subject to the composition sandbox and launch privacy gate;
+// only bounded PCM leaves the browser, never arbitrary paths or encoded files.
+export async function synthesizeCompositionMusic(page, durationSec) {
+  const sampleRate = 24000;
+  const length = Math.round(sampleRate * durationSec);
+  // browser.js evaluate -> send supplies a 30-second command deadline and
+  // rejects all pending commands on the render signal abort; index.js closes
+  // the disposable context in finally, including a never-settling score.
+  const samples = await page.evaluate(`(async () => {
+    const renderAudio = globalThis.portosComposition.renderAudio;
+    if (typeof renderAudio !== 'function') throw new Error('portosComposition.renderAudio is required for synthesized music');
+    const samples = await renderAudio({ sampleRate: ${sampleRate}, durationSec: ${durationSec} });
+    if (!Array.isArray(samples) || samples.length !== ${length}) throw new Error('renderAudio must return exactly ${length} mono PCM samples');
+    if (samples.some(value => !Number.isFinite(value) || value < -1 || value > 1)) throw new Error('renderAudio must return finite mono PCM samples in [-1, 1]');
+    return samples;
+  })()`);
+  if (!Array.isArray(samples) || samples.length !== length || samples.some(value => !Number.isFinite(value) || value < -1 || value > 1)) {
+    throw new Error('renderAudio must return finite mono PCM samples in [-1, 1]');
+  }
+  if (!samples.some(value => Math.abs(value) > 0.0001)) throw new Error('renderAudio returned a silent soundtrack');
+  return pcmToWavBuffer(Float32Array.from(samples), { sampleRate });
 }

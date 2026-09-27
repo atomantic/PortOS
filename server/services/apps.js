@@ -43,10 +43,10 @@ function buildPortosApp() {
     tlsPort: certPresent ? PORTS.API : null,
     buildCommand: 'npm run build',
     startCommands: ['npm start'],
+    // Match npm start: Vite is development-only, not an expected production process.
     pm2ProcessNames: [
       'portos-server',
       'portos-cos',
-      'portos-ui',
       'portos-autofixer',
       'portos-autofixer-ui',
       'portos-browser'
@@ -57,7 +57,6 @@ function buildPortosApp() {
       // there and Overview would otherwise show a dead port.
       { name: 'portos-server', port: PORTS.API, ports: certPresent ? { api: PORTS.API, 'api-local': PORTS.API_LOCAL } : { api: PORTS.API } },
       { name: 'portos-cos', port: PORTS.COS, ports: { api: PORTS.COS } },
-      { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },
       { name: 'portos-autofixer', port: PORTS.AUTOFIXER, ports: { api: PORTS.AUTOFIXER } },
       { name: 'portos-autofixer-ui', port: PORTS.AUTOFIXER_UI, ports: { ui: PORTS.AUTOFIXER_UI } },
       { name: 'portos-browser', port: PORTS.CDP, ports: { cdp: PORTS.CDP, health: PORTS.CDP_HEALTH } }

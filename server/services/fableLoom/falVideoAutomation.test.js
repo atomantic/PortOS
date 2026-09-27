@@ -446,4 +446,77 @@ describe('FableLoom fal.ai browser automation', () => {
     expect(mocks.saveUploadedGalleryVideoBuffer).not.toHaveBeenCalled();
     expect(mocks.attachNodeVideo).not.toHaveBeenCalled();
   });
+
+  it('still runs a later queued job after an earlier job rejects the shared run tail', async () => {
+    // A plain error whose `.name` accessor itself throws reproduces a failure
+    // that escapes executeJob()'s own internal try/catch (it throws again
+    // while building the failure diagnostic), rejecting the promise chained
+    // onto the module-level `runTail`. Without rejection recovery on that
+    // chain, every subsequent job silently skips execution forever.
+    class UnreadableNameError extends Error {
+      get name() { throw new Error('name accessor blew up'); }
+    }
+    const loom = {
+      id: 'loom-1',
+      episodes: [{
+        id: 'ep-1',
+        nodes: [
+          { id: 'node-1', image: 'scene.png' },
+          { id: 'node-2', image: 'scene-2.png' },
+        ],
+      }],
+    };
+    mocks.getLoom
+      .mockResolvedValueOnce(loom) // first job's lookup while queuing
+      .mockRejectedValueOnce(new UnreadableNameError('scene check failed')) // first job's in-flight scene check
+      .mockResolvedValue(loom); // second job's lookup + in-flight scene check
+
+    const firstJob = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', {
+      prompt: 'Example direction', io: null,
+    });
+    expect(firstJob.status).toBe('queued');
+    // Let the queue actually attempt (and reject on) the first job before
+    // enqueuing the second, so the rejection is in place first. The first
+    // job must itself reach a terminal 'failed' state rather than staying
+    // 'queued'/'running' forever, or it would permanently block this scene
+    // from ever starting a new job (see ACTIVE_STATUSES).
+    const firstResult = await waitForTerminalJob(firstJob);
+    expect(firstResult.status).toBe('failed');
+
+    makeBrowser();
+    const secondJob = await startFalVideoAutomation('loom-1', 'ep-1', 'node-2', {
+      prompt: 'Another direction', io: null,
+    });
+
+    const settled = await waitForTerminalJob(secondJob);
+    expect(settled.status).toBe('completed');
+  });
+
+  it('does not leave an unhandled rejection on the run tail while the queue sits idle', async () => {
+    // Same failure shape as above, but with no follow-up job ever enqueued —
+    // the recovery catch must be attached to `runTail` immediately when the
+    // job starts, not deferred until a later job arrives to chain onto it.
+    class UnreadableNameError extends Error {
+      get name() { throw new Error('name accessor blew up'); }
+    }
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      mocks.getLoom
+        .mockResolvedValueOnce(loomWithImage())
+        .mockRejectedValueOnce(new UnreadableNameError('scene check failed'));
+
+      await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', {
+        prompt: 'Example direction', io: null,
+      });
+      // Give the queued job's promise chain a full turn to settle (and, if
+      // unfixed, to surface as an unhandled rejection) with no other job
+      // ever queued afterward.
+      await vi.waitFor(() => expect(mocks.getLoom.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await new Promise((resolve) => { setImmediate(resolve); });
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
+  });
 });

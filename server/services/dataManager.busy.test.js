@@ -74,13 +74,11 @@ describe('purgeCategory — CATEGORY_BUSY refusal', () => {
     expect(existsSync(dataPath(key))).toBe(true);
   });
 
-  // A per-item purge names the one entry the user picked, so it stays available
-  // while the category is busy — the refusal is about the all-at-once wipe.
-  it('still allows a per-item purge while the category is busy', async () => {
+  it('refuses a per-item purge while the category is busy', async () => {
     trainingRunsBusy.mockImplementation(busyWith('a trainer is running'));
-    await purgeCategory('training-runs', { subPath: 'run-0001' });
-    expect(existsSync(dataPath('training-runs', 'run-0001'))).toBe(false);
-    expect(trainingRunsBusy).not.toHaveBeenCalled();
+    await expect(purgeCategory('training-runs', { subPath: 'run-0001' }))
+      .rejects.toMatchObject({ status: 409, code: 'CATEGORY_BUSY' });
+    expect(existsSync(dataPath('training-runs', 'run-0001'))).toBe(true);
   });
 
   it('leaves a category with no busyCheck completely unaffected', async () => {

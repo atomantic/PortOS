@@ -177,13 +177,13 @@ describe('collectBusyOccupancies', () => {
   it('collects the global cadence and the perpetual recheck of types enabled here', async () => {
     loadSchedule.mockResolvedValue({
       tasks: {
-        'release-check': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' },
+        'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' },
         'branch-reconcile': { type: 'on-demand', enabled: true, perpetual: true, recheckCron: '0 3 * * *' },
         'pr-reviewer': { type: 'cron', enabled: true, cronExpression: '0 8 * * *' },
       },
     });
     getAppTaskTypeOverrides.mockResolvedValue({
-      'release-check': { enabled: true },
+      'do-release': { enabled: true },
       'branch-reconcile': { enabled: true },
       // Enabled for the install but not for this app — its window is somebody
       // else's problem, so it must not cost this app an hour.
@@ -194,8 +194,8 @@ describe('collectBusyOccupancies', () => {
   });
 
   it('lets a per-app cadence REPLACE the global one, the way the scheduler reads it', async () => {
-    loadSchedule.mockResolvedValue({ tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
-    getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '0 20 * * 1' } });
+    loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
+    getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '0 20 * * 1' } });
     const sources = await collectBusyOccupancies({ id: 'a' });
     // Blocking 03:00 as well would cost the plan four hours a day that this app
     // never runs anything in.
@@ -204,8 +204,8 @@ describe('collectBusyOccupancies', () => {
   });
 
   it('decodes a retired named cadence rather than reading it as no cadence', async () => {
-    loadSchedule.mockResolvedValue({ tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
-    getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: 'weekly' } });
+    loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
+    getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: 'weekly' } });
     const sources = await collectBusyOccupancies({ id: 'a' });
     // An override written by an older install still occupies its hour; treating
     // it as unparseable would schedule an audit straight over the release.
@@ -222,8 +222,8 @@ describe('collectBusyOccupancies', () => {
 
 describe('buildQualitySchedulePlan', () => {
   it('plans only the applicable checks and works around the app release window', async () => {
-    loadSchedule.mockResolvedValue({ tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
-    getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true } });
+    loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
+    getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true } });
     const app = appWith(NODE_SERVICE);
     const built = await buildQualitySchedulePlan(app);
     expect(built.plan.slots.map(slot => slot.taskType)).not.toContain('accessibility');
@@ -231,7 +231,7 @@ describe('buildQualitySchedulePlan', () => {
     for (const slot of built.plan.slots) expect([2, 3, 4, 5]).not.toContain(slot.hour);
     // The service owns the whole endpoint payload, so the route adds nothing.
     expect(built).toMatchObject({ appId: app.id, appName: app.name, claimTaskTypes: expect.arrayContaining(['claim-work']) });
-    expect(built.busySources).toEqual([{ taskType: 'release-check', cron: '30 3 * * *', origin: 'global' }]);
+    expect(built.busySources).toEqual([{ taskType: 'do-release', cron: '30 3 * * *', origin: 'global' }]);
   });
 
   it('plans exactly the checks the caller named, applicable or not', async () => {

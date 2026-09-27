@@ -6,6 +6,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
+import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
 import { emitLog } from './cosEvents.js';
 import { LEGACY_INTERVAL_TYPES, normalizeIntervalConfig } from './taskScheduleConstants.js';
 import {
@@ -65,8 +66,11 @@ function migrateScheduleV1toV2(schedule) {
 
   // Merge selfImprovement settings into tasks (excluding cos-enhancement)
   if (schedule.selfImprovement) {
-    for (const [taskType, config] of Object.entries(schedule.selfImprovement)) {
-      if (taskType === 'cos-enhancement') continue; // Removed
+    for (const [storedType, config] of Object.entries(schedule.selfImprovement)) {
+      if (storedType === 'cos-enhancement') continue; // Removed
+      // A v1 schedule predates later renames (TASK_TYPE_RENAMES) — map them too,
+      // or the defaults below have no key to merge the operator's config into.
+      const taskType = currentTaskTypeName(storedType);
       // security stays as 'security' (was already named this in selfImprovement)
       if (migrated.tasks[taskType]) {
         migrated.tasks[taskType] = { ...migrated.tasks[taskType], ...config };
@@ -78,7 +82,7 @@ function migrateScheduleV1toV2(schedule) {
   if (schedule.appImprovement) {
     for (const [taskType, config] of Object.entries(schedule.appImprovement)) {
       // Rename security-audit → security
-      const unifiedType = taskType === 'security-audit' ? 'security' : taskType;
+      const unifiedType = taskType === 'security-audit' ? 'security' : currentTaskTypeName(taskType);
       if (migrated.tasks[unifiedType]) {
         // If selfImprovement already set a non-default config, prefer it for overlapping types
         // unless appImprovement has a different non-default config
@@ -100,11 +104,11 @@ function migrateScheduleV1toV2(schedule) {
       if (key.startsWith('self-improve:')) {
         const taskType = key.replace('self-improve:', '');
         if (taskType === 'cos-enhancement') continue; // Removed
-        newKey = `task:${taskType}`;
+        newKey = `task:${currentTaskTypeName(taskType)}`;
       } else if (key.startsWith('app-improve:')) {
         let taskType = key.replace('app-improve:', '');
         if (taskType === 'security-audit') taskType = 'security';
-        newKey = `task:${taskType}`;
+        newKey = `task:${currentTaskTypeName(taskType)}`;
       }
 
       if (migrated.executions[newKey]) {

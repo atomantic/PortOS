@@ -10,11 +10,14 @@ vi.mock('../../services/socket', () => ({ default: socketMock }));
 vi.mock('../../services/api', () => ({
   getCalendarEvents: vi.fn(),
   syncCalendarAccount: vi.fn(),
+  apiSyncGoogleCalendar: vi.fn(),
+  mcpSyncGoogleCalendar: vi.fn(),
 }));
-vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
 import * as api from '../../services/api';
 import AgendaTab from './AgendaTab';
+import toast from '../ui/Toast';
 
 function LocationProbe() {
   const location = useLocation();
@@ -197,7 +200,7 @@ describe('AgendaTab date scope and paging', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
     await act(async () => {});
     const syncHandler = socketMock.on.mock.calls.filter(([name]) => name === 'calendar:sync:completed').at(-1)[1];
-    await act(async () => syncHandler());
+    await act(async () => syncHandler({ accountId: 'personal', status: 'success' }));
     expect(screen.getByRole('status')).toHaveTextContent('50 of 105');
     expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 0 }));
   });
@@ -226,5 +229,66 @@ describe('AgendaTab date scope and paging', () => {
     expect(await screen.findByText('Event last')).toBeTruthy();
     expect(api.getCalendarEvents).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 }));
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+});
+
+
+describe('Agenda provider sync', () => {
+  const syncAccounts = [
+    { id: 'outlook', name: 'Example Outlook', enabled: true, type: 'outlook' },
+    { id: 'google', name: 'Example Google', enabled: true, type: 'google-calendar', syncMethod: 'google-api' },
+    { id: 'mcp', name: 'Example MCP', enabled: true, type: 'google-calendar', syncMethod: 'claude-mcp' },
+    { id: 'disabled', enabled: false, type: 'google-calendar', syncMethod: 'google-api' },
+  ];
+  beforeEach(() => {
+    vi.resetAllMocks();
+    api.getCalendarEvents.mockResolvedValue({ events: [] });
+    api.syncCalendarAccount.mockResolvedValue({ status: 'success', newEvents: 2 });
+    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
+    api.mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 3 });
+  });
+
+  it.each(['Sync', 'Sync now'])('routes %s to each enabled provider and refreshes HTTP-only completions', async action => {
+    await renderAgenda(syncAccounts);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: action })));
+    expect(api.syncCalendarAccount).toHaveBeenCalledExactlyOnceWith('outlook', { silent: true });
+    expect(api.apiSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('google', { silent: true });
+    expect(api.mcpSyncGoogleCalendar).toHaveBeenCalledExactlyOnceWith('mcp', { silent: true });
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(4);
+    expect(toast.success).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('button', { name: 'Sync' })).not.toBeDisabled();
+    const completed = socketMock.on.mock.calls.find(([name]) => name === 'calendar:sync:completed')[1];
+    await act(async () => completed({ accountId: 'google', status: 'success', newEvents: 1 }));
+    expect(toast.success).toHaveBeenCalledTimes(3);
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps a mixed batch busy until HTTP settles and identifies failed and partial accounts', async () => {
+    let rejectOutlook;
+    api.syncCalendarAccount.mockImplementation(() => new Promise((_resolve, reject) => { rejectOutlook = reject; }));
+    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'partial', reason: 'One calendar unavailable' });
+    api.mcpSyncGoogleCalendar.mockResolvedValue({ status: 'success', newEvents: 1 });
+    await renderAgenda(syncAccounts);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Sync' })));
+    expect(screen.getByRole('button', { name: 'Sync' })).toBeDisabled();
+    expect(toast.warning).toHaveBeenCalledWith('Example Google: Calendar sync incomplete: One calendar unavailable');
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(3);
+    await act(async () => rejectOutlook(new Error('Provider unavailable')));
+    expect(toast.error).toHaveBeenCalledWith('Example Outlook: Calendar sync failed: Provider unavailable');
+    expect(toast.success).toHaveBeenCalledExactlyOnceWith('Example MCP: Calendar sync complete: 1 events');
+    expect(screen.getByRole('button', { name: 'Sync' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
+  });
+
+  it('warns about skipped and push-only outcomes without refreshing or claiming success', async () => {
+    api.syncCalendarAccount.mockResolvedValue({ status: 'skipped' });
+    api.apiSyncGoogleCalendar.mockResolvedValue({ status: 'push-only' });
+    await renderAgenda(syncAccounts.slice(0, 2));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Sync now' })));
+    expect(toast.warning).toHaveBeenCalledTimes(2);
+    expect(toast.warning.mock.calls[0][0]).toContain('Example Outlook: Sync skipped');
+    expect(toast.warning.mock.calls[1][0]).toContain('Example Google: This account receives pushed updates');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(api.getCalendarEvents).toHaveBeenCalledTimes(1);
   });
 });

@@ -48,6 +48,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - `catalog_user_types` — user-defined ingredient types (the registry that defines catalog row semantics), one row per type (`id` PK, the definition in `data` JSONB, `updated_at`/`deleted_at` mirroring the federation LWW clock + tombstone). Migrated from the `data/settings.json` `catalogUserTypes` slice in Phase 4 lead-in (#1001) so type evolution versions/syncs alongside the catalog data it governs. Federates via the catalog sync `catalogTypes` envelope block (wire shape unchanged by the move). Adapter: `server/services/catalogUserTypes/db.js`, dispatched via `store.js`.
 - `sync_feed` — the commit-ordered federation change feed (#8315) behind the `memories` and catalog-table peer pulls: one row per live row version, `(stream = table name, row_sequence = that row's sync_sequence) → position`. A position is drawn at COMMIT by deferred constraint triggers serialized on one transaction-scoped advisory lock, so a transaction that commits late can never land below a cursor a peer already advanced past (the write-time `sync_sequence` could). Peers page by position; positions start at 1e15, so a pre-feed cursor replays each stream once after an upgrade (apply is LWW / ON CONFLICT, so nothing is duplicated). Machine-local bookkeeping — only the rows it points at federate. DDL: `server/lib/db/schema/syncFeed.js` + `init-db.sql`; existing rows are backfilled by db-migration `009-commit-ordered-sync-feed.js`.
 - `universes` / `universe_runs` — Universe Builder records (canon bibles, categories, composite sheets, locks, influences, and portable character production packages) one row per universe with the full sanitized record in `data` JSONB and `name`/`schema_version`/`ephemeral`/`updated_at`/`deleted`/`deleted_at` mirrored into columns; render-run history one row per run (local-only, capped 200, never federated). Character production packages carry only versioned voice direction and approved managed-image roles; local profiles, recordings, provider ids, and training artifacts are excluded from the federated wire. Migrated from `data/universes/{id}/index.json` (collectionStore) in Phase 3 Create slice 1 (#1014). **NO `sync_sequence`** — universes federate via the EXISTING `dataSync` snapshot/push model (LWW on the body's `updatedAt`), so the storage swap is invisible to peers (no schema-version bump). The store bumps an in-process mutation epoch on every write that `dataSync` folds into its checksum fingerprint, since a DB edit no longer changes the `data/universes/` directory the fingerprint used to watch. **`universe_runs` is intentionally never federated** — a regenerable render cache under a 200-row *global* cap that two producers would mutually evict, while the durable universe record already syncs (ADR [tribe + universe-runs local](./decisions/2026-06-26-tribe-and-universe-runs-local.md), #1724). Adapter: `server/services/universeBuilder/db.js`, dispatched via `store.js`. **One universe ships with the product:** `universe-reality` ("Reality"), seeded by `scripts/migrations/395-reality-universe-seed.js` — not by `data.reference/`, because universes are PG rows and `setup-data.js` only copies files. It carries the federated `factual: true` flag (#7616), which marks a world whose people and places are real so the catalog extractor reads captured text as lived record rather than invented story; `factual` is persisted ONLY when true, so every fiction universe keeps its exact on-disk shape and wire checksum, and `PORTOS_SCHEMA_VERSIONS.universes` is 12 so a `factual`-unaware peer cannot strip-then-LWW the flag away. The migration gates on the ABSENCE of any row with that id — tombstone included — so a Reality the user deleted is never resurrected by an upgrade.
+- Voice Studio extends `voice_profiles` with unbound library records (`library: true`, nullable universe/character columns). Assignment copies the approved reference and creates a bound snapshot with `originProfileId`; the existing unique approved-binding index remains in force. Metadata is `db-primary`, reference WAVs are managed assets under the existing backup path, and neither is federated. Migration 416 records the idempotent boot DDL; no seed is shipped.
 - `voice_profiles` / `voice_profile_renders` — machine-local DB-primary records for approved `(universeId, characterId)` bindings and the latest rendered dialogue line per `(issueId, lineId)`. They store the promoted Kokoro/Piper preset, profile revision, route availability, benchmark provenance, and reproducible dialogue delivery details (engine/model revision, timing, controls, and mastering). The portable Universe character and federated pipeline issue keep only portable voice data and audio filenames; they never store a local profile id. Rendered benchmark WAVs, safe-basename source-asset metadata, and future local engine artifacts live under `data/voice-profiles/<profileId>/`. Both the PostgreSQL dump and that managed directory are included in normal backup, while peer sync intentionally carries neither. Adapter: `server/services/voice/profiles.js`.
 - `tribe_people` / `tribe_touchpoints` / `tribe_memory_links` — the Tribe relationship/CRM graph (people + their care cadence, contact touchpoints, and cross-links into brain `memories`). **Intentionally machine-local — never federated** (ADR [tribe + universe-runs local](./decisions/2026-06-26-tribe-and-universe-runs-local.md), #1724): it is relationship-graph data, mirroring the deliberate "memory_links are instance-local" boundary in `memorySync.js` (memory *nodes* federate, the link graph does not), and is coupled to machine-local domains — `tribe_memory_links` extends the non-federated `memory_links` layer and `tribe_touchpoints` carry per-machine calendar-account refs. NO `sync_sequence`, no peer-sync record kind, no `dataSync` category. **Deletes are erased after 30 days** (#8459): deleting a person is a soft delete (a recovery window only — the tombstone is never needed for sync), and the daily `tribePurge` sweep (`server/services/tribePurge.js` → `tribe.purgeDeletedPeople`) hard-deletes people tombstoned more than `DELETED_PERSON_RETENTION_DAYS` ago — cascading to their touchpoints, identities and memory links — and removes every `record_audit` snapshot of them. The same sweep expires all `tribe_*` `record_audit` rows older than the window, since those snapshots copy a third party's contact details and notes; creative-table audit rows are never touched. Adapter: `server/services/tribe.js`.
 - `creative_commissions` — Creative Commissions (Autonomous Creation Engine, #2657/#2686): standing recurring creative briefs that fire on a cron cadence and drive the Creative Director directive pipeline unattended. One row per commission, the full sanitized record in `data` JSONB with `name`/`enabled`/`created_at`/`updated_at` mirrored into columns for the scheduler's "arm every enabled commission" query. The brief/identity federates as `creativeCommission` so synced feedback can attach to the same commission; `schedule`, `runs`, `assignment`, `enabled`, and feedback view stay machine-local (the per-reaction `commissionFeedback` records federate separately). The opt-in Digital Twin music-taste configuration is bounded brief metadata; raw taste sources and per-run recipes never cross the wire. The file backend is the `NODE_ENV=test`/`MEMORY_BACKEND=file` escape hatch only. Adapter: `server/services/creativeCommissions/db.js`, selected pg-vs-file by `server/services/creativeCommissions/store.js` (file backend is the `NODE_ENV=test`/`MEMORY_BACKEND=file` escape hatch only).
@@ -95,6 +96,85 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - LoRA training datasets — `data/lora-datasets/{id}/index.json` + `images/*.png` (collectionStore). The record is inseparable from the image bytes it organizes, has no cross-record queries beyond a small characterId scan, and is **machine-local** like `data/loras/` itself (training artifacts tied to this machine's GPU output — never federates, no sync cursor/tombstone). Backed up in full: uploads and hand-edited captions are not re-creatable. Training RUN records are `db-primary` (`lora_training_runs`); run artifacts (checkpoints/samples) live under `data/training-runs/{runId}/` with checkpoints/cache excluded from backup.
 
 ---
+
+### Database endpoints in managed processes
+
+The ecosystem resolves native `PGPORT` and Docker `PGPORT_DOCKER` from the
+launching environment, then `.env`, then their defaults. It passes `PGPORT`
+to the server and CoS runner as the **active pool port**. It also passes the
+resolved native port as internal `PORTOS_NATIVE_PGPORT` and the resolved Docker
+port as `PGPORT_DOCKER`. Child maintenance/configuration processes preserve
+those backend identities when reloading the ecosystem or preparing native
+setup, even when the parent's active pool is Docker. Do not put the internal
+variable in `.env`; configure the native port with `PGPORT` in the ordinary
+launching shell or `.env`. Inherited endpoint identity takes precedence over
+a later file edit: restart from the intended launch environment to apply changed
+connection settings. A coordinator must still compare saved configuration,
+recorded endpoints, and the running pool before cutover.
+
+### Database maintenance journal
+
+`data/database-maintenance/operation.json` is `file-primary`, machine-local recovery state: it must be readable before PostgreSQL, including while either backend is unavailable. Its enclosing directory is the admission fence. The versioned record contains an operation UUID, lifecycle stage, timestamp, and explicit source/target connection identities; it contains no password, token, or application records. It is never federated and has no reference seed. Missing state is idle; an incomplete, malformed, unreadable, or newer-version operation stays fenced. No install migration is needed for an initially absent operation.
+
+Coordinator ownership and cancellation share one exclusive durable initial claim. Once owned, an operation advances only through `accepted → quiescing → exporting → importing → committing → verifying → verified`; each transition requires the same operation, current ownership token, and expected previous stage. Immutable stage publications tolerate a retry of the same transition. Every stage (including `verified`) retains the admission fence. Stage names record coordinator progress; they do not independently prove quiescence, transfer, or healthy target startup. Verification-only server startup can read the recorded target through its actual pool at the `verifying` or `verified` stage; its bounded result is transient, creates no new store, and never advances the journal or reopens admission.
+
+The journal also supplies **internal ownership recovery** for the transfer worker; neither is an operator command. `reserveCoordinatorWorker(id, token)` atomically publishes a complete, one-use `worker-<token>/` directory bound to that operation and owner. A crash while preparing its binding leaves only an unpublished temporary directory, so the same owner can retry reservation. The internal `spawnDatabaseMaintenanceWorker(id, token)` path reserves this directory and uses the shared detached launcher with `cleanup: false`, a fixed Node executable and worker entrypoint, and no caller-selected command, arguments, environment, or control directory. It verifies current ownership before setup and again before supervisor launch. The worker claims an exclusive `started.json` marker before doing anything else; copied arguments cannot enter it twice. On POSIX it then records its process group in `group.json` before starting any database child. Ordinary `spawnDetached` calls still require normal admission, even if passed extra options or an owner token. `recoverCoordinator(id, previousToken, recoveryToken)` accepts only the recorded operation and current token, at any unreleased stage, after the detached supervisor has published a complete numeric `exit` receipt. The caller durably records its unique recovery token before attempting recovery. An immutable successor publication chooses exactly one winner across competing recoveries and revokes the old token; retrying that same recorded request returns its published token after a crash between publication and acknowledgement. A different claimant cannot recover or reuse the winner's token. A shared per-owner/per-stage decision publication serializes ownership handoff with stage transitions. Recovery completes an already-decided forward stage before choosing its successor; a predecessor that lost the decision cannot publish a new stage. Each successor reserves a new worker directory; old logs and completion evidence remain intact. Recovery preserves the source, target, operation ID, and stage. It does not treat an interrupted import as source success; `importing` → `committing` additionally requires this operation's committed import receipt. `prepareRecovery(id)` wraps this for the operator: it publishes the successor token in `recovery-after-<token>.json` before recovering, so concurrent or repeated requests adopt the same successor instead of stranding a second owner.
+
+There is deliberately no PID-death, elapsed-time, or force recovery. A launch interrupted before its supervisor records an exit stays fenced, even if its PID appears dead. A worker exit does **not** prove its descendants stopped, so every transfer attempt — including each recovered successor — repeats quiescence before any export or import (see [offline transfer](#offline-transfer) below). Mode commit, verified target restart, and admission release follow the transfer in the same worker (see [mode commit, verified restart, and release](#mode-commit-verified-restart-and-release)).
+
+For local diagnostics at any stage, run `node scripts/database-maintenance.mjs status`. From `exporting` onward it adds `transfer: { dump: "absent" | "recorded", import: "pending" | "committed" }`; malformed transfer records fail closed. An owned operation adds a bounded `coordinator` result: `unregistered` means no worker reservation; `awaiting-exit` means no supervisor completion proof (either running or interrupted); `exited` includes the supervisor exit code. Neither is a transfer-success verdict. Malformed ownership, binding, or exit records fail closed. Only an **unowned accepted** operation can use `node scripts/database-maintenance.mjs cancel <operation-id>` after checking saved source configuration. For an owned operation whose worker exited (`coordinator.state: "exited"`), `node scripts/database-maintenance.mjs recover <operation-id>` relaunches the worker for the SAME recorded operation and prints `{ recovery: "launched" | "running" }`; there is no launch of a new operation, force, skip or reverse command. `awaiting-exit` means no recovery is possible yet: wait for the running worker, or — if it was interrupted before its supervisor recorded an exit — keep the fence and inspect it by hand. Run `recover` from a shell without `PGHOST`/`PGPORT` overrides; the worker refuses when the saved configuration does not resolve to the recorded target. Preserve the journal, worker records, `transfer-*.json`, the source database and the `portos-maintenance-<operation-id>.sql` dump; do not delete markers, edit or replace the dump, or call `scripts/db.sh migrate` (still refused). Stage-specific meaning: `accepted` — nothing stopped; `quiescing` — producers may be stopped, no dump yet; `exporting` + `dump: absent` — the next attempt re-exports from the quiesced source; `exporting`/`importing` + `dump: recorded` — the source copy is fixed and only it may be imported; `importing` + `import: pending` — the target transaction did not commit, retry imports the same dump; `import: committed` — mode commit and restart verification remain; `committing` — saved mode is being set to the target; `verifying` — saved mode names the target, waiting for a restarted server's own proof; `verified` — only release remains. After release `status` reports `{ stage: "idle", lastCutover: { id, source, target } }`. If a successor refuses because an earlier coordinator's process is still running, inspect this install's process table (`ps -A -o pid,pgid,command`) and stop that leftover dump/import yourself before the next recovery.
+
+`data/database-writers/<launch-id>/` is machine-local, file-primary **detached launch evidence**. `spawnDetached` publishes and fsyncs a reservation before its first asynchronous setup step, then checks admission again. A launch that races fence acceptance is therefore either refused or already represented in the inventory. It checks admission again after setup; a launch refused before any launcher started records `abandoned.json`, the only proof that no child exists. On POSIX the detached outer `sh` is a session and process-group leader, so its PID (`launcher.json`) names the group every supervisor/job descendant inherits; `launch.json` adds the job PID and launch time. Reservations contain only a random launch ID, timestamp, control directory, and process-group mode. Commands, arguments, environment variables, credentials, and application records are excluded. A partial/unreadable record fails inventory closed. On completion, POSIX keeps the identity and retires the entry only after two consecutive process-table snapshots show the job gone and every recorded group empty (a group ID cannot be reused while it has members); a surviving descendant or slow supervisor leaves the record for maintenance reconciliation. Windows has no group proof, so its completion still compacts into the identity-free `unreconciled-exits.json` marker, published from fsynced bytes with its parent directory synced before deletion. Ordinary completed jobs do not accumulate one permanent directory per launch.
+
+Run `node scripts/database-maintenance.mjs writers` for bounded counts at any stage (`unresolved`, `launching`, `launched`, `exited`, `abandoned`); it always reports `quiescenceVerified: false` and exposes no control paths or process identities. A malformed inventory refuses the command. A `{ state: 'unresolved', kind: 'retired-exits' }` entry represents legacy or Windows compacted completion history. **An inventory read never proves descendant quiescence.** Only the internal `reconcileDetachedWriters(id, token)` stage (`server/services/databaseMaintenanceQuiescence.js`) can, and only for the owning coordinator worker after `stopOwnedDatabaseProducers` recorded producer shutdown at `quiescing`. It classifies each record against a POSIX process-table snapshot: a job still alive with a verified identity (its PGID is recorded and it started inside the launch window) has its recorded groups sent SIGTERM, then SIGKILL after a grace period; a group seen empty is never signalled again. It refuses, leaving the fence and every record in place, when an admitted launch has not recorded a process identity, when a record is legacy/compacted, lacks a launcher group, or is a process-group job whose own PID was never recorded, when a live PID does not match its recorded identity (possible reuse), when an exited job still has surviving group members, when groups do not terminate, when a detached supervisor of this install's data directory is running without a record (for example a launch from code that predates the registry), or on Windows for anything but abandoned launches. Two consecutive quiescent snapshots are required before it archives every record to `data/database-maintenance/reconciled-writers/<launch-id>/` and returns `quiescenceVerified: true, transferReady: false`. It never infers absence from a PID probe or elapsed time and has no force/skip option. It is internal: `quiesceDatabaseWriters(id, token)` runs producer shutdown, the predecessor-coordinator proof, then reconciliation inside the entered transfer worker, which repeats it on every attempt. Limits: a descendant that deliberately leaves its session and process group (`setsid`) is not observable by group, and orphans of a pre-registry launch whose supervisor already exited cannot be identified. Records are local recovery evidence included in backups, never a federated application collection or reference seed; do not delete them to unblock maintenance. Damaged ownership or inventory makes the transfer worker exit with code 1 and a redacted refusal. Its stdout/stderr, owner binding, one-use entry marker, group record and supervisor receipt remain in the reserved directory.
+
+A cancelled unowned accepted operation moves to `data/database-maintenance-cancelled/<operation-id>/` as local recovery evidence. These records remain filesystem-backed and included in backups; they are not a growing application collection. Restoring an active journal deliberately restores its fence: do not delete it merely to make startup succeed. A released operation moves to `data/database-maintenance-completed/<operation-id>/` the same way. `data/database-authority.json` is `file-primary`, machine-local state read before PostgreSQL: one versioned record naming the last released cutover's operation id and its retired source and released target endpoints (no password or records). Absent means no cutover has completed; malformed fails closed. It is never federated, has no reference seed, and needs no migration. See [database maintenance admission](BACKUP.md#database-maintenance-admission) for the operator contract and current limitations.
+
+#### Offline transfer
+
+The fixed worker (`scripts/database-maintenance-worker.mjs` → `runDatabaseTransfer(id, token)` in `server/services/databaseMaintenanceTransfer.js`) is the only code that transfers data. In order it: claims its one-use entry and records its process group; stops PM2 CoS then server (`stopOwnedDatabaseProducers`, which moves `accepted` → `quiescing` and, on recovery, re-reads the ORIGINAL identities); proves no earlier coordinator of this operation still has a live process group (`assertPredecessorCoordinatorsStopped`); reconciles admitted spawns and detached writers (`reconcileDetachedWriters`); and only then transfers:
+
+- **`quiescing` → `exporting`**: `scripts/db.sh export --endpoint` with the journal's recorded source host, port, user and database. The worker builds the child environment from an allowlist (the password is the only libpq variable passed), and `db.sh` strips every other inherited `PG*` variable again, so `PGHOST`, `PGHOSTADDR`, `PGSERVICE`, `PGOPTIONS` and the like cannot redirect it. The dump is `data/db-dumps/portos-maintenance-<operation-id>.sql`. A failed `pg_dump`, missing completion trailer, or unexpected output path is never recorded. A complete dump and its directory are fsynced, then `transfer-dump.json` publishes its operation, source identity, size and SHA-256, immutably, before `exporting` → `importing`.
+- **`importing`**: the recorded dump must still match its size and digest (a changed or missing dump refuses). `db.sh import --endpoint` loads it into the recorded target in one `psql --single-transaction` with `ON_ERROR_STOP`; a failed import commits nothing. Success publishes `transfer-import.json`, binding that digest to the target. A crash between the commit and that receipt makes the next attempt import the same `--clean` dump again, which reproduces the same state because nothing writes the target before verified restart.
+
+Ordinary pooled writes and detached spawns refuse throughout. A refusal exits `1` with a bounded reason (counts and stage only; no hosts, paths, tokens or PIDs); `db.sh` output stays internal.
+
+Recovery is same-operation only and never reverses direction. A successor (`recoverCoordinator` after the predecessor's supervisor exit receipt, then a new `spawnDatabaseMaintenanceWorker`) repeats the whole quiescence sequence, then: at `exporting` with no recorded dump it exports again (an interrupted or failed export is never reused); at `exporting` with a recorded dump it verifies the bytes and advances; at `importing` it retries the same recorded dump into the same recorded target; with an import receipt it reports the committed import without importing again. A killed worker can leave its `pg_dump`/`psql` running after its supervisor records an exit: while any recorded predecessor group still has members, the successor refuses (`a previous coordinator's dump or import process is still running`) and signals nothing, because a group ID seen empty could have been reused. A predecessor with no group record never started a database child. Windows has no group proof, so a successor there refuses once any predecessor had entered. Descendants that leave their process group (`setsid`) are not observable.
+
+#### Mode commit, verified restart, and release
+
+After a committed import the same worker (`runDatabaseCutover` in `server/services/databaseMaintenanceCutover.js`) continues. The source keeps authority until the mode commit; the target has it afterward, and nothing is ever reversed:
+
+- **`importing` → `committing`**: only with this operation's import receipt.
+- **`committing` → `verifying`**: `.env` `PGMODE` is rewritten to the RECORDED target mode (temporary file, fsync, rename; every other line kept). A fresh process then evaluates `ecosystem.config.cjs` and must resolve exactly the recorded target endpoint. Recovery at `committing` repeats this same write — it never reads the file's current mode as evidence and never restores the source mode.
+- **`verifying` → `verified`**: the worker restarts the recorded `portos-server` with `pm2 restart ecosystem.config.cjs --only portos-server --update-env` (so PM2's cached environment cannot supply the old `PGPORT`). `server/start.js` sees the fence and runs only the narrow handshake (`server/services/databaseCutoverHandshake.js`): it proves ITS OWN pool — the captured host/port/database/user must equal the recorded target, and a read-only transaction must find the schema — publishes `target-proof-<pid>.json` bound to its process start time, and waits. Routes, migrations, schedulers and CoS never load before release. The worker accepts proof only for the pid PM2 reports for that server now, with the same process start time (a reused pid never inherits an earlier proof). PM2 `online`, the saved mode, or an earlier pid's proof is not success; a wrong pool or unhealthy target makes the server exit and the worker time out (3 minutes) with the operation left at `verifying`.
+- **release**: after re-checking that the saved configuration still names the target, the worker writes `data/database-authority.json` (operation id, retired source and released target endpoints), then moves `data/database-maintenance/` to `data/database-maintenance-completed/<operation-id>/`, which reopens admission. The waiting server continues only when that authority names this operation and its own pool as the target. CoS restarts last, if it was running before the cutover. The worker prints `{ stage: "released", importCommitted: true, sourceRetained: true, restartVerified: true, cosRestarted }`.
+
+**Expected downtime** is the whole run: PortOS (UI, API, CoS, agents and schedules) is stopped from `quiescing` until release. It is roughly one export plus one import of the database (seconds for a small install, minutes for a large catalog/memory store) plus a server restart. The API answers the cutover request with `202`; the next page load is the restarted server.
+
+**Retired backend.** The source database and `data/db-dumps/portos-maintenance-<operation-id>.sql` are retained untouched as the recovery copy — they no longer receive writes. Every pooled operation and every managed boot (`databaseBootFence`) refuses with `DATABASE_RETIRED_BACKEND` when its pool names the retired source and not the released target: for example a PM2 app restarted with a cached environment, or a shell exporting an old `PGPORT`. Restart that process from the saved configuration (`pm2 restart ecosystem.config.cjs --update-env`). To move back, run a cutover in the other direction; hand-editing `PGMODE` back to the retired backend is refused rather than silently writing to the stale copy. Removing `data/database-authority.json` lifts the guard and is only safe once you have confirmed which backend holds your records.
+
+**Recovery commands.** Inspect with `node scripts/database-maintenance.mjs status`. If `coordinator.state` is `exited`, repair the reported cause (for example start the target backend, or fix `.env`) and run `node scripts/database-maintenance.mjs recover <operation-id>`; repeat as needed — each run resumes the recorded stage. `verifying` with a server that keeps exiting usually means the target is unreachable or `.env`/the launch environment points elsewhere; `pm2 logs portos-server` shows the bounded refusal. `verified` with no release (a crash between them) is completed by the same `recover`. Never delete the fence, the proofs, or the authority record to force startup.
+
+### Calendar daily-review recovery
+
+Daily reviews remain in the existing `data/calendar/daily-reviews/<date>.json`
+file-primary store. An optional per-event `pendingOperations` map records each desired confirmation,
+its stable date/event `sourceKey`, and prior goal link before goal effects run.
+Only a successful goal-store write publishes the confirmation and clears the intent.
+An explicit daily-review read or confirmation retry replays pending work locally;
+missing goals remain visible as pending confirmations without blocking the day.
+History stays a read-only projection of completed confirmations. No recovery path
+calls an AI or calendar provider.
+
+Goal progress carries the same optional `sourceKey` in the existing identity goal
+store (including its MortalLoom mirror). A serialized goal mutation replaces or
+removes only matching entries, preserving manual and legacy progress. These are
+additive optional fields: old reviews and goal logs are read unchanged, with no
+backfill, seed, or install migration, because historical free-form entries cannot
+be safely assigned provenance. The journal stays machine-local; no new peer sync
+category is introduced. Existing filesystem backups cover the review intents and
+goal data together; interrupted intents remain retryable after restore.
 
 ## `asset-file-db-indexed` — bytes on disk, metadata in DB
 
@@ -163,6 +243,18 @@ Each file→Postgres migrator parks its source aside (`<domain>.imported`, per-r
 
 ---
 
+### Existing Messages draft send state
+
+Messages retains its existing machine-local `data/messages/drafts.json` store.
+Migration 415 adds send-attempt identity and a history capped at 20 attempts per
+draft, including interruption and operator reconciliation timestamps. It preserves
+draft content and states; startup recovery then marks abandoned sends as
+`delivery_unknown` without contacting a provider. Unknown delivery cannot be
+edited, deleted, approved, or sent until the operator checks their mailbox and
+records sent or not sent. Confirmed nondelivery returns to an unapproved draft.
+These fields stay with the existing draft backup and never federate; this change
+adds no new store or seed.
+
 ## PostgreSQL is required — `MEMORY_BACKEND=file` is test-only
 
 PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every install and every federated peer machine (decision: [ADR — PostgreSQL as the Primary Datastore](./decisions/2026-06-07-postgres-as-primary-datastore.md)). Run it as either:
@@ -203,22 +295,54 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 ### Moving between Docker and native
 
-`scripts/db.sh migrate` exports the mode selected in the repository-root `.env`
-and imports into the other mode. The dump uses `--clean`: it **replaces the
-destination's database objects and records**, rather than merging records.
-Back up both databases and stop PortOS processes before an intentional move.
+Automatic backend migration and switching are temporarily unavailable.
+The Settings switch/migration requests and `scripts/db.sh migrate`,
+`use-native`, and `use-docker` refuse before copying data or changing mode. The former path could accept writes after its dump snapshot
+and strand them on the source; changing `.env` also leaves the running server
+connected to its original pool.
 
-`scripts/db.sh setup-native` selects **native** mode after provisioning; it does
-not copy Docker data. Running `scripts/db.sh migrate` immediately afterward
-therefore copies **native → Docker**, potentially overwriting your existing
-Docker records with a fresh database. For **Docker → native**, first select the
-Docker source with `scripts/db.sh use-docker`, ensure that source is running,
-then run `scripts/db.sh migrate`. Check `scripts/db.sh status` before migrating.
-The migration switches to the destination mode after a successful import.
+`POST /api/database/maintenance/preflight` accepts explicit `source` and `target`
+backend names through the ordinary instance authentication gate. It checks the
+saved direction against the running pool and requires complete, trusted, idle
+work state. A successful response is `{ source, target, advisory: true, accepted: false }`: it creates no operation, reserves no maintenance window, and does
+not promise that a later request is safe. The future acceptance path must repeat
+these checks under its final admission protocol. Missing/unreadable work state,
+configuration drift, or an existing maintenance fence refuses the check.
 
-The migration command assumes the standard native `:5432` and Docker `:5561`
-destination ports. For custom ports, use an explicitly targeted dump/restore
-instead. See [Backup & Restore](./BACKUP.md) for backup and restore semantics.
+The internal `stopOwnedDatabaseProducers` coordinator stage retains the original
+PM2 CoS/server identities in the operation's local `producers.json`, stops CoS
+before the server by numeric PM2 id, and verifies a fresh daemon read after each
+stop. Missing/duplicate/foreign identities, changed live PIDs, unknown lifecycle
+states, failed stops, or failed readback keep the operation fenced. Recovery
+uses the same recorded operation and original identities; it never changes the
+saved backend. Producer shutdown alone does **not** prove child/spawn quiescence
+or authorize a dump. The internal transfer worker follows it with predecessor
+and descendant reconciliation, then exports the recorded source and imports the
+recorded dump into the recorded target (see [offline transfer](#offline-transfer)).
+The backend cutover API (`POST /api/database/maintenance/cutover`, `POST /api/database/maintenance/recover`, host-control gated) now runs the whole verified lifecycle; the Settings database tab stays disabled until #8811 surfaces its progress and recovery.
+
+For stage diagnostics, run `node scripts/database-maintenance.mjs status` and
+`node scripts/database-maintenance.mjs writers`. `accepted` means no transfer
+has begun; `quiescing` requires retained producer and child reconciliation
+evidence; `exporting`/`importing` report `transfer` dump/import state. Do not remove the fence, erase `producers.json`, probe a PID to infer
+ownership, or reverse source/target. There is no user-callable resume or bypass
+for the transfer stages. A same-operation internal successor requires
+the prior detached supervisor's durable exit receipt and repeats shutdown
+readback, predecessor and writer reconciliation before any export or import.
+
+Until the Settings flow ships (#8811), keep the existing backend selected and use
+backups unless you drive the cutover API deliberately. A safe cutover requires
+downtime for **all** PortOS writers, including the CoS runner, and verification
+that the restarted server actually uses the target. A server-only restart or
+a saved-mode change is not that verification. Do not use Sync followed by Switch
+as a migration workaround.
+
+`scripts/db.sh setup-native` provisions native PostgreSQL without selecting it
+or copying Docker data. Fresh-install setup still selects its configured mode. Preserve the backend holding your records. If an earlier
+migration already ran, keep both databases and its dump intact: the old source
+may contain writes missing from the target. Do not destroy either backend or
+reverse the migration before comparing and recovering those records.
+See [Backup & Restore](./BACKUP.md) for backup and restore semantics.
 
 ### Boot schema upgrades & lock windows
 
@@ -529,3 +653,40 @@ before manually retiring history.
 Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
 
 `passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.
+
+### CoS raw recording maintenance
+
+CoS historical `metadata.json`, prompts, parsed `output.txt`, feedback and history
+indexes have no automatic age expiry. `cosAgentIndex.pruneOldAgentArchives` is a
+compatibility no-op. Data Management → Chief of Staff → Recording cleanup offers
+verified gzip compression and separately opted-in deletion of **raw terminal
+recordings only**. Unknown files, parsed output, prompts and metadata are never
+removed by this maintenance. The separate explicit Delete/Clear history actions
+remain destructive; they are not storage maintenance.
+
+The existing machine-local CoS config owns `agentStorage` and a bounded
+`lastAgentStorageJob` audit. Defaults compress after seven days, with irreversible
+deletion off. Migration 416 adopts those defaults for existing config without
+converting any recording or overwriting user policy. While CoS is running, hourly maintenance handles
+at most 25 eligible runs; manual previews handle at most 1,000 per batch and
+expire after 15 minutes. Saving policy reconciles it immediately. No provider
+calls occur. A cancellation preserves the original until verified publication.
+
+`raw.txt.gz` is a lossless local asset alternative to `raw.txt`; a same-directory
+`raw-storage.json` is **file-primary asset lifecycle metadata**, inseparable from
+that archive's pin, checksum and disposition. It is not a new relational history
+store. A plain file wins if interrupted publication leaves both forms; a later
+maintenance pass verifies and converges them. History and learning consumers keep
+reading unchanged metadata/output/prompt files. The download endpoint serves the
+available raw or gzip asset without loading it into memory; deleted recordings
+return an explicit unavailable response. The flat active-run layout is excluded.
+
+Compression requires an old, completed, state-evicted, unpinned run with regular,
+unmodified artifacts and no preserved worktree or known live/resume/pipeline
+reference. Deletion additionally requires a retained task summary and nonempty
+parsed output. A stale preview is revalidated before publication/deletion. The
+raw sidecar and compressed asset stay machine-local; existing peer CoS sync
+continues its unchanged allowlist (`metadata.json`, `output.txt`, `prompt.txt`).
+Filesystem backups include both gzip assets and their sidecars, and restore keeps
+them readable without a conversion. Data Management's backup export keeps its
+originals and is distinct from space reclamation.

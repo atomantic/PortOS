@@ -7,7 +7,7 @@ import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
 import { AGENT_INSTRUCTIONS_FILENAME, CLAUDE_BRIDGE_FILENAME } from '../../lib/agentInstructionsFile.js';
-import { SELF_IMPROVEMENT_TASK_TYPES } from '../../lib/scheduledTaskTypes.js';
+import { SELF_IMPROVEMENT_TASK_TYPES, currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 
 const SKILLS_DIR = join(PATHS.root, 'data/prompts/skills');
 
@@ -76,7 +76,8 @@ const skillForTaskType = (task) => {
   ];
   for (const taskType of taskTypes) {
     if (typeof taskType !== 'string') continue;
-    const normalized = taskType.trim().toLowerCase();
+    // A task queued before a rename still names the retired type.
+    const normalized = currentTaskTypeName(taskType.trim().toLowerCase());
     if (Object.hasOwn(TASK_TYPE_SKILL_ALIASES, normalized)) {
       return TASK_TYPE_SKILL_ALIASES[normalized];
     }

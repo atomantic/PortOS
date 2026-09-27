@@ -8,6 +8,12 @@ import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
+import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
+
+import { acceptDatabaseMaintenance } from './databasePreflight.js';
+import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
+
+export { preflightDatabaseMaintenance } from './databasePreflight.js';
 
 const rootDir = PATHS.root;
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
@@ -21,6 +27,8 @@ const bashBinary = resolveBashBinary();
 // before they probe or change configuration; always release after failure.
 let databaseOperationActive = false;
 async function withDatabaseOperation(operation) {
+  // Check synchronously before locking, probing, or launching shell writers.
+  assertDatabaseAdmission();
   if (databaseOperationActive) {
     throw new ServerError('Another database operation is in progress. Wait for it to finish and retry.', { status: 409 });
   }
@@ -30,6 +38,46 @@ async function withDatabaseOperation(operation) {
   } finally {
     databaseOperationActive = false;
   }
+}
+
+/**
+ * Read only the durable operation, including while pool admission is fenced.
+ * This is not a health probe or permission to resume writers. Even a verified
+ * journal remains fenced until the coordinator explicitly releases admission.
+ * Bounded: modes, stage and coordinator state — never endpoints or tokens.
+ */
+export function getMaintenanceStatus() {
+  const journal = createDatabaseMaintenanceJournal();
+  const operation = journal.read();
+  if (!operation) {
+    const last = createDatabaseAuthority().read();
+    return { stage: 'idle', fenced: false,
+      ...(last ? { lastCutover: { id: last.operationId, source: last.source.mode, target: last.target.mode, sourceRetained: true } } : {}) };
+  }
+  return {
+    id: operation.id,
+    stage: operation.stage,
+    source: operation.source.mode,
+    target: operation.target.mode,
+    coordinator: journal.coordinatorStatus(operation.id).state,
+    fenced: true,
+  };
+}
+
+/**
+ * Accept an offline cutover. Serialized with every other database admin
+ * mutation. Returns `{ accepted, launch }`: the route sends its 202 first and
+ * launches the worker afterward, because the worker then stops PortOS.
+ */
+export const acceptDatabaseCutover = (direction) => withDatabaseOperation(() => acceptDatabaseMaintenance(direction));
+
+/**
+ * Same-operation recovery: `{ status, launch }`, launch deferred like
+ * acceptance. Runs while fenced, so it bypasses the admin lock.
+ */
+export async function beginDatabaseCutoverRecovery(id) {
+  const { beginDatabaseCutoverRecovery: begin } = await import('./databaseMaintenanceCutover.js');
+  return begin(id);
 }
 
 /**
@@ -225,47 +273,15 @@ export async function getStatus() {
 }
 
 /**
- * Switch database backends, optionally migrating data first.
+ * Backend changes require a coordinated stop and verified restart. Neither a
+ * snapshot nor a mode-only switch can rebind this process's existing pool.
  */
-async function switchDatabaseImpl({ target, migrate }, io) {
-  const emit = (event, data) => io?.emit('database:progress', { event, ...data });
-
-  if (migrate) {
-    emit('start', { message: `Migrating data to ${target}...` });
-    const result = await runDbScript(['migrate']);
-    if (result.exitCode !== 0) {
-      emit('error', { message: 'Migration failed' });
-      throw new ServerError('Migration failed', {
-        status: 500,
-        context: { details: result.stderr || result.stdout }
-      });
-    }
-    emit('complete', { message: `Migration to ${target} complete` });
-    return { success: true, output: result.stdout };
-  }
-
-  // Just switch mode without migrating
-  emit('start', { message: `Switching to ${target}...` });
-  const switchResult = await runDbScript([target === 'docker' ? 'use-docker' : 'use-native']);
-  if (switchResult.exitCode !== 0) {
-    emit('error', { message: 'Switch failed' });
-    throw new ServerError('Switch failed', {
-      status: 500,
-      context: { details: switchResult.stderr || switchResult.stdout }
-    });
-  }
-
-  const startResult = await runDbScript(['start']);
-  if (startResult.exitCode !== 0) {
-    emit('error', { message: `Failed to start ${target} database` });
-    throw new ServerError(`Failed to start ${target} database`, {
-      status: 500,
-      context: { details: startResult.stderr || startResult.stdout }
-    });
-  }
-
-  emit('complete', { message: `Switched to ${target}` });
-  return { success: true, output: switchResult.stdout + '\n' + startResult.stdout };
+async function switchDatabaseImpl() {
+  // Re-enable only with the durable, verified offline cutover in #8805.
+  throw new ServerError(
+    'Database migration and switching are temporarily unavailable: a coordinated shutdown and restart is required to preserve writes. Keep using the current backend; backups remain available.',
+    { status: 409, code: 'DATABASE_CUTOVER_UNAVAILABLE' }
+  );
 }
 
 const pgUser = POOL_CONFIG.user;
@@ -550,7 +566,7 @@ async function syncDatabaseImpl(io) {
 
   emit('start', { message: 'Exporting from active database...' });
   // Explicit backend export bypasses db.sh's saved-mode/container selection.
-  const { dumpFile } = await exportDatabase(currentMode);
+  const { dumpFile } = await exportDatabaseImpl(currentMode);
   console.log(`🗄️ Sync: exported to ${dumpFile}`);
 
   // Step 2: Ensure target is running and configured
@@ -689,7 +705,7 @@ async function setupNativeDatabaseImpl(io) {
 }
 
 /** Export a specific database backend, or the active backend when omitted. */
-export async function exportDatabase(backend) {
+async function exportDatabaseImpl(backend) {
   const label = `backup-${Date.now()}`;
 
   if (backend) {
@@ -764,3 +780,5 @@ export const stopDatabase = (backend) => withDatabaseOperation(() => stopDatabas
 export const setupNativeDatabase = (io) => withDatabaseOperation(() => setupNativeDatabaseImpl(io));
 
 export const fixDatabase = () => withDatabaseOperation(() => fixDatabaseImpl());
+
+export const exportDatabase = (backend) => withDatabaseOperation(() => exportDatabaseImpl(backend));

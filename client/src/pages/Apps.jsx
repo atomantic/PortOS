@@ -254,9 +254,9 @@ export default function Apps() {
       {displayedApps.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-12 text-center">
           <div className="text-4xl mb-4">{showArchived ? '📦' : '🗂️'}</div>
-          <h3 className="text-xl font-semibold text-white mb-2">
+          <h2 className="text-xl font-semibold text-white mb-2">
             {showArchived ? 'No archived apps' : 'No apps registered'}
-          </h3>
+          </h2>
           <p className="text-gray-500 mb-6">
             {showArchived ? 'Archived apps will appear here' : 'Register your first app to monitor its health, restart it, and surface it on your dashboard.'}
           </p>

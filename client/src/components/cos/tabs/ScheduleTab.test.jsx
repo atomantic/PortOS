@@ -65,7 +65,7 @@ describe('mergeUpdatedTaskInterval', () => {
     };
     const schedule = {
       tasks: {
-        'release-check': {
+        'do-release': {
           type: 'cron',
           cronExpression: '0 3 * * 0-6',
           status: { shouldRun: false, nextRunAt: '2026-09-22T10:00:00.000Z' },
@@ -73,10 +73,10 @@ describe('mergeUpdatedTaskInterval', () => {
       },
     };
 
-    expect(mergeUpdatedTaskInterval(schedule, 'release-check', {
+    expect(mergeUpdatedTaskInterval(schedule, 'do-release', {
       type: 'cron',
       cronExpression: status.cronExpression,
-    }, status).tasks['release-check'].status).toEqual(status);
+    }, status).tasks['do-release'].status).toEqual(status);
   });
 });
 

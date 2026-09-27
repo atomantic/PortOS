@@ -1,5 +1,5 @@
 /**
- * Machine-local Tailcat serve status — start/stop PortOS API :5555 over
+ * Machine-local Tailcat serve status — start/stop the isolated PortOS ingress over
  * tailcat, and Copy the tc… address for the other node to Dial-them.
  *
  * The full address is returned by the serve status API on purpose (our own
@@ -23,14 +23,15 @@ export default function TailcatServePanel({ onChange, compact = false }) {
     if (await runServe(fn, message)) onChange?.();
   };
 
+  const degraded = status?.live && status?.relayStatus === 'degraded';
   const label = status?.live
-    ? 'serving'
+    ? (degraded ? 'relay degraded' : 'process running')
     : (status?.status || 'stopped');
   const tone = status?.live
-    ? 'success'
+    ? (degraded ? 'warning' : 'muted')
     : (STATUS_TONE[status?.status] || 'muted');
   const StatusIcon = status?.live
-    ? CheckCircle2
+    ? (degraded ? AlertCircle : Clock)
     : (STATUS_ICON[status?.status] || Clock);
 
   return (
@@ -82,6 +83,18 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             {status?.live && (
               <button
                 type="button"
+                onClick={() => run(() => retryTailcatServe(), 'Tailcat serve restarted')}
+                disabled={busy}
+                title="Restart the serving process using the saved key"
+                className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white disabled:opacity-50 border border-port-border rounded px-2 py-1 transition-colors"
+              >
+                <RefreshCw size={11} className={busy ? 'animate-spin' : ''} />
+                {busy ? 'Working...' : 'Restart serve'}
+              </button>
+            )}
+            {status?.live && (
+              <button
+                type="button"
                 onClick={() => run(() => stopTailcatServe(), 'Tailcat serve stopped')}
                 disabled={busy}
                 className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-port-error disabled:opacity-50 border border-port-border rounded px-2 py-1 transition-colors"
@@ -91,6 +104,17 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             )}
           </div>
         </div>
+
+        {status?.live && (
+          <p role="status" className={`text-[11px] mt-2 leading-snug ${degraded ? 'text-port-warning' : 'text-gray-500'}`}>
+            {degraded
+              ? (status.relayError || 'Tailcat reported a relay connection failure.')
+              : (status.relayStatus === 'connected'
+                ? 'Relay connected. End-to-end peer health is not verified here.'
+                : 'Relay reachability is unknown. A running process does not confirm a working tunnel.')}
+            {status.relayObservedAt && <span> · {timeAgo(status.relayObservedAt)}</span>}
+          </p>
+        )}
 
         <TailcatAddress address={status?.tcAddress} preview={status?.tcAddressRedacted} disabled={busy} />
 

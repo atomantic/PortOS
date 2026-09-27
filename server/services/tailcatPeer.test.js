@@ -504,6 +504,102 @@ describe('saved tailcat forwards', () => {
     expect(patches).toEqual([['fwd_1', expect.objectContaining({ peerId: 'peer-9', status: 'active', lastError: null })]]);
   });
 
+  it('waits for process exit across concurrent retries, escalating even after a prior signal', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill.mockImplementation(() => { child.killed = true; return true; });
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const replacement = fakeChild();
+    const startForward = vi.fn().mockResolvedValueOnce(child).mockResolvedValue(replacement);
+    const options = {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => null,
+      allocatePort: vi.fn(async () => 15555), startForward,
+      getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', port: 15555 }],
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+    };
+    try {
+      await retryTailcatForward('fwd_1', options);
+      child.kill('SIGTERM'); // A sent signal must never stand in for an exit.
+      const retry = retryTailcatForward('fwd_1', options);
+      const concurrentRetry = retryTailcatForward('fwd_1', options);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+      expect(startForward).toHaveBeenCalledTimes(1);
+      expect(options.allocatePort).toHaveBeenCalledTimes(1);
+      child.signalCode = 'SIGKILL';
+      child.emit('exit', null, 'SIGKILL');
+      await Promise.all([retry, concurrentRetry]);
+      expect(startForward).toHaveBeenCalledTimes(3);
+      expect(_liveForwardCountForTests()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains a child that will not exit and refuses to spawn a replacement', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill.mockImplementation(() => { child.killed = true; return true; });
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const startForward = vi.fn(async () => child);
+    const options = {
+      ensureInstalled: async () => ({ bin: 'tailcat' }), primeDerpMap: async () => null,
+      allocatePort: async () => 15555, startForward,
+      getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', port: 15555 }],
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+    };
+    try {
+      await retryTailcatForward('fwd_1', options);
+      const result = expect(retryTailcatForward('fwd_1', options))
+        .rejects.toMatchObject({ code: 'TAILCAT_STOP_TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(16000);
+      await result;
+      expect(startForward).toHaveBeenCalledTimes(1);
+      expect(_liveForwardCountForTests()).toBe(1);
+    } finally {
+      child.emit('exit', null, 'SIGKILL');
+      vi.useRealTimers();
+    }
+  });
+
+  it('replaces a stale relay address without recreating its paired peer', async () => {
+    const replacement = 'tcEXAMPLE' + 'B'.repeat(40);
+    const savedPeer = { id: 'peer-1', transport: 'tailcat', port: 15555, syncSecret: 'example-pair-secret', syncCategories: { brain: true } };
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: savedPeer.id, tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5565,
+    }] });
+    const patches = [];
+    const startForward = vi.fn(async () => fakeChild());
+    const addPeerFn = vi.fn();
+    const peer = await retryTailcatForward('fwd_1', {
+      tcAddress: ` ${replacement} `,
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({}),
+      allocatePort: async () => 15555,
+      startForward, addPeerFn,
+      patchForwardEntry: async (id, patch) => { patches.push(patch); return { id, ...patch }; },
+      getPeersFn: async () => [savedPeer],
+    });
+    expect(patches[0]).toEqual({ tcAddress: replacement });
+    expect(startForward).toHaveBeenCalledWith(expect.objectContaining({ tcAddress: replacement, remotePort: 5565 }));
+    expect(peer).toBe(savedPeer);
+    expect(addPeerFn).not.toHaveBeenCalled();
+
+    const persist = vi.fn();
+    await expect(retryTailcatForward('fwd_1', { tcAddress: 'invalid', patchForwardEntry: persist }))
+      .rejects.toMatchObject({ code: 'TAILCAT_BAD_ADDRESS' });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('repoints an existing peer when a retry has to bind a different port', async () => {
     readJSONFile.mockResolvedValue({ version: 1, forwards: [{
       id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,

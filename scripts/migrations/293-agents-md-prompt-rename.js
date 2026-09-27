@@ -12,6 +12,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
+import { currentTaskTypeName } from '../../server/lib/scheduledTaskTypes.js';
 
 const SCHEDULE_PATHS = [
   join('data', 'cos', 'task-schedule.json'),
@@ -53,13 +54,15 @@ export default {
       for (const key of TASK_KEYS) {
         const task = schedule.tasks[key];
         if (!task) continue;
+        // release-check was renamed do-release; migration 417 moves the task later.
+        const promptKey = currentTaskTypeName(key);
         const currentVersion = task.promptVersion || 1;
-        if (task.promptCustomized || currentVersion >= PROMPT_VERSIONS[key]) continue;
-        task.prompt = DEFAULT_TASK_PROMPTS[key];
-        task.promptVersion = PROMPT_VERSIONS[key];
+        if (task.promptCustomized || currentVersion >= PROMPT_VERSIONS[promptKey]) continue;
+        task.prompt = DEFAULT_TASK_PROMPTS[promptKey];
+        task.promptVersion = PROMPT_VERSIONS[promptKey];
         dirty = true;
         updatedCount += 1;
-        console.log(`📝 ${relPath}: upgraded ${key} prompt v${currentVersion} → v${PROMPT_VERSIONS[key]}`);
+        console.log(`📝 ${relPath}: upgraded ${key} prompt v${currentVersion} → v${PROMPT_VERSIONS[promptKey]}`);
       }
       if (dirty) await writeFile(fullPath, `${JSON.stringify(schedule, null, 2)}\n`);
     }

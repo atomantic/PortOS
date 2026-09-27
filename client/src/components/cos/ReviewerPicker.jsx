@@ -17,7 +17,7 @@ import {
 } from './constants';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isToolFreeReviewer, prioritizeToolFreeReviewers } from '../../../../server/lib/reviewerConfig.js';
-import { effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
+import { effortLevelsForProvider, effectiveModelFor, isTuiProvider } from '../../utils/providers';
 import { isApplyCapableReviewer, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 // The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
@@ -180,6 +180,10 @@ export default function ReviewerPicker({
   const [legacyReviewer, setLegacyReviewer] = useState('');
   const [effortNotice, setEffortNotice] = useState('');
   const providerRecords = modelOptions?.providers || [];
+  // A review runs its provider headless (CLI or API), never through an
+  // interactive TUI session, so TUI records are not offered as new reviewers.
+  // A TUI reviewer saved earlier keeps its row and label.
+  const reviewerProviderOptions = providerRecords.filter(provider => !isTuiProvider(provider));
   const labelFor = (token) => isProviderReviewer(token)
     ? providerRecords.find(provider => `provider:${provider.id}` === token)?.name || token.slice(9)
     : reviewerLabel(token);
@@ -280,7 +284,7 @@ export default function ReviewerPicker({
       if (providerReviewUnsupported?.[token]) {
         return {
           label: "can't review",
-          title: `${labelFor(token)} cannot run isolated, tool-free claim/public reviews on this machine. Configure its command, select API mode, or choose a supported reviewer harness in AI Providers.`
+          title: `${labelFor(token)} has no command configured, so it cannot run a review. Set its command or switch it to API mode in AI Providers.`
         };
       }
       return null;
@@ -746,7 +750,7 @@ export default function ReviewerPicker({
           <div className="w-full sm:w-80 max-w-full">
             <ProviderModelSelector
               dense
-              providers={providerRecords}
+              providers={reviewerProviderOptions}
               selectedProviderId={addProviderId}
               onProviderChange={setAddProviderId}
               emptyProviderOption="Choose a reviewer provider"

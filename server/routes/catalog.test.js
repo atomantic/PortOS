@@ -23,7 +23,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
+import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 // Mock embeddings — the bulk-import + restore routes call these; we don't want a
@@ -501,7 +501,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
       console.log('RECEIPT:' + JSON.stringify(result));
     `, JSON.stringify({ scrapId: scrap.id, body })], {
       cwd: new URL('../', import.meta.url),
-      env: { ...process.env, NODE_ENV: 'test', PGDATABASE: 'portos_test' },
+      env: { ...process.env, NODE_ENV: 'test', PGDATABASE: POOL_CONFIG.database },
     });
     const restartedResult = JSON.parse(stdout.split('\n').find(line => line.startsWith('RECEIPT:')).slice(8));
     expect(restartedResult).toEqual(first.body.ingredients);

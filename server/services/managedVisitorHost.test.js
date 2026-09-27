@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createManagedVisitorHost } from './managedVisitorHost.js';
+import { EIDOVERSE_PORT } from '../lib/eidoversePort.js';
 it('disabled transport makes no requests and explicit configuration keeps host credentials on the fixed loopback namespace', async () => {
   const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ capabilities: { managedVisitors: null } })));
   const disabled = createManagedVisitorHost({ token: '', fetchImpl });
@@ -7,7 +8,7 @@ it('disabled transport makes no requests and explicit configuration keeps host c
   expect(fetchImpl).not.toHaveBeenCalled();
   const token = 'a'.repeat(64), host = createManagedVisitorHost({ token, fetchImpl }); await host.capabilities();
   const [url, options] = fetchImpl.mock.calls[0];
-  expect(url).toBe('http://127.0.0.1:8940/api/managed-visitors/v1/version');
+  expect(url).toBe(`http://127.0.0.1:${EIDOVERSE_PORT}/api/managed-visitors/v1/version`);
   expect(options.headers.Authorization).toBe(`Bearer ${token}`); expect(options.redirect).toBe('error'); expect(options.signal).toBeInstanceOf(AbortSignal);
 });
 it('host response buffering is bounded and malformed/non-success replies do not become capabilities', async () => {

@@ -19,13 +19,15 @@ import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisp
 import { synthesize, listVoices, listVoiceEngines, VALID_ENGINES } from '../services/voice/tts.js';
 import {
   listVoiceProfiles,
+  listStudioProfiles,
+  getVoiceProfileRequired,
   parsePresetVoiceId,
   promotePresetProfile,
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
 } from '../services/voice/profiles.js';
-import { renderProfileBenchmark, benchmarkProfileInteractive } from '../services/voice/profileBenchmarks.js';
+import { renderProfileBenchmark, benchmarkProfileInteractive, completeProfileInteractiveBenchmark } from '../services/voice/profileBenchmarks.js';
 import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
 import {
   startFineTuningJob,
@@ -189,10 +191,11 @@ router.get('/facetime/status', asyncHandler(async (_req, res) => {
   res.json(await facetimeBridge.checkSetup());
 }));
 
+const facetimeActions = { probe: facetimeBridge.probe, call: facetimeBridge.call, hangup: facetimeBridge.hangup };
 for (const command of ['probe', 'call', 'hangup']) {
   router.post(`/facetime/${command}`, asyncHandler(async (req, res) => {
     validateRequest(facetimeActionSchema, req.body || {});
-    res.json(await facetimeBridge[command]());
+    res.json(await facetimeActions[command]());
   }));
 }
 
@@ -249,6 +252,12 @@ const interactiveBenchmarkSchema = z.object({
   maxFirstAudioMs: z.number().min(50).max(5000).optional(),
 }).strict();
 
+const interactivePlaybackReceiptSchema = z.object({
+  benchmarkId: z.string().uuid(),
+  renderRequestLatencyMs: z.number().min(0).max(3600000),
+  playbackStartupMs: z.number().min(0).max(30000),
+}).strict();
+
 const fineTuneStartSchema = z.object({
   epochs: z.number().int().min(1).max(50).optional(),
   checkpointInterval: z.number().int().min(10).max(500).optional(),
@@ -274,6 +283,71 @@ const downloadModelSchema = z.object({
 const profileIdParamsSchema = z.object({
   id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
 }).strict();
+
+const studioDesignSchema = z.object({
+  label: z.string().trim().min(1).max(160),
+  instructions: z.string().trim().min(1).max(2000),
+  text: z.string().trim().min(1).max(400),
+  seed: z.number().int().min(0).max(2147483647).default(42),
+  rate: z.number().min(0.5).max(2).default(1),
+  pitchSemitones: z.number().int().min(-12).max(12).default(0),
+  genSeconds: z.number().min(2).max(6).default(4),
+}).strict();
+const studioAssignmentSchema = z.object({
+  enableInteractive: z.boolean().default(false),
+  universeId: z.string().trim().min(1).max(160),
+  characterId: z.string().trim().min(1).max(160),
+}).strict();
+const notifyStudio = req => req.app.get('io')?.emit('voice-studio:changed', {});
+// Include legacy character-editor mutations so an open library stays current.
+router.use('/profiles', (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') res.once('finish', () => {
+    if (res.statusCode < 400) notifyStudio(req);
+  });
+  next();
+});
+
+router.get('/studio/profiles', asyncHandler(async (req, res) => {
+  const filters = validateRequest(z.object({
+    limit: z.coerce.number().int().min(1).max(100).default(30),
+    cursor: z.string().max(512).optional(),
+  }).strict(), req.query);
+  res.json(await listStudioProfiles(filters));
+}));
+router.get('/profiles/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(profileIdParamsSchema, req.params);
+  res.json({ profile: await getVoiceProfileRequired(id) });
+}));
+router.get('/studio/status', asyncHandler(async (_req, res) => {
+  const { getAukStatus } = await import('../services/voice/aukRuntime.js');
+  res.json(await getAukStatus());
+}));
+router.post('/studio/setup', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  const { startAukSetup } = await import('../services/voice/aukRuntime.js');
+  res.status(202).json(startAukSetup(() => notifyStudio(req)));
+}));
+router.post('/studio/unload', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  const { unloadAuk } = await import('../services/voice/aukRuntime.js');
+  unloadAuk();
+  notifyStudio(req);
+  res.json({ ok: true });
+}));
+router.post('/studio/design', asyncHandler(async (req, res) => {
+  const body = validateRequest(studioDesignSchema, req.body || {});
+  const { createStudioVoice } = await import('../services/voice/studio.js');
+  const profile = await createStudioVoice(body);
+  notifyStudio(req);
+  res.status(201).json({ profile });
+}));
+router.post('/profiles/:id/assign', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(profileIdParamsSchema, req.params);
+  const body = validateRequest(studioAssignmentSchema, req.body || {});
+  const { assignStudioVoice } = await import('../services/voice/studio.js');
+  const profile = await assignStudioVoice(id, body);
+  res.json({ profile });
+}));
 
 // GET /api/voice/engines
 router.get('/engines', asyncHandler(async (_req, res) => {
@@ -345,7 +419,14 @@ router.post('/profiles/:id/benchmark', asyncHandler(async (req, res) => {
 router.post('/profiles/:id/benchmark-interactive', asyncHandler(async (req, res) => {
   const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
   const body = validateRequest(interactiveBenchmarkSchema, req.body || {});
-  const profile = await benchmarkProfileInteractive(profileId, body);
+  const benchmark = await benchmarkProfileInteractive(profileId, body);
+  res.json({ benchmark });
+}));
+
+router.post('/profiles/:id/benchmark-interactive/complete', asyncHandler(async (req, res) => {
+  const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
+  const body = validateRequest(interactivePlaybackReceiptSchema, req.body || {});
+  const profile = await completeProfileInteractiveBenchmark(profileId, body);
   res.json({ profile });
 }));
 

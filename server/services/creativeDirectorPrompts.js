@@ -272,9 +272,11 @@ export const CD_MAX_SCENE_RETRIES = 3;
  * @param {object} project
  * @param {object} scene
  * @param {number} frameCount — how many frames are attached to the call
+ * @param {{ referenceCount?: number }} [options] — style reference images
+ *   attached AFTER the frames (#8724); 0 leaves the prompt unchanged
  * @returns {string}
  */
-export function buildEvaluateVisionPrompt(project, scene, frameCount) {
+export function buildEvaluateVisionPrompt(project, scene, frameCount, { referenceCount = 0 } = {}) {
   const total = project.treatment?.scenes?.length;
   const positionLabel = total ? `${(scene.order ?? 0) + 1}/${total}` : `${(scene.order ?? 0) + 1}/?`;
   const styleSpec = (project.styleSpec || '').trim()
@@ -287,11 +289,16 @@ export function buildEvaluateVisionPrompt(project, scene, frameCount) {
   const frameLine = frameCount > 1
     ? `You are shown ${frameCount} frames sampled across the scene's timeline, in order (first = start, last = end).`
     : 'You are shown a single representative frame from the scene.';
+  // Style reference images follow the frames in the same request (#8724).
+  // They are the art-direction target, not part of the render.
+  const referenceLine = referenceCount > 0
+    ? `\nAfter the scene frames come ${referenceCount} style reference image(s) from the project's universe / mood board. They are NOT part of the render — judge style adherence against them (palette, texture, lighting, composition) alongside the style spec.\n`
+    : '';
 
   return `You are the creative director for the video project "${project.name}". Evaluate a freshly-rendered scene and decide whether it works.
 
 ${frameLine}
-
+${referenceLine}
 ## Scene
 - Position: ${positionLabel}
 - Intent: ${scene.intent || '(unspecified)'}

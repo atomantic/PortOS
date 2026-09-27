@@ -39,7 +39,40 @@ export const broadcastSse = (job, payload, { retain = true } = {}) => {
   // run is actually doing.
   if (retain) job.lastPayload = payload;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const c of job.clients) c.write(msg);
+  // Isolate each client's write — a dead client's `res.write` throwing (a
+  // closed/broken pipe) must not abort the loop and starve every later
+  // client in `job.clients` of a frame their connection is still open for
+  // (#8915).
+  for (const c of job.clients) {
+    try {
+      c.write(msg);
+    } catch (err) {
+      console.error(`❌ SSE client write failed, dropping this subscriber's frame: ${err?.message || err}`);
+    }
+  }
+};
+
+// Dispatches a job's terminal SSE frame and its companion lifecycle event
+// (`imageGenEvents`/`videoGenEvents` 'completed'/'failed') INDEPENDENTLY: each
+// call gets its own try/catch, so a throw from one — a dead client's
+// `res.write` throwing inside `sseSend`, or a throwing listener inside
+// `emitEvent` — cannot suppress the other. Terminal dispatch is otherwise a
+// bare `broadcastSse(...)` followed by `events.emit(...)`, and the lifecycle
+// event drives durable side effects (gallery index, peer sync, job-queue
+// settlement) that must fire regardless of whether the best-effort SSE write
+// to a possibly-dead client succeeds (#8915). `jobId` is only for the error
+// log line.
+export const dispatchTerminalEvent = (jobId, sseSend, emitEvent) => {
+  try {
+    sseSend();
+  } catch (err) {
+    console.error(`❌ SSE terminal broadcast failed [${String(jobId).slice(0, 8)}]: ${err?.message || err}`);
+  }
+  try {
+    emitEvent();
+  } catch (err) {
+    console.error(`❌ Lifecycle event dispatch failed [${String(jobId).slice(0, 8)}]: ${err?.message || err}`);
+  }
 };
 
 export const attachSseClient = (jobs, jobId, res) => {
@@ -130,8 +163,11 @@ export const createJobFailureFinalizer = ({
     job.status = 'error';
     activeJobs.delete(jobId);
     console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    events.emit('failed', failedPayload(jobId, reason));
+    dispatchTerminalEvent(
+      jobId,
+      () => broadcastSse(job, { type: 'error', error: reason }),
+      () => events.emit('failed', failedPayload(jobId, reason)),
+    );
     closeJobAfterDelay(jobs, jobId);
   };
   finalize.canceled = (job, jobId, slotOwner = null) => finalize(job, jobId, slotOwner, 'Canceled', { force: true });

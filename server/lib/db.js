@@ -8,6 +8,8 @@
 import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isTestRunner } from './runtimeEnv.js';
+import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 
 const { Pool } = pg;
 
@@ -27,13 +29,13 @@ if (!process.env.PGPASSWORD) {
 // need a SECOND, independent connection to the same database (a raw `pg`
 // client outside the pool) don't have to re-derive these defaults and risk
 // drifting from them — see server/lib/db.test.js.
-export const POOL_CONFIG = {
+export const POOL_CONFIG = Object.freeze({
   host: process.env.PGHOST || 'localhost',
   port: parseInt(process.env.PGPORT || '5432', 10),
   database: process.env.PGDATABASE || 'portos',
   user: process.env.PGUSER || 'portos',
   password: process.env.PGPASSWORD || 'portos',
-};
+});
 
 const pool = new Pool({
   ...POOL_CONFIG,
@@ -213,6 +215,10 @@ function maintenanceError() {
 }
 
 async function databaseOperation(fn) {
+  // A process-local restore context cannot bypass a durable cutover fence,
+  // and a pool still naming a cutover's retired backend never reaches it.
+  assertDatabaseAdmission();
+  assertDatabasePoolAuthority(POOL_CONFIG);
   if (maintenanceActive && !databaseContext.getStore()?.active) throw maintenanceError();
   const context = { active: true };
   const pending = databaseContext.run(context, async () => fn());
@@ -227,6 +233,8 @@ async function databaseOperation(fn) {
 
 /** Drain admitted database work and reject new work until restore completes. */
 export async function withDatabaseMaintenance(fn) {
+  assertDatabaseAdmission();
+  assertDatabasePoolAuthority(POOL_CONFIG);
   if (maintenanceActive || databaseContext.getStore()?.active) throw maintenanceError();
   maintenanceActive = true;
   const context = { active: true };
@@ -339,14 +347,14 @@ export async function checkHealth() {
     };
   }
   try {
-    const result = await pool.query(`
+    const result = await databaseOperation(() => pool.query(`
       SELECT
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
         EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
         EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
-    `);
+    `));
     const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
     return {
       connected: true,
@@ -356,6 +364,53 @@ export async function checkHealth() {
   } catch (err) {
     console.error(`🗄️ Database health check failed: ${err.message}`);
     return { connected: false, hasSchema: false, hasCatalogSchema: false, error: err.message };
+  }
+}
+
+/**
+ * Fixed, read-only startup diagnostic through THIS process's actual pool.
+ * This does not lift admission, execute caller SQL, advance the journal, or
+ * establish that a later ordinary restart used this connection. Only the
+ * verification-only entrypoint calls it; all ordinary operations stay fenced.
+ */
+export async function verifyDatabaseMaintenanceTarget(id) {
+  const journal = createDatabaseMaintenanceJournal();
+  const refuse = () => Object.assign(new Error('Database target verification refused.'), {
+    code: 'DATABASE_TARGET_UNVERIFIED',
+  });
+  const readTarget = () => {
+    const operation = journal.read();
+    if (!operation || operation.id !== id || !['verifying', 'verified'].includes(operation.stage)) throw refuse();
+    const target = operation.target;
+    // Exact saved identity, including the pool's captured host/port; do not
+    // infer an endpoint from current mode, mutable env, or a reachable peer.
+    if (['host', 'port', 'database', 'user'].some(key => target[key] !== POOL_CONFIG[key])) throw refuse();
+    return operation;
+  };
+  const operation = readTarget();
+  if (isTestRunner() && !/_test$/.test(POOL_CONFIG.database) && process.env.TEST_DB_OK !== '1') throw refuse();
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query({ text: 'BEGIN READ ONLY', query_timeout: 10_000 });
+    const { rows } = await client.query({ text: `
+      SELECT current_database() AS database, current_user AS "user",
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories') AS has_memories,
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memory_links') AS has_links,
+        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'catalog_ingredients') AS has_catalog,
+        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'catalog_scraps') AS has_catalog_scraps
+    `, query_timeout: 10_000 });
+    const health = rows?.[0];
+    if (health?.database !== operation.target.database || health?.user !== operation.target.user
+      || !['has_memories', 'has_links', 'has_sync', 'has_catalog', 'has_catalog_scraps'].every(key => health[key] === true)) throw refuse();
+    // A query completing after journal damage/removal/replacement is not proof
+    // for that new state. Preserve exactly the operation and stage we read.
+    if (JSON.stringify(readTarget()) !== JSON.stringify(operation)) throw refuse();
+    return { id, stage: operation.stage, target: operation.target.mode, targetHealthy: true, fenced: true };
+  } finally {
+    await client.query({ text: 'ROLLBACK', query_timeout: 10_000 }).catch(() => { discard = true; });
+    client.release(discard);
   }
 }
 

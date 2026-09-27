@@ -1,5 +1,12 @@
 import { parse } from '@babel/parser';
 
+// A cheap, conservative caller gate: aliases retain the imported helper name.
+// Unicode escapes may spell an identifier without its literal name, so those
+// sources still get parsed. Comments/strings are harmless false positives.
+export function mayReadJsonFile(source) {
+  return source.includes('readJSONFile') || source.includes('\\u');
+}
+
 // Test-only syntax scan, never imports a service or reads runtime data.
 // Matches direct helper names (including imported aliases), not arbitrary
 // wrappers, namespace calls, variable aliases, or cross-module dataflow.

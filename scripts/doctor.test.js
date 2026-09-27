@@ -136,14 +136,31 @@ describe('formatReport', () => {
 });
 
 describe('portBlock', () => {
-  it('returns only the PortOS-owned 5553-5561 block, deduped and sorted', () => {
-    // PORTS also carries whisper/llama/vLLM ports the operator starts by hand,
-    // and lists POSTGRES twice (its own key plus the docker one).
+  it('returns only the PortOS-owned 5553-5569 block (core + extension band), deduped and sorted', () => {
+    // PORTS also carries vLLM/SGLang/Tailcat-forward ports the operator starts
+    // by hand, and lists POSTGRES twice (its own key plus the docker one).
     const ports = portBlock();
     expect(ports.length).toBeGreaterThan(0);
     expect(ports).toEqual([...new Set(ports)].sort((a, b) => a - b));
-    expect(ports.every((p) => p >= 5553 && p <= 5561)).toBe(true);
+    expect(ports.every((p) => p >= 5553 && p <= 5569)).toBe(true);
     expect(ports).toContain(5555);
+  });
+
+  it('includes the PortOS-managed extension-band sidecars (whisper, eidoverse bridge, JEV, llama.cpp)', () => {
+    // Regression for #8900: these are started by PortOS itself
+    // (server/services/voice/bootstrap.js, eidoverseHost.js, jev.js), not by
+    // the operator, and a stale 5553-5561 range made them invisible to
+    // `npm run doctor`'s occupancy probe.
+    const ports = portBlock();
+    expect(ports).toEqual(expect.arrayContaining([5562, 5563, 5566, 5568]));
+  });
+
+  it('excludes operator-run ports outside the PortOS block', () => {
+    const ports = portBlock();
+    expect(ports).not.toContain(15555); // Tailcat forward
+    expect(ports).not.toContain(18020); // vLLM Qwen
+    expect(ports).not.toContain(18021); // SGLang Qwen
+    expect(ports).not.toContain(18022); // Fleet LLM queue
   });
 });
 

@@ -78,6 +78,30 @@ describe('listWorkItems', () => {
     expect(out).toMatchObject({ tracker: 'gitlab', items: [], count: 0, reason: 'glab-list-failed', transient: true });
   });
 
+  it('passes the detector\'s per-cause skip attribution through for an empty list', async () => {
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', source: 'origin' });
+    detectActionableWork.mockResolvedValue({
+      actionable: false, count: 0, reason: 'no-actionable-issues',
+      items: [], skipCauses: { 'needs-input': 5, blocked: 2 }
+    });
+
+    const out = await listWorkItems(app);
+
+    // The picker renders WHY each issue was skipped from this map — a null (not
+    // {}) when the detector reported no attribution keeps the field absent for
+    // every other empty shape (plan items, JIRA tickets).
+    expect(out.skipCauses).toEqual({ 'needs-input': 5, blocked: 2 });
+  });
+
+  it('omits skipCauses when the detector reports none', async () => {
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', source: 'origin' });
+    detectActionableWork.mockResolvedValue({ actionable: false, count: 0, reason: 'no-open-issues', items: [] });
+
+    const out = await listWorkItems(app);
+
+    expect(out.skipCauses).toBeNull();
+  });
+
   it('lists JIRA sprint tickets, skipping ones already started or done', async () => {
     resolveAppWorkTracker.mockResolvedValue({ resolved: 'jira', source: 'configured' });
     fetchMyCurrentSprintTickets.mockResolvedValue([

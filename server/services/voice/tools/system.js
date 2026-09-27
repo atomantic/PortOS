@@ -50,6 +50,7 @@ export const SYSTEM_TOOLS = [
 
   {
     name: 'pm2_restart',
+    hostControl: true,
     description:
       'Restart a PortOS PM2 process by name. Use when the user says "restart the whisper server", "restart portos-api", "bounce the cos runner". Only restart — never kill or delete.',
     parameters: {

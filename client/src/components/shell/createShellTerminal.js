@@ -43,9 +43,10 @@ export const createShellTerminal = (container, options = {}) => {
     // Screen-reader mode is what makes xterm build its .xterm-accessibility
     // live region — without it every rendered row stays aria-hidden and a
     // screen-reader user focusing the terminal hears an empty textarea. It
-    // also relaxes _keyDown's blanket preventDefault on resolved keys, which
-    // the dictation bridge (lib/terminalDictation.js) is already written to
-    // defer to.
+    // also relaxes _keyDown's blanket preventDefault on resolved keys and
+    // makes xterm ignore every textarea insertText event — so dictation (which
+    // fires no key events) reaches the PTY only through the dictation bridge
+    // (lib/terminalDictation.js), which accounts for both.
     screenReaderMode: true,
     ...options,
   });

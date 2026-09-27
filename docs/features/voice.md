@@ -10,10 +10,130 @@ PortOS includes an optional voice assistant with support for fully local operati
 |-------|----------------|--------------|--------|
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
-| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS | ✅ |
+| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (CPU/CUDA/Apple Silicon MLX) | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
+
+**Qwen3-TTS status:** the bundled runner calls the official
+[qwen-tts inference API](https://github.com/QwenLM/Qwen3-TTS#python-package-usage)
+for voice design and reference cloning on CPU/CUDA. Install `qwen-tts` in the
+isolated Qwen Python environment; the package supplies Torch, NumPy and
+SoundFile. Apple Silicon uses [MLX Audio](https://github.com/Blaizzy/mlx-audio)
+against the same verified official snapshots. In the isolated Qwen Python
+environment, install `mlx-audio` at commit
+`784b29e2691a93ca7483147d86f61859dfaa6296` (the adapter's reference API) plus
+`soundfile` and `huggingface_hub`. The runtime probe checks MLX/Metal availability
+without loading weights. MLX cloning requires a reference transcript and a
+loaded speech-tokenizer encoder; otherwise it fails rather than generating an
+unconditioned voice. Speech-rate changes and instruction-controlled Base cloning are
+refused rather than reported as applied controls. Fine-tuning is described
+under Voice Studio below. Explicit model
+downloads in Settings fetch the official Qwen snapshot at an immutable Hub
+revision and verify the size and digest of every required file, including the
+speech tokenizer weights, before publishing readiness. Downloads require
+`huggingface_hub` in the isolated Qwen Python environment. A missing dependency
+or failed verification returns an error; it never marks the model downloaded.
+Earlier versions produced test tones, placeholder checkpoints and download
+metadata; those artifacts are not evidence of model readiness. Runtime probes
+report dependency/hardware availability without loading weights. Model download readiness is separate: it
+requires a verified snapshot marker and all required files. Unchanged verified
+files use their size, change timestamps, and filesystem identity; changed files
+are rehashed before they can report ready. Windows probes rehash all files because
+Python does not expose a reliable change timestamp there; old metadata-only model folders remain unavailable.
+Inference loads only these verified snapshots with Hub/Transformers offline
+mode enabled, never a repository ID that might trigger an implicit download.
+The returned model revision includes the immutable commit hash. No model
+download runs automatically. Audio is buffered, not streamed.
+
+Apple Silicon real-model generation and an independent transcript check passed
+on 2026-09-27 (evidence below). The operator confirmed clear, natural design
+speech and clear cloned speech with the same speaker identity. Fixture tests prove the adapter contract,
+not speech quality. On a supported host with the
+isolated environment and verified weights, run the following manually from
+the repository root (substitute the isolated Python executable and model root):
+
+```sh
+python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+  --mode design --model-id Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --text 'The example garden gate is open.' --instructions 'A clear warm alto.' \
+  --output-wav <scratch-dir>/design.wav
+python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+  --mode clone --model-id Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --reference-audio <scratch-dir>/design.wav \
+  --reference-transcript 'The example garden gate is open.' \
+  --text 'Please close the gate after you enter.' --output-wav <scratch-dir>/clone.wav
+```
+
+Listen to both files and record intelligibility and voice continuity with the
+reported revisions before treating this as a validated speech runtime. The
+reference is generated, so no personal recording or consent is needed for this
+smoke. A successful command or non-silent WAV alone does not establish quality.
+
+**Apple Silicon smoke evidence — 2026-09-27 (#8857).** The two commands above
+ran successfully on macOS arm64 through the production runner at `4a8dafc3a`,
+with seed 42 and rate 1.0. No runtime code changes were needed. The reference
+was the generated design WAV, not a personal recording. Model acquisition used
+the runner's explicit `--download` operation for each model; all required files
+passed upstream size/digest verification before inference loaded local snapshots
+with Hub/Transformers offline mode enabled.
+
+| Model | Verified revision |
+|-------|-------------------|
+| `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | `5ecdb67327fd37bb2e042aab12ff7391903235d3` |
+| `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | `fd4b254389122332181a7c3db7f27e918eec64e3` |
+
+The isolated environment used Python 3.11.11, MLX 0.32.2, MLX Audio 0.4.8
+at the pinned commit above, Transformers 5.17.0, NumPy 2.4.6, SoundFile 0.14.0,
+and huggingface-hub 1.33.0. PyTorch was absent; the probe reported `device: mlx`,
+both 1.7B snapshots downloaded, and `training_adapter: null`.
+
+| Output | Format | Duration | RMS | Peak | Independent local transcript |
+|--------|--------|----------|-----|------|------------------------------|
+| `design.wav` | Mono PCM16, 24 kHz | 1.76 s | 0.115736 | 0.622681 | The example Garden Gate is open. |
+| `clone.wav` | Mono PCM16, 24 kHz | 1.84 s | 0.098126 | 0.410736 | Please close the gate after you enter. |
+
+Both decoded WAVs were finite and non-silent. Local MLX Whisper 0.4.3
+(`mlx-community/whisper-small.en-mlx` revision
+`52a88bf6e98b114a210c21bb83e22d6e1505cb73`, English, no supplied transcript prompt)
+recovered every requested word, ignoring case and punctuation. This supports
+intelligibility for these two short samples; it does not establish naturalness,
+speaker identity, general quality, or browser playback latency. WAV SHA-256:
+
+```text
+design.wav c05344914d4c81b7099c427483f44d620edfe743f7b17af1f08cdb93044ace29
+clone.wav  7ff72e5745adb753b36f318f567cddceaf13e42c37f5e7d21e6a9969492dee0e
+```
+
+After listening to both files, the operator confirmed that the design sample
+was clear and natural, and that the clone clearly spoke the requested sentence
+and sounded like the same speaker. These are listening observations for the
+two samples, not a numerical similarity score or general quality benchmark.
+
+A real `--mode fine-tune` invocation on this host exited 1 with
+`QWEN3_RUNTIME_UNAVAILABLE` (requires CUDA with bf16), creating no checkpoint
+directory. A real CUDA training run and an intelligible checkpoint audition
+remain open in #8857; these MLX results do not close that issue.
+
+Interactive profile qualification plays a fresh buffered WAV in the browser.
+The first click renders and transfers the probe. A second explicit playback
+click preserves browser autoplay permission. The latency gate sums measured
+render-request time and click-to-`playing` startup time, including response
+transfer and decoding, while excluding the operator's wait between clicks.
+It is a render-plus-playback-start benchmark, not continuous request-to-playback
+or first-chunk streaming latency. Rendering
+alone never enables the route. A one-use receipt expires after two minutes, binds
+the measurement to the rendered profile revision, and saves its boundary, model
+revision and route decision together. Restarting the server or changing the
+profile requires a fresh benchmark. The probe must reach `ended` after `playing`
+before submitting its startup measurement. Playback rejection or timeout cannot
+qualify.
+The browser reports its own playback event; this is a trusted operator-reported
+measurement, not an attestation of another machine's audio output. The receipt
+binds the report to a current probe but cannot prove that a remote client played
+it. Qualification changes profile routing, not execution authority. No similarity score is
+invented, and passing this latency gate does not establish intelligibility or
+speaker identity.
 
 ### FaceTime Audio control plane
 
@@ -261,3 +381,60 @@ reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
 | Whisper base.en (no CoreML) | 0 (server resident) | 400–800 ms / 2 s of audio | Good |
 | Whisper base.en + CoreML | 0 | 150–300 ms / 2 s of audio | Good |
 | Whisper small.en + CoreML | 0 | 300–600 ms / 2 s of audio | Better |
+
+## Character Voice Studio
+
+**Create → Voice Studio** (`/voices`) is the reusable voice library. A character's
+sheet links here with its universe and character selected. `/voices/new`
+creates a voice; `/voices/:profileId` auditions and assigns it. Series dialogue
+and FableLoom live conversations reuse the universe-character voice resolver.
+Assigning copies an approved reference into a separate character profile, so
+experimentation in the library does not silently replace a cast voice. Profiles
+and reference audio remain machine-local, following the existing voice policy.
+
+AuK-Flash uses the official `feat/mlx-apple-silicon` backend with 8-bit inference.
+On Apple Silicon, **Set up AuK locally** provisions an isolated Python runtime
+under `~/.portos/auk`, downloads weights, and converts them to MLX. It requires
+`uv`, network access, and at least 40 GB free disk space. Setup is explicit;
+startup and page reads never download weights or generate speech. Other hosts
+can browse their stored library but cannot run this MLX engine.
+
+Timbre/accent/delivery use natural-language direction. Pitch is a separate AuK
+acoustic edit in semitones. Pace changes target duration; the operator must
+listen for intelligibility and clipping before assigning. Previews are 2–6
+base seconds, scaled by pace. Longer dialogue is split without dropping text
+into model segments of at most 12 seconds, all conditioned on the same voice
+reference, then joined into one WAV (up to 32 segments per request). Controls take
+effect on generation, not continuously during playback. Each generation creates
+a new candidate, with a preserved WAV reference, transcript, seed, and settings.
+The resident model is reused for previews and unloaded after ten idle minutes
+or through **Unload model**. Inference is serialized and times out after three
+minutes. Assignment offers an explicit **Use this voice in FableLoom live
+conversations too** option. It accepts buffered playback (the whole reply must
+finish before playback, up to the three-minute runtime timeout), not low-latency
+streaming qualification. Without that opt-in, AuK remains studio-only and the
+existing interactive fallback is retained. The production planner checks the
+interactive route rather than treating every approved studio voice as live-ready.
+
+The separate Qwen runtime can fine-tune one speaker with the official
+[Qwen3-TTS single-speaker recipe](https://github.com/QwenLM/Qwen3-TTS/tree/022e286b98fbec7e1e916cb940cdf532cd9f488e/finetuning)
+(adapter `qwen-tts-sft-12hz`). The runner ports that recipe rather than
+calling the upstream scripts. The probe names the adapter only on CUDA with
+bf16 support and `qwen-tts`, `librosa` and `safetensors` installed. CPU and Apple Silicon hosts report
+`training_adapter: null`, and starts return `503 QWEN3_TRAINING_UNAVAILABLE` before any job record or process
+exists. Training uses a verified, downloaded Base snapshot offline (`409 QWEN3_MODEL_NOT_INSTALLED`
+otherwise). It uses the profile's transcribed source recordings, with the first recording as the speaker
+reference. Full-parameter training needs substantial GPU memory. Each checkpoint is a full model copy
+(about the base snapshot's size), so the checkpoint interval (optimizer steps) bounds disk use.
+
+A checkpoint is published only after the runner records the SHA-256 of every file it loads. It must pass
+the same verification and loader used for synthesis and render a non-silent audition (`audition.wav`).
+Checkpoints that fail are deleted. The published revision is
+`<base-model>@<base-revision>+sha256.<weights-digest>`; promotion records it, and fine-tuned synthesis
+refuses a checkpoint whose files changed or whose revision differs. Checkpoints load only through
+qwen-tts on CPU/CUDA; MLX refuses them. Checkpoints recorded by earlier placeholder runners have no
+producing adapter or sealed revision and are refused with `409 CHECKPOINT_UNVERIFIED` rather than promoted.
+Fixture tests prove this publication contract, not training quality. A real training run on supported
+hardware is still pending in #8857. Operators should listen to each audition before promoting. The runtime is excluded from
+Voice Studio assignment until repaired (issue #8857). Voice Studio does not
+claim a Qwen runtime is working merely because its metadata exists.

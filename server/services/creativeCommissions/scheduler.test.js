@@ -89,9 +89,10 @@ vi.mock('../domainUsage.js', () => ({
   recordDomainUsage: (...a) => recordUsageMock(...a),
 }));
 const resolveUniverseStyleMock = vi.fn();
+const resolveMoodBoardStyleMock = vi.fn(async () => ({ board: null, images: [] }));
 vi.mock('../creativeStyleSources.js', () => ({
   resolveUniverseStyleSource: (...a) => resolveUniverseStyleMock(...a),
-  resolveMoodBoardStyleSource: async () => ({ board: null, images: [] }),
+  resolveMoodBoardStyleSource: (...a) => resolveMoodBoardStyleMock(...a),
 }));
 
 const {
@@ -321,6 +322,34 @@ describe('runScheduledCommission gates', () => {
     expect(params.directive.goal).toContain('Visual style to embrace: ink wash');
     expect(params.styleSpec).toContain('Visual style to embrace: ink wash');
     expect(params.styleSpec.endsWith('flat')).toBe(true);
+  });
+
+  it('hands the mood board pinned images to the project as structured style references (#8724)', async () => {
+    resolveMoodBoardStyleMock.mockResolvedValueOnce({
+      board: { name: 'Example Board', items: [] },
+      images: [
+        { kind: 'image', filename: 'pin-a.png', label: 'Dusk street', origin: 'mood-board', path: '/abs/images/pin-a.png', url: '/data/images/pin-a.png' },
+        { kind: 'image-ref', filename: 'pin-b.png', label: 'pin-b.png', origin: 'mood-board', path: '/abs/image-refs/pin-b.png', url: '/data/image-refs/pin-b.png' },
+      ],
+    });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      brief: { intent: 'surreal', styleSpec: 'flat', constraints: { moodBoardId: 'board-1' } },
+    }));
+    await runScheduledCommission('commission-1');
+    const [params] = createProjectMock.mock.calls[0];
+    // Filenames, never the absolute paths the resolver used to find them.
+    expect(params.styleReferenceImages).toEqual([
+      { kind: 'image', filename: 'pin-a.png', label: 'Dusk street', origin: 'mood-board' },
+      { kind: 'image-ref', filename: 'pin-b.png', label: 'pin-b.png', origin: 'mood-board' },
+    ]);
+    // The served-path list stays in the styleSpec for the agent-driven stages.
+    expect(params.styleSpec).toContain('/data/images/pin-a.png');
+  });
+
+  it('passes no style references for a commission without a style source', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission());
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock.mock.calls[0][0].styleReferenceImages).toBeUndefined();
   });
 
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {

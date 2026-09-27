@@ -214,9 +214,9 @@ export default function FableLoom() {
           </FormField>
           <section className="border-t border-port-border pt-3 space-y-2">
             <div>
-              <h3 className="text-sm font-semibold flex items-center gap-1.5">
+              <h2 className="text-sm font-semibold flex items-center gap-1.5">
                 <Sparkles size={14} className="text-port-accent" /> AI series-plan draft
-              </h3>
+              </h2>
               <p className="text-xs text-port-text-muted mt-1">
                 Optionally draft the complete arc, ordered plot points, and side quests from
                 these story details and the linked universe canon.

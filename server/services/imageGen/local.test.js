@@ -11,6 +11,11 @@ vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalM
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
+// Lets a test force the post-render degenerate-frame check to throw, without
+// touching the real frame-guard implementation the other suites exercise.
+const mockRejectDegenerateFrame = vi.fn(async () => null);
+vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: (...args) => mockRejectDegenerateFrame(...args) }));
+
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
 const mockResolveFlux2Python = vi.fn();
@@ -1046,5 +1051,149 @@ describe('local render failure delivery', () => {
     expect(attachSseClient(jobId, response)).toBe(true);
     expect(response.write.mock.calls[0][0]).toContain(expected);
     response.req.emit('close');
+  });
+});
+
+// Regression (#8905): proc.on('close', async …) had no outer try/catch, so a
+// throw from the post-render work (rejectDegenerateFrame, autoCleanGeneratedImage,
+// …) escaped as an unhandled rejection instead of settling the job — leaving it
+// stuck 'running' forever with no terminal SSE frame and no scheduled cleanup.
+describe('local render failure delivery — post-render throw safety net', () => {
+  beforeEach(() => {
+    mockRejectDegenerateFrame.mockReset();
+    mockRejectDegenerateFrame.mockResolvedValue(null);
+  });
+
+  it('settles the job to error, emits failed, and schedules cleanup when a post-render hook rejects', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    // Simulate a post-exit hook throwing on an otherwise-successful render
+    // (code 0) — the exact hazard window the shipped runtime never covered.
+    mockRejectDegenerateFrame.mockRejectedValueOnce(new Error('disk read failed mid-decode'));
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    vi.useFakeTimers();
+    try {
+      child.emit('close', 0);
+      const failure = await failed;
+      expect(failure.error).toContain('disk read failed mid-decode');
+
+      // Still delivers a terminal SSE frame instead of leaving a connected
+      // client hanging — replay proves the job settled to 'error', not stuck
+      // 'running'.
+      const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+      expect(attachSseClient(jobId, response)).toBe(true);
+      expect(response.write.mock.calls[0][0]).toContain('disk read failed mid-decode');
+      response.req.emit('close');
+
+      // closeJobAfterDelay was scheduled from the outer catch/finally — the
+      // job is still present immediately after, then gone once the grace
+      // window elapses, proving cleanup was scheduled exactly once (not
+      // skipped by the throw).
+      vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+      const late = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+      expect(attachSseClient(jobId, late)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Regression (#8915): the terminal dispatch was a bare
+// `broadcastSse(...); imageGenEvents.emit(...)` pair — a throwing SSE client
+// (e.g. a dead connection's res.write) that fires from inside broadcastSse
+// would abort BEFORE the lifecycle emit ran, silently skipping the gallery
+// index / peer-sync / job-queue bookkeeping the emit drives even though the
+// job's own status/error fields were already correct. Both dispatch paths
+// (the `code !== 0` failure branch and the success branch) now go through
+// `dispatchTerminalEvent`, which isolates each call in its own try/catch.
+describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', () => {
+  beforeEach(() => {
+    mockRejectDegenerateFrame.mockReset();
+    mockRejectDegenerateFrame.mockResolvedValue(null);
+  });
+
+  it('still emits the failed lifecycle event when a connected SSE client throws on write', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    // Feed the stderr diagnosis BEFORE attaching the throwing client — the
+    // intermediate status broadcasts this line triggers are unrelated to the
+    // terminal-dispatch decoupling under test.
+    child.stderr.emit('data', Buffer.from('runner.py: error: invalid value for --steps\n'));
+
+    // A connected client whose write() throws — the dead-client hazard the
+    // issue names (a broken pipe surfacing as a synchronous throw) — attached
+    // just before the terminal close so only the terminal SSE frame hits it.
+    // (attachSseClient's own replay of the cached lastPayload is a first,
+    // separate write call — let that one through so it doesn't mask the
+    // terminal-dispatch assertion below.)
+    let writeCalls = 0;
+    const throwingClient = {
+      writeHead: vi.fn(),
+      write: vi.fn(() => {
+        writeCalls += 1;
+        if (writeCalls > 1) throw new Error('write after end');
+      }),
+      end: vi.fn(),
+      req: new EventEmitter(),
+    };
+    expect(attachSseClient(jobId, throwingClient)).toBe(true);
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    child.emit('close', 2);
+
+    // The lifecycle event still fires — and still carries the real
+    // diagnosis — even though the SSE broadcast to this client threw.
+    const failure = await failed;
+    expect(failure.error).toContain('invalid value for --steps');
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
+    errSpy.mockRestore();
+  });
+
+  it('still emits the completed lifecycle event when a connected SSE client throws on write', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    const throwingClient = {
+      writeHead: vi.fn(),
+      write: vi.fn(() => { throw new Error('write after end'); }),
+      end: vi.fn(),
+      req: new EventEmitter(),
+    };
+    expect(attachSseClient(jobId, throwingClient)).toBe(true);
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const completed = new Promise((resolve) => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+
+    // Gallery indexing / peer-sync (driven by 'completed') still fires even
+    // though the SSE 'complete' frame threw delivering to this client.
+    await expect(completed).resolves.toMatchObject({ mode: 'local' });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
+    errSpy.mockRestore();
   });
 });

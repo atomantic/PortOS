@@ -29,7 +29,7 @@ import socket from '../../services/socket';
 
 afterEach(() => vi.useRealTimers());
 
-import { getTailcatServe, startTailcatServe, stopTailcatServe } from '../../services/api';
+import { getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
 import TailcatServePanel from './TailcatServePanel';
 
 const stopped = {
@@ -78,6 +78,22 @@ describe('TailcatServePanel', () => {
     await waitFor(() => expect(startTailcatServe).toHaveBeenCalled());
     expect(await screen.findByRole('button', { name: 'Copy address' })).toBeInTheDocument();
     expect(screen.getByText(/tcEX…EEEE/)).toBeInTheDocument();
+  });
+
+  it('restarts a live but stale serve without disabling it or replacing its address', async () => {
+    getTailcatServe.mockResolvedValue(serving);
+    let finishRestart;
+    retryTailcatServe.mockImplementationOnce(() => new Promise(resolve => { finishRestart = resolve; }));
+    const user = userEvent.setup();
+    render(<TailcatServePanel />);
+    await user.click(await screen.findByRole('button', { name: 'Restart serve' }));
+    expect(screen.getByRole('button', { name: 'Working...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled();
+    await act(async () => finishRestart(serving));
+    expect(screen.getByRole('button', { name: 'Restart serve' })).toBeEnabled();
+    expect(screen.getByText(/tcEX…EEEE/)).toBeInTheDocument();
+    expect(stopTailcatServe).not.toHaveBeenCalled();
+    expect(startTailcatServe).not.toHaveBeenCalled();
   });
 
   it('stops a live serve', async () => {
@@ -166,4 +182,22 @@ it.each([false, true])('reconciles changes received during a mutation (failed=%s
   await act(async () => finishMutation());
   expect(getTailcatServe).toHaveBeenCalledTimes(2);
   expect(screen.getByText('Example process exited')).toBeInTheDocument();
+});
+
+
+it('shows relay degradation and socket-driven recovery without claiming peer health', async () => {
+  getTailcatServe.mockReset().mockResolvedValue({ ...serving, relayStatus: 'degraded',
+    relayError: 'Tailcat relay connection timed out.', relayObservedAt: '2026-01-01T00:00:00Z' });
+  render(<TailcatServePanel />);
+  expect(await screen.findByText('relay degraded')).toBeInTheDocument();
+  expect(screen.getByText(/Tailcat relay connection timed out/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  getTailcatServe.mockResolvedValue({ ...serving, relayStatus: 'connected', relayError: null });
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.queryByText('relay degraded')).not.toBeInTheDocument();
+  expect(screen.getByText('process running')).toBeInTheDocument();
+  expect(screen.getByText(/End-to-end peer health is not verified/)).toBeInTheDocument();
+  getTailcatServe.mockResolvedValue({ ...serving, relayStatus: 'unknown' });
+  await act(async () => socket.emit('tailcat:serve:changed', {}));
+  expect(screen.getByText(/Relay reachability is unknown/)).toBeInTheDocument();
 });

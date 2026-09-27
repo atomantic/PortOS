@@ -41,6 +41,13 @@
 // xterm's: it counts as a resync point, not ours to forward, and the event goes
 // through untouched.
 //
+// Screen-reader mode widens the seam to keydown. There xterm sends a resolved key
+// from `_keyDown` and deliberately does NOT cancel it (so the textarea keeps the
+// text for the screen reader to announce) — lowercase letters, digits, Backspace
+// all land in the field and fire `input` for bytes the PTY already has. So in that
+// mode a live keydown latches the same way a keypress does. Outside it, a handled
+// keydown is cancelled and never reaches the field.
+//
 // We mirror `_keyPressHandled` and only that flag. xterm's `_inputEvent` also gates
 // on `_keyDownSeen` and clears an `_unprocessedDeadKey`; the omissions are
 // deliberate, because our own resync points already cover both — the keydown resync
@@ -133,8 +140,9 @@ export const attachDictationBridge = (terminal, sendData) => {
   // Length of `mirror` we did not put into the PTY ourselves — see planFieldEdit.
   let floor = mirror.length;
   let resyncTimer = null;
-  // Set on `keypress`, consumed by the next event — see "The keypress seam" above.
-  let keyPressSeen = false;
+  // Set on `keypress` (and, in screen-reader mode, on keydown), consumed by the next
+  // event — see "The keypress seam" above.
+  let keyStrokeSeen = false;
 
   const cancelResync = () => {
     clearTimeout(resyncTimer);
@@ -157,16 +165,18 @@ export const attachDictationBridge = (terminal, sendData) => {
   };
 
   const handleKeyDown = (ev) => {
-    // Whatever this keystroke inserts is xterm's only if a keypress follows it.
-    keyPressSeen = false;
+    // Whatever this keystroke inserts is xterm's only if a keypress follows it —
+    // or, in screen-reader mode, already, because xterm sent it from keydown.
+    keyStrokeSeen = false;
     // 229 is the "composition character" every soft keyboard/IME reports — those
     // keystrokes land in the textarea and are ours to diff, not a resync point.
     // They fire no keypress either, which is what keeps them ours below.
     if (ev.keyCode === 229 || ev.isComposing) return;
+    if (terminal.options?.screenReaderMode) keyStrokeSeen = true;
     scheduleResync();
   };
 
-  const handleKeyPress = () => { keyPressSeen = true; };
+  const handleKeyPress = () => { keyStrokeSeen = true; };
 
   // The insertion a keypress produces can fail to arrive (the browser consumes the
   // combination itself, focus leaves mid-keystroke). Disarm on keyup — as xterm's
@@ -175,10 +185,10 @@ export const attachDictationBridge = (terminal, sendData) => {
   // all, so waiting for another keydown to clear it would swallow a dictated phrase.
   // `input` fires during the keypress default action, long before keyup, so this
   // never races the consume.
-  const disarmKeyPress = () => { keyPressSeen = false; };
+  const disarmKeyStroke = () => { keyStrokeSeen = false; };
 
   const handleBlur = () => {
-    disarmKeyPress();
+    disarmKeyStroke();
     scheduleResync();
   };
 
@@ -188,17 +198,14 @@ export const attachDictationBridge = (terminal, sendData) => {
     // keypress seam"). Take the insertion into the floor so a later correction can't
     // rewind through it, and leave the event alone. Consumed ahead of the guards
     // below so the latch is strictly one-shot.
-    if (keyPressSeen) {
-      disarmKeyPress();
+    if (keyStrokeSeen) {
+      disarmKeyStroke();
       resyncNow();
       return;
     }
     // A real composition (IME candidate window) is xterm's CompositionHelper's job;
     // it forwards the committed text on compositionend.
     if (ev.isComposing) return;
-    // Screen-reader mode is the one configuration where xterm deliberately lets
-    // these events through so the textarea can be read out — stay out of the way.
-    if (terminal.options?.screenReaderMode) return;
     if (!isOwnedInput(ev.inputType)) {
       resyncNow();
       return;
@@ -225,7 +232,7 @@ export const attachDictationBridge = (terminal, sendData) => {
   const listeners = [
     ['keydown', handleKeyDown],
     ['keypress', handleKeyPress],
-    ['keyup', disarmKeyPress],
+    ['keyup', disarmKeyStroke],
     ['input', handleInput],
     ['blur', handleBlur],
     ['compositionend', scheduleResync],

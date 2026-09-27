@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
+import { runInNewContext } from 'node:vm';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -19,17 +20,6 @@ const dockerPortBindings = dockerComposeSrc.match(/^    ports:\r?\n((?:^      - 
 describe('Docker PostgreSQL host binding', () => {
   it('publishes the configured host port on loopback only', () => {
     expect(dockerPortBindings).toEqual(['- "127.0.0.1:${PGPORT_DOCKER:-5561}:5432"']);
-  });
-});
-
-describe('native setup migration guidance', () => {
-  it('warns that migrating immediately after native setup overwrites Docker data', () => {
-    const dbScript = readFileSync(join(here, 'db.sh'), 'utf8');
-    const nativeSetup = dbScript.split('cmd_setup_native() {')[1].split('\n}\n')[0];
-    expect(nativeSetup).toContain('set_mode native');
-    expect(nativeSetup).not.toContain('To migrate data from Docker: scripts/db.sh migrate');
-    expect(nativeSetup).toContain('copy native data OVER Docker data');
-    expect(nativeSetup).toContain('docs/STORAGE.md#moving-between-docker-and-native');
   });
 });
 
@@ -78,5 +68,22 @@ describe('setup-db docker-port resolver (success log accuracy)', () => {
   it('setup-db.js interpolates the resolved docker port, not a hardcoded 5561', () => {
     expect(setupDbSrc).toContain('PostgreSQL ready on port ${PG_PORT_DOCKER}');
     expect(setupDbSrc).not.toContain("'✅ PostgreSQL ready on port 5561'");
+  });
+});
+
+describe('native setup inherited endpoint', () => {
+  it('builds native subprocess settings from native identity, not the active Docker port', () => {
+    // Execute the real setup configuration boundary without starting its menu,
+    // probing PostgreSQL, or loading the install's .env.
+    const start = setupDbSrc.indexOf('const envVar =');
+    const end = setupDbSrc.indexOf('function getMode()');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const configure = (env) => runInNewContext(
+      setupDbSrc.slice(start, end) + '\nPG_CHILD_ENV',
+      { process: { env }, envFile: {}, parseNativePort, parseDockerPort },
+    );
+    expect(configure({ PGPORT: '5570', PORTOS_NATIVE_PGPORT: '5433' }).PGPORT).toBe('5433');
+    expect(configure({ PGPORT: '5434' }).PGPORT).toBe('5434');
   });
 });

@@ -1223,6 +1223,32 @@ describe('ChiefOfStaff active-agent snapshot readiness', () => {
   const agent = { id: 'agent-example', taskId: 'task-example', status: 'running', startedAt: '2026-01-01T00:00:00.000Z', metadata: { taskDescription: 'Example active work' } };
   const socketHandler = event => socketStub.on.mock.calls.filter(([name]) => name === event).at(-1)[1];
 
+  it.each([true, false])('keeps unknown CoS status out of the loaded Agents UI until running=%s arrives', async (running) => {
+    let resolveStatus;
+    api.getCosStatus.mockReturnValueOnce(new Promise(resolve => { resolveStatus = resolve; }));
+    api.getCosAgents.mockResolvedValue([agent]);
+    renderPageAt('agents');
+    expect(await screen.findByText('Example active work')).toBeInTheDocument();
+    expect(screen.getAllByRole('status', { name: 'Loading CoS status' }).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Sleeping')).toBeNull();
+    expect(screen.queryByText('Stopped')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Start.*agent/ })).toBeNull();
+    await act(async () => resolveStatus({ running, config, stats: {} }));
+    expect(screen.queryByRole('status', { name: 'Loading CoS status' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: running ? /Stop.*agent/ : /Start.*agent/ }).length).toBeGreaterThan(0);
+  });
+
+  it('keeps failed status unknown and supports retry while agents remain visible', async () => {
+    api.getCosStatus.mockRejectedValueOnce(new Error('Unavailable'));
+    api.getCosAgents.mockResolvedValue([agent]);
+    await renderSettledAt('agents');
+    expect(await screen.findByText('Could not load CoS status.')).toBeInTheDocument();
+    expect(screen.getByText('Example active work')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start.*agent/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry CoS status' }));
+    expect((await screen.findAllByRole('button', { name: 'Start Chief of Staff agent' })).length).toBeGreaterThan(0);
+  });
+
   it('shows pending on navigation and paints agents before a slow status summary', async () => {
     await renderSettledAt('mind');
     let resolveAgents;

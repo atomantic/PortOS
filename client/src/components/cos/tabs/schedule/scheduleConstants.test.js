@@ -244,7 +244,7 @@ describe('describeNextRun', () => {
       status: { reason: 'perpetual-parked', nextRunAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
     });
     expect(out.text).toMatch(/parked · rechecks/);
-    expect(out.title).toContain('no-actionable-issues');
+    expect(out.title).toBe('Parked: no-actionable-issues');
   });
 
   it('prefers the per-app aggregate over the global drain status for app-scoped perpetual tasks', () => {
@@ -254,10 +254,18 @@ describe('describeNextRun', () => {
       type: 'on-demand',
       perpetual: true,
       status: { reason: 'perpetual-drain' },
-      perpetualStatus: { parkedAppCount: 2, trackedAppCount: 2, globalParked: false, nextRecheckAt: '2999-01-01T00:00:00Z', parkReason: 'no-actionable-issues' }
+      perpetualStatus: {
+        parkedAppCount: 2,
+        trackedAppCount: 2,
+        globalParked: false,
+        nextRecheckAt: '2999-01-01T00:00:00Z',
+        parkReason: 'no-actionable-issues',
+        parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+        parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+      }
     });
-    expect(out.text).toMatch(/2 app\(s\) parked · rechecks/);
-    expect(out.title).toContain('no-actionable-issues');
+    expect(out.text).toMatch(/2 app\(s\) parked — 49 needs-input, 17 blocked · rechecks/);
+    expect(out.title).toBe('Parked: no-actionable-issues — 49 needs-input, 17 blocked');
   });
 
   it('shows draining when some apps still have work in the aggregate', () => {

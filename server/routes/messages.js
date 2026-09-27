@@ -71,6 +71,11 @@ const updateDraftSchema = z.object({
   status: z.enum(['draft', 'pending_review', 'approved']).optional()
 });
 
+const reconcileDraftSchema = z.object({
+  attemptId: z.string().guid(),
+  outcome: z.enum(['sent', 'not_sent'])
+});
+
 const generateDraftSchema = z.object({
   accountId: z.string().guid(),
   replyToMessageId: z.string().nullish(),
@@ -78,6 +83,11 @@ const generateDraftSchema = z.object({
   context: z.string().optional().default(''),
   instructions: z.string().optional().default(''),
   useVoice: z.boolean().optional()
+});
+
+const evaluateMessagesSchema = z.object({
+  accountId: z.string().guid().optional(),
+  messageIds: z.array(z.string().trim().min(1).max(1024)).min(1).max(100).optional()
 });
 
 const updateSelectorsSchema = z.object({
@@ -162,26 +172,25 @@ router.delete('/triage-rules/:index', asyncHandler(async (req, res) => {
 
 // === Evaluate Route ===
 router.post('/evaluate', asyncHandler(async (req, res) => {
-  const { accountId, messageIds } = req.body || {};
-  // Get messages to evaluate
-  let messages;
-  if (messageIds && Array.isArray(messageIds)) {
-    // Evaluate specific messages
-    const allResult = await messageSync.getMessages({ accountId, limit: 100 });
-    messages = allResult.messages.filter(m => messageIds.includes(m.id));
-  } else {
-    // Evaluate all unevaluated messages (up to 20)
-    const allResult = await messageSync.getMessages({ accountId, limit: 50 });
-    messages = allResult.messages.filter(m => !m.evaluation).slice(0, 20);
-  }
-  if (!messages.length) return res.json({ evaluations: {} });
+  const { accountId, messageIds } = validateRequest(evaluateMessagesSchema, req.body ?? {});
+  const { messages } = await messageSync.getMessages({
+    accountId,
+    messageIds,
+    unevaluatedOnly: !messageIds,
+    limit: messageIds ? 100 : 20
+  });
+  // Explicit requests report IDs absent from the selected account(s), including
+  // when none exist. Existing requested messages can still be evaluated.
+  const foundIds = new Set(messages.map(message => message.id));
+  const missingMessageIds = messageIds ? [...new Set(messageIds)].filter(id => !foundIds.has(id)) : [];
+  if (!messages.length) return res.json({ evaluations: {}, missingMessageIds });
 
   const result = await evaluateMessages(messages);
 
   // Store evaluations back on cached messages
   await messageSync.updateMessageEvaluations(result.evaluations);
 
-  res.json(result);
+  res.json({ ...result, missingMessageIds });
 }));
 
 // === Draft Routes ===
@@ -264,6 +273,16 @@ router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
   }
   const draft = await messageDrafts.approveDraft(req.params.id);
   if (!draft) throw new ServerError('Draft not found', { status: 404 });
+  res.json(draft);
+}));
+
+router.post('/drafts/:id/reconcile', asyncHandler(async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    throw new ServerError('Invalid draft ID format', { status: 400 });
+  }
+  const data = validateRequest(reconcileDraftSchema, req.body);
+  const draft = await messageDrafts.reconcileDraftSend(req.params.id, data);
+  req.app.get('io')?.emit('messages:changed', {});
   res.json(draft);
 }));
 

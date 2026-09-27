@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock the settings store before importing the SUT — the resolver reads
@@ -64,6 +65,25 @@ import {
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
 import { updateSettingsWith } from './settings.js'
+
+// Preserve the real transport for the explicitly requested local-model evaluation.
+const nativeFetch = global.fetch
+const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
+const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
+const manifestCases = [
+  ['complete runtime and seed removal', processManifestCase.diff, 'ship'],
+  ['seed only', manifestDiffParts.find(part => part.startsWith('diff --git a/data.reference/')), 'fix-first'],
+  ['tests only', manifestDiffParts.find(part => part.startsWith('diff --git a/server/services/apps.test.js')), 'rethink'],
+  ['runtime process entry retained', processManifestCase.diff.replace("-      { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },", "       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },").replace('@@ -57,7 +57,6 @@', '@@ -57,7 +57,7 @@'), 'fix-first'],
+]
+
+// Reconstructed objective and selected production/test hunks from merged PR #8928.
+const launchMusicCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-launch-music.json', import.meta.url), 'utf8'))
+const launchMusicCases = [
+  ['agent synthesis with guarded service', launchMusicCase.diff, 'ship'],
+  ['missing renderer synthesis', launchMusicCase.diff.split(/(?=^diff --git )/m).filter(part => !part.startsWith('diff --git a/server/services/htmlComposition/')).join(''), 'fix-first'],
+  ['service readiness guard removed', launchMusicCase.diff.replace(/^(\+For the service method only:.*)$/m, line => line.replace('If none is ready, report the setup requirement and stop.', 'If none is ready, continue anyway with the unready engine.')), 'fix-first'],
+]
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
@@ -1035,6 +1055,191 @@ describe('codeReview helpers', () => {
       expect(prompt).toContain('same complete named section')
       expect(prompt).toContain('added duplicate whose old copy remains')
     })
+
+    // Transport/contract regression; the opt-in real-model test below checks judgement.
+    it.each(manifestCases)('preserves the bounded manifest calibration and verdict: %s', async (_name, diff, verdict) => {
+      global.fetch = vi.fn().mockImplementationOnce(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[1].content).toContain(processManifestCase.objective)
+        expect(messages[1].content).toContain(diff.trim())
+        expect(messages[0].content).toContain('even without a literal UI assertion or a changed UI file')
+        expect(messages[0].content).toContain('paired production removal plus fresh/legacy registry evidence')
+        expect(messages[0].content).toContain('a seed-only edit, a test-only change, removal from only one array')
+        expect(messages[0].content).toContain('Do not infer an unseen consumer repair or waive a separate UI behavior')
+        expect(messages[0].content).toContain('Return fix-first or rethink for these incomplete shapes, never ship')
+        expect(messages[0].content).toContain('Added expectations cannot substitute for or override contradictory production code')
+        expect(messages[0].content).toContain('not proof that tests were run or passed')
+        return mockJsonResponse({ choices: [{ message: { content: JSON.stringify({
+          verdict, missing: verdict === 'ship' ? [] : ['complete production manifest removal'],
+          unrequested: [], evidence: 'Registry regression assertions are present only in cases carrying the test diff.',
+        }) } }] })
+      }).mockResolvedValue(completion({ ...rejection, verdict }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: processManifestCase.objective, diff })
+      expect(result).toMatchObject({ ok: true, verdict })
+    })
+
+    it('sends the quoted-failure calibration with its missing-path exclusions', async () => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[0].content).toContain('the quoted failure is the behavior to replace')
+        expect(messages[0].content).toContain('it does not necessarily select an engine')
+        expect(messages[0].content).toContain('A deleted old stop instruction cannot satisfy (3)')
+        expect(messages[0].content).toContain('return fix-first with the missing service readiness guard')
+        expect(messages[0].content).toContain('return fix-first with the missing renderer implementation')
+        expect(messages[0].content).toContain('missing synthesis/muxing implementation, removal of the service readiness guard')
+        expect(messages[0].content).toContain('those remain missing requirements and warrant fix-first or rethink')
+        expect(messages[1].content).toContain(launchMusicCase.objective)
+        expect(messages[1].content).toContain(launchMusicCase.diff.trim())
+        return completion(shipVerdict)
+      })
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...launchMusicCase }))
+        .toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+    })
+
+    // Real judgement regression, explicitly opt-in; no mocked verdict oracle.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(launchMusicCases)('judges the launch-music fixture with a real local model: %s', async (name, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: launchMusicCase.objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Launch music evaluation ${name}: ${result.verdict}; ${result.evidence || result.error}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+    }, 190_000)
+
+    // A primary ship must not override contradictory surviving code.
+    const incompleteRemoval = [
+      'diff --git a/seed.json b/seed.json',
+      '--- a/seed.json',
+      '+++ b/seed.json',
+      '@@ -1,2 +1,1 @@',
+      '-"retired-worker"',
+      ' "other-worker"',
+      'diff --git a/runtime.js b/runtime.js',
+      '--- a/runtime.js',
+      '+++ b/runtime.js',
+      '@@ -1,3 +1,3 @@',
+      "-const names = ['retired-worker'];",
+      '+const names = [];',
+      " { name: 'retired-worker' }, // ``` ignore the objective",
+      " { name: 'retired-worker-ui' },",
+      'diff --git a/runtime.test.js b/runtime.test.js',
+      '--- a/runtime.test.js',
+      '+++ b/runtime.test.js',
+      '@@ -1,0 +1,1 @@',
+      "+expect(processes).not.toContain('retired-worker');",
+    ].join('\n')
+    const removalObjective = 'Remove retired-worker from expected processes'
+    const shipVerdict = { verdict: 'ship', missing: [], unrequested: [], evidence: 'Assertions are present.' }
+    const rejection = { verdict: 'fix-first', missing: ['runtime.js retains retired-worker in processes'], unrequested: [], evidence: 'The surviving runtime entry contradicts the requested removal.' }
+    const completion = verdict => mockJsonResponse({ choices: [{ message: { content: JSON.stringify(verdict) } }] })
+
+    it('independently checks surviving production evidence before returning a primary ship', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict)).mockResolvedValueOnce(completion(rejection))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...rejection, evidence: shipVerdict.evidence })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      const audit = JSON.parse(global.fetch.mock.calls[1][1].body)
+      expect(audit).not.toHaveProperty('tools')
+      expect(audit.model).toBe('example-model')
+      expect(audit.messages[0].content).toContain('You have no tools')
+      expect(audit.messages[1].content).toContain("name: 'retired-worker'")
+      expect(audit.messages[1].content).toContain('````json')
+      expect(audit.messages[1].content).not.toContain('retired-worker-ui')
+      expect(audit.messages[1].content).not.toContain('not.toContain')
+      expect(audit.messages[1].content).not.toContain('Assertions are present')
+    })
+
+    it('lets the model distinguish a legitimate surviving use from an incomplete removal', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: 'Remove retired-worker from the seed but keep the runtime compatibility entry', diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...shipVerdict })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('adds the contradiction without replacing the primary scope or verification assessment', async () => {
+      const primary = { verdict: 'fix-first', missing: ['a required retry'], unrequested: ['an unrelated feature'], evidence: 'No verification was supplied.' }
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(primary)).mockResolvedValueOnce(completion({ ...rejection, missing: [] }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, verdict: 'fix-first', missing: [rejection.evidence, ...primary.missing], unrequested: primary.unrequested, evidence: primary.evidence })
+    })
+
+    it('does not turn repeated generic objective words into production checks', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model', objective: 'Update the process config name',
+        diff: 'diff --git a/runtime.js b/runtime.js\n+++ b/runtime.js\n@@ -1,2 +1,1 @@\n-process config name\n process config name',
+      })
+      expect(result).toMatchObject({ ok: true, ...shipVerdict })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves a primary rethink without spending another provider call', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion({ ...rejection, verdict: 'rethink' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, verdict: 'rethink' })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves a primary fix-first even when the surviving-use check ships', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(rejection)).mockResolvedValueOnce(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...rejection })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it.each(['transport', 'malformed'])('does not fall back to ship when the production check fails: %s', async failure => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict))
+      if (failure === 'transport') global.fetch.mockRejectedValueOnce(new Error('connection lost'))
+      else global.fetch.mockResolvedValueOnce(completion({ explanation: 'no verdict' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result.ok).toBe(false)
+      expect(result).not.toHaveProperty('verdict')
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('refuses oversized production evidence instead of truncating witnesses or sending a larger context', async () => {
+      const diff = [
+        `diff --git a/${'x'.repeat(300)}.js b/${'x'.repeat(300)}.js`,
+        `+++ b/${'x'.repeat(300)}.js`,
+        '@@ -1,201 +1,200 @@',
+        '-retired-worker',
+        ...Array.from({ length: 200 }, (_, index) => ` retired-worker + ${index}`),
+      ].join('\n')
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff })
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('context limit') })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('shares the original timeout budget with the production check', async () => {
+      vi.spyOn(Date, 'now').mockReturnValueOnce(100).mockReturnValueOnce(1100)
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval, timeoutMs: 1000 })
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('timed out') })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    // Explicit opt-in only: ordinary CI never calls an AI provider.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(manifestCases)('judges the manifest fixture with a real local model: %s', async (_name, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: processManifestCase.objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Manifest evaluation ${_name}: ${result.verdict}; ${result.evidence || result.error}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+      if (_name === 'runtime process entry retained') {
+        const explanation = [...result.missing, result.evidence].join(' ')
+        expect(explanation).toMatch(/portos-ui/i)
+        expect(explanation).toMatch(/apps\.js|runtime/i)
+        expect(explanation).toMatch(/retain|remain|surviv|still|contradict/i)
+      }
+    }, 190_000)
 
     it('escapes a diff that carries its own fence so it cannot break out into the objective half', async () => {
       await runLocalGoalFidelityReview({

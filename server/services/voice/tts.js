@@ -36,7 +36,7 @@ export const listVoiceEngines = async () => {
   return TTS_ENGINE_IDS.map((id) => ({
     id,
     ...TTS_ENGINE_REGISTRY[id],
-    unavailableControls,
+    unavailableControls: id === 'auk' ? 'Pitch edits run in Voice Studio; formant controls are unavailable.' : unavailableControls,
     transformProbe: transforms,
   }));
 };
@@ -49,6 +49,10 @@ const resolveEngine = (engine) => {
 };
 
 const backend = (engine) => {
+  if (engine === 'auk') return {
+    synth: async (...args) => (await import('./aukRuntime.js')).synthesizeAuk(...args),
+    list: async () => [],
+  };
   if (engine === 'piper') return { synth: synthesizePiper, list: listPiperVoices };
   if (engine === 'qwen3-tts') return { synth: synthesizeQwen3, list: listQwen3Voices };
   return { synth: synthesizePiper, list: listPiperVoices };
@@ -118,6 +122,15 @@ export const synthesize = async (text, opts = {}) => {
     }
   }
 
+  if (profile?.engine === 'auk') {
+    const sample = profile.sourceAssets?.[0];
+    synthOpts = { ...synthOpts, instructions: profile.inference.instructions, seed: profile.inference.seed,
+      referenceAudio: sample ? join(profileArtifactDirectory(profile.id), 'source', sample.filename) : null,
+      // The approved reference already contains the pitch edit. Never apply it twice.
+      pitchSemitones: sample ? 0 : profile.inference.pitchSemitones,
+    };
+  }
+
   const voice = profileVoice || opts.voice;
   if (voice) {
     if (engine === 'piper') {
@@ -140,7 +153,7 @@ export const synthesize = async (text, opts = {}) => {
     }
   }
 
-  const result = engine === 'qwen3-tts'
+  const result = engine === 'qwen3-tts' || engine === 'auk'
     ? await synth(text, synthOpts, opts.signal)
     : await synth(text, ttsCfg, opts.signal);
 

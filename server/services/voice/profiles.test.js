@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,11 +19,11 @@ const {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteFineTunedProfile,
-  promoteVoiceProfile,
   resolveCharacterVoice,
   getProfileForSynthesis,
   profileArtifactDirectory,
   recordVoiceProfileRender,
+  saveProfileBenchmark,
 } = await import('./profiles.js');
 
 const PROFILE = {
@@ -107,6 +107,18 @@ describe('voice profile contract', () => {
     const { stat } = await import('node:fs/promises');
     expect((await stat(profileArtifactDirectory(profile.id))).isDirectory()).toBe(true);
     expect(queryMock.mock.calls.at(-1)[0]).toContain('INSERT INTO voice_profiles');
+  });
+
+  it('requires an auditioned AuK profile and clears its reference when switching to a preset', async () => {
+    await expect(promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'auk:invented' }))
+      .rejects.toMatchObject({ code: 'VOICE_PROFILE_INVALID_PRESET' });
+    expect(queryMock).not.toHaveBeenCalled();
+    queryMock.mockResolvedValue({ rows: [] }).mockResolvedValueOnce({ rows: [{ data: {
+      ...PROFILE, engine: 'auk', voiceId: 'auk:voice-profile-1', kind: 'designed', originProfileId: 'library-1',
+      sourceAssets: [{ filename: 'reference.wav', transcript: 'Hello.' }], inference: { instructions: 'Old voice' },
+    } }] });
+    const replacement = await promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'piper:example' });
+    expect(replacement).toMatchObject({ engine: 'piper', sourceAssets: [], originProfileId: null, inference: { instructions: null } });
   });
 
   it('creates voice design candidate profile as draft without altering approved profile', async () => {
@@ -243,6 +255,28 @@ describe('voice profile contract', () => {
       timing: { latencyMs: 24, durationMs: 850 },
       mastering: PROFILE.mastering,
     });
+  });
+
+  it('saves playback evidence and route atomically for the rendered revision and rejects stale revisions', async () => {
+    const benchmark = {
+      renderedAt: '2026-09-01T00:00:00.000Z', profileRevision: PROFILE.version,
+      interactiveLatencyMs: 120, similarityScore: null,
+      interactiveMeasurement: { boundary: 'browser-playing-segmented', synthesisLatencyMs: 90, renderRequestLatencyMs: 100, playbackStartupMs: 20, modelRevision: PROFILE.modelRevision },
+    };
+    const interactive = { enabled: true, maxFirstAudioMs: 900 };
+    queryMock.mockResolvedValueOnce({ rows: [{ data: { ...PROFILE, benchmark, routes: { ...PROFILE.routes, interactive } } }] });
+    const saved = await saveProfileBenchmark(PROFILE, benchmark, { interactive });
+    expect(saved.benchmark.interactiveMeasurement).toEqual(benchmark.interactiveMeasurement);
+    expect(saved.routes.interactive).toEqual(interactive);
+    const [sql, args] = queryMock.mock.calls[0];
+    expect(sql).toContain("(data->>'version')::int = $3");
+    expect(sql).toContain("COALESCE(NULLIF(data->'benchmark', 'null'::jsonb), '{}'::jsonb) || ($2::jsonb->'benchmark')");
+    expect(JSON.parse(args[1]).benchmark).not.toHaveProperty('lines');
+    expect(JSON.parse(args[1]).benchmark.interactiveMeasurement).toEqual(benchmark.interactiveMeasurement);
+    expect(args[2]).toBe(PROFILE.version);
+    expect(JSON.parse(args[3])).toEqual(interactive);
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    await expect(saveProfileBenchmark(PROFILE, benchmark, { interactive })).rejects.toMatchObject({ code: 'VOICE_PROFILE_BENCHMARK_STALE' });
   });
 
   it('rejects a profile on a disabled route instead of silently synthesizing it', async () => {

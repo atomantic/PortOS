@@ -497,7 +497,39 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
     // The free tool exposes one form in one persistent browser profile. Keep
     // every user-requested scene job, but serialize them so a later click
     // cannot replace the prompt/image of an in-flight render.
-    runTail = runTail.then(() => executeJob(job));
+    // executeJob() catches and records its own failures on the job object, but
+    // a rare failure before that internal catch (e.g. its own diagnostic
+    // formatting throwing) would otherwise leave the stored `runTail` rejected,
+    // silently skipping every future job's executeJob() call. The recovery
+    // catch is attached in the same expression that starts the job — not
+    // deferred until the next job is queued — so an idle queue never leaves a
+    // rejected `runTail` unhandled either. It also finishes the job record
+    // itself: without this, a job that escaped executeJob()'s own failure
+    // handling would stay 'queued'/'running' forever, permanently blocking
+    // this scene from ever starting a new job (see ACTIVE_STATUSES above).
+    // This recovery handler must never itself throw — a throw here would
+    // re-reject `runTail`, and a job whose scene check throws is exactly the
+    // kind of unusual error object (see the falVideoAutomation.test.js
+    // regression test) that could also make logging or the finish-job step
+    // below misbehave.
+    runTail = runTail.then(() => executeJob(job)).catch((error) => {
+      try {
+        console.error(`❌ fal.ai video automation job failed to complete: ${error?.message || error}`);
+      } catch {
+        console.error('❌ fal.ai video automation job failed to complete (error details unreadable)');
+      }
+      try {
+        if (ACTIVE_STATUSES.has(job.status)) {
+          job.status = 'failed';
+          job.statusMsg = 'fal.ai video failed';
+          job.error = 'fal.ai browser automation failed unexpectedly. Inspect the PortOS Browser tab, then retry.';
+          job.completedAt = new Date().toISOString();
+          emitJob(job);
+        }
+      } catch (finishError) {
+        console.error(`❌ fal.ai video automation queue recovery could not finish the job record: ${finishError?.message || finishError}`);
+      }
+    });
     // Snapshot the queued state before the serialized runner can advance it;
     // both same-scene callers receive the same initial API contract.
     return publicJob(job);

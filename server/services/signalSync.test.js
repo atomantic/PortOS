@@ -106,9 +106,9 @@ describe('signalSync pure helpers', () => {
 
     it('groups a busy thread into one touchpoint per conversation per local day', () => {
       const messages = [
-        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
-        { messageId: 'm2', at: new Date('2024-06-01T19:30:00Z'), conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
-        { messageId: 'm3', at: new Date('2024-06-02T20:00:00Z'), conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
+        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), type: 'incoming', conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
+        { messageId: 'm2', at: new Date('2024-06-01T19:30:00Z'), type: 'incoming', conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
+        { messageId: 'm3', at: new Date('2024-06-02T20:00:00Z'), type: 'incoming', conversationId: 'conv-1', conversationName: 'Jane', handles: ['+15551234567'] },
       ];
       const out = signalTouchpointCandidates(messages, tz);
       expect(out).toHaveLength(2); // two distinct local days
@@ -119,16 +119,34 @@ describe('signalSync pure helpers', () => {
       expect(day1.identities).toEqual([{ phone: '+15551234567' }]);
     });
 
+    it('ignores system-only rows so they log no contact history', () => {
+      const out = signalTouchpointCandidates([
+        { messageId: 'synthetic-1', at: new Date('2024-06-01T18:00:00Z'), type: 'verified-change', conversationId: 'synthetic-chat', handles: ['+15551234567'] },
+      ], tz);
+      expect(out).toHaveLength(0);
+    });
+
+    it('groups only real messages in a mixed batch, keeping their timestamps', () => {
+      const out = signalTouchpointCandidates([
+        { messageId: 's1', at: new Date('2024-06-01T21:00:00Z'), type: 'verified-change', conversationId: 'c1', handles: ['+15551234567'] },
+        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), type: 'outgoing', conversationId: 'c1', handles: ['+15551234567'] },
+        { messageId: 's2', at: new Date('2024-06-02T18:00:00Z'), type: 'group-v2-change', conversationId: 'c1', handles: ['+15551234567'] },
+      ], tz);
+      expect(out).toHaveLength(1);
+      expect(out[0].dedupeKey).toBe('signal:c1:2024-06-01');
+      expect(out[0].happenedAt).toBe('2024-06-01T18:00:00.000Z');
+    });
+
     it('skips conversations with no matchable handle', () => {
       const out = signalTouchpointCandidates([
-        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), conversationId: 'group-1', conversationName: 'A Group', handles: [] },
+        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), type: 'incoming', conversationId: 'group-1', conversationName: 'A Group', handles: [] },
       ], tz);
       expect(out).toHaveLength(0);
     });
 
     it('skips messages missing a conversationId or a valid date', () => {
       const out = signalTouchpointCandidates([
-        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), conversationId: null, handles: ['+15551234567'] },
+        { messageId: 'm1', at: new Date('2024-06-01T18:00:00Z'), type: 'incoming', conversationId: null, handles: ['+15551234567'] },
         { messageId: 'm2', at: new Date('bad'), conversationId: 'c', handles: ['+15551234567'] },
       ], tz);
       expect(out).toHaveLength(0);

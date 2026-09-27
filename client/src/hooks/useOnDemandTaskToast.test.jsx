@@ -117,6 +117,46 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(msg).not.toMatch(/0 of/);
   });
 
+  // The live failure mode behind this channel: 88 open issues, zero claimable,
+  // and a toast that said only "no claimable issues (0 of 88 open — 10
+  // in-flight, 78 filtered)" — which reads as the task being broken. The
+  // per-cause attribution names WHY each filtered issue was skipped, so the
+  // user sees their queue is 49 `needs-input` decisions deep, not stuck.
+  it('names the per-cause skip attribution instead of a bare "N filtered"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-actionable-issues',
+      counts: { open: 88, inFlight: 10, filtered: 78 },
+      skipCauses: { 'needs-input': 49, blocked: 17, 'decomposed-epic': 12 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no claimable issues/);
+    expect(msg).toMatch(/0 of 88 open/);
+    expect(msg).toMatch(/49 needs-input, 17 blocked, 12 decomposed-epic/);
+    // The causes replace the bare "78 filtered" — they ARE the filtered detail.
+    expect(msg).not.toMatch(/78 filtered/);
+  });
+
+  it('does not double-report in-flight (the counts breakdown already carries it)', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-actionable-issues',
+      counts: { open: 20, inFlight: 10, filtered: 10 },
+      // The detector includes `in-flight` in the map as informational only —
+      // the toast must not render it twice ("10 in-flight, 10 in-flight").
+      skipCauses: { 'in-flight': 10, 'needs-input': 6, blocked: 4 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/10 in-flight/);
+    expect(msg).toMatch(/6 needs-input, 4 blocked/);
+    // Exactly one "in-flight" mention — the counts breakdown's.
+    expect(msg.match(/in-flight/g)).toHaveLength(1);
+  });
+
   // branch-reconcile's park used to report 'no-in-flight-branches' while merged
   // branches sat behind a protected worktree — "nothing to do" for a task the
   // user could see had work queued, which reads as the task not running at all.

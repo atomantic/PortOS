@@ -226,6 +226,13 @@ function codexPublicReviewActionsSpawnArgs(provider, { effectiveModel, effort, m
   ]);
 }
 
+// Code-review reader: Codex's OS-level read-only sandbox may inspect files but
+// never write or run a mutating command. It still exposes read tools, so it is
+// the read-only code-review tier, not the no-tool posture.
+function codexReadOnlyReviewSpawnArgs(provider, ctx) {
+  return codexPublicReviewArgs(provider, ctx, ['--sandbox', 'read-only']);
+}
+
 function codexPublicReviewArgs(provider, { effectiveModel, effort, maxConcurrentThreads }, postureArgs) {
   const args = [
     'exec',
@@ -297,6 +304,8 @@ function grokPublicReviewArgs(provider, { effectiveModel, effort } = {}, posture
   return { command: provider?.command || 'grok', args, stdinMode: 'prompt' };
 }
 
+const matchCodexProcess = (provider) => isProcessProvider(provider) && isCodexCommand(provider?.command);
+
 const CODEX = {
   id: 'codex',
   idFragment: 'codex',
@@ -316,8 +325,12 @@ const CODEX = {
     // Read-only filesystem access still exposes tools; it is not no-tool.
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: codexPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => isProcessProvider(provider) && isCodexCommand(provider?.command),
+      matchProvider: matchCodexProcess,
     },
+  },
+  readOnlyReview: {
+    spawnArgs: codexReadOnlyReviewSpawnArgs,
+    matchProvider: matchCodexProcess,
   },
 };
 
@@ -1068,6 +1081,39 @@ export function publicReviewProviderBlock(provider, posture) {
 /** Whether a provider can run a tool-free public-content stage. */
 export function supportsPublicReviewProvider(provider) {
   return supportsPublicReviewPosture(provider, PUBLIC_REVIEW_NO_TOOL_POSTURE);
+}
+
+/**
+ * How a CLI code reviewer is held to reading, strongest first — or null when
+ * the vendor maintains no enforced reviewer mode:
+ *
+ * - `no-tool`   — the vendor's no-tool public-review recipe (claude, grok, …).
+ * - `read-only` — an enforced mode that may read but never write (codex's
+ *                 OS-level read-only sandbox).
+ *
+ * Only code review consults the read-only tier; a no-tool pipeline stage still
+ * requires the no-tool recipe. Antigravity has neither: live runs showed both
+ * its `--mode plan` and its terminal `--sandbox` still write files, so it
+ * must not be listed here as read-only.
+ */
+export function codeReviewTier(provider) {
+  if (supportsPublicReviewProvider(provider)) return PUBLIC_REVIEW_NO_TOOL_POSTURE;
+  return readOnlyReviewRecipe(provider) ? 'read-only' : null;
+}
+
+function readOnlyReviewRecipe(provider) {
+  if (!isProcessProvider(provider)) return null;
+  return PROVIDER_VENDORS.find((vendor) => vendor.readOnlyReview?.matchProvider(provider))?.readOnlyReview || null;
+}
+
+/**
+ * Headless argv for the tier `codeReviewTier` names (`ctx` as for
+ * `buildVendorSpawnConfig`), or null when the vendor has no enforced reviewer
+ * mode and the caller must fall back to its ordinary argv.
+ */
+export function buildCodeReviewSpawnConfig(provider, ctx) {
+  if (supportsPublicReviewProvider(provider)) return buildVendorSpawnConfig(provider, ctx);
+  return readOnlyReviewRecipe(provider)?.spawnArgs(provider, ctx) || null;
 }
 
 /** Whether a provider can run the sandboxed final public-review stage. */

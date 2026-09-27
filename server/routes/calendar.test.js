@@ -66,6 +66,7 @@ import calendarRoutes from './calendar.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
 import { getUserTimezone } from '../services/userTimezone.js';
+import * as dailyReview from '../services/dailyReview.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
 import * as calendarGoogleApiSync from '../services/calendarGoogleApiSync.js';
 import * as googleAuth from '../services/googleAuth.js';
@@ -88,6 +89,14 @@ describe('Calendar Routes — normalized error handling', () => {
   });
 
   describe('thrown ServerErrors map to the standard JSON envelope', () => {
+    it('POST /review/:date/confirm preserves typed missing-goal errors', async () => {
+      dailyReview.confirmEvent.mockRejectedValue(new ServerError('Goal not found', { status: 404, code: 'GOAL_NOT_FOUND' }));
+      const response = await request(app).post('/api/calendar/review/2026-01-02/confirm')
+        .send({ eventId: 'event-a', happened: true, goalId: 'goal-a', durationMinutes: 30 });
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('GOAL_NOT_FOUND');
+    });
+
     it('POST /sync/:accountId surfaces a 409 sync-lock conflict', async () => {
       calendarSync.syncAccount.mockRejectedValue(new ServerError('Sync already in progress', { status: 409 }));
 
@@ -304,6 +313,27 @@ describe('Calendar Routes — push sync carries Google conference metadata (#628
     app.use('/api/calendar', calendarRoutes);
     vi.clearAllMocks();
     calendarGoogleSync.pushSyncEvents.mockResolvedValue({ newEvents: 1, updated: 0, pruned: 0, total: 1 });
+  });
+
+  it('preserves participant projection and authoritative clears without accepting unrelated metadata', async () => {
+    const response = await push([{
+      ...baseEvent,
+      organizer: { email: 'alice@example.com', displayName: 'Example Organizer', self: true, privateNote: 'discard' },
+      attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined', privateNote: 'discard' }],
+    }, { ...baseEvent, id: 'clear', organizer: null, attendees: [] }, baseEvent, { ...baseEvent, id: 'null-attendees', attendees: null }]);
+    expect(response.status).toBe(200);
+    expect(pushedEvents()[0].organizer).toEqual({ email: 'alice@example.com', displayName: 'Example Organizer', self: true });
+    expect(pushedEvents()[0].attendees).toEqual([{ email: 'alice@example.com', self: true, responseStatus: 'declined' }]);
+    expect(pushedEvents()[1]).toMatchObject({ organizer: null, attendees: [] });
+    expect(pushedEvents()[2]).not.toHaveProperty('organizer');
+    expect(pushedEvents()[2]).not.toHaveProperty('attendees');
+    expect(pushedEvents()[3].attendees).toBeNull();
+  });
+
+  it.each([{ organizer: 'invalid' }, { attendees: [{ self: 'yes' }] }])('rejects malformed participant types: %j', async fields => {
+    const response = await push([{ ...baseEvent, ...fields }]);
+    expect(response.status).toBe(400);
+    expect(calendarGoogleSync.pushSyncEvents).not.toHaveBeenCalled();
   });
 
   it('forwards conferenceData entry points and hangoutLink to the service', async () => {

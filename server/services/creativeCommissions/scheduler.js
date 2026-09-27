@@ -490,6 +490,10 @@ async function fireCommission(commission, trigger) {
       name: `${baseName}${dateSuffix}`,
       ...projectParams,
       styleSpec: composeCommissionStyleSpec(commission.brief?.styleSpec, styleSource),
+      // The style source's reference images as data, not just served paths in
+      // the styleSpec text: scene evaluation attaches them to its vision call
+      // and local image renders condition on them (#8724).
+      styleReferenceImages: styleSource?.images,
       directive,
       // The back-pointer, NOT a copy of the commission's provider pin. agentBridge
       // resolves that pin live from this id at every dispatch, so an edit to the

@@ -89,6 +89,11 @@ export {
 // the well-known labels (api, ui, devUi, cdp, health).
 export const processListQuerySchema = z.object({ appId: z.string().min(1).optional() });
 
+export const logsQuerySchema = z.object({
+  lines: z.coerce.number().int().min(1).max(5000).default(100),
+  follow: z.enum(['true', 'false']).optional(),
+});
+
 export const processActionSchema = z.object({
   action: z.enum(['start', 'stop', 'restart']),
   appId: z.string().min(1).optional()
@@ -1631,6 +1636,18 @@ export const databaseSwitchSchema = z.object({
   migrate: z.boolean().optional()
 });
 
+// POST /api/database/maintenance/preflight — advisory only; never accepts a cutover.
+export const databaseMaintenancePreflightSchema = z.object({
+  source: z.enum(DB_BACKENDS),
+  target: z.enum(DB_BACKENDS)
+}).strict().refine(value => value.source !== value.target, { message: 'Source and target must differ' });
+
+// POST /api/database/maintenance/cutover — accepts the offline cutover (202).
+export const databaseMaintenanceCutoverSchema = databaseMaintenancePreflightSchema;
+
+// POST /api/database/maintenance/recover — same-operation recovery only.
+export const databaseMaintenanceRecoverSchema = z.object({ id: z.string().uuid() }).strict();
+
 // POST /api/database/{start,stop,destroy} — operate on a named backend.
 export const databaseBackendSchema = z.object({
   backend: z.enum(DB_BACKENDS)
@@ -2427,16 +2444,26 @@ export const mindBundleApplySchema = z.object({
   )).strict(),
 }).strict();
 
+export const appLaunchVideoPublishSchema = z.object({
+  videoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),
+}).strict();
+
 export const appLaunchVideoRequestSchema = z.object({
+  sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  feedback: z.string().trim().min(1).max(4000).optional(),
   tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
   direction: z.string().trim().max(2000).default(''),
   format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
-  targetDurationSec: z.number().int().min(15).max(25).default(20),
+  targetDurationSec: z.number().int().min(15).max(120).default(20),
+  generateMusic: z.boolean().default(false),
+  musicMethod: z.enum(['agent', 'service']).default('agent'),
+  motionGraphics: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({
-  targetDurationSec: z.number().min(15).max(25),
+  sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  targetDurationSec: z.number().min(15).max(120),
   appId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
   runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
 }).strict().refine(value => Boolean(value.appId) === Boolean(value.runId), 'appId and runId must be supplied together');
@@ -2456,9 +2483,10 @@ export const launchVideoStoryboardSchema = z.object({
 // HTML composition inputs are local, editable assets, never provider prompts.
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
+  synthesizeMusic: z.boolean().optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-});
+}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both');
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),

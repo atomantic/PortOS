@@ -175,6 +175,25 @@ export function mirrorStatus(status) {
   return (typeof status === 'string' && status ? status : 'draft').slice(0, STATUS_COLUMN_MAX);
 }
 
+const STYLE_REFERENCE_IMAGE_KINDS = new Set(['image', 'image-ref']);
+const STYLE_REFERENCE_IMAGES_MAX = 4;
+
+// Canonical `styleReferenceImages`: entries with a known kind and a filename,
+// capped. The resolvers that later turn a filename into a path basename it, so
+// a malformed entry can at worst name a missing file, which is skipped.
+function normalizeStyleReferenceImages(images) {
+  if (!Array.isArray(images)) return [];
+  return images
+    .filter((image) => STYLE_REFERENCE_IMAGE_KINDS.has(image?.kind) && typeof image.filename === 'string' && image.filename)
+    .slice(0, STYLE_REFERENCE_IMAGES_MAX)
+    .map(({ kind, filename, label, origin }) => ({
+      kind,
+      filename,
+      label: typeof label === 'string' && label ? label : filename,
+      origin: origin === 'universe' || origin === 'mood-board' ? origin : null,
+    }));
+}
+
 /**
  * Build a fresh project record. The caller supplies the already-created media
  * collection id (collection creation is a side effect both backends perform
@@ -186,8 +205,9 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     styleSpec = '', startingImageFile = null, userStory = null,
     disableAudio = true, autoAcceptScenes = false, sourceIssueId = null, commissionId = null,
     cast = [], generateFirstPass = false, directive = null,
-    modelOverrides = {}, renderBackend = null,
+    modelOverrides = {}, renderBackend = null, styleReferenceImages = null,
   } = input;
+  const referenceImages = normalizeStyleReferenceImages(styleReferenceImages);
   const videoDraft = input.workspace === 'video'
     ? creativeDirectorVideoDraftSchema.parse(input.videoDraft || {
       durationRange: { min: targetDurationSeconds, max: targetDurationSeconds },
@@ -252,6 +272,15 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // Additive: the whole record round-trips through the JSONB column verbatim
     // (sanitizeProjectForSync / mergeProjectRecord), so no schema-version bump.
     commissionId,
+    // The commission style source's reference images (#8724) —
+    // `[{ kind: 'image' | 'image-ref', filename, label, origin }]`, filenames
+    // only. Scene evaluation attaches them next to the rendered frames and a
+    // local image render uses them as `referenceImagePaths` when the planner
+    // set none. SERVER-MANAGED like `commissionId` (not in the public
+    // create/update schema) and OMITTED when empty, so a bare or unpinned
+    // project's record is unchanged. Additive JSONB — no schema-version bump; a
+    // peer without the files just resolves fewer of them.
+    ...(referenceImages.length ? { styleReferenceImages: referenceImages } : {}),
     collectionId,
     timelineProjectId: null,
     finalVideoId: null,

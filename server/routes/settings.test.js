@@ -775,6 +775,31 @@ describe('Settings routes — imageGen.agy slice', () => {
   });
 });
 
+describe('Settings routes — imageGen.local.pythonPath (#8751)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('refuses a pythonPath that is not a python interpreter, persisting nothing', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { local: { pythonPath: '/bin/sh' } } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PYTHON_PATH');
+    expect(store.imageGen).toBeUndefined();
+  });
+
+  it('accepts a venv interpreter and a cleared value', async () => {
+    for (const pythonPath of ['/opt/example/.venv/bin/python3.12', '']) {
+      const res = await request(buildApp())
+        .put('/api/settings')
+        .send({ imageGen: { local: { pythonPath } } });
+      expect(res.status).toBe(200);
+    }
+  });
+});
+
 describe('Settings routes — renderDefaults slice (#3231)', () => {
   beforeEach(() => {
     store = {};

@@ -127,7 +127,7 @@ describe('ReviewerPicker', () => {
   describe("provider reviewer that can't review (#7660)", () => {
     const providers = [{ id: 'hosted-harness', name: 'Hosted Harness', command: 'opencode', enabled: true, models: [] }];
 
-    it('flags an enabled provider reported as unable to run a tool-free review', () => {
+    it('flags an enabled provider reported as unable to run any review', () => {
       render(
         <ReviewerPicker
           reviewers={['provider:hosted-harness']}
@@ -136,8 +136,7 @@ describe('ReviewerPicker', () => {
           onChange={() => {}}
         />
       );
-      expect(screen.getByText("can't review")).toHaveAttribute('title', expect.stringContaining('tool-free claim/public reviews'));
-      expect(screen.getByText("can't review")).toHaveAttribute('title', expect.stringContaining('select API mode, or choose a supported reviewer harness'));
+      expect(screen.getByText("can't review")).toHaveAttribute('title', expect.stringContaining('Set its command or switch it to API mode'));
     });
 
     it('says nothing about a provider absent from the map, or when it was never fetched', () => {
@@ -172,6 +171,23 @@ describe('ReviewerPicker', () => {
       expect(screen.getByText('disabled')).toBeInTheDocument();
       expect(screen.queryByText("can't review")).not.toBeInTheDocument();
     });
+  });
+
+  it('offers CLI and API providers as new reviewers, but not TUI records', () => {
+    render(
+      <ReviewerPicker
+        reviewers={[]}
+        modelOptions={{ loaded: true, providers: [
+          { id: 'example-cli', name: 'Example CLI', type: 'cli', command: 'agy', enabled: true, models: [] },
+          { id: 'example-api', name: 'Example API', type: 'api', enabled: true, models: [] },
+          { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'agy', enabled: true, models: [] },
+        ] }}
+        onChange={() => {}}
+      />
+    );
+    expect(screen.getByRole('option', { name: /Example CLI/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Example API/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Example TUI/ })).not.toBeInTheDocument();
   });
 
   // The Add row lists what this machine can actually run. Hidden, not dropped:

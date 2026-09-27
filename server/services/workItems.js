@@ -80,6 +80,10 @@ export async function listWorkItems(app, { issueAuthorFilter, issueExcludeLabels
     // Present only when the detector named a fault that won't self-clear (a
     // permission the token lacks), so the picker can print the way out instead of
     // the generic "retry" copy every other transient gets.
-    remedy: result.remedy || null
+    remedy: result.remedy || null,
+    // Per-cause skip attribution for an empty list (the detector computes it
+    // exactly when items run out), so the picker can say WHY each issue was
+    // skipped instead of a hand-maintained cause list that goes stale.
+    skipCauses: result.skipCauses && Object.keys(result.skipCauses).length > 0 ? result.skipCauses : null
   };
 }

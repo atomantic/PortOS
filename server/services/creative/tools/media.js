@@ -280,6 +280,27 @@ async function enforceRenderBackendPin(kind, params, project) {
   };
 }
 
+/**
+ * Condition a LOCAL image render on the owning project's style reference
+ * images (#8724) — the universe / mood-board images a Creative Commission's
+ * style source resolved at fire time.
+ *
+ * Runs after the backend pin, so `params.mode` is final: absent means the
+ * queue's local default, which is also what an unpinned project renders on.
+ * Cloud modes are left alone — their "input image" wiring edits that image
+ * rather than borrowing its style. A planner that already chose its own
+ * `referenceImagePaths` wins. A project without style references (every bare
+ * CD project) returns `params` untouched.
+ */
+async function applyStyleReferenceImages(params, project) {
+  if (!project?.styleReferenceImages?.length) return params;
+  if (params?.mode && params.mode !== IMAGE_GEN_MODE.LOCAL) return params;
+  if (Array.isArray(params?.referenceImagePaths) && params.referenceImagePaths.length) return params;
+  const { styleReferenceImagePaths } = await import('../../creativeStyleSources.js');
+  const referenceImagePaths = styleReferenceImagePaths(project.styleReferenceImages);
+  return referenceImagePaths.length ? { ...params, referenceImagePaths } : params;
+}
+
 // Load the owning CD project ONCE per enqueue — both the video preset
 // reconciliation and the render-backend pin read from it, and re-reading would
 // double the store round-trips per plan step. Null outside a project context (a
@@ -324,6 +345,7 @@ const mediaTool = (kind, label) => ({
       if (kind === 'video') params = enforceVideoRenderPreset(params, project);
       if (kind === 'image') params = enforceImageRenderPreset(params, project);
       params = await enforceRenderBackendPin(kind, params, project);
+      if (kind === 'image') params = await applyStyleReferenceImages(params, project);
       // Resolve the selected local model AFTER the backend ladder has applied
       // project/install pins. The same model-catalog fields that drive Video
       // Gen's visible controls then snap the autonomous job onto that model's

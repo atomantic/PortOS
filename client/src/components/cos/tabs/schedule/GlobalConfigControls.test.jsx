@@ -242,22 +242,44 @@ describe('GlobalConfigControls — issue exclude labels', () => {
 
 describe('GlobalConfigControls — require approval', () => {
   it('toggles requireApproval on the task metadata', () => {
-    const onUpdate = renderControls({ taskType: 'release-check', taskMetadata: { useWorktree: false, openPR: false } });
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { useWorktree: false, openPR: false } });
     fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
-    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
       taskMetadata: { useWorktree: false, openPR: false, requireApproval: true },
     });
   });
 
   it('turns requireApproval off when it is already on', () => {
     const onUpdate = renderControls({
-      taskType: 'release-check',
+      taskType: 'do-release',
       taskMetadata: { requireApproval: true },
     });
     fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
-    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
       taskMetadata: { requireApproval: false },
     });
+  });
+});
+
+describe('GlobalConfigControls — release options', () => {
+  it('is hidden for other tasks', () => {
+    renderControls();
+    expect(screen.queryByText('Release Options')).not.toBeInTheDocument();
+  });
+
+  it('shows options ON by default and writes an explicit false when turned off', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { slashdoCommand: 'release', resolveBlockers: false } });
+    expect(screen.getByRole('button', { name: 'Disable merge dependency updates' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Disable merge dependency updates' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
+      taskMetadata: { slashdoCommand: 'release', resolveBlockers: false, mergeDependencyUpdates: false },
+    });
+  });
+
+  it('turns an explicitly disabled option back on', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { resolveBlockers: false } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enable resolve blockers' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', { taskMetadata: { resolveBlockers: true } });
   });
 });
 
@@ -337,6 +359,45 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
     // A cron+perpetual task rechecks on its OWN expression, so it needs none.
     renderControls({ config: { type: 'cron', cronExpression: '0 7 * * *', perpetual: true } });
     expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
+  });
+
+  it('shows parked skip causes while leaving unattributed parks unchanged', () => {
+    renderControls({
+      config: {
+        type: 'on-demand',
+        perpetual: true,
+        autoStart: true,
+        status: { reason: 'perpetual-drain' },
+        perpetualStatus: {
+          globalParked: false,
+          parkedAppCount: 1,
+          trackedAppCount: 1,
+          nextRecheckAt: null,
+          parkReason: 'no-actionable-issues',
+          parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+          parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+        }
+      }
+    });
+    expect(screen.getByText('1 app(s) parked (no-actionable-issues) — 49 needs-input, 17 blocked')).toBeInTheDocument();
+
+    cleanup();
+    renderControls({
+      config: {
+        type: 'on-demand',
+        perpetual: true,
+        autoStart: true,
+        status: { reason: 'perpetual-drain' },
+        perpetualStatus: {
+          globalParked: false,
+          parkedAppCount: 1,
+          trackedAppCount: 1,
+          nextRecheckAt: null,
+          parkReason: 'branch-reconcile'
+        }
+      }
+    });
+    expect(screen.getByText('1 app(s) parked (branch-reconcile)')).toBeInTheDocument();
   });
 });
 

@@ -26,7 +26,7 @@ const response = (overrides = {}) => ({
   scanned: 120,
   complete: true,
   claimTaskTypes: ['claim-work', 'claim-issue', 'plan-task'],
-  busySources: [{ taskType: 'release-check', cron: '30 3 * * *', origin: 'app' }],
+  busySources: [{ taskType: 'do-release', cron: '30 3 * * *', origin: 'app' }],
   plan: {
     checksPerDay: 1,
     slots: [{ taskType: 'security', label: 'Security', day: 1, hour: 9, fileIssues: true, cron: '0 9 * * 1' }],

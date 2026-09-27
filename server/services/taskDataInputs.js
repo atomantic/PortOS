@@ -262,6 +262,7 @@ const INPUT_LOADERS = {
           issueAuthorFilter: taskMetadata.issueAuthorFilter
             ?? (claimTask ? 'self' : 'any'),
           issueExcludeLabels: taskMetadata.issueExcludeLabels || [],
+          excludeNonActionableLabels: claimTask,
         }, forge.env)
       : await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
     return result.ok
@@ -275,7 +276,12 @@ const INPUT_LOADERS = {
         + (result.truncated ? TRUNCATION_NOTICE : '')
       : forgeUnavailable('Open issues', forge, result);
   },
-  'open-pull-requests': async ({ app, deps, forge }) => {
+  'open-pull-requests': async ({ app, deps, forge, taskType, trustedPullRequestData }) => {
+    // Maintenance already resolved live author authority and screened discussion.
+    // A second, generic listing would put excluded PRs back into the prompt.
+    if (taskType === 'pr-watcher') {
+      return trustedPullRequestData || 'Trusted PR data is unavailable. Do not fetch an unfiltered PR list or expand the maintenance scope.';
+    }
     if (!forge) return unavailableMessage('Open pull requests', 'repository forge is unavailable');
     const result = await deps.listPullRequests({ cli: forge.cli, cwd: app.repoPath, env: forge.env, state: 'open' });
     return result.ok
@@ -292,7 +298,7 @@ const INPUT_LOADERS = {
 };
 
 /** Resolve selected input ids into prompt-ready sections without throwing. */
-export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, taskType, dependencies = {} } = {}) {
+export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, taskType, trustedPullRequestData, dependencies = {} } = {}) {
   const selected = Array.isArray(inputIds) ? [...new Set(inputIds)] : [];
   if (!selected.length) return [];
   const definitions = new Map(TASK_DATA_INPUT_DEFINITIONS.map((definition) => [definition.id, definition]));
@@ -309,7 +315,8 @@ export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, 
     environment: process.env,
     ...dependencies,
   };
-  const needsForge = selected.some((id) => id.includes('issues') || id.includes('pull-requests'));
+  const needsForge = selected.some((id) => id.includes('issues') || (id.includes('pull-requests')
+    && !(taskType === 'pr-watcher' && id === 'open-pull-requests')));
   const forge = needsForge
     ? await resolveForgeContext(app, deps).catch(() => null)
     : null;
@@ -318,7 +325,7 @@ export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, 
     const definition = definitions.get(id);
     const loader = INPUT_LOADERS[id];
     if (!definition || !loader) return null;
-    const content = await loader({ app, deps, forge, taskMetadata, taskType }).catch(() => unavailableMessage(definition.label));
+    const content = await loader({ app, deps, forge, taskMetadata, taskType, trustedPullRequestData }).catch(() => unavailableMessage(definition.label));
     return { id, label: definition.label, content };
   }));
   return sections.filter(Boolean);

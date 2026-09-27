@@ -2,7 +2,7 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
-    "app-launch-video": "fa15ea11b4cf49f31ae17513ff780421",
+    "app-launch-video": "f1aee8c3de778663a5ba44a4f3486ce5",
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
@@ -23,6 +23,7 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "eb97988dfc16d4c655f1834acc91d665",
     "dependency-updates": "2d94021c979a86a349e125f5c15665d8",
+    "do-release": "b185da91e17d796514d841378fc7be6b",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
@@ -31,6 +32,7 @@
     "issue-reconcile": "541afc6566aa012ebc400ccff391ce2b",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
+    "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
     "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
     "model-comparison-refresh": "f66e070fa08e30edda2c3020289f0c67",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
@@ -47,7 +49,6 @@
     "privacy": "ecf3c57c064e3c4ab662d70252c686fb",
     "reference-watch": "57221102b6245d40852ac258fbf9ebbf",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
-    "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
     "reliability": "2a99be77b8f34653f4b926db0a773ea5",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "4bd26243a5792a39040da0b49321ca27",
@@ -63,7 +64,7 @@
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
-    "app-launch-video": 1,
+    "app-launch-video": 4,
     "better-cognitive-load": 1,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
@@ -83,6 +84,7 @@
     "data-integrity": 1,
     "data-safety": 2,
     "dependency-updates": 7,
+    "do-release": 15,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
@@ -91,6 +93,7 @@
     "issue-reconcile": 7,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
+    "media-render-research": 1,
     "mobile-responsive": 3,
     "model-comparison-refresh": 4,
     "module-hygiene": 1,
@@ -103,7 +106,6 @@
     "privacy": 1,
     "reference-watch": 4,
     "refresh-local-llm-catalog": 4,
-    "release-check": 14,
     "reliability": 1,
     "repo-sync": 1,
     "security": 4,
@@ -127,6 +129,11 @@
     ],
     "api-contract": [
       "cf02b10a5993baf473e0d320771f26b6"
+    ],
+    "app-launch-video": [
+      "fa15ea11b4cf49f31ae17513ff780421",
+      "0247e82d4ae6e812dbd666d3bd75ad62",
+      "71962a1f6f902d93f2c8840e3281301b"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"
@@ -254,6 +261,22 @@
       "f34cfa7e495d2bd6d3ac3c80b44447e8",
       "44de787b45e037fbce281efc87706873"
     ],
+    "do-release": [
+      "655180dfbab22e11fab79072ac49c9d6",
+      "d567ce8c4033687d5a9177439e00d0a6",
+      "133c221608545a26f328dead099a4d0a",
+      "609167c41331e6bbfc6d5f5edc452d4c",
+      "9c7508598ee772d1cee8f609f9ed7372",
+      "8436a47b5b1c9b2a342795e5634552da",
+      "746f11daaf721eae9e16845858ef55ee",
+      "08c928e6f79f83535e40b6988ff6eae3",
+      "afa9039cfbff21d77d601dc74eb5b81f",
+      "2d2a6700c23b73bf738c2aa915e37277",
+      "64be10f6ac7bcf74d4fc257089fc179b",
+      "644e5f2f6df1daf06f3792a81ba7a51a",
+      "5a82eec9f86ad05185ed77a42dbfd9d4",
+      "cd936b9a4fb76273b36ec54c3ed6d5ba"
+    ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
     ],
@@ -352,21 +375,6 @@
       "525bd0077672bf2f8beec9c0124740c8",
       "a9dce67bb9f0837ba904f3412b03637f",
       "ca7324a0f2251a66b46ea534940c9da8"
-    ],
-    "release-check": [
-      "655180dfbab22e11fab79072ac49c9d6",
-      "d567ce8c4033687d5a9177439e00d0a6",
-      "133c221608545a26f328dead099a4d0a",
-      "609167c41331e6bbfc6d5f5edc452d4c",
-      "9c7508598ee772d1cee8f609f9ed7372",
-      "8436a47b5b1c9b2a342795e5634552da",
-      "746f11daaf721eae9e16845858ef55ee",
-      "08c928e6f79f83535e40b6988ff6eae3",
-      "afa9039cfbff21d77d601dc74eb5b81f",
-      "2d2a6700c23b73bf738c2aa915e37277",
-      "64be10f6ac7bcf74d4fc257089fc179b",
-      "644e5f2f6df1daf06f3792a81ba7a51a",
-      "5a82eec9f86ad05185ed77a42dbfd9d4"
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",

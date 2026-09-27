@@ -6,6 +6,10 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `databaseCutoverHandshake.js` | Narrow fenced-boot path for the ordinary server: at `verifying`/`verified` prove this process's own pool reaches the recorded target, publish a per-pid proof, and wait for admission release before the app graph loads. |
+| `databaseMaintenanceCutover.js` | Internal cutover worker body (transfer → forward-only `.env` mode commit → server restart with target proof → release → CoS restart) and `recoverDatabaseCutover(id)` same-operation recovery for the CLI/API. |
+| `databaseMaintenanceProducers.js` | Internal one-use coordinator stage: retain producer identity, stop this install's PM2 CoS/server, and verify fresh readback while admission remains fenced. |
+| `databaseMaintenanceQuiescence.js` | Internal coordinator stage after producer shutdown: terminate verified running detached-writer groups, prove every registry record quiescent from process-table evidence, archive it with the operation, and refuse pending, legacy, orphaned, ambiguous or unregistered writers. |
 | `imageGen/prepareParams.js` | Shared image request preparation and the canonical local image model selector. Use `selectLocalImageModelFromSettings()` for model identity and `resolveLocalImageModel()` when the caller must also enforce local runtime, hardware, and edit-image requirements. |
 | `imageGen/index.js` | Mode-aware image backend dispatcher and shared image-generation helpers. Direct queue consumers still resolve local model identity before enqueueing. |
 | `universeBuilderRender.js` | Universe Builder batch render jobs. |

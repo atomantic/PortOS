@@ -2,12 +2,13 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
+import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../../lib/reviewerModels';
@@ -171,6 +172,16 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     // taskMetadata is replaced wholesale server-side, so spread the existing keys.
     await onUpdate(taskType, {
       taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
+    });
+    setUpdating(false);
+  };
+
+  // Release options are ON unless explicitly false, so the toggle writes an
+  // explicit boolean either way.
+  const handleReleaseOptionToggle = async (field) => {
+    setUpdating(true);
+    await onUpdate(taskType, {
+      taskMetadata: { ...(config.taskMetadata || {}), [field]: config.taskMetadata?.[field] === false }
     });
     setUpdating(false);
   };
@@ -393,11 +404,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
               if (allParked) {
                 const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
+                const skipSummary = formatSkipCauses(p.parkSkipCauses);
                 return (
                   <>
                     {stallNote}
                     <p className="text-xs text-port-warning mt-1">
-                      {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
+                      {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
                     </p>
                   </>
                 );
@@ -412,11 +424,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             }
             // Global (non-app) perpetual task: the global status.reason is accurate.
             if (status.reason === 'perpetual-parked') {
+              const skipSummary = formatSkipCauses(status.parkSkipCauses);
               return (
                 <>
                   {stallNote}
                   <p className="text-xs text-port-warning mt-1">
-                    Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
+                    Parked{status.parkReason ? ` (${status.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
                   </p>
                 </>
               );
@@ -586,6 +599,34 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             {BRANCHES_PER_AGENT_OPTIONS.find(o => o.value === (config.taskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT))?.description}.
             {' '}Branches are prioritized deterministically; the next drain picks up the remainder after this batch progresses.
           </p>
+        </div>
+      )}
+
+      {RELEASE_OPTIONS_TASK_TYPES.has(taskType) && (
+        <div>
+          <span className="text-sm text-gray-400 block mb-2">Release Options</span>
+          <div className="space-y-2">
+            {RELEASE_OPTIONS.map(({ field, label, description }) => {
+              const enabled = config.taskMetadata?.[field] !== false;
+              return (
+                <button
+                  key={field}
+                  type="button"
+                  disabled={updating}
+                  aria-pressed={enabled}
+                  aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                  className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
+                  onClick={() => handleReleaseOptionToggle(field)}
+                >
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm text-white">{label}</span>
+                    <p className="text-xs text-gray-500">{description}</p>
+                  </div>
+                  <ToggleSwitch enabled={enabled} disabled={updating} decorative />
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

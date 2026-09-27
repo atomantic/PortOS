@@ -26,9 +26,6 @@ import { isEchoOfRecentTts, rememberTtsSentence } from '../voice/echo.js';
 import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { pcmToFloat } from '../voice/callEndpointing.js';
 import {
-  audienceCanParticipate,
-} from '../../lib/fableLoomParticipation.js';
-import {
   FABLELOOM_AUDIO_TARGETS,
   isAssetSafeForLiveVoice,
   resolvePlaybackPhaseAsset,
@@ -36,7 +33,6 @@ import {
 import {
   findEpisode,
   getLoom,
-  mutateLoom,
 } from './records.js';
 import {
   publicNode,
@@ -44,6 +40,12 @@ import {
 } from './weave.js';
 import { getUniverse } from '../universeBuilder.js';
 import { parseVoiceId } from '../pipeline/audio.js';
+
+// Explicit casting wins over array order; legacy looms without a selection keep
+// their first-character fallback. A deleted selection never becomes another actor.
+const protagonistVoiceCharacter = (loom, universe) => loom.protagonistCharacterId
+  ? universe?.characters?.find(character => character.id === loom.protagonistCharacterId) || null
+  : universe?.characters?.[0] || null;
 
 // Active hosted sessions in memory (ephemeral, machine-local)
 const activeSessions = new Map();
@@ -152,7 +154,7 @@ export async function checkHostedSessionReadiness({ loomId, episodeId, loom: cus
     if (loom.universeId) {
       universe = await getUniverse(loom.universeId).catch(() => null);
     }
-    const protagonistChar = universe?.characters?.[0] || null;
+    const protagonistChar = protagonistVoiceCharacter(loom, universe);
     if (protagonistChar) {
       resolvedVoice = await resolveCharacterVoice({
         universeId: loom.universeId,
@@ -170,7 +172,7 @@ export async function checkHostedSessionReadiness({ loomId, episodeId, loom: cus
   }
 
   // 5. Playback readiness check
-  let playbackReady = true;
+  const playbackReady = true;
   if (startNode) {
     const asset = resolvePlaybackPhaseAsset({
       node: startNode,
@@ -217,7 +219,7 @@ export async function checkHostedSessionReadiness({ loomId, episodeId, loom: cus
  * 5. Active hold asset is safe for live voice (no character dialogue / blocking SFX)
  */
 export function revalidateLiveConversationGate({ session, node, asset }) {
-  if (!session || session.status !== 'active') {
+  if (session?.status !== 'active') {
     return { allowed: false, reason: 'SESSION_INACTIVE' };
   }
   if (!node) {
@@ -341,7 +343,7 @@ export async function createHostedSession(loomId, episodeId, {
 function verifyHostedTokenAgainst(sessionId, token, hashField) {
   if (!sessionId || !token || typeof token !== 'string') return false;
   const session = activeSessions.get(sessionId);
-  if (!session || session.status !== 'active') return false;
+  if (session?.status !== 'active') return false;
   if (isExpired(session)) {
     session.status = 'ended';
     return false;
@@ -417,7 +419,7 @@ export function _getInternalSession(sessionId) {
  */
 export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
   const session = activeSessions.get(sessionId);
-  if (!session || session.status !== 'active') {
+  if (session?.status !== 'active') {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
   }
 
@@ -476,7 +478,7 @@ export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
  */
 export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
   const session = activeSessions.get(sessionId);
-  if (!session || session.status !== 'active') {
+  if (session?.status !== 'active') {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
   }
 
@@ -585,7 +587,7 @@ export function endHostedSession(sessionId, { reason = 'ended', io } = {}) {
  */
 export async function startHostedListening(sessionId, { io } = {}) {
   const session = activeSessions.get(sessionId);
-  if (!session || session.status !== 'active') {
+  if (session?.status !== 'active') {
     throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
   }
 
@@ -654,7 +656,7 @@ export async function processHostedUtterance(sessionId, {
   io,
 } = {}) {
   const session = activeSessions.get(sessionId);
-  if (!session || session.status !== 'active') {
+  if (session?.status !== 'active') {
     throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
   }
 
@@ -791,7 +793,7 @@ export async function processHostedUtterance(sessionId, {
       if (loom.universeId) {
         universe = await getUniverse(loom.universeId).catch(() => null);
       }
-      const char = universe?.characters?.[0] || null;
+      const char = protagonistVoiceCharacter(loom, universe);
       const resolved = await resolveCharacterVoice({
         universeId: loom.universeId,
         characterId: char?.id,

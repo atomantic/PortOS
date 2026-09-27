@@ -72,6 +72,11 @@ describe('SlashDoRunDrawer', () => {
     ] });
     render(<MemoryRouter><SlashDoPanel appId="acme" appName="Acme App" appType="node" /></MemoryRouter>);
     await screen.findByRole('option', { name: 'Codex' });
+    // Untouched overview actions must retain server-selected Auto routing.
+    await userEvent.click(screen.getByRole('button', { name: '/do:plan-task' }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenLastCalledWith(
+      'plan-task', 'acme', { provider: undefined, model: undefined, effort: undefined }, { silent: true }
+    ));
     await userEvent.selectOptions(screen.getByLabelText('Provider'), 'codex');
     await userEvent.selectOptions(screen.getByLabelText('Model'), 'gpt-5');
     await userEvent.selectOptions(screen.getByLabelText('Thinking effort'), 'high');

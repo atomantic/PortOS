@@ -30,9 +30,9 @@ const graph = ({ appSchedules, occurrences }) => ({
     windows: [],
   },
   nodes: [{
-    id: 'task:release-check',
+    id: 'task:do-release',
     kind: 'task',
-    label: 'release-check',
+    label: 'do-release',
     enabled: true,
     schedule: { type: 'on-demand' },
     totalAppCount: 2,
@@ -46,8 +46,8 @@ const graph = ({ appSchedules, occurrences }) => ({
 const APP_SCHEDULED = graph({
   appSchedules: [{ appId: 'acme', appName: 'Acme', cronExpression: '0 7 * * *', nextRunAt: new Date(NOW.getTime() + 7 * HOUR).toISOString() }],
   occurrences: [{
-    id: 'task:release-check:launch:1',
-    nodeId: 'task:release-check',
+    id: 'task:do-release:launch:1',
+    nodeId: 'task:do-release',
     at: new Date(NOW.getTime() + 7 * HOUR).toISOString(),
     kind: 'launch',
     apps: ['acme'],
@@ -60,7 +60,7 @@ const render_ = async (data) => {
     render(<MemoryRouter><WorkflowTab apps={[]} providers={[]} /></MemoryRouter>);
   });
   // The label appears on the track AND on its 'Scheduled order' chip.
-  await screen.findAllByText('release-check');
+  await screen.findAllByText('do-release');
 };
 
 beforeEach(() => vi.clearAllMocks());

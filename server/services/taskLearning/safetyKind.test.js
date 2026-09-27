@@ -59,17 +59,23 @@ describe('classifySafetyKind (#2440)', () => {
     expect(classifySafetyKind({ taskTypeKey: 'open-upstream-pr' }).kind).toBe('external-pr');
     expect(classifySafetyKind({ taskTypeKey: 'publish-release' }).kind).toBe('publish');
     expect(classifySafetyKind({ taskTypeKey: 'cut-release' }).kind).toBe('publish');
+    // Only the scheduled do-release task type is carved out — the wording still counts.
+    expect(classifySafetyKind({ metadata: { taskDescription: 'Do release of the mobile build' } }).kind).toBe('publish');
     expect(classifySafetyKind({ metadata: { taskDescription: 'Deploy the site to production' } }).kind).toBe('publish');
     expect(classifySafetyKind({ metadata: { taskDescription: 'Draft a social-media post' } }).kind).toBe('content');
   });
 
-  it('does not treat release-check (or pre-release) as a publish action', () => {
+  it('does not treat the scheduled do-release task (or pre-release) as a publish action', () => {
     // `\brelease\b` used to match `release-check` and force every Run Now into
-    // awaiting-approve. The type is a readiness coordinator, not a ship.
+    // awaiting-approve. Renamed do-release, the operator-configured task keeps
+    // the confidence gate — even though its prompt title reads "Do Release".
     for (const input of [
       { taskTypeKey: 'app-improve:release-check' },
       { taskTypeKey: 'self-improve:release-check' },
       { metadata: { analysisType: 'release-check' } },
+      { taskTypeKey: 'self-improve:do-release', metadata: { taskDescription: '[Improvement: PortOS] Do Release' } },
+      { taskTypeKey: 'app-improve:do-release' },
+      { metadata: { analysisType: 'do-release' } },
       { taskTypeKey: 'pre-release-audit' }
     ]) {
       const out = classifySafetyKind(input);

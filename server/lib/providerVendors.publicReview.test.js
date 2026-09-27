@@ -7,7 +7,9 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
 } from './agentExecutionProfiles.js';
 import {
+  buildCodeReviewSpawnConfig,
   buildVendorSpawnConfig,
+  codeReviewTier,
   enforcedPublicReviewPosturesForProvider,
   publicReviewPosturesForProvider,
   publicReviewProviderBlock,
@@ -249,6 +251,25 @@ describe('public-review provider postures', () => {
 
   it('rejects Antigravity plan mode because it does not remove tools', () => {
     expect(() => buildVendorSpawnConfig(antigravity, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })).toThrow(/no enforced no-tool/);
+  });
+
+  // Code review is the one caller that accepts a read-only mode in place of the
+  // no-tool recipe: the no-tool pipeline gate above still refuses both vendors.
+  it('grades code reviewers by the strongest enforced mode, and builds read-only argv from scratch', () => {
+    expect(codeReviewTier(grok)).toBe(PUBLIC_REVIEW_NO_TOOL_POSTURE);
+    // Antigravity's plan mode and terminal sandbox both still write files.
+    expect(codeReviewTier(antigravity)).toBeNull();
+    expect(codeReviewTier(codex)).toBe('read-only');
+    expect(codeReviewTier({ id: 'custom', type: 'cli', command: 'custom-agent' })).toBeNull();
+    expect(codeReviewTier({ id: 'agy-api', type: 'api', command: 'agy' })).toBeNull();
+
+    const codexReview = buildCodeReviewSpawnConfig({ ...codex, args: ['--dangerously-bypass-approvals-and-sandbox'] }, {
+      safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
+    });
+    expect(codexReview.args).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only']));
+    expect(codexReview.args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    // No enforced mode: the caller falls back to the vendor's ordinary argv.
+    expect(buildCodeReviewSpawnConfig(antigravity, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })).toBeNull();
   });
 
   it('builds grok’s two postures from its own permission-mode and sandbox flags', () => {

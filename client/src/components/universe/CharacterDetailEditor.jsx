@@ -10,6 +10,7 @@
  * only knows the field shape.
  */
 
+import { Link } from 'react-router';
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
@@ -46,9 +47,9 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
-  benchmarkProfileInteractive,
   startFineTuningJob,
 } from '../../services/apiVoice';
+import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
 import TabPills from '../ui/TabPills';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -899,9 +900,18 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
     return result;
   }, { errorMessage: 'Could not render voice benchmark' });
 
+  const [pendingPlayback, setPendingPlayback] = useState(null);
+  const playbackReady = pendingPlayback?.profileId === profile?.id && pendingPlayback?.profileRevision === profile?.version;
   const [qualifyInteractive, qualifyingInteractive] = useAsyncAction(async () => {
     if (!profile?.id) return null;
-    const result = await benchmarkProfileInteractive(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+    if (!playbackReady) {
+      const probe = await prepareProfilePlayback(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+      setPendingPlayback(probe);
+      return probe;
+    }
+    setPendingPlayback(null);
+    const result = await pendingPlayback.play();
+    setProfile(result?.profile || null);
     await refreshProfiles();
     return result;
   }, { errorMessage: 'Interactive benchmark qualification failed' });
@@ -926,6 +936,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
 
   return (
     <BoxedSection icon={Mic} label="Local voice profile & Voice Lab" summary={loading ? 'loading' : profileState}>
+
       <p className="text-[10px] leading-snug text-gray-500">
         Machine-local voice design, consented cloning, and optional fine-tuning. Candidate profiles never mutate approved character voice until explicitly promoted.
       </p>
@@ -953,11 +964,11 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
                 Active Approved Voice: <span className="text-port-accent">{profile.voiceId}</span> ({profile.kind})
               </p>
               <p className="text-[10px] text-gray-400">
-                Model: {profile.modelRevision} · Rate: {profile.delivery?.rate ?? 1} · Studio: {profile.routes?.studio?.enabled ? 'Yes' : 'No'} · Interactive: {profile.routes?.interactive?.enabled ? 'Qualified' : 'Pending qualification'}
+                Model: {profile.modelRevision} · Rate: {profile.delivery?.rate ?? 1} · Studio: {profile.routes?.studio?.enabled ? 'Yes' : 'No'} · Interactive: {profile.engine === 'auk' ? (profile.routes?.interactive?.enabled ? 'Buffered enabled' : 'Studio only') : (profile.routes?.interactive?.enabled ? 'Qualified' : 'Pending qualification')}
               </p>
               {profile.benchmark?.interactiveLatencyMs ? (
                 <p className="text-[10px] text-port-success">
-                  Interactive Latency Benchmark: {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
+                  {profile.benchmark.interactiveMeasurement?.boundary === 'browser-playing-segmented' ? 'Render + playback-start benchmark:' : 'Buffered synthesis benchmark:'} {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
                 </p>
               ) : null}
             </div>
@@ -982,7 +993,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
               type="button" onClick={qualifyInteractive} disabled={disabled || qualifyingInteractive || !approved}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
-              {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} Qualify interactive route
+              {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} {playbackReady ? 'Play benchmark to qualify' : 'Qualify interactive route'}
             </button>
           </div>
 
@@ -1135,7 +1146,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
 
       {activeTab === 'finetune' && (
         <div className="space-y-2">
-          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Checkpointed and cancellable; never assumes the last checkpoint is best.</p>
+          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Requires a supported Qwen training adapter; without one the request is refused and no checkpoint is created.</p>
           <div className="flex gap-2">
             <label className="block text-[10px] text-gray-400 flex-1">
               Epochs
@@ -1413,6 +1424,12 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
     <div className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-port-border pt-3">
         <h3 className="text-sm font-semibold text-port-accent">Character sheet</h3>
+        {universeId && (<Link
+        to={`/voices?${new URLSearchParams({ universeId, characterId: entry.id })}`}
+        className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+      >
+        <Mic size={14} /> Create or assign a voice in Voice Studio
+      </Link>)}
         {onExpand ? (
           <button type="button" onClick={onExpand} disabled={expanding || disabled}
             className="inline-flex min-h-[40px] items-center gap-1.5 px-3 py-2 text-xs rounded border border-port-accent/40 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"

@@ -7,6 +7,7 @@ import { FormField } from '../../ui/FormField';
 import ProcessLogLines from '../../ui/ProcessLogLines';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
+import useFocusTrap from '../../../hooks/useFocusTrap';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { formatBytes, formatCount, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
 
@@ -26,6 +27,11 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
   const fullscreenLogsRef = useRef(null);
+  const fullscreenModalRef = useRef(null);
+  const fullscreenButtonRef = useRef(null);
+
+  // Focus trap for fullscreen modal: trap Tab/Shift+Tab and restore focus on close
+  useFocusTrap(fullscreen, fullscreenModalRef);
 
   // Socket log lifecycle lives in the shared hook so this tab and the desktop
   // launch-progress panel can't drift.
@@ -63,6 +69,13 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
     copyToClipboard(text, 'Logs copied');
   };
 
+  const handleFullscreenEscape = (e) => {
+    if (e.key === 'Escape' && fullscreen) {
+      e.preventDefault();
+      setFullscreen(false);
+    }
+  };
+
   const filteredProcesses = filterFn
     ? processes.filter(proc => filterFn(proc.name))
     : pm2ProcessNames
@@ -88,18 +101,20 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         </div>
 
         <div className="bg-port-card border border-port-border rounded-xl overflow-hidden overflow-x-auto">
-          <table className="w-full min-w-[700px]">
+          <table className="w-full min-w-[700px]" aria-label="PM2 processes">
             <thead className="bg-port-border/50">
               <tr>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8"></th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Name</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Status</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">PID</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">CPU</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Memory</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Uptime</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-400">Restarts</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-400">Actions</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400 w-8">
+                  <span className="sr-only">Details</span>
+                </th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Name</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Status</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">PID</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">CPU</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Memory</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Uptime</th>
+                <th scope="col" className="px-4 py-3 text-left text-sm font-medium text-gray-400">Restarts</th>
+                <th scope="col" className="px-4 py-3 text-right text-sm font-medium text-gray-400">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-port-border">
@@ -203,6 +218,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                                 Copy logs
                               </button>
                               <button
+                                ref={fullscreenButtonRef}
                                 onClick={() => setFullscreen(true)}
                                 className="min-h-[44px] px-1 text-xs text-gray-500 hover:text-white flex items-center gap-1"
                                 title="Fullscreen"
@@ -249,7 +265,14 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         directly because this overlay isn't a <Modal>.
       */}
       {fullscreen && expandedProcess && createPortal(
-        <div className="fixed inset-0 bg-port-bg z-50 flex flex-col">
+        <div
+          ref={fullscreenModalRef}
+          className="fixed inset-0 bg-port-bg z-50 flex flex-col"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Logs for ${expandedProcess}`}
+          onKeyDown={handleFullscreenEscape}
+        >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
@@ -271,7 +294,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                   <option value={2000}>2000</option>
                 </select>
               </FormField>
-              <span className="text-sm text-gray-600">{formatCount(logs.length)} lines</span>
+              <span className="text-sm text-gray-400">{formatCount(logs.length)} lines</span>
               <button
                 onClick={clearLogs}
                 className="min-h-[44px] min-w-[44px] px-1 text-sm text-gray-500 hover:text-white"

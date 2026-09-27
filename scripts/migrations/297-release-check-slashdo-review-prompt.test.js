@@ -40,16 +40,16 @@ describe('migration 297 — upgrade release-check task prompt to the slashdo-bac
 
     expect(result.updated).toBe(2);
     expect(readJson(cosPath).tasks['release-check']).toEqual({
-      promptVersion: PROMPT_VERSIONS['release-check'],
+      promptVersion: PROMPT_VERSIONS['do-release'],
       promptCustomized: false,
-      prompt: DEFAULT_TASK_PROMPTS['release-check'],
+      prompt: DEFAULT_TASK_PROMPTS['do-release'],
     });
     expect(readJson(cosPath).tasks.custom).toEqual({
       promptVersion: 10,
       promptCustomized: true,
       prompt: 'keep this',
     });
-    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['release-check']);
+    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['do-release']);
   });
 
   it('does not create a schedule when neither location exists', async () => {

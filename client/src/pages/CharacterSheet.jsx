@@ -846,7 +846,7 @@ export default function CharacterSheet() {
               <div className="bg-port-bg border border-port-border rounded-xl flex flex-col min-h-0">
                 <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
                   <ScrollText className="w-4 h-4 text-gray-400" />
-                  <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
+                  <h2 className="text-sm font-medium text-gray-300">Event Log</h2>
                   <span className="text-xs text-gray-500">({formatCount(char.events?.length, { fallback: '0' })} entries)</span>
                 </div>
           <div className="overflow-y-auto max-h-[400px] divide-y divide-port-border/50">

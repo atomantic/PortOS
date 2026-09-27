@@ -29,7 +29,7 @@ describe('migration 293 — AGENTS.md prompt rename', () => {
     writeJson(schedulePath, {
       tasks: {
         'claim-issue': { prompt: outgoing('claim-issue'), promptVersion: PROMPT_VERSIONS['claim-issue'] - 1 },
-        'release-check': { prompt: outgoing('release-check'), promptVersion: PROMPT_VERSIONS['release-check'] - 1 },
+        'release-check': { prompt: outgoing('do-release'), promptVersion: PROMPT_VERSIONS['do-release'] - 1 },
         'stash-cleanup': { prompt: outgoing('stash-cleanup'), promptVersion: 1 },
       },
     });
@@ -38,9 +38,10 @@ describe('migration 293 — AGENTS.md prompt rename', () => {
     const tasks = readJson(schedulePath).tasks;
 
     expect(result.updated).toBe(3);
-    for (const key of ['claim-issue', 'release-check', 'stash-cleanup']) {
-      expect(tasks[key].prompt).toBe(DEFAULT_TASK_PROMPTS[key]);
-      expect(tasks[key].promptVersion).toBe(PROMPT_VERSIONS[key]);
+    // release-check is stored under its old key until migration 417 renames it.
+    for (const [key, promptKey] of [['claim-issue', 'claim-issue'], ['release-check', 'do-release'], ['stash-cleanup', 'stash-cleanup']]) {
+      expect(tasks[key].prompt).toBe(DEFAULT_TASK_PROMPTS[promptKey]);
+      expect(tasks[key].promptVersion).toBe(PROMPT_VERSIONS[promptKey]);
       expect(tasks[key].prompt).toContain('AGENTS.md');
     }
   });

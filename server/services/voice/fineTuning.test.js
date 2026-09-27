@@ -4,17 +4,15 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
-import { PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../lib/testHelper.js';
 
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
-// Both overrides default to null = "use the real thing", so one suite can hold
-// the deterministic state-machine cases AND the single runner-boundary case
-// that must exercise actual spawn wiring (vi.mock is per-FILE and hoisted, so
-// a runtime switch is the only way to have both).
+// Both overrides default to null = "use the real thing". The runner's own
+// publication contract is covered in scripts/qwen3_tts_runner.test.js; these
+// lifecycle cases script its stdout frames instead of training a model.
 let spawnOverride = null;
-let pythonOverride = null;
+let runtimeOverride = null;
 
 vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
 vi.mock('../../lib/paths.js', async () => {
@@ -27,7 +25,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 });
 vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, resolveQwen3Python: async () => pythonOverride ?? actual.resolveQwen3Python() };
+  return { ...actual, getQwen3RuntimeStatus: async () => runtimeOverride ?? actual.getQwen3RuntimeStatus() };
 });
 
 const {
@@ -63,7 +61,7 @@ beforeEach(async () => {
   voiceProfilesRoot = await mkdtemp(join(tmpdir(), 'portos-voice-profiles-'));
   queryMock.mockReset();
   spawnOverride = null;
-  pythonOverride = null;
+  runtimeOverride = null;
 });
 
 afterEach(async () => {
@@ -92,9 +90,10 @@ const jobRecordPath = (jobId) => join(voiceProfilesRoot, PROFILE.id, 'fine-tune'
 const createScriptedChild = ({ signal } = {}) => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   child.kill = vi.fn();
   // Frames mirror the runner's stdout contract (scripts/qwen3_tts_runner.py);
-  // the runner-boundary case below is what keeps that mirror honest.
+  // they describe the contract a real training adapter must emit.
   child.emitFrames = (...frames) => {
     for (const frame of frames) {
       child.stdout.emit('data', Buffer.from(`${JSON.stringify(frame)}\n`));
@@ -113,21 +112,36 @@ const createScriptedChild = ({ signal } = {}) => {
   return child;
 };
 
-const checkpointFrame = (step) => ({
+const BASE_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
+const jobDir = (jobId) => join(voiceProfilesRoot, PROFILE.id, 'fine-tune', jobId);
+const revisionFor = (step) => `${BASE_MODEL}@${'a'.repeat(40)}+sha256.${String(step).padStart(64, '0')}`;
+
+// A sealed, auditioned checkpoint as the runner publishes it: inside the job's
+// directory, with the digest-bound revision promotion records.
+const checkpointFrame = (jobId, step) => ({
   stage: 'checkpoint',
   step,
-  checkpoint: `checkpoint-${step}.safetensors`,
-  checkpoint_path: `/scripted/checkpoint-${step}.safetensors`,
-  sample_wav: `/scripted/sample-step-${step}.wav`,
+  checkpoint: `checkpoint-step-${step}`,
+  checkpoint_path: join(jobDir(jobId), `checkpoint-step-${step}`),
+  sample_wav: join(jobDir(jobId), `checkpoint-step-${step}`, 'audition.wav'),
   loss: 0.42,
+  model_revision: revisionFor(step),
+});
+
+const READY_RUNTIME = Object.freeze({
+  ok: true,
+  pythonPath: '/scripted/python',
+  trainingAdapter: 'qwen-tts-sft-12hz',
+  models: { [BASE_MODEL]: { downloaded: true } },
 });
 
 /** Install a scripted child and hand the test the handle spawn will return. */
 const useScriptedRunner = () => {
-  pythonOverride = '/scripted/python';
+  runtimeOverride = READY_RUNTIME;
   let child = null;
-  spawnOverride = (_command, _args, options) => {
+  spawnOverride = (_command, args, options) => {
     child = createScriptedChild(options);
+    child.args = args;
     return child;
   };
   // The job's spawn happens inside startFineTuningJob, so resolve lazily.
@@ -185,12 +199,24 @@ describe('fineTuning', () => {
     expect(startRes).toMatchObject({ jobId: expect.any(String), status: 'running' });
 
     const child = scripted();
+    // The runner receives the verified model root and a dataset manifest that
+    // pairs each transcribed recording with its text.
+    const argValue = (flag) => child.args[child.args.indexOf(flag) + 1];
+    expect(argValue('--model-id')).toBe(BASE_MODEL);
+    expect(argValue('--models-dir')).toEqual(expect.any(String));
+    expect(JSON.parse(await readFile(argValue('--dataset-manifest'), 'utf8'))).toEqual({
+      speaker: 'portos_voice',
+      reference_audio: join(voiceProfilesRoot, PROFILE.id, 'source', 'sample.wav'),
+      samples: [{ audio: join(voiceProfilesRoot, PROFILE.id, 'source', 'sample.wav'), text: 'Training transcription sample.' }],
+    });
     child.emitFrames(
-      { stage: 'init', total_steps: 100 },
       { stage: 'training', step: 20, total_steps: 100, loss: 1.2, progress: 20 },
-      checkpointFrame(20),
-      checkpointFrame(100),
-      { stage: 'completed', total_steps: 100 },
+      checkpointFrame(startRes.jobId, 20),
+      // Frames that were not sealed inside this job are never indexed.
+      { ...checkpointFrame(startRes.jobId, 40), checkpoint_path: '/elsewhere/checkpoint-step-40' },
+      { ...checkpointFrame(startRes.jobId, 60), model_revision: 'qwen3-tts:checkpoint-60' },
+      checkpointFrame(startRes.jobId, 100),
+      { stage: 'completed', checkpoints: 2 },
     );
     child.exit(0);
 
@@ -201,12 +227,14 @@ describe('fineTuning', () => {
     expect(status.status).toBe('completed');
     expect(status.progress).toBe(100);
     expect(status.step).toBe(20);
-    expect(status.checkpoints).toHaveLength(2);
+    expect(status.totalSteps).toBe(100);
+    expect(status.checkpoints.map((checkpoint) => checkpoint.step)).toEqual([20, 100]);
     expect(status.checkpoints[0]).toMatchObject({
-      id: 'checkpoint-20.safetensors',
+      id: 'checkpoint-step-20',
       step: 20,
-      checkpointPath: '/scripted/checkpoint-20.safetensors',
-      sampleWav: '/scripted/sample-step-20.wav',
+      checkpointPath: join(jobDir(startRes.jobId), 'checkpoint-step-20'),
+      sampleWav: join(jobDir(startRes.jobId), 'checkpoint-step-20', 'audition.wav'),
+      modelRevision: revisionFor(20),
     });
 
     const promoteRes = await promoteCheckpoint({
@@ -217,7 +245,8 @@ describe('fineTuning', () => {
     expect(promoteRes).toMatchObject({
       kind: 'fine-tuned',
       approval: { status: 'approved' },
-      inference: { checkpointPath: '/scripted/checkpoint-20.safetensors' },
+      modelRevision: revisionFor(20),
+      inference: { checkpointPath: join(jobDir(startRes.jobId), 'checkpoint-step-20') },
     });
   });
 
@@ -227,7 +256,7 @@ describe('fineTuning', () => {
     const scripted = useScriptedRunner();
 
     const startRes = await startFineTuningJob({ profileId: PROFILE.id, epochs: 50 });
-    scripted().emitFrames(checkpointFrame(50));
+    scripted().emitFrames(checkpointFrame(startRes.jobId, 50));
 
     const cancelRes = cancelFineTuningJob(startRes.jobId);
     expect(cancelRes).toMatchObject({ ok: true, jobId: startRes.jobId, status: 'cancelled' });
@@ -257,6 +286,17 @@ describe('fineTuning', () => {
       error: 'Process exited with code 3',
     });
 
+    // The runner's structured, path-free failure is what the operator sees.
+    const refused = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
+    scripted().stderr.emit('data', Buffer.from(`${JSON.stringify({
+      ok: false, code: 'QWEN3_TRAINING_FAILED', error: 'No fine-tuned checkpoint passed its reload audition',
+    })}\n`));
+    scripted().exit(1);
+    expect(await drainJobRecord(refused.jobId)).toMatchObject({
+      status: 'failed',
+      error: 'No fine-tuned checkpoint passed its reload audition',
+    });
+
     // A killed child reports a null code; "exited with code null" tells the
     // operator nothing about an OOM reap partway through a long run.
     const killed = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
@@ -277,7 +317,7 @@ describe('fineTuning', () => {
       epochs: 2,
       checkpointInterval: 20,
     });
-    scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+    scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
     scripted().exit(0);
 
     const record = await drainJobRecord(jobId);
@@ -302,7 +342,7 @@ describe('fineTuning', () => {
       epochs: 2,
       checkpointInterval: 20,
     });
-    scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+    scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
     scripted().exit(0);
     const record = await drainJobRecord(jobId);
     expect(record.checkpoints.length).toBeGreaterThan(0);
@@ -361,7 +401,7 @@ describe('fineTuning', () => {
         epochs: 2,
         checkpointInterval: 20,
       });
-      scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+      scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
       scripted().exit(0);
       await drainJobRecord(jobId);
 
@@ -378,42 +418,60 @@ describe('fineTuning', () => {
   });
 });
 
-// One boundary case keeps the scripted frames above honest: it runs the actual
-// Python runner through the real spawn, so a rename in either the runner's
-// stdout contract or the arguments it is handed fails here.
-describe.skipIf(!resolveTestPython())('fineTuning runner boundary', () => {
-  it('drives the real Qwen3 runner from spawn to a terminal sidecar', async () => {
+describe('fineTuning without a trainable model', () => {
+  it('refuses non-Base or unverified base weights before creating a job or spawning', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();
-    // Windows ships a `python` Store-alias stub that resolves but cannot run, so
-    // take the interpreter the shared helper proved executable.
-    pythonOverride = resolveTestPython();
+    spawnOverride = vi.fn();
+    runtimeOverride = READY_RUNTIME;
 
-    const { jobId } = await startFineTuningJob({
+    await expect(startFineTuningJob({ profileId: PROFILE.id, baseModel: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' }))
+      .rejects.toMatchObject({ status: 400, code: 'QWEN3_TRAINING_UNSUPPORTED_MODEL' });
+    runtimeOverride = { ...READY_RUNTIME, models: { [BASE_MODEL]: { downloaded: false } } };
+    await expect(startFineTuningJob({ profileId: PROFILE.id }))
+      .rejects.toMatchObject({ status: 409, code: 'QWEN3_MODEL_NOT_INSTALLED' });
+    expect(spawnOverride).not.toHaveBeenCalled();
+    await expect(readFile(join(voiceProfilesRoot, PROFILE.id, 'fine-tune'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('fineTuning without a training adapter', () => {
+  it('refuses to start before creating a job or spawning when inference is ready but training is not', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    runtimeOverride = { ok: true, pythonPath: '/scripted/python', trainingAdapter: null };
+    spawnOverride = vi.fn();
+
+    await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))
+      .rejects.toMatchObject({ status: 503, code: 'QWEN3_TRAINING_UNAVAILABLE' });
+    expect(spawnOverride).not.toHaveBeenCalled();
+    await expect(readFile(join(voiceProfilesRoot, PROFILE.id, 'fine-tune'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('never promotes a legacy placeholder checkpoint that has no producing adapter', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    const jobId = '11111111-2222-4333-8444-555555555555';
+    await mkdir(join(voiceProfilesRoot, PROFILE.id, 'fine-tune', jobId), { recursive: true });
+    await writeFile(jobRecordPath(jobId), JSON.stringify({
+      id: jobId,
       profileId: PROFILE.id,
-      epochs: 2,
-      checkpointInterval: 20,
-    });
+      universeId: 'universe-1',
+      characterId: 'character-1',
+      status: 'completed',
+      checkpoints: [{ id: 'checkpoint-20.safetensors', step: 20, checkpointPath: '/legacy/checkpoint-20.safetensors' }],
+    }));
 
-    // A real interpreter's wall time tracks machine load, not the assertion, so
-    // both budgets come from the repository's Python-shelling allowance rather
-    // than a fixed inner deadline (#6268). The poll is strictly below the
-    // vitest budget so a genuinely stuck run reports the status it observed
-    // instead of producing a bare test timeout.
-    const record = await drainJobRecord(jobId, { timeout: Math.floor(PY_TEST_TIMEOUT_MS * 0.75) });
-    expect(record.status).toBe('completed');
-    expect(record.checkpoints.length).toBeGreaterThan(0);
-    // Same projection the scripted frames assert, mapped off the runner's own
-    // snake_case stdout keys.
-    expect(record.checkpoints[0]).toMatchObject({
-      id: expect.stringMatching(/^checkpoint-\d+\.safetensors$/),
-      step: expect.any(Number),
-      checkpointPath: expect.stringContaining('checkpoint-'),
-      sampleWav: expect.stringContaining('sample-step-'),
-    });
+    await expect(promoteCheckpoint({ profileId: PROFILE.id, jobId, checkpointId: 'checkpoint-20.safetensors' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHECKPOINT_UNVERIFIED' });
 
-    const status = await getFineTuningJobStatus(jobId, PROFILE.id);
-    expect(status.status).toBe('completed');
-    expect(status.progress).toBe(100);
-  }, PY_TEST_TIMEOUT_MS);
+    // An adapter name alone is not enough: an unsealed checkpoint has no
+    // digest-bound revision for synthesis to verify against.
+    await writeFile(jobRecordPath(jobId), JSON.stringify({
+      ...JSON.parse(await readFile(jobRecordPath(jobId), 'utf8')),
+      trainingAdapter: 'qwen-tts-sft-12hz',
+    }));
+    await expect(promoteCheckpoint({ profileId: PROFILE.id, jobId, checkpointId: 'checkpoint-20.safetensors' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHECKPOINT_UNVERIFIED' });
+    expect(queryMock.mock.calls.some(([sql]) => /insert|update/i.test(sql))).toBe(false);
+  });
 });

@@ -201,7 +201,7 @@ describe('CodeReviewersTab', () => {
     renderTab(<CodeReviewersTab />);
 
     expect(await screen.findByText(/ollama: the last review attempt failed \(NO_MODEL\)/)).toBeInTheDocument();
-    expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
+    expect(screen.getByText(/The next successful review clears this warning/)).toBeInTheDocument();
     expect(screen.getByText(/Select a model on Review chain/)).toBeInTheDocument();
   });
 
@@ -213,7 +213,7 @@ describe('CodeReviewersTab', () => {
     });
     renderTab(<CodeReviewersTab />);
     expect(await screen.findByText(/opencode: the last review attempt failed/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
-    expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
+    expect(screen.getByText(/The next successful review clears this warning/)).toBeInTheDocument();
   });
 
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {

@@ -62,6 +62,7 @@ import { ensureDir, sleep } from './fileUtils.js';
 import { safeChildProcessOptions } from './processEnv.js';
 import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
+import { classifyWriterQuiescence, reserveDatabaseWriter } from './databaseWriterRegistry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -513,6 +514,58 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
   return { tick, finish };
 }
 
+const markAbandoned = (writer) => {
+  try { writer.abandoned?.(); } catch {
+    console.error('❌ Could not persist abandoned detached launch evidence');
+  }
+};
+
+// Process-table snapshot, POSIX only. `lstart` is fixed-format under LC_ALL=C;
+// an unparseable row throws rather than being skipped, because a skipped row
+// could be exactly the surviving writer a caller is looking for.
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s?(.*)$/;
+export async function snapshotProcesses() {
+  if (process.platform === 'win32') throw new Error('Process-group snapshots are unavailable on Windows');
+  const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='],
+    safeChildProcessOptions({ timeout: 15000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } }));
+  const rows = stdout.split('\n').filter(line => line.trim()).map((line) => {
+    const match = PS_ROW.exec(line);
+    const startedAt = match ? Date.parse(match[3]) : NaN;
+    if (!match || !Number.isFinite(startedAt)) throw new Error('Unreadable process table');
+    return { pid: Number(match[1]), pgid: Number(match[2]), startedAt, command: match[4] };
+  });
+  if (!rows.some(row => row.pid === process.pid)) throw new Error('Incomplete process table');
+  return rows;
+}
+
+// The supervisor subshell of EVERY detached launch — including launches from
+// versions that predate the writer registry — runs this exact script text.
+export const isDetachedSupervisorCommand = (command) => command.includes('d="$1"; shift') && command.includes('$d/pid');
+
+// Signal a whole process group; false when it no longer exists.
+export const signalProcessGroup = (pgid, signal) => {
+  try { process.kill(-pgid, signal); return true; } catch (err) {
+    if (err.code === 'ESRCH') return false;
+    throw err;
+  }
+};
+
+// On completion, retire a POSIX record only after two consecutive snapshots
+// prove the job gone and its recorded groups empty. Survivors (or a slow
+// supervisor) leave the identity retained for maintenance reconciliation.
+const RETIRE_ATTEMPTS = 3;
+const RETIRE_INTERVAL_MS = 200;
+async function retireQuiescentWriter(writer) {
+  if (process.platform === 'win32' || !writer.inspect || !writer.retire) return;
+  let consecutive = 0;
+  for (let attempt = 0; attempt < RETIRE_ATTEMPTS + 1 && consecutive < 2; attempt += 1) {
+    if (attempt > 0) await sleep(RETIRE_INTERVAL_MS);
+    const verdict = classifyWriterQuiescence(writer.inspect(), await snapshotProcesses()).verdict;
+    consecutive = verdict === 'quiescent' ? consecutive + 1 : 0;
+  }
+  if (consecutive >= 2) writer.retire();
+}
+
 /**
  * Spawn a detached, pm2-restart-surviving child process.
  *
@@ -536,10 +589,36 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
  *   always the `taskkill /T /F` tree, group flag or not.
  * @returns {Promise<object>} ChildProcess-like handle (resolves once the PID is known)
  */
-export async function spawnDetached(bin, args = [], {
+export async function spawnDetached(bin, args = [], options = {}) {
+  return spawnDetachedWithReservation(bin, args, options, reserveDatabaseWriter);
+}
+
+/**
+ * Internal, one-use launch of the fixed offline-transfer worker. There is no
+ * bin/argv/env/controlDir override and no ordinary-writer bypass option. It
+ * retains the supervisor receipt even when the caller exits; a successor needs
+ * that receipt before recovery (see databaseMaintenanceTransfer.js).
+ */
+export async function spawnDatabaseMaintenanceWorker(id, token) {
+  const [{ createDatabaseMaintenanceJournal }, { PATHS }] = await Promise.all([
+    import('./databaseMaintenanceJournal.js'), import('./paths.js'),
+  ]);
+  const journal = createDatabaseMaintenanceJournal();
+  const controlDir = journal.reserveCoordinatorWorker(id, token);
+  return spawnDetachedWithReservation(process.execPath,
+    [join(PATHS.root, 'scripts', 'database-maintenance-worker.mjs'), id, token],
+    { controlDir, cleanup: false, cwd: PATHS.root,
+      env: { ...process.env, PORTOS_DATA_ROOT: PATHS.installRoot } },
+    () => {
+      journal.assertCoordinatorWorker(id, token);
+      return { assertLaunchAllowed: () => journal.assertCoordinatorWorker(id, token) };
+    });
+}
+
+async function spawnDetachedWithReservation(bin, args, {
   env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, pidTimeoutMs = PID_TIMEOUT_MS,
   cleanup = false, killProcessGroup = false,
-} = {}) {
+}, reserveWriter) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
 
   const isWindows = process.platform === 'win32';
@@ -547,6 +626,25 @@ export async function spawnDetached(bin, args = [], {
   // `kill` reports false until the supervisor records a PID, so a setup failure
   // (below) still returns a usable handle.
   const handle = createDetachedHandle({ killProcessGroup });
+  // Publish before any await: a launch admitted immediately before maintenance
+  // is visible even while async setup or the detached supervisor is pending.
+  let writer;
+  try { writer = reserveWriter(controlDir, killProcessGroup); } catch (err) {
+    setImmediate(() => handle.emit('error', err));
+    return handle;
+  }
+  const recordCompletion = (code, signal) => {
+    try { writer.completed?.(code, signal); } catch {
+      // Missing evidence is unresolved, never synthesized into quiescence.
+      console.error('❌ Could not persist detached writer completion evidence');
+    }
+  };
+  handle.once('close', (code, signal) => {
+    recordCompletion(code, signal);
+    retireQuiescentWriter(writer).catch(() => {
+      // Retained evidence is reconciled later; it is never treated as absence.
+    });
+  });
 
   const pidFile = join(controlDir, 'pid');
   const exitFile = join(controlDir, 'exit');
@@ -567,6 +665,7 @@ export async function spawnDetached(bin, args = [], {
     () => (killProcessGroup ? writeFile(groupKillFile, '1') : null),
   ).then(() => null, (err) => err);
   if (ensureControlDir) {
+    markAbandoned(writer);
     setImmediate(() => {
       if (cleanup) rm(controlDir, { recursive: true, force: true }).catch(() => {});
       handle.emit('error', ensureControlDir);
@@ -586,6 +685,13 @@ export async function spawnDetached(bin, args = [], {
   // writes two control files before it spawns, so it can fail with a rejection
   // too; route that into the same slot rather than letting it reject
   // spawnDetached, for the reason ensureControlDir above spells out.
+  try { writer.assertLaunchAllowed(); } catch (err) {
+    // Nothing was launched, so the reservation can say so durably. Without
+    // this, an admitted launch refused by the fence would stay unresolved.
+    markAbandoned(writer);
+    setImmediate(() => handle.emit('error', err));
+    return handle;
+  }
   let launcherSpawnError = null;
   let launcherExit = null;
   const launcher = isWindows
@@ -598,6 +704,11 @@ export async function spawnDetached(bin, args = [], {
       detached: true,
       stdio: 'ignore',
     });
+  if (!isWindows && launcher?.pid) {
+    try { writer.launcher?.(launcher.pid); } catch {
+      console.error('❌ Could not persist detached launcher group evidence');
+    }
+  }
   launcher?.on('error', (err) => { launcherSpawnError = err; });
   launcher?.on('exit', (code) => { launcherExit = Number.isInteger(code) ? code : 'signal'; });
   launcher?.unref();
@@ -653,6 +764,13 @@ export async function spawnDetached(bin, args = [], {
   };
 
   await awaitPid();
+  if (handle.pid !== null) {
+    try { writer.launched?.(handle.pid); } catch {
+      // The child may already exist. Preserve the reservation and control
+      // files; inventory cannot mistake this for a completed or absent writer.
+      console.error('❌ Could not persist detached writer launch evidence');
+    }
+  }
 
   if (isWindows && launchError) {
     // Persist cancellation before returning or scheduling cleanup. A supervisor

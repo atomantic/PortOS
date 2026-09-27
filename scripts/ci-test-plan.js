@@ -237,6 +237,13 @@ export const ALWAYS_RUN_TESTS = [
   // Whole-tree scanner: any server file can add a `process.env` read, and
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
+  // Whole-tree scanners over the shared collectServerSources/collectClientSources
+  // walkers (#8723): the offending file is never imported by the guard, so
+  // impact selection only reaches them when the guard itself changes.
+  'server/lib/apiRouteGraph.test.js',
+  'server/lib/childProcess.guards.test.js',
+  'server/lib/cliChildEnv.test.js',
+  'server/lib/editorial/proseTics.test.js',
   'server/lib/generatedManifests.test.js',
   // Base-relative server import-growth guard (#7993). A new eager edge in a
   // widely reached module multiplies across suites this file does not import,
@@ -247,12 +254,16 @@ export const ALWAYS_RUN_TESTS = [
   // Pregate copies the sha into the test process so the local run uses this
   // plan's base, not a second guess.
   'server/lib/importScoping.test.js',
+  // Whole-tree scanner over collectServerSources: every cwd-passing spawn pins PWD (#8723).
+  'server/lib/spawnCwd.test.js',
   // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
   // breadcrumb, with no import edge back to this file.
   'server/lib/localProviderRuntime.test.js',
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',
+  // Whole-tree scanner: any server/client file can re-inline a RegExp escape (#8723).
+  'server/lib/textUtils.test.js',
   // Whole-tree scanner: any server file can log a failure through
   // `console.log`, and the guard only ever sees it as a path string.
   'server/logLevelConventions.test.js',
@@ -260,6 +271,10 @@ export const ALWAYS_RUN_TESTS = [
   // `pm2 jlist` execution/parsing outside the two designated readers (#8164).
   'server/pm2JlistOwnership.guard.test.js',
   'server/services/imageGen/renderTargets.guard.test.js',
+  // Whole-tree scanners over collectServerSources (#8723).
+  'server/services/gitlab.glabFlags.test.js',
+  'server/services/orphanedPartialGc.test.js',
+  'server/services/providers.shape.test.js',
   'server/services/taskPromptDefaults.test.js',
   'server/timerCallbackConventions.test.js',
 ];

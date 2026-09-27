@@ -1,4 +1,5 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { EIDOVERSE_PORT } from '../lib/eidoversePort.js';
 
 // Settings win over the env var so the owner can set/rotate the credential from
 // Settings > Credentials without restarting PortOS — same precedence and
@@ -14,7 +15,7 @@ async function resolveVisitorToken() {
 }
 
 /** Explicitly configured local host only; construction and disabled capability reads make no requests. */
-export function createManagedVisitorHost({ token, fetchImpl = fetch, port = 8940 } = {}) {
+export function createManagedVisitorHost({ token, fetchImpl = fetch, port = EIDOVERSE_PORT } = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ServerError('Invalid managed visitor host port.', { status: 400 });
   // An explicitly passed `token` (including '' in tests) is honored verbatim and
   // resolved statically, exactly as before. Omitting it entirely resolves fresh

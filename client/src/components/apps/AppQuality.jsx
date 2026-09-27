@@ -157,13 +157,13 @@ export default function AppQuality({ app, detail = false }) {
                 </select>
               </label>
             </div>
-            <table className="w-full text-sm text-left">
+            <table className="w-full text-sm text-left" aria-label="Category audit results">
               <thead className="text-xs text-gray-400">
                 <tr>
-                  <th className="py-1.5 px-2">Category</th>
-                  <th className="py-1.5 px-2">Score</th>
-                  <th className="py-1.5 px-2 hidden sm:table-cell">Evidence</th>
-                  <th className="py-1.5 px-2"><span className="sr-only">Actions</span></th>
+                  <th scope="col" className="py-1.5 px-2">Category</th>
+                  <th scope="col" className="py-1.5 px-2">Score</th>
+                  <th scope="col" className="py-1.5 px-2 hidden sm:table-cell">Evidence</th>
+                  <th scope="col" className="py-1.5 px-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>{sortedCategories.map(category => <CategoryRow key={category.id} category={category}

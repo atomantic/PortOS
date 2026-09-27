@@ -4,13 +4,24 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const mocks = vi.hoisted(() => ({ execFile: vi.fn(), statErrorPath: null }));
+const mocks = vi.hoisted(() => ({ execFile: vi.fn(), statErrorPath: null, countErrorPath: null, virtualCount: 0 }));
 const testDataRoot = mkdtempSync(join(tmpdir(), 'datamanager-strict-test-'));
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    opendir: vi.fn(async (path, ...args) => {
+      if (path === mocks.countErrorPath) throw Object.assign(new Error('enumeration denied'), { code: 'EACCES' });
+      if (mocks.virtualCount && String(path).endsWith('cache')) return {
+        async *[Symbol.asyncIterator]() {
+          for (let index = 0; index < mocks.virtualCount; index++) yield {
+            name: `example-${index}-${'x'.repeat(200)}`, isDirectory: () => false, isFile: () => true,
+          };
+        },
+      };
+      return actual.opendir(path, ...args);
+    }),
     stat: vi.fn((path, ...args) => {
       if (path === mocks.statErrorPath) {
         return Promise.reject(Object.assign(new Error('stat access denied'), { code: 'EACCES' }));
@@ -36,7 +47,7 @@ const { getDataOverview } = await import('./dataManager.js');
 afterAll(() => rmSync(testDataRoot, { recursive: true, force: true }));
 
 beforeEach(() => {
-  mocks.statErrorPath = null;
+  mocks.statErrorPath = null; mocks.countErrorPath = null; mocks.virtualCount = 0;
   rmSync(testDataRoot, { recursive: true, force: true });
   mkdirSync(join(testDataRoot, 'cache'), { recursive: true });
   mkdirSync(join(testDataRoot, 'runs'), { recursive: true });
@@ -76,4 +87,21 @@ describe('dataManager strict overview', () => {
 
     await expect(getDataOverview({ strict: true })).rejects.toThrow('stat access denied');
   });
+});
+
+// Regression: an enumeration error is unknown even when size succeeds; a large
+// listing never needs to fit in execFile's stdout buffer.
+it('counts a large streamed listing and never invokes find', async () => {
+  mocks.virtualCount = 10000;
+  const overview = await getDataOverview();
+  expect(overview.categories.find(c => c.key === 'cache')).toMatchObject({ size: 1024, fileCount: 10000 });
+  expect(mocks.execFile.mock.calls.every(([command]) => command === 'du')).toBe(true);
+});
+it('keeps byte totals with unavailable counts, and rejects enumeration errors in strict mode', async () => {
+  mocks.countErrorPath = join(testDataRoot, 'cache');
+  mocks.execFile.mockImplementation((command, args, options, callback) => callback(null, { stdout: '1\tdata\n', stderr: '' }));
+  const overview = await getDataOverview();
+  expect(overview.categories.find(c => c.key === 'cache')).toMatchObject({ size: 1024, fileCount: null });
+  expect(overview.totalFileCount).toBeNull();
+  await expect(getDataOverview({ strict: true })).rejects.toThrow('enumeration denied');
 });

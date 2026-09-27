@@ -242,6 +242,17 @@ export const TRACKER_FILING_PRESETS = {
     bodyRequirements: 'the motivation (which PRD.md requirement or success criterion, GOALS.md priority, or repository-documented user need this serves), the decided approach naming the {appName} files/components it would touch, an estimated scope, acceptance criteria another agent can verify cold, and any explicit non-goals',
     planCommitMessage: 'docs(plan-feature): file <N> feature plan(s)',
   },
+  // `area:media` keeps findings filterable with the rest of the media work.
+  'media-render-research': {
+    slugPrefix: 'media-research-',
+    label: 'media-render-research',
+    issueLabel: 'media-research',
+    labelDescription: 'Proposed from local Apple Silicon media rendering research',
+    extraLabels: ['area:media'],
+    planItemBody: 'From `media-render-research` (<today\'s date>). <Current {appName} model/runtime/setting and the better option, with source URL + date.> Change: <exact version/checkpoint/value + {appName} files>. Scope: <small/medium/large>.',
+    bodyRequirements: 'the current state (the {appName} files, pinned versions and defaults involved), the evidence (source URLs with dates and the measured gain with its hardware and settings), the decided change naming the exact model revision, version pin or setting value and the {appName} files to change (with download size, memory floor, license and any install migration), a `Scope:` of small/medium/large, acceptance criteria including a local render check, and non-goals',
+    planCommitMessage: 'docs(media-render-research): file <N> media rendering finding(s)',
+  },
 };
 
 /**

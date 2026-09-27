@@ -185,6 +185,19 @@ describe('fableLoomProduction', () => {
       .toBe(true);
   });
 
+  it('requires the interactive route before an approved studio voice satisfies live casting', () => {
+    const episode = { ...sampleEpisode, nodes: [{ ...sampleEpisode.nodes[0], transitions: [],
+      interactionWindow: { enabled: true, protagonistCharacterId: 'char-1' } }] };
+    const profile = { id: 'voice-1', binding: { universeId: 'u1', characterId: 'char-1' },
+      approval: { status: 'approved' }, routes: { studio: { enabled: true }, interactive: { enabled: false } } };
+    const options = { episode, universe: { id: 'u1', characters: [{ id: 'char-1', name: 'Example' }] },
+      loom: { id: 'loom-1', protagonistCharacterId: 'char-1' }, localVoiceProfiles: [profile] };
+    const reasons = () => buildEpisodeProductionPlan(options).plannedAssets.find(asset => asset.type === 'dialogue').readiness.reasons;
+    expect(reasons().some(reason => /no approved voice binding/i.test(reason))).toBe(true);
+    profile.routes.interactive.enabled = true;
+    expect(reasons().some(reason => /no approved voice binding/i.test(reason))).toBe(false);
+  });
+
   it('refuses exact-input planning when a node has no recorded provenance', () => {
     const plan = buildEpisodeProductionPlan({
       episode: sampleEpisode,

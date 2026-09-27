@@ -16,6 +16,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { NAV_COMMANDS } from '../lib/navManifest.js';
 import { dispatchTool, getToolMetadata } from '../services/voice/tools.js';
+import { requireHostControl, requestHasHostControl } from '../services/authGate.js';
 
 const router = Router();
 
@@ -82,13 +83,15 @@ const actionBodySchema = z.object({
   args: z.record(z.any()).optional().default({}),
 });
 
-router.post('/action/:id', asyncHandler(async (req, res) => {
+router.post('/action/:id', (req, res, next) => (
+  getToolMetadata(req.params.id)?.hostControl ? requireHostControl(req, res, next) : next()
+), asyncHandler(async (req, res) => {
   const id = String(req.params.id || '');
   if (!PALETTE_ACTION_IDS.has(id)) {
     throw new ServerError(`Unknown palette action "${id}"`, { status: 404 });
   }
   const { args } = validateRequest(actionBodySchema, req.body ?? {});
-  const result = await dispatchTool(id, args, { sideEffects: [] });
+  const result = await dispatchTool(id, args, { sideEffects: [], hasHostControl: () => requestHasHostControl(req) });
   res.json({ ok: result?.ok !== false, result });
 }));
 

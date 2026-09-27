@@ -51,12 +51,14 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           <FleetSourcesPill fleet={quota.fleet} />
           {/* Per-card refresh: every family's reading is its own multi-second
               CLI/TUI scrape, so re-reading one provider must not respawn all
-              of them. */}
+              of them. The button is a 44px touch target around the small
+              icon; its negative margins let it overhang the header's line box
+              and the card padding, so the compact phone card doesn't grow. */}
           <button
             type="button"
             onClick={() => onRefresh(quota.family)}
             disabled={refreshing || disabled}
-            className="text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center min-w-11 min-h-11 -my-2.5 -mr-2 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
             title={`Refresh ${quota.label} usage`}
             aria-label={`Refresh ${quota.label} usage`}
           >
@@ -159,9 +161,10 @@ function ProviderQuotaSection() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl sm:text-2xl font-bold text-white">Subscription Usage</h1>
         <button
+          type="button"
           onClick={() => load(true)}
           disabled={loading}
-          className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs sm:text-sm text-gray-400 hover:text-white disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 min-w-11 min-h-11 -my-2 px-2 sm:px-3 text-xs sm:text-sm text-gray-400 hover:text-white disabled:opacity-50"
           title="Refresh every provider's usage"
         >
           {/* `will-change-transform` promotes the icon to its own compositor
@@ -311,16 +314,16 @@ function CostReportTable({ report }) {
 
       {/* Desktop view (>= sm): Table layout */}
       <div className="hidden sm:block overflow-x-auto">
-        <table className="w-full text-sm min-w-[680px]">
+        <table className="w-full text-sm min-w-[680px]" aria-label="Provider token usage and costs">
           <thead>
-            <tr className="text-left text-xs text-gray-500 border-b border-port-border">
-              <th className="py-2 pr-2 font-medium">Provider / Model</th>
-              <th className="py-2 px-2 font-medium text-right">Sessions</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens In</th>
-              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
-              <th className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
-              <th className="py-2 px-2 font-medium text-right">Tokens Out</th>
-              <th className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
+            <tr className="text-left text-xs text-gray-400 border-b border-port-border">
+              <th scope="col" className="py-2 pr-2 font-medium">Provider / Model</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Sessions</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens In</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Read</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right hidden md:table-cell">Cache Write</th>
+              <th scope="col" className="py-2 px-2 font-medium text-right">Tokens Out</th>
+              <th scope="col" className="py-2 pl-2 font-medium text-right">Est. API Cost</th>
             </tr>
           </thead>
           <tbody>

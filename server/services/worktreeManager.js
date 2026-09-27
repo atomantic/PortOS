@@ -13,7 +13,7 @@ import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
-import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -45,7 +45,22 @@ const DIRT_PATHS_IN_WARNING = 5;
 // Dependencies are linked from the source checkout for ordinary ephemeral
 // worktrees. Dependency-update tasks opt out so package managers cannot mutate
 // the source checkout's installed tree through these links.
-const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'server/node_modules'];
+async function worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup = false } = {}) {
+  const entries = await readdir(worktreePath, { withFileTypes: true });
+  const children = await Promise.all(entries
+    .filter(entry => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules')
+    .map(async ({ name }) => {
+      // Cleanup must still find owned links after a package or its source is removed.
+      if (cleanup) return join(name, 'node_modules');
+      const sourceDirectory = await lstat(join(sourceWorkspace, name)).catch(() => null);
+      if (!sourceDirectory?.isDirectory()) return null;
+      if (existsSync(join(sourceWorkspace, name, '.git')) || existsSync(join(worktreePath, name, '.git'))) return null;
+      const manifest = await lstat(join(worktreePath, name, 'package.json')).catch(() => null);
+      if (!manifest?.isFile()) return null;
+      return join(name, 'node_modules');
+    }));
+  return ['node_modules', ...children.filter(Boolean)];
+}
 
 /**
  * Make installed dependencies available to a fresh worktree without copying
@@ -54,10 +69,11 @@ const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'serve
  * layout. Existing paths are preserved, including real directories and links.
  */
 export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
-  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath);
+  await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
-    const sourceExists = await lstat(sourcePath).then(() => true).catch(() => false);
+    const sourceExists = await stat(sourcePath).then(info => info.isDirectory()).catch(() => false);
     if (!sourceExists) return;
     const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
     if (targetExists) return;
@@ -70,7 +86,8 @@ export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
  * Real dependency directories and links managed by another tool stay intact.
  */
 export async function unlinkWorktreeDependencies(sourceWorkspace, worktreePath) {
-  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+  const dependencyPaths = await worktreeDependencyPaths(sourceWorkspace, worktreePath, { cleanup: true });
+  await Promise.all(dependencyPaths.map(async (relativePath) => {
     const sourcePath = join(sourceWorkspace, relativePath);
     const targetPath = join(worktreePath, relativePath);
     const targetStat = await lstat(targetPath).catch((err) => {
@@ -953,10 +970,11 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // by finalizeAgent before this cleanup runs. Ignore it for the preservation
   // decision, while still preserving the tree if any real change remains; the
   // eventual forced worktree removal discards it with the rest of the completed
-  // checkout. Both names — THIS run's `.agent-done-<agentId>` and the legacy
-  // shared one a pre-upgrade run may have left — and no other agent's.
+  // checkout. The run's canonical name and its bounded truncation-recovery
+  // name, plus the legacy shared one a pre-upgrade run may have left — and no
+  // other agent's.
   const dirt = classifyWorktreeDirt(dirtyFiles, {
-    ignoredPaths: [DONE_SENTINEL_NAME, doneSentinelName(agentId)]
+    ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)]
   });
   if (!dirt.clean && options.discardDirt) {
     // Throwaway posture: the caller has already established that nothing in this

@@ -329,7 +329,7 @@ describe('applyOnDemandConsent', () => {
       approvalRequired: true,
       autoApproved: false,
       approvalReason: 'safety-kind:publish',
-      metadata: { analysisType: 'release-check', approvalReason: 'safety-kind:publish' }
+      metadata: { analysisType: 'do-release', approvalReason: 'safety-kind:publish' }
     };
     expect(applyOnDemandConsent(task)).toBe(task);
     expect(task).toMatchObject({ approvalRequired: false, autoApproved: true });
@@ -342,7 +342,7 @@ describe('applyOnDemandConsent', () => {
       approvalRequired: true,
       autoApproved: false,
       approvalReason: 'config:requireApproval',
-      metadata: { analysisType: 'release-check', requireApproval: true }
+      metadata: { analysisType: 'do-release', requireApproval: true }
     };
     applyOnDemandConsent(task);
     expect(task).toMatchObject({
@@ -362,7 +362,7 @@ describe('isConfiguredApprovalRequired', () => {
   it('is true only for an explicit requireApproval: true', () => {
     expect(isConfiguredApprovalRequired({ requireApproval: true })).toBe(true);
     expect(isConfiguredApprovalRequired({ requireApproval: false })).toBe(false);
-    expect(isConfiguredApprovalRequired({ analysisType: 'release-check' })).toBe(false);
+    expect(isConfiguredApprovalRequired({ analysisType: 'do-release' })).toBe(false);
     expect(isConfiguredApprovalRequired(undefined)).toBe(false);
   });
 
@@ -1423,6 +1423,14 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     expect(sets.appsWithBlockedImprovement.get('app-1')).toBe('sys-t1');
   });
 
+  it('a task queued under a renamed type holds the current type slot', () => {
+    // A release-check task queued before migration 417 must dedupe against
+    // do-release, or the generator mints a duplicate next to it.
+    const sets = buildImprovementDedupSets([liTask({}, { analysisType: 'release-check' })]);
+    expect(sets.existingTaskTypes.has('app:app-1:do-release')).toBe(true);
+    expect(sets.existingTaskTypes.has('app:app-1:release-check')).toBe(false);
+  });
+
   it('a failure-blocked NON-improvement task never holds the per-app cap', () => {
     // Blocked tasks are not reaped, so a blocked investigation / review
     // follow-up (app-tagged but no derivable analysis type) holding the cap
@@ -2094,7 +2102,7 @@ describe('buildClaimWorkTask reviewer pin', () => {
     const { prompt } = await buildClaimWorkTask(app, { reviewers: ['provider:example-reviewer'] });
     expect(prompt).toContain('kind: "claim-review"');
     expect(prompt).toContain('toolFree: true');
-    expect(prompt).toContain('a provider without that profile returns REVIEWER_UNSUPPORTED before launch');
+    expect(prompt).toContain('Provider CLIs run in an isolated scratch directory with the diff inlined');
     expect(prompt).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');
     expect(prompt).toContain('an optional inconclusive result remains non-blocking');
   });

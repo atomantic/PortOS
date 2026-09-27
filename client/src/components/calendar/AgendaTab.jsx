@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
-import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 import EventDetail from './EventDetail';
 import { formatCount, formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
@@ -104,22 +103,35 @@ export default function AgendaTab({ accounts }) {
 
   useEffect(() => {
     fetchEvents();
-    const onSyncCompleted = () => fetchEvents();
-    socket.on('calendar:sync:completed', onSyncCompleted);
     return () => {
       ++requestGeneration.current;
       pending.current = false;
-      socket.off('calendar:sync:completed', onSyncCompleted);
     };
   }, [fetchEvents]);
 
+  const { sync } = useAccountSyncStatus({
+    eventPrefix: 'calendar',
+    label: 'Calendar sync',
+    successText: ({ newEvents }) => `Calendar sync complete: ${newEvents ?? 0} events`,
+    onRefresh: fetchEvents,
+    getAccountName: accountId => accounts.find(account => account.id === accountId)?.name,
+    isStandaloneCompletion: ({ calendarId }) => Boolean(calendarId),
+  });
+  const batchPending = useRef(false);
   const enabledAccounts = accounts.filter(a => a.enabled);
 
   const handleSync = async () => {
+    if (batchPending.current) return;
+    batchPending.current = true;
     setSyncing(true);
-    await Promise.allSettled(enabledAccounts.map(a => api.syncCalendarAccount(a.id)));
+    await Promise.allSettled(enabledAccounts.map(account => sync(account.id, () => {
+      if (account.type !== 'google-calendar') return api.syncCalendarAccount(account.id, { silent: true });
+      return account.syncMethod === 'google-api'
+        ? api.apiSyncGoogleCalendar(account.id, { silent: true })
+        : api.mcpSyncGoogleCalendar(account.id, { silent: true });
+    })));
+    batchPending.current = false;
     setSyncing(false);
-    toast.success('Calendar sync started');
   };
 
   const grouped = groupEventsByDay(events);

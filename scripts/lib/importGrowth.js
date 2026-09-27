@@ -245,6 +245,7 @@ export function compareImportGrowth(base, head, { limit = EXISTING_SUITE_GROWTH_
 }
 
 export function formatImportGrowthReport(report) {
+  if (report.skipped) return `Import growth not measured: ${report.skipped}.`;
   const lines = [
     PROXY_NOTE,
     `Base ${report.baseTestCount} suites, proxy total ${report.baseTotal}.`,
@@ -352,6 +353,19 @@ function defaultBaseRef(repoRoot) {
   const head = git(repoRoot, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
   if (head.status === 0 && head.stdout.trim()) return head.stdout.trim();
   return 'origin/main';
+}
+
+/**
+ * Why this run should not measure growth, or null when it should.
+ * The limit is sized for ONE change. A pull request into `release`, and the
+ * push that lands it, compare against the previous release, so they sum every
+ * pull request of the cycle — each of which already passed this guard against
+ * main. Measuring that aggregate fails a release on growth no change owns.
+ */
+export function importGrowthSkipReason(env = process.env) {
+  if (env.GITHUB_BASE_REF === 'release') return 'pull request into release aggregates a whole release cycle';
+  if (env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF_NAME === 'release') return 'push to release aggregates a whole release cycle';
+  return null;
 }
 
 /**
@@ -554,6 +568,8 @@ export function evaluateWorkingTreeImportGrowth({
   limit = EXISTING_SUITE_GROWTH_LIMIT,
   now = () => performance.now(),
 } = {}) {
+  const skipped = importGrowthSkipReason(env);
+  if (skipped) return { ok: true, skipped };
   const baseRef = resolveImportGrowthBase({ repoRoot, env });
   const headStart = now();
   const head = measureWorkingTree(repoRoot);

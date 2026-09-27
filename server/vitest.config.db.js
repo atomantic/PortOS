@@ -15,6 +15,8 @@ process.env.NODE_ENV = 'test';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  'services/voice/profiles.db.test.js',
+  'services/voice/studio.db.test.js',
   '../scripts/perf/collectionFixture.db.test.js',
   'services/appQuality.db.test.js',
   '**/db.test.js',

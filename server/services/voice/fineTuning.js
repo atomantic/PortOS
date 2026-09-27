@@ -6,12 +6,17 @@
  * checkpoint promotion.
  *
  * Training is machine-local, optional, and never assumes the last checkpoint is best.
+ * It starts only when the runner's probe names a real training adapter (the
+ * official Qwen single-speaker recipe on bf16 CUDA). The runner publishes a
+ * checkpoint only after it is sealed and reloads to render an audition, and
+ * reports the digest-bound revision promotion records. Adapter-less legacy
+ * checkpoints and checkpoints without that revision never promote.
  */
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, readJSONFileStrict } from '../../lib/fileUtils.js';
@@ -19,8 +24,10 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { closeJobAfterDelay } from '../../lib/sseUtils.js';
 import {
   DEFAULT_CLONE_MODEL,
+  QWEN3_TTS_MODELS_DIR,
   QWEN3_TTS_RUNNER_SCRIPT,
-  resolveQwen3Python,
+  SUPPORTED_QWEN3_MODELS,
+  getQwen3RuntimeStatus,
 } from './qwen3TtsRuntime.js';
 import {
   getVoiceProfileRequired,
@@ -48,6 +55,14 @@ const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 // the child before the caller returns, by the child's terminal handler. One
 // shape so whichever writes first leaves the same record.
 const CANCELLED_OUTCOME = Object.freeze({ status: 'cancelled', error: 'Cancelled by user' });
+
+// The official recipe fine-tunes the Base variants only.
+const TRAINABLE_MODELS = new Set(SUPPORTED_QWEN3_MODELS.map((model) => model.id).filter((id) => id.endsWith('-Base')));
+// Single-speaker recipe: one registered speaker name per checkpoint.
+const TRAINING_SPEAKER = 'portos_voice';
+const DATASET_MANIFEST_FILE = 'dataset.json';
+const AUDIO_FILE_RE = /\.(wav|mp3|flac|m4a)$/i;
+const STDERR_TAIL_BYTES = 8192;
 
 const jobRecordPath = (profileId, jobId) =>
   join(profileArtifactDirectory(profileId), 'fine-tune', jobId, JOB_RECORD_FILE);
@@ -139,7 +154,7 @@ export async function validateFineTuningDataset(profileId) {
   }
 
   const files = await readdir(sourceDir);
-  const audioFiles = files.filter((f) => /\.(wav|mp3|flac|m4a)$/i.test(f));
+  const audioFiles = files.filter((f) => AUDIO_FILE_RE.test(f));
   fileCount = audioFiles.length;
 
   if (fileCount === 0) {
@@ -167,6 +182,35 @@ export async function validateFineTuningDataset(profileId) {
 }
 
 /**
+ * Pair each transcribed source asset with its recording. The first pair is the
+ * speaker reference; the recipe recommends one reference for every sample.
+ */
+function buildTrainingDataset(profile, sourceDir) {
+  const samples = (profile.sourceAssets || [])
+    .filter((asset) => typeof asset.filename === 'string' && AUDIO_FILE_RE.test(asset.filename)
+      && asset.filename === asset.filename.split(/[\\/]/).pop()
+      && asset.transcript?.trim() && existsSync(join(sourceDir, asset.filename)))
+    .map((asset) => ({ audio: join(sourceDir, asset.filename), text: asset.transcript.trim() }));
+  if (samples.length === 0) {
+    throw new ServerError('Dataset not ready: no transcribed source recording is available', {
+      status: 400,
+      code: 'DATASET_NOT_READY',
+    });
+  }
+  return { speaker: TRAINING_SPEAKER, reference_audio: samples[0].audio, samples };
+}
+
+// A checkpoint frame is recorded only when the runner sealed and auditioned
+// it inside this job's own directory.
+const isPublishedCheckpoint = (event, outputDir) => (
+  typeof event.checkpoint === 'string'
+  && typeof event.checkpoint_path === 'string'
+  && dirname(event.checkpoint_path) === outputDir
+  && typeof event.model_revision === 'string'
+  && /@[0-9a-f]{40}\+sha256\.[0-9a-f]{64}$/.test(event.model_revision)
+);
+
+/**
  * Start an explicit fine-tuning job for a voice profile.
  */
 export async function startFineTuningJob({
@@ -183,19 +227,36 @@ export async function startFineTuningJob({
     });
   }
 
-  const python = await resolveQwen3Python();
-  if (!python) {
-    throw new ServerError('Python runtime is unavailable for fine-tuning', {
+  // Refuse before a job record or child exists. Inference readiness is not
+  // training support; only a runner that names a real adapter may train.
+  const runtime = await getQwen3RuntimeStatus();
+  if (!runtime.ok || !runtime.pythonPath || !runtime.trainingAdapter) {
+    throw new ServerError('Qwen3-TTS fine-tuning is unavailable: no supported training adapter is installed', {
       status: 503,
-      code: 'QWEN3_RUNTIME_UNAVAILABLE',
+      code: 'QWEN3_TRAINING_UNAVAILABLE',
+    });
+  }
+  if (!TRAINABLE_MODELS.has(baseModel)) {
+    throw new ServerError('Qwen3-TTS fine-tuning supports only the Base models', {
+      status: 400,
+      code: 'QWEN3_TRAINING_UNSUPPORTED_MODEL',
+    });
+  }
+  if (!runtime.models?.[baseModel]?.downloaded) {
+    throw new ServerError('Download and verify the Qwen3-TTS base model before fine-tuning', {
+      status: 409,
+      code: 'QWEN3_MODEL_NOT_INSTALLED',
     });
   }
 
   const profile = await getVoiceProfileRequired(profileId);
+  const dataset = buildTrainingDataset(profile, validation.sourceDir);
   const jobId = randomUUID();
   const profileDir = profileArtifactDirectory(profile.id);
   const outputDir = join(profileDir, 'fine-tune', jobId);
   await mkdir(outputDir, { recursive: true });
+  const datasetManifest = join(outputDir, DATASET_MANIFEST_FILE);
+  await atomicWrite(datasetManifest, dataset);
 
   const abortController = new AbortController();
   const jobState = {
@@ -206,11 +267,13 @@ export async function startFineTuningJob({
     status: 'running',
     progress: 0,
     step: 0,
-    totalSteps: epochs * 50,
+    // Optimizer steps depend on the dataset; the runner reports the total.
+    totalSteps: null,
     loss: null,
     checkpoints: [],
     outputDir,
     baseModel,
+    trainingAdapter: runtime.trainingAdapter,
     startedAt: new Date().toISOString(),
     completedAt: null,
     error: null,
@@ -224,16 +287,30 @@ export async function startFineTuningJob({
   const args = [
     QWEN3_TTS_RUNNER_SCRIPT,
     '--mode', 'fine-tune',
-    '--dataset-dir', validation.sourceDir,
+    '--models-dir', QWEN3_TTS_MODELS_DIR,
+    '--dataset-manifest', datasetManifest,
     '--output-dir', outputDir,
     '--epochs', String(epochs),
     '--checkpoint-interval', String(checkpointInterval),
     '--model-id', baseModel,
   ];
 
-  const child = spawn(python, args, safeChildProcessOptions({ signal: abortController.signal }));
+  const child = spawn(runtime.pythonPath, args, safeChildProcessOptions({ signal: abortController.signal }));
   // Keep a handle on the child so a future shutdown hook can reach in-flight training.
   jobState.child = child;
+
+  // Drain stderr so a long run cannot block on a full pipe; keep the tail for
+  // the runner's structured (path-free) failure message.
+  let stderrTail = '';
+  child.stderr?.on('data', (chunk) => { stderrTail = (stderrTail + chunk.toString()).slice(-STDERR_TAIL_BYTES); });
+  const runnerError = () => {
+    try {
+      const failure = JSON.parse(stderrTail.trim().split(/\r?\n/).at(-1));
+      return typeof failure?.error === 'string' ? failure.error : null;
+    } catch {
+      return null;
+    }
+  };
 
   let lineBuffer = '';
   child.stdout.on('data', (chunk) => {
@@ -251,13 +328,14 @@ export async function startFineTuningJob({
           jobState.totalSteps = event.total_steps || jobState.totalSteps;
           jobState.loss = event.loss;
           jobState.progress = event.progress;
-        } else if (event.stage === 'checkpoint') {
+        } else if (event.stage === 'checkpoint' && isPublishedCheckpoint(event, outputDir)) {
           jobState.checkpoints.push({
             id: event.checkpoint,
             step: event.step,
             checkpointPath: event.checkpoint_path,
             sampleWav: event.sample_wav,
             loss: event.loss,
+            modelRevision: event.model_revision,
             createdAt: new Date().toISOString(),
           });
           // Checkpoints are the promotable artifact, so index each one as it
@@ -295,7 +373,9 @@ export async function startFineTuningJob({
     // run is the likely cause, so name the signal rather than "code null".
     settle({
       status: 'failed',
-      error: code === null ? `Process terminated by signal ${signal}` : `Process exited with code ${code}`,
+      error: code === null
+        ? `Process terminated by signal ${signal}`
+        : (runnerError() || `Process exited with code ${code}`),
     });
   });
 
@@ -308,6 +388,7 @@ export async function startFineTuningJob({
     profileId: profile.id,
     status: jobState.status,
     totalSteps: jobState.totalSteps,
+    trainingAdapter: jobState.trainingAdapter,
     startedAt: jobState.startedAt,
   };
 }
@@ -351,6 +432,14 @@ export async function promoteCheckpoint({ profileId, jobId, checkpointId }) {
   if (!ckpt) {
     throw new ServerError(`Checkpoint not found: ${checkpointId}`, { status: 404, code: 'CHECKPOINT_NOT_FOUND' });
   }
+  // Earlier runners wrote text placeholders named .safetensors. A checkpoint
+  // without its producing adapter and sealed revision never becomes a voice.
+  if (!job.trainingAdapter || typeof ckpt.modelRevision !== 'string') {
+    throw new ServerError('Checkpoint was not produced by a supported training adapter', {
+      status: 409,
+      code: 'CHECKPOINT_UNVERIFIED',
+    });
+  }
 
   return promoteFineTunedProfile({
     profileId,
@@ -358,7 +447,7 @@ export async function promoteCheckpoint({ profileId, jobId, checkpointId }) {
     characterId: job.characterId,
     checkpointPath: ckpt.checkpointPath,
     checkpointId: ckpt.id,
-    modelRevision: `qwen3-tts:checkpoint-${ckpt.step}`,
+    modelRevision: ckpt.modelRevision,
     step: ckpt.step,
   });
 }

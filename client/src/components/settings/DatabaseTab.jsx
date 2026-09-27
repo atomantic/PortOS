@@ -1,13 +1,31 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
+import { Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes, formatCount } from '../../utils/formatters';
+import { formatBytes, formatCount, formatDurationMs } from '../../utils/formatters';
 import {
-  getDatabaseStatus, switchDatabase, setupNativeDatabase, exportDatabase, fixDatabase,
-  syncDatabase, startDatabase, stopDatabase, destroyDatabase
+  getDatabaseStatus, setupNativeDatabase, exportDatabase, fixDatabase,
+  syncDatabase, startDatabase, stopDatabase, destroyDatabase,
+  getDatabaseMaintenanceStatus, cutoverDatabase, recoverDatabaseCutover
 } from '../../services/api';
 import socket from '../../services/socket';
+import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '../../lib/safeStorage';
+
+// Session-scoped: the cutover restarts this server, so the tab reloads or
+// reconnects mid-operation. Persisting only for the tab's lifetime keeps a
+// stale marker from resurrecting a finished operation in a future session.
+const OWN_OPERATION_KEY = 'portos-database-cutover-operation';
+const CUTOVER_TOAST_ID = 'portos-database-cutover';
+
+const STAGE_LABELS = {
+  accepted: 'Preparing cutover',
+  quiescing: 'Draining writers',
+  exporting: 'Exporting source database',
+  importing: 'Importing into target',
+  committing: 'Committing configuration',
+  verifying: 'Restarting and verifying target',
+  verified: 'Verified',
+};
 
 function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction, setConfirmAction, actionInProgress, busy, exportDatabase: exportDb }) {
   const data = dbStatus?.[backend];
@@ -99,35 +117,6 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
         {/* Non-active backend actions */}
         {!isActive && (data?.installed || data?.configured) && (
           <>
-            {/* Migrate & switch to this backend */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'migrate',
-                label: `Migrate to ${displayLabel} and switch?`,
-                detail: `Exports data from ${activeLabel}, imports into ${displayLabel}, and makes ${displayLabel} the active backend.`,
-                action: () => runAction(`migrate-${backend}`, () => switchDatabase(backend, true), `Migrated to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`}
-            >
-              <ArrowRightLeft size={12} />
-              Migrate to {displayLabel}
-            </button>
-
-            {/* Switch without migration */}
-            <button
-              onClick={() => setConfirmAction({
-                type: 'switch',
-                label: `Switch to ${displayLabel} without migrating data?`,
-                action: () => runAction(`switch-${backend}`, () => switchDatabase(backend, false), `Switched to ${displayLabel}`)
-              })}
-              disabled={busy}
-              className={`${btnClass} bg-port-border hover:bg-port-border/70 text-white`}
-            >
-              <ArrowRightLeft size={12} />
-              Switch
-            </button>
-
             {/* Sync data from active into this backend */}
             <button
               onClick={() => setConfirmAction({
@@ -178,13 +167,118 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
   );
 }
 
+/**
+ * Coordinated offline backend cutover (#8811). The journal that backs
+ * `GET /database/maintenance/status` is durable on disk and outlives the
+ * server restart the cutover performs, so it is the single source of truth
+ * for "what happened" — never the accepted-request response, a reconnect, or
+ * a saved-mode change alone. Only a `fenced: false` read whose `lastCutover.id`
+ * matches the operation THIS tab started counts as a verified success.
+ */
+function MigrationPanel({ dbStatus, maintenance, maintenanceLoading, downtimeMs, verifiedOperationId, onMigrate, onRecover, recovering, busy, recoverDisabled }) {
+  if (maintenanceLoading && !maintenance) {
+    return <BrailleSpinner text="Checking migration status" />;
+  }
+  if (!maintenance) {
+    return (
+      <p className="text-sm text-gray-500">Unable to check migration status. Use Refresh above to retry.</p>
+    );
+  }
+
+  if (maintenance.fenced) {
+    const needsRecovery = maintenance.coordinator === 'exited';
+    const label = STAGE_LABELS[maintenance.stage] || maintenance.stage;
+    return (
+      <div className={`rounded-lg p-3 space-y-2 border ${needsRecovery ? 'bg-port-error/10 border-port-error/30' : 'bg-port-accent/10 border-port-accent/20'}`}>
+        <div className="flex items-center gap-2 text-sm">
+          {needsRecovery ? <AlertTriangle size={14} className="text-port-error" /> : <BrailleSpinner />}
+          <span className={needsRecovery ? 'text-port-error' : 'text-port-accent'}>
+            {maintenance.source} &rarr; {maintenance.target}: {label}
+            {needsRecovery && ' (interrupted)'}
+          </span>
+        </div>
+        {needsRecovery ? (
+          <>
+            <p className="text-xs text-gray-400">
+              The cutover worker exited before finishing. It is safe to resume — the operation resumes from its recorded
+              stage and will not reverse direction or repeat completed work.
+            </p>
+            <button
+              onClick={() => onRecover(maintenance)}
+              disabled={recoverDisabled}
+              className="flex items-center gap-2 px-3 py-1.5 bg-port-error/20 hover:bg-port-error/30 text-port-error text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+            >
+              {recovering ? <BrailleSpinner /> : <RotateCw size={14} />}
+              Resume cutover
+            </button>
+          </>
+        ) : (
+          <p className="text-xs text-gray-400">
+            PortOS will stop and restart itself to complete this. Other database actions are disabled until it finishes.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const target = dbStatus?.mode === 'docker' ? 'native' : 'docker';
+  const targetLabel = target === 'docker' ? 'Docker' : 'Native';
+  const sourceLabel = dbStatus?.mode === 'docker' ? 'Docker' : 'Native';
+
+  return (
+    <div className="space-y-2">
+      {maintenance.lastCutover && verifiedOperationId === maintenance.lastCutover.id && (
+        <div className="flex items-center gap-2 text-sm text-port-success bg-port-success/10 border border-port-success/20 rounded-lg px-3 py-2">
+          <CheckCircle2 size={14} />
+          <span>
+            Verified — now running on {maintenance.lastCutover.target}
+            {downtimeMs != null && ` (downtime ${formatDurationMs(downtimeMs)})`}
+          </span>
+        </div>
+      )}
+      <button
+        onClick={() => onMigrate({ source: dbStatus?.mode, target })}
+        disabled={busy || !dbStatus?.mode}
+        className="flex items-center gap-2 px-3 py-1.5 bg-port-border hover:bg-port-border/70 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+      >
+        <ArrowRightLeft size={14} />
+        Migrate {sourceLabel} &rarr; {targetLabel}
+      </button>
+      <p className="text-xs text-gray-500">
+        Stops PortOS, transfers data, commits the new backend, and restarts — verifying the restarted server before
+        reporting success. Expect brief downtime. Backups remain available regardless.
+      </p>
+    </div>
+  );
+}
+
 export function DatabaseTab() {
   const [dbStatus, setDbStatus] = useState(null);
   const [dbLoading, setDbLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState(null);
   const [progressMsg, setProgressMsg] = useState('');
   const [confirmAction, setConfirmAction] = useState(null);
+  const [maintenance, setMaintenance] = useState(null);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
+  const [recovering, setRecovering] = useState(false);
+  const [downtimeMs, setDowntimeMs] = useState(null);
+  // The operation id THIS tab has confirmed verified, if any. Pinned to an id
+  // (not a bare boolean) so a later CLI/other-tab cutover replacing
+  // `maintenance.lastCutover` with a DIFFERENT operation can't make this tab
+  // keep showing an earlier success as if it were that new operation's.
+  const [verifiedOperationId, setVerifiedOperationId] = useState(null);
   const progressTimer = useRef(null);
+  // The operation THIS tab started, if any: { id, source, target, acceptedAt }.
+  // Session-scoped because the server restarts mid-operation; a page reload in
+  // the same tab must still recognize its own cutover once it reconciles.
+  const ownOperationRef = useRef(safeReadJsonSession(OWN_OPERATION_KEY));
+  const wentDownAtRef = useRef(null);
+  // Bumped by every reconcile call AND by the optimistic snapshot handleMigrate
+  // / handleRecover set right after acceptance. A status read applies its
+  // result only if it is still the latest — otherwise a slow, stale GET
+  // (in flight before this tab accepted a cutover) could resolve afterward
+  // and overwrite the just-established fence with old idle data.
+  const reconcileSeqRef = useRef(0);
 
   const loadStatus = useCallback(() => {
     setDbLoading(true);
@@ -194,8 +288,53 @@ export function DatabaseTab() {
       .finally(() => setDbLoading(false));
   }, []);
 
+  const reconcileMaintenance = useCallback(() => {
+    const seq = ++reconcileSeqRef.current;
+    setMaintenanceLoading(true);
+    getDatabaseMaintenanceStatus()
+      .then((status) => {
+        if (seq !== reconcileSeqRef.current) return; // superseded — see reconcileSeqRef above
+        setMaintenance(status);
+        const own = ownOperationRef.current;
+        if (!own) return;
+        if (status.fenced && status.id !== own.id) {
+          // A different operation is fenced (e.g. started from the CLI) —
+          // this tab's own marker no longer applies.
+          ownOperationRef.current = null;
+          safeRemoveSession(OWN_OPERATION_KEY);
+          toast.dismiss(CUTOVER_TOAST_ID);
+          return;
+        }
+        if (!status.fenced) {
+          if (status.lastCutover?.id === own.id) {
+            const downtime = wentDownAtRef.current ? Date.now() - wentDownAtRef.current : null;
+            setDowntimeMs(downtime);
+            setVerifiedOperationId(own.id);
+            toast.success(`Database migrated to ${status.lastCutover.target}`, { id: CUTOVER_TOAST_ID });
+          } else {
+            // No matching verified record — cancelled or superseded. Never
+            // claim success for an accepted-but-unresolved operation.
+            toast.dismiss(CUTOVER_TOAST_ID);
+          }
+          ownOperationRef.current = null;
+          safeRemoveSession(OWN_OPERATION_KEY);
+          wentDownAtRef.current = null;
+        } else if (status.coordinator === 'exited') {
+          toast.error('Database cutover was interrupted and needs recovery.', { id: CUTOVER_TOAST_ID });
+        }
+      })
+      // A failed read (e.g. the server is mid-restart) tells us nothing new —
+      // keep whatever fence state we last confirmed rather than dropping to
+      // null, which would read as idle and re-enable competing actions while
+      // a cutover may still be in flight. Only a first-ever failed read has
+      // nothing to preserve, which correctly renders "unable to check".
+      .catch(() => { if (seq === reconcileSeqRef.current) setMaintenance((prev) => prev); })
+      .finally(() => { if (seq === reconcileSeqRef.current) setMaintenanceLoading(false); });
+  }, []);
+
   useEffect(() => {
     loadStatus();
+    reconcileMaintenance();
 
     const handleProgress = (data) => {
       clearTimeout(progressTimer.current);
@@ -209,12 +348,34 @@ export function DatabaseTab() {
       }
     };
 
+    // Push, don't poll: the cutover restarts this server, so there is no
+    // event stream during that gap. Socket.IO's own reconnect (not a
+    // client-driven interval) is the signal that it's safe to re-read the
+    // durable maintenance journal. Reconcile on EVERY connect, including the
+    // first — a page reloaded while the server was still down gets its
+    // mount-time HTTP reads refused, and this is the only later signal that
+    // it's back. A duplicate read right after a successful mount fetch is
+    // harmless.
+    const handleConnect = () => {
+      loadStatus();
+      reconcileMaintenance();
+    };
+    const handleDisconnect = () => {
+      if (ownOperationRef.current && wentDownAtRef.current == null) {
+        wentDownAtRef.current = Date.now();
+      }
+    };
+
     socket.on('database:progress', handleProgress);
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
     return () => {
       socket.off('database:progress', handleProgress);
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
       clearTimeout(progressTimer.current);
     };
-  }, [loadStatus]);
+  }, [loadStatus, reconcileMaintenance]);
 
   const runAction = useCallback((key, fn, successMsg) => {
     setConfirmAction(null);
@@ -228,7 +389,60 @@ export function DatabaseTab() {
       .finally(() => setActionInProgress(null));
   }, [loadStatus]);
 
-  const busy = actionInProgress != null;
+  const handleMigrate = useCallback((direction) => {
+    setConfirmAction(null);
+    setActionInProgress('cutover');
+    cutoverDatabase(direction)
+      .then((accepted) => {
+        const own = { id: accepted.id, source: accepted.source, target: accepted.target, acceptedAt: Date.now() };
+        ownOperationRef.current = own;
+        safeWriteJsonSession(OWN_OPERATION_KEY, own);
+        wentDownAtRef.current = null;
+        setDowntimeMs(null);
+        setVerifiedOperationId(null);
+        // Accepted only — never a success toast. PortOS is about to restart.
+        toast.loading(`Cutover accepted (${accepted.source} → ${accepted.target}) — PortOS will restart`, {
+          id: CUTOVER_TOAST_ID, duration: Infinity,
+        });
+        // Invalidate any in-flight status read from BEFORE acceptance — it
+        // could still resolve with stale idle data and clobber this snapshot.
+        reconcileSeqRef.current += 1;
+        setMaintenance({ id: accepted.id, stage: accepted.stage, source: accepted.source, target: accepted.target, coordinator: 'unclaimed', fenced: true });
+      })
+      .catch(() => { /* request() already surfaces API errors as a toast */ })
+      .finally(() => setActionInProgress(null));
+  }, []);
+
+  const handleRecover = useCallback((operation) => {
+    setRecovering(true);
+    recoverDatabaseCutover(operation.id)
+      .then(() => {
+        // Claim the same operation id — even a tab that only resumed it
+        // (rather than starting it) should see the eventual verified result.
+        const own = { id: operation.id, source: operation.source, target: operation.target, acceptedAt: Date.now() };
+        ownOperationRef.current = own;
+        safeWriteJsonSession(OWN_OPERATION_KEY, own);
+        wentDownAtRef.current = null;
+        setDowntimeMs(null);
+        setVerifiedOperationId(null);
+        toast.loading('Resuming interrupted cutover — PortOS will restart', { id: CUTOVER_TOAST_ID, duration: Infinity });
+        reconcileMaintenance();
+      })
+      .catch(() => { /* request() already surfaces API errors as a toast */ })
+      .finally(() => setRecovering(false));
+  }, [reconcileMaintenance]);
+
+  // Fail closed: an unknown maintenance read (never loaded yet, or a failed
+  // re-read with nothing previously confirmed — see reconcileMaintenance)
+  // counts as busy too, not just a confirmed fence. A CLI operator (or
+  // another tab) can hold a fence this browser has no session-storage record
+  // of, so "we don't know" must disable competing actions exactly like a
+  // confirmed one does — only a successful `fenced: false` read re-enables them.
+  const busy = actionInProgress != null || recovering || maintenance == null || Boolean(maintenance?.fenced);
+  // The Recover button lives INSIDE the fenced/interrupted state, so it must
+  // not be gated by `maintenance.fenced` — that would make it permanently
+  // disabled the one time it needs to be clickable.
+  const recoverDisabled = actionInProgress != null || recovering;
 
   return (
     <div className="space-y-4">
@@ -239,13 +453,13 @@ export function DatabaseTab() {
             <span className={`w-2 h-2 rounded-full ${dbStatus?.connected ? 'bg-port-success' : 'bg-port-error'}`} />
             <span className="text-sm text-gray-300">
               {dbStatus?.connected ? 'Connected' : dbStatus ? 'Disconnected' : ''}
-              {dbStatus?.memoryCount != null && ` \u2014 ${formatCount(dbStatus.memoryCount)} memories`}
-              {dbStatus?.dbBytes != null && ` \u2014 ${formatBytes(dbStatus.dbBytes)}`}
+              {dbStatus?.memoryCount != null && ` — ${formatCount(dbStatus.memoryCount)} memories`}
+              {dbStatus?.dbBytes != null && ` — ${formatBytes(dbStatus.dbBytes)}`}
               {dbStatus?.tableCount != null && ` (${dbStatus.tableCount} tables)`}
             </span>
           </div>
           <button
-            onClick={loadStatus}
+            onClick={() => { loadStatus(); reconcileMaintenance(); }}
             disabled={dbLoading}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
             title="Refresh status" aria-label="Refresh status"
@@ -275,6 +489,24 @@ export function DatabaseTab() {
                 exportDatabase={exportDatabase}
               />
             </div>
+
+            <MigrationPanel
+              dbStatus={dbStatus}
+              maintenance={maintenance}
+              maintenanceLoading={maintenanceLoading}
+              downtimeMs={downtimeMs}
+              verifiedOperationId={verifiedOperationId}
+              onMigrate={(direction) => setConfirmAction({
+                type: 'migrate',
+                label: `Migrate from ${direction.source} to ${direction.target}?`,
+                detail: 'PortOS stops itself, transfers the data, and restarts on the new backend. This causes brief downtime and cannot be cancelled once the transfer starts.',
+                action: () => handleMigrate(direction),
+              })}
+              onRecover={handleRecover}
+              recovering={recovering}
+              busy={busy}
+              recoverDisabled={recoverDisabled}
+            />
 
             {/* Progress indicator */}
             {progressMsg && (

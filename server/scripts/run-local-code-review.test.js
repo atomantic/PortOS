@@ -27,12 +27,12 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   const harness = join(root, 'harness.cjs');
   await writeFile(join(root, 'context.txt'), 'example surrounding source');
   await writeFile(harness, `
-    const { readFileSync } = require('node:fs');
+    const { existsSync } = require('node:fs');
     process.stdin.resume();
     process.stdin.on('end', () => {
       const args = process.argv.slice(2);
-      const context = readFileSync('context.txt', 'utf8');
-      if (context !== 'example surrounding source' || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
+      // No reviewer mode means ordinary argv, so it must run outside the caller's checkout.
+      if (existsSync('context.txt') || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
       process.stdout.write('NO FINDINGS');
     });
   `);
@@ -67,17 +67,24 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   };
   const results = await (async () => {
     const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
-    return [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview({ backend: 'provider:example-cli', model: 'review-model', diff: request.diff })];
+    const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
+    return [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
+      await runReview({ ...cliRequest, kind: 'claim-review' }),
+      await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] })];
   })().finally(async () => {
     await new Promise(resolve => api.close(resolve));
     await rm(root, { recursive: true, force: true });
   });
-  expect(results).toHaveLength(3);
-  // #6338: a CLI reviewer is granted only through a maintained no-tool
-  // (read-only) recipe. A generic harness has none, so the bridge refuses it
-  // instead of running the vendor's unrestricted argv.
-  expect(results[2].code).not.toBe(0);
-  expect(results[2].stderr).toMatch(/REVIEWER_UNSUPPORTED/);
+  expect(results).toHaveLength(5);
+  // A generic harness has no enforced reviewer mode: it still reviews code,
+  // ordinary or claim, confined to a scratch cwd (the harness fails if it can
+  // see the caller's checkout), but public-comment screening refuses it.
+  for (const result of [results[2], results[3]]) {
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', findings: 'NO FINDINGS' });
+  }
+  expect(results[4].code).not.toBe(0);
+  expect(results[4].stderr).toMatch(/REVIEWER_UNSUPPORTED/);
   for (const [index, model] of ['review-model', 'default-model'].entries()) {
     const result = results[index];
     expect(result.code, result.stderr).toBe(0);

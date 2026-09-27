@@ -1,3 +1,4 @@
+import '../services/databaseBootFence.js';
 /**
  * CoS Agent Runner - Standalone PM2 Process
  *
@@ -9,6 +10,7 @@
  */
 
 import express from 'express';
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 import { spawn } from '../lib/childProcess.js';
 import * as pty from 'node-pty';
 import { join, basename } from 'path';
@@ -16,7 +18,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS, watchForFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -39,6 +41,7 @@ import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
+import { createAgentSentinelAccess } from '../services/agentSentinelWatcher.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 
 // Process-level safety net (defense-in-depth, see issue #1878). The main server
@@ -200,6 +203,7 @@ app.get('/agents', async (req, res) => {
  * restarts before the TUI exits.
  */
 app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -283,6 +287,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   // transient runner refusal and sent the whole fleet into a retry storm. Name
   // the actual fault instead, and let the caller block on the unrecoverable ones.
   let tuiProcess;
+  assertDatabaseAdmission();
   try {
     tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
       name: 'xterm-256color',
@@ -322,6 +327,13 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     exited: false,
   };
   activeAgents.set(agentId, agent);
+  const sentinelAccess = createAgentSentinelAccess({
+    workspacePath: cwd,
+    agentId,
+    sentinelPath: doneSentinelPath,
+    startedAt,
+    getActiveAgentIds: () => activeAgents.keys(),
+  });
 
   tuiProcess.onData((data) => {
     const current = activeAgents.get(agentId);
@@ -339,26 +351,56 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   })));
 
   if (doneSentinelPath) {
-    agent.doneWatcher = watchForFile(doneSentinelPath, () => {
+    const handleSentinel = () => {
       agent.sentinelWork = lifecycle.trackWork(async () => {
         const current = activeAgents.get(agentId);
         if (!current) return;
-        current.completedBySentinel = true;
-        const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
+        const sentinelSourcePath = sentinelAccess.resolvedPath?.();
+        let sentinelReadSucceeded = true;
+        const contents = await sentinelAccess.read().catch(err => {
+          sentinelReadSucceeded = false;
           console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
           return '';
         });
-        const { summary } = parseSentinelPayload(contents);
+        let sentinelValidated = sentinelReadSucceeded;
+        let validatedContents = contents;
+        if (sentinelReadSucceeded) {
+          sentinelValidated = await sentinelAccess.promote(contents).catch(err => {
+            console.error(`❌ TUI agent ${agentId} canonical sentinel promotion failed: ${err.message}`);
+            return false;
+          });
+          if (sentinelValidated && sentinelSourcePath && sentinelSourcePath !== sentinelAccess.path) {
+            let canonicalReadSucceeded = true;
+            validatedContents = await sentinelAccess.read().catch(err => {
+              canonicalReadSucceeded = false;
+              console.error(`❌ TUI agent ${agentId} canonical sentinel read failed: ${err.message}`);
+              return '';
+            });
+            sentinelValidated = canonicalReadSucceeded;
+          }
+        }
+        if (!sentinelValidated) {
+          if (activeAgents.get(agentId) === current) {
+            current.doneWatcher?.();
+            current.doneWatcher = sentinelAccess.watch(handleSentinel);
+          }
+          return;
+        }
+        current.completedBySentinel = true;
+        const { summary } = parseSentinelPayload(validatedContents);
         if (summary) {
+          current.completionOutput = `${SENTINEL_COMPLETION_MARKER}\n${summary}\n`;
           emitToServer('agent:output', {
             agentId,
             text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
           });
         }
         if (!current.exited) current.process.kill();
+        await sentinelAccess.cleanup();
       });
       return agent.sentinelWork;
-    });
+    };
+    agent.doneWatcher = sentinelAccess.watch(handleSentinel);
   }
 
   await withState((state) => {
@@ -406,6 +448,7 @@ app.get('/agents/:agentId/stats', async (req, res) => {
  * Spawn a new agent
  */
 app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
+  assertDatabaseAdmission();
   const {
     agentId,
     taskId,
@@ -490,6 +533,7 @@ app.post('/spawn', lifecycle.spawnRoute(async (req, res) => {
   //     and the trailing --print marker swallows the next flag as its "prompt".
   //   - Grok on Windows: `/dev/stdin` rewritten to a temp file → useStdin=false.
   //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
+  assertDatabaseAdmission();
   const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt, { cwd });
   const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, deliveredArgs, childEnv);
 

@@ -44,6 +44,10 @@ const loomRunSnapshot = (production) => Object.freeze({
 });
 
 export const SOCKET_EVENT_CONTRACTS = Object.freeze({
+  'voice-studio:changed': {
+    direction: 'server-to-client', summary: 'Voice library or runtime setup changed; refetch authenticated state.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'fleet-host:subscribe': {
     direction: 'client-to-server', summary: 'Observe local fleet host readiness while this operator socket is subscribed.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -141,6 +145,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'cos:scheduler:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate upcoming tasks after scheduler registration, cancellation or execution.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'cos:storage:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate CoS recording maintenance progress and policy.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   'cos:agents:changed': {

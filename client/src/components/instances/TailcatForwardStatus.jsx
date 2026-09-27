@@ -6,6 +6,7 @@
  * Never receives a full tc… capability — only the redacted listing fields.
  */
 
+import { useId, useState } from 'react';
 import { RefreshCw, Trash2, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import { DEFAULT_TAILCAT_REMOTE_PORT } from '../../lib/ports';
 import Pill from '../ui/Pill';
@@ -34,6 +35,10 @@ export function TailcatForwardStatus({
   compact = false,
   showForget = true,
 }) {
+  const addressId = useId();
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [replacementAddress, setReplacementAddress] = useState('');
+
   if (!forward) {
     return (
       <div className="mt-2 text-[11px] text-gray-500 leading-snug">
@@ -95,6 +100,33 @@ export function TailcatForwardStatus({
           </div>
         )}
       </div>
+      {onRetry && (
+        <div className="mt-2 text-[11px]">
+          <button type="button" disabled={busy} className="text-port-accent underline disabled:opacity-50"
+            onClick={() => { setEditingAddress(!editingAddress); setReplacementAddress(''); }}>
+            {editingAddress ? 'Cancel address replacement' : 'Replace remote address'}
+          </button>
+          {editingAddress && (
+            <form className="mt-2 space-y-2" onSubmit={async (event) => {
+              event.preventDefault();
+              const address = replacementAddress.trim();
+              if (!address || busy) return;
+              setReplacementAddress('');
+              setEditingAddress(false);
+              await onRetry(undefined, address);
+            }}>
+              <label htmlFor={addressId} className="block text-gray-400">New remote Tailcat address</label>
+              <input id={addressId} type="password" autoComplete="off" spellCheck={false}
+                value={replacementAddress} onChange={event => setReplacementAddress(event.target.value)}
+                disabled={busy} required minLength={24} maxLength={2048}
+                className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1" />
+              <p className="text-gray-500">Paste the address copied from the remote after a relay change. Keeps this peer and its pairing settings.</p>
+              <button type="submit" disabled={busy || !replacementAddress.trim()}
+                className="border border-port-border rounded px-2 py-1 disabled:opacity-50">Save address &amp; retry</button>
+            </form>
+          )}
+        </div>
+      )}
       {failure && (
         <p className="text-[11px] text-port-error mt-2 leading-snug break-words">
           {failure.message}

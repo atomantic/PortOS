@@ -31,10 +31,13 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
+import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
+import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
+import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
@@ -90,6 +93,7 @@ import { appendTaskDataInputs, resolveTaskDataInputs } from './taskDataInputs.js
 import { ensurePrReviewerPipeline, runPrReviewerSecurityPreflight, scopeDescriptionToPullRequest } from './prReviewerPipeline.js';
 import {
   applyPerpetualDrainCap,
+  applyReleaseOptions,
   buildImprovementTaskDescription,
   buildPlanConstraintBlock,
   resolveBranchReconcileBlock,
@@ -785,7 +789,9 @@ export async function resolveAutonomyBudget(state, runningAgentEntries) {
   return { cosAutonomyMode, autonomousActionsRemaining };
 }
 
-const analysisTypeForTask = (task) => task.metadata?.analysisType || task.metadata?.selfImprovementType;
+// Tasks queued before a task-type rename (TASK_TYPE_RENAMES) resolve to the
+// current schedule key, or they would read as disabled and never drain.
+const analysisTypeForTask = (task) => currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
 
 function isDisabledAnalysisType(task, taskSchedule) {
   const analysisType = analysisTypeForTask(task);
@@ -1420,9 +1426,9 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
     const isActive = task.status === 'pending' || task.status === 'in_progress';
     const isBlocked = task.status === 'blocked';
     const isFailureBlocked = isBlocked && task.metadata?.blockedCategory !== 'user-terminated';
-    const analysisType = task.metadata?.analysisType ||
+    const analysisType = currentTaskTypeName(task.metadata?.analysisType ||
       task.metadata?.selfImprovementType ||
-      task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1];
+      task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1]);
     const appId = task.metadata?.app;
     if ((isActive || isBlocked) && analysisType) {
       const taskKey = appId ? `app:${appId}:${analysisType}` : analysisType;
@@ -1717,7 +1723,7 @@ async function resolveConfidenceApproval(state, taskTypeKey, logLabel, metadata 
  * APPROVAL tasks).
  *
  * `metadata.requireApproval` is the escape hatch: a type the user marked
- * "always ask" (e.g. release-check when they want to review the merge)
+ * "always ask" (e.g. do-release when they want to review the merge)
  * keeps the hold even on Run Now.
  */
 export function applyOnDemandConsent(task) {
@@ -1818,6 +1824,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   // user-action-review: render the delivery posture the operator chose
   // (fileIssues on = tracker issues, off = queued CoS tasks).
   description = applyUserActionDeliveryMode(description, taskType, metadata);
+  description = applyReleaseOptions(description, taskType, metadata);
   description = await applyUserActionDetectorSection(description, taskType);
 
   const repoSync = await resolveRepoSyncBlock(null, taskType, metadata);
@@ -1834,7 +1841,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   stampApprovalReason(metadata, approval);
 
   // Self-improvement tasks do not pass through the managed-app prompt renderer,
-  // but release-check still names the install's configured reviewers explicitly.
+  // but do-release still names the install's configured reviewers explicitly.
   // Resolve that token here so the global/on-demand path gets the same reviewer
   // contract and local-review procedure as an app-scoped release task.
   if (description.includes('{reviewers}')) {
@@ -2359,7 +2366,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
     actionableCount: parkInfo?.parkActionableCount ?? null,
-    counts: parkInfo?.parkCounts || null
+    counts: parkInfo?.parkCounts || null,
+    skipCauses: parkInfo?.parkSkipCauses || null
   });
 }
 
@@ -2587,9 +2595,15 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const counts = detection.total != null
     ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
     : null;
+  // Per-cause skip attribution for the same question at one level deeper: not
+  // just "78 filtered" but "49 needs-input, 17 blocked, …". Only the claim
+  // detectors report it; every other park shape keeps the field absent.
+  // parkPerpetual's own log line renders the summary (it is the single choke
+  // point every park flows through), so this one stays bare.
+  const skipCauses = detection.skipCauses ?? null;
   // Terminal park — parkPerpetual zeroes the dispatch budget in the same write, so
   // the next drain window starts fresh instead of capping early on this one's spend.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, signature: null });
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, skipCauses, signature: null });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
   return { skip: true };
 }
@@ -2619,8 +2633,7 @@ export function applyUserActionDeliveryMode(promptTemplate, taskType, metadata) 
   const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
   const block = resolveUserActionDeliveryBlock(taskType, metadata);
   if (!block) return prompt;
-  if (prompt.includes('{userActionDelivery}')) return prompt.replace(/\{userActionDelivery\}/g, () => block);
-  return `## Delivery mode\n\n${block}\n\n---\n\n${prompt}`;
+  return renderOrPrependSection(prompt, '{userActionDelivery}', 'Delivery mode', block);
 }
 
 /**
@@ -2636,8 +2649,7 @@ export async function applyUserActionDetectorSection(promptTemplate, taskType) {
     return [];
   });
   const block = formatUserActionDetectorBlock(findings) || 'No leftover-branch findings.';
-  if (prompt.includes('{userActionDetectors}')) return prompt.replace(/\{userActionDetectors\}/g, () => block);
-  return `## Detectors\n\n${block}\n\n---\n\n${prompt}`;
+  return renderOrPrependSection(prompt, '{userActionDetectors}', 'Detectors', block);
 }
 
 
@@ -2948,7 +2960,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
     : '';
   const baseDescription = await buildImprovementTaskDescription({
-    promptTemplate: applyAuditModeWrapper(promptTemplate, modeInstructions),
+    promptTemplate: applyAuditModeWrapper(applyReleaseOptions(promptTemplate, promptTaskType, metadata), modeInstructions),
     app, promptTaskType, metadata,
     blocks: {
       referenceData: referenceDataBlock,
@@ -2963,7 +2975,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
       planConstraint: planConstraintBlock
     }
   });
-  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app, taskMetadata: metadata, taskType: promptTaskType });
+  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
+    app, taskMetadata: metadata, taskType: promptTaskType,
+    trustedPullRequestData: prDataBlock,
+  });
   const description = scopeDescriptionToPullRequest(
     appendTaskDataInputs(baseDescription, taskDataInputs),
     metadata

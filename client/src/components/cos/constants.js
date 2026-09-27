@@ -428,6 +428,17 @@ export const BRANCHES_PER_AGENT_OPTIONS = [1, 2, 3, 4, 5, 6].map((value) => ({
   description: `Give each branch-reconcile coordinator up to ${value} prioritized branch${value === 1 ? '' : 'es'} per run`
 }));
 
+// do-release options (taskMetadata booleans, each ON unless explicitly false).
+// Fields mirror RELEASE_OPTION_KEYS in server/lib/cosValidation.js — the
+// server drops any key outside that list.
+export const RELEASE_OPTIONS_TASK_TYPES = new Set(['do-release']);
+export const RELEASE_OPTIONS = [
+  { field: 'finishInFlight', label: 'Finish in-flight work', description: 'Merge or close open PRs and reconcile lingering branches that no running agent owns before releasing' },
+  { field: 'mergeDependencyUpdates', label: 'Merge dependency updates', description: 'Merge open Dependabot/Renovate PRs, fixing any that break the build' },
+  { field: 'resolveBlockers', label: 'Resolve blockers', description: 'Fix failing tests, red CI, and blocking bugs (delegating to a sub-agent) instead of stopping to report them' },
+  { field: 'autoDecide', label: 'Make decisions', description: 'Make routine design and preference decisions and list them for your review, instead of stopping to ask' },
+];
+
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)
 // hasOverride: whether there's an explicit per-app override set

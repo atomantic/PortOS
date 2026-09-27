@@ -28,7 +28,9 @@ const envVar = (key, fallback) => process.env[key] ?? envFile[key] ?? fallback;
 const PG_USER = envVar('PGUSER', 'portos');
 const PG_DATABASE = envVar('PGDATABASE', 'portos');
 const PG_PASSWORD = envVar('PGPASSWORD', 'portos');
-const PG_PORT_NATIVE = parseNativePort(envVar('PGPORT', 5432));
+// A managed parent exports PGPORT for its active pool (possibly Docker), and
+// preserves the native identity separately. Ordinary shells keep legacy PGPORT.
+const PG_PORT_NATIVE = parseNativePort(process.env.PORTOS_NATIVE_PGPORT || envVar('PGPORT', 5432));
 // Docker host-port mapping (docker-compose.yml maps `${PGPORT_DOCKER:-5561}:5432`).
 // Resolve it the same tolerant way so the "ready on port N" log can't lie when a
 // user overrides PGPORT_DOCKER — a misleading success port is exactly the kind of

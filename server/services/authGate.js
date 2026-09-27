@@ -13,7 +13,9 @@ import {
   isPeerBasicBootstrapRequest,
 } from '../lib/apiAccessPolicy.js';
 import { sendErrorResponse, ServerError } from '../lib/errorHandler.js';
-import { isHostControlRoute } from '../lib/hostControlRoutes.js';
+import {
+  changedHostControlSettingsPaths, hostControlBodyKeys, hostControlSettingsPathsIn, isHostControlRoute,
+} from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
 
@@ -249,9 +251,24 @@ const hasHostControl = (auth, localConnection) =>
 
 export const HOST_CONTROL_FORBIDDEN_MESSAGE = 'Host control requires an operator session, or a local connection when no password is set. Set an instance password to use it remotely.';
 
+// Server-derived HTTP authority; never read caller-provided body fields.
+export const requestHasHostControl = (req) => hasHostControl(
+  req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers),
+);
+
+// Re-check at tool dispatch, after any STT/LLM wait. A handshake/session that
+// was valid when a turn started is not a durable grant to execute later.
+export const socketHasCurrentHostControl = async (socket) => {
+  if (socket.disconnected === true) return false;
+  if (await isAuthEnabled()) {
+    return await verifyRequestSession({ headers: socket.handshake?.headers || {} }) === true;
+  }
+  return socketHasHostControl(socket);
+};
+
 // Mount after authGate: missing context fails closed.
 export const requireHostControl = (req, res, next) => {
-  if (hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  if (requestHasHostControl(req)) return next();
   sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));
@@ -264,6 +281,21 @@ export const requireHostControl = (req, res, next) => {
 export const hostControlRouteGate = (req, res, next) => (
   isHostControlRoute(req.method, req.path) ? requireHostControl(req, res, next) : next()
 );
+
+// The body-slice twin, mounted right after the JSON parser: the two
+// polymorphic policy stores (PUT /api/settings, PUT /api/cos/config) are
+// gated only when the body names a key that changes execution policy, or
+// changes the stored value of a nested settings key that picks an executable
+// (HOST_CONTROL_SETTINGS_PATHS). The settings read is skipped when the caller
+// already holds host control, since the answer could not change.
+export const hostControlBodyGate = async (req, res, next) => {
+  if (hostControlBodyKeys(req.method, req.path, req.body).length > 0) return requireHostControl(req, res, next);
+  const named = hostControlSettingsPathsIn(req.method, req.path, req.body);
+  if (named.length === 0
+    || hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  const changed = changedHostControlSettingsPaths(named, req.body, await getSettings());
+  return changed.length > 0 ? requireHostControl(req, res, next) : next();
+};
 
 // The socket twin of requireHostControl on a password-free install, for the
 // per-event re-check in socket.js (with a password set, that re-check already

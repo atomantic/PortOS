@@ -312,3 +312,16 @@ describe('InboxTab triage tab bar (#7244)', () => {
     expect(allTab).toHaveAttribute('aria-selected', 'true');
   });
 });
+
+it('retains the requested inbox row and displays the actionable identity conflict', async () => {
+  const row = { id: 'requested', accountId: neverSyncedAccount.id, subject: 'Keep this message', from: { name: 'Example Sender' }, date: HOUR_AGO, source: 'gmail' };
+  api.getMessageInbox.mockResolvedValue({ messages: [row], total: 1 });
+  api.executeMessageAction.mockRejectedValueOnce(Object.assign(new Error('Sync the account and retry.'), { status: 409, code: 'MESSAGE_IDENTITY_CONFLICT' }));
+  renderInbox([neverSyncedAccount]);
+  expect(await screen.findByText(row.subject)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Sync the account and retry.'));
+  expect(api.executeMessageAction).toHaveBeenCalledWith(row.accountId, row.id, 'delete', { silent: true });
+  expect(screen.getByText(row.subject)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Delete', exact: true })).not.toBeDisabled();
+});

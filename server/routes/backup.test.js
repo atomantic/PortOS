@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { PassThrough } from 'stream';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
@@ -20,9 +21,22 @@ vi.mock('../services/backup.js', () => ({
 }));
 
 vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn()
+  getSettings: vi.fn(),
+  settingsEvents: new EventEmitter()
 }));
 
+vi.mock('../services/auth.js', () => ({
+  isAuthEnabled: vi.fn(),
+  verifyPassword: vi.fn(),
+  verifyRequestSession: vi.fn(),
+}));
+vi.mock('../services/instanceIdentity.js', () => ({ loadData: vi.fn() }));
+
+import { isAuthEnabled, verifyPassword, verifyRequestSession } from '../services/auth.js';
+import { loadData } from '../services/instanceIdentity.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
+import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
 import backupRoutes from './backup.js';
@@ -496,6 +510,81 @@ describe('backup routes', () => {
         .send({ snapshotId: 'snap-1', dryRun: false });
       expect(res.status).toBe(200);
       expect(res.body).toEqual(serviceResult);
+    });
+  });
+});
+
+// These requests exercise the production authorization chain before the real
+// router. Mocking restore services prevents all rsync/psql, maintenance and
+// settings-reload effects, and proves denied requests never reach those sinks.
+describe('backup restore operator authority (#8772)', () => {
+  const peer = { id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'synthetic-pair-secret-for-tests-only' };
+  const buildGuardedApp = (remoteAddress) => {
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use('/api/backup', backupRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isAuthEnabled.mockResolvedValue(false);
+    verifyRequestSession.mockImplementation(async (req) => req.headers.authorization === 'Bearer example-operator');
+    verifyPassword.mockResolvedValue(false);
+    loadData.mockResolvedValue({ peers: [peer] });
+    getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+    backup.restoreSnapshot.mockResolvedValue({ success: true });
+    backup.restorePostgres.mockResolvedValue({ success: true });
+  });
+
+  describe.each([
+    ['restore', 'restoreSnapshot'],
+    ['restore-db', 'restorePostgres'],
+  ])('%s', (route, service) => {
+    it.each([true, false])('rejects unauthorized callers before restore, dryRun=%s', async (dryRun) => {
+      const cases = [
+        { address: '192.0.2.10', headers: {}, enabled: false, status: 403, code: 'HOST_CONTROL_FORBIDDEN' },
+        { address: '192.0.2.10', headers: { 'X-Forwarded-For': '127.0.0.1', [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '127.0.0.1' }, enabled: false, status: 403, code: 'HOST_CONTROL_FORBIDDEN' },
+        { address: '127.0.0.1', headers: { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '192.0.2.10', 'X-Forwarded-For': '127.0.0.1' }, enabled: false, status: 403, code: 'HOST_CONTROL_FORBIDDEN' },
+        { address: '127.0.0.1', headers: {}, enabled: true, status: 401, code: 'AUTH_REQUIRED' },
+        { address: '192.0.2.10', headers: { [PEER_AUTH_HEADER]: derivePeerAuthToken(peer.syncSecret, peer.instanceId), [PEER_INSTANCE_HEADER]: peer.instanceId }, enabled: true, status: 403, code: 'PEER_SCOPE_FORBIDDEN' },
+        { address: '127.0.0.1', headers: { Authorization: 'Basic ' + Buffer.from(':example-password').toString('base64') }, enabled: true, status: 403, code: 'HOST_CONTROL_FORBIDDEN', basic: true },
+      ];
+      for (const scenario of cases) {
+        isAuthEnabled.mockResolvedValue(scenario.enabled);
+        verifyPassword.mockResolvedValue(scenario.basic === true);
+        const pending = request(buildGuardedApp(scenario.address)).post('/api/backup/' + route);
+        for (const [header, value] of Object.entries(scenario.headers)) pending.set(header, value);
+        const res = await pending.send({ snapshotId: 'snap-1', dryRun });
+        expect(res.status).toBe(scenario.status);
+        expect(res.body.code).toBe(scenario.code);
+        expect(backup.restoreSnapshot).not.toHaveBeenCalled();
+        expect(backup.restorePostgres).not.toHaveBeenCalled();
+      }
+    });
+
+    it.each([undefined, true, false])('preserves operator restores and dry-run defaults, dryRun=%s', async (dryRun) => {
+      for (const scenario of [
+        { address: '127.0.0.1', headers: {}, enabled: false },
+        { address: '127.0.0.1', headers: { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::1' }, enabled: false },
+        { address: '192.0.2.10', headers: { Authorization: 'Bearer example-operator' }, enabled: true },
+      ]) {
+        isAuthEnabled.mockResolvedValue(scenario.enabled);
+        const pending = request(buildGuardedApp(scenario.address)).post('/api/backup/' + route);
+        for (const [header, value] of Object.entries(scenario.headers)) pending.set(header, value);
+        const res = await pending.send({ snapshotId: 'snap-1', dryRun });
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ success: true });
+        expect(backup[service]).toHaveBeenLastCalledWith('/example-backups', 'snap-1',
+          expect.objectContaining({ dryRun: dryRun ?? true }));
+      }
     });
   });
 });

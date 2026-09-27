@@ -40,13 +40,13 @@ export default {
       if (!task) continue;
 
       const currentVersion = task.promptVersion || 1;
-      if (task.promptCustomized || currentVersion >= PROMPT_VERSIONS['release-check']) continue;
+      if (task.promptCustomized || currentVersion >= PROMPT_VERSIONS['do-release']) continue;
 
-      task.prompt = DEFAULT_TASK_PROMPTS['release-check'];
-      task.promptVersion = PROMPT_VERSIONS['release-check'];
+      task.prompt = DEFAULT_TASK_PROMPTS['do-release'];
+      task.promptVersion = PROMPT_VERSIONS['do-release'];
       await writeFile(fullPath, `${JSON.stringify(schedule, null, 2)}\n`);
       updatedCount += 1;
-      console.log(`📝 ${relPath}: upgraded release-check prompt v${currentVersion} → v${PROMPT_VERSIONS['release-check']}`);
+      console.log(`📝 ${relPath}: upgraded release-check prompt v${currentVersion} → v${PROMPT_VERSIONS['do-release']}`);
     }
     return { updated: updatedCount };
   },

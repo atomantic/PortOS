@@ -45,7 +45,7 @@ function queueBacklog(bucketId) {
     backlogQueues.set(bucketId, { running, queued: null });
     return running;
   }
-  const queued = slot.running.then(() => {
+  const queued = slot.running.catch(() => {}).then(() => {
     // Promote the follow-up before scanning. Events arriving during it need
     // another trailing scan, since their manifest may already have been read.
     slot.running = queued;
@@ -86,26 +86,26 @@ export async function attachWatcher(bucketId) {
   // /setTimeout/setInterval callbacks" rule (chokidar events fire outside the
   // request lifecycle, no Express middleware to bubble the throw to).
   w.on('add', async (path) => {
-    if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
-    const file = basename(path);
-    if (!file.endsWith('.json')) return;
     try {
+      if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
+      const file = basename(path);
+      if (!file.endsWith('.json')) return;
       await processManifest(bucketId, file);
     } catch (err) {
-      console.error(`❌ sharing.watcher: processManifest threw for ${file}: ${err?.message || err}`);
+      console.error(`❌ sharing.watcher: processManifest threw for ${basename(path)}: ${err?.message || err}`);
     }
   });
   w.on('change', async (path) => {
-    if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
-    // A manifest *changing* after first write is unusual (atomicWrite
-    // produces a stable file), but it can happen if a peer's sync app
-    // does a delete-then-write. Re-process — cursor will dedup.
-    const file = basename(path);
-    if (!file.endsWith('.json')) return;
     try {
+      if (isBundleSync(path)) { await queueBacklog(bucketId); return; }
+      // A manifest *changing* after first write is unusual (atomicWrite
+      // produces a stable file), but it can happen if a peer's sync app
+      // does a delete-then-write. Re-process — cursor will dedup.
+      const file = basename(path);
+      if (!file.endsWith('.json')) return;
       await processManifest(bucketId, file);
     } catch (err) {
-      console.error(`❌ sharing.watcher: processManifest threw on change ${file}: ${err?.message || err}`);
+      console.error(`❌ sharing.watcher: processManifest threw on change ${basename(path)}: ${err?.message || err}`);
     }
   });
   w.on('unlink', async (path) => {

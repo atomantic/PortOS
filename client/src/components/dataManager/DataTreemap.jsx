@@ -30,16 +30,19 @@ function NestedItems({ items, width, height }) {
   return rects.map(({ item, x, y, w, h }) => {
     const showName = w > 56 && h > 18;
     const showSize = showName && h > 34;
+    const Tile = item.sourceHref ? 'a' : 'span';
     return (
-      <span
+      <Tile
         key={item.name}
-        className="absolute block overflow-hidden rounded-sm border border-black/20 bg-black/15 px-1.5 py-0.5"
+        href={item.sourceHref}
+        aria-label={item.sourceHref ? `Open source: ${item.label || item.name}` : undefined}
+        className={`absolute block overflow-hidden rounded-sm border border-black/20 bg-black/15 px-1.5 py-0.5 ${item.sourceHref ? 'pointer-events-auto hover:bg-black/25 focus-visible:ring-2 focus-visible:ring-port-accent' : ''}`}
         style={{ left: x + 1, top: y + 1, width: Math.max(0, w - 2), height: Math.max(0, h - 2) }}
-        title={`${item.name} — ${formatBytes(item.size)}`}
+        title={`${item.label || item.name} — ${formatBytes(item.size)}`}
       >
-        {showName && <span className="block truncate text-[11px] leading-4 text-gray-200">{item.name}</span>}
+        {showName && <span className="block truncate text-[11px] leading-4 text-gray-200">{item.label || item.name}</span>}
         {showSize && <span className="block truncate text-[10px] leading-3 text-gray-400 font-mono">{formatBytes(item.size)}</span>}
-      </span>
+      </Tile>
     );
   });
 }
@@ -86,30 +89,36 @@ export default function DataTreemap({ categories, looseBytes = 0, selectedKey, d
         const items = selected && detail?.key === cat.key ? detail.items : null;
         const bodyH = tileH - HEADER_H - 4;
         return (
-          <button
+          <div
             key={cat.key}
-            type="button"
-            onClick={() => onSelect(cat.key)}
-            disabled={cat.loose}
-            title={cat.loose
-              ? `Files directly in data/ (settings and state) — ${formatBytes(cat.size)}`
-              : `${cat.label} — ${formatBytes(cat.size)} · ${kind.label}`}
-            aria-pressed={selected}
+
             className={`absolute flex flex-col justify-start overflow-hidden rounded-md border-t-2 text-left transition-colors ${kind.tile} ${kind.edge} ${selected ? 'ring-2 ring-white/70 z-10' : ''}`}
             style={{ left: x, top: y, width: tileW, height: tileH, ...(kind.hatch ? HATCH_STYLE : null) }}
           >
-            {showHeader && (
-              <span className="flex w-full shrink-0 items-baseline justify-between gap-2 px-2 bg-black/20" style={{ height: HEADER_H, lineHeight: `${HEADER_H}px` }}>
+            <button
+              type="button"
+              onClick={() => onSelect(cat.key)}
+              disabled={cat.loose}
+            title={cat.loose
+              ? `Files directly in data/ (settings and state) — ${formatBytes(cat.size)}`
+              : `${cat.label} — ${formatBytes(cat.size)} · ${kind.label}`}
+              aria-label={cat.label}
+              aria-pressed={selected}
+              className="absolute inset-0 flex flex-col text-left"
+            >
+              {showHeader && (
+                <span className="flex w-full shrink-0 items-baseline justify-between gap-2 px-2 bg-black/20" style={{ height: HEADER_H, lineHeight: `${HEADER_H}px` }}>
                 <span className="truncate text-xs font-medium text-white">{cat.label}</span>
                 {showSize && <span className="shrink-0 text-[11px] font-mono text-gray-400">{formatBytes(cat.size)}</span>}
-              </span>
-            )}
+                </span>
+              )}
+            </button>
             {items?.length > 0 && showHeader && bodyH > 24 && (
-              <span className="absolute left-1 right-1 bottom-1" style={{ top: HEADER_H + 2 }}>
+              <span className="pointer-events-none absolute left-1 right-1 bottom-1" style={{ top: HEADER_H + 2 }}>
                 <NestedItems items={items} width={tileW - 8} height={bodyH} />
               </span>
             )}
-          </button>
+          </div>
         );
       })}
     </div>

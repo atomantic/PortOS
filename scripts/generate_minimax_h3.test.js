@@ -183,27 +183,31 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     expect(output.trim()).toBe('/tmp/previews');
   });
 
-  it('projects the DiT batch rows to the generated video rows before decoding', () => {
+  it('decodes only a bounded midpoint window of generated rows for the stepwise preview', () => {
     const output = runPython(`${importRunner}\n${[
       'import json, sys, types',
       'packing = types.ModuleType("minimax_h3_mlx.packing")',
       'packing.align_num_frames = lambda value: value',
-      'packing.video_latent_num_frames = lambda value: 2',
+      'packing.video_latent_num_frames = lambda value: 37',
       'sys.modules["minimax_h3_mlx"] = types.ModuleType("minimax_h3_mlx")',
       'sys.modules["minimax_h3_mlx.packing"] = packing',
       'class Config:',
       '    spatial_compression_ratio = 2',
+      '    token_drop = 3',
       'class DitConfig:',
       '    patch_size = (1, 2, 2)',
       'class VideoVae:',
       '    config = Config()',
+      '    tokens_chunk_size = 5',
       'class Dit:',
       '    config = DitConfig()',
       'class Rows:',
-      '    def __init__(self, shape): self.shape = shape',
+      '    def __init__(self, shape, start=0): self.shape, self.start = shape, start',
       '    def __getitem__(self, key):',
-      '        if key == 0: return Rows((10, 4))',
-      '        if isinstance(key, slice): return Rows((8, 4))',
+      '        if key == 0: return Rows((152, 4))',
+      '        if isinstance(key, slice):',
+      '            start, stop, _ = key.indices(self.shape[0])',
+      '            return Rows((stop - start, 4), self.start + start)',
       '        raise AssertionError(f"unexpected row key: {key!r}")',
       'class Frame:',
       '    shape = (4, 4, 3)',
@@ -214,19 +218,19 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
       '    video_vae = VideoVae()',
       '    dit = Dit()',
       '    def _decode_video(self, rows, *shape):',
-      '        print(json.dumps({"rows": list(rows.shape), "shape": list(shape)}))',
+      '        print(json.dumps({"rows": list(rows.shape), "start": rows.start, "shape": list(shape)}))',
       '        return Frames()',
       'seen = []',
       'runner.write_stepwise_preview = lambda directory, frame: seen.append((directory, list(frame.shape))) or True',
-      'preview = runner._H3StepwisePreview(Pipe(), "/tmp/previews", 17, 8, 8)',
-      'rows = Rows((1, 10, 4))',
+      'preview = runner._H3StepwisePreview(Pipe(), "/tmp/previews", 124, 8, 8)',
+      'rows = Rows((1, 152, 4))',
       'proxy = runner._PreviewingDiT(lambda *args: "ok", preview)',
       'proxy(rows)',
       'preview.publish(1, 2)',
       'print(json.dumps({"seen": seen, "saved": preview.saved}))',
     ].join('\n')}`);
     const lines = output.trim().split('\n').map((line) => JSON.parse(line));
-    expect(lines[0]).toMatchObject({ rows: [8, 4], shape: [2, 4, 4] });
+    expect(lines[0]).toMatchObject({ rows: [28, 4], start: 64, shape: [7, 4, 4] });
     expect(lines[1]).toEqual({ seen: [['/tmp/previews', [4, 4, 3]]], saved: 1 });
   });
 
@@ -1259,6 +1263,47 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(encodes) == 1
     assert [seed for seed, _ in calls] == [0, 1, 2]
     assert all(embeds is calls[0][1] for _, embeds in calls)
+print('OK')
+`);
+  expect(output.trim()).toBe('OK');
+});
+
+// #8867: the FL2VA reference feeds its vision tower the keyframes it already put
+// onto the canvas. The pinned port prepares them only for the VAE, so without
+// this the text encoder would read the raw upload at a different size and token
+// grid than the conditioning rows it is paired with.
+it.skipIf(!pyBin)('conditions the vision encoder on canvas-prepared keyframes, as the reference does', () => {
+  const output = runPython(`${importRunner}
+import contextlib, io, sys, tempfile, types
+from types import SimpleNamespace as NS
+runner.heartbeat = lambda *_: contextlib.nullcontext()
+runner._install_h3_stepwise_preview = lambda *_: None
+prepared = []
+def prepare_keyframe_image(image, height, width, stretch):
+    prepared.append((image.size, stretch))
+    return NS(size=(width, height), source=image.size)
+packing = types.ModuleType('minimax_h3_mlx.packing')
+packing.prepare_keyframe_image = prepare_keyframe_image
+sys.modules['minimax_h3_mlx'] = types.ModuleType('minimax_h3_mlx')
+sys.modules['minimax_h3_mlx.packing'] = packing
+seen = {}
+def encode(prompt, images):
+    seen['encoder'] = [(image.size, image.source) for image in images]
+    return ('embeddings', 'tags')
+class Pipe:
+    text_encoder = NS(encode=encode)
+    def __call__(self, prompt, **kwargs):
+        # The pinned pipeline hands its images to the text encoder unchanged.
+        self.text_encoder.encode(prompt, kwargs['images'])
+        return NS(video=NS(shape=[124]), fps=24, audio=None, sample_rate=32000)
+with tempfile.TemporaryDirectory() as tmp:
+    args = NS(output=str(Path(tmp) / 'clip.mp4'), seed=0, prompt='Example shot', num_frames=124, steps=8,
+              anchor=['first', 'last'], height=1344, width=768)
+    with contextlib.redirect_stdout(io.StringIO()):
+        runner.render_outputs(Pipe(), args, [NS(size=(3000, 4000)), NS(size=(1920, 1080))],
+                              lambda path, *_: path.write_bytes(b'example-video'))
+assert prepared == [((3000, 4000), True), ((1920, 1080), False)], prepared
+assert seen['encoder'] == [((768, 1344), (3000, 4000)), ((768, 1344), (1920, 1080))], seen
 print('OK')
 `);
   expect(output.trim()).toBe('OK');

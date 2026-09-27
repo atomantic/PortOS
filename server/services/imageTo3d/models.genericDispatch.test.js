@@ -41,6 +41,14 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({ ok: true, holder: {}, release: vi.fn(() => Promise.resolve()) })),
 }));
 
+// Adapter dispatch does not exercise host-runtime reclamation. Keep the
+// asynchronous render off real local-model probes/unloads, as models.test.js
+// does, so its completion is independent of host load and resident models.
+vi.mock('../localMemory.js', () => ({
+  prepareLocalMemory: vi.fn(async () => ({ unloaded: [], availableGb: 64, totalGb: 64, budgetGb: 64, blockers: [] })),
+  gpuBlockersMessage: vi.fn(() => 'GPU blocked'),
+}));
+
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
   listGeneratingModelSummaries: vi.fn(),

@@ -22,7 +22,7 @@ it('renders inherited provider pins and emits only the edited field, including a
   render(<CodeReviewDefaultsProvider><Editor /></CodeReviewDefaultsProvider>);
   expect(await screen.findByLabelText('Model for example-api')).toHaveValue('custom-coder');
   expect(screen.getByLabelText('Reasoning effort for example-api')).toHaveValue('high');
-  expect(screen.getByText(/tool-free claim\/public reviews/)).toBeInTheDocument();
+  expect(screen.getByText(/Set its command or switch it to API mode/)).toBeInTheDocument();
   expect(onChange).not.toHaveBeenCalled();
   fireEvent.click(screen.getByLabelText('Make example-api non-blocking'));
   expect(onChange.mock.lastCall[0]).toEqual({ optionalReviewers: ['provider:example-api'] });

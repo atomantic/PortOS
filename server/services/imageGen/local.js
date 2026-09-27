@@ -25,7 +25,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
 import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { hfChildEnv } from '../hfToken.js';
@@ -743,8 +743,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
+    dispatchTerminalEvent(
+      jobId,
+      () => broadcastSse(job, { type: 'error', error: reason }),
+      () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+    );
     activeProcess = null;
     activeJob = null;
     void releaseHeavyClaim();
@@ -934,180 +937,240 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     void releaseHeavyClaim();
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
-    // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
-    // that decodes fine and holds no content (a solid-black frame from a run
-    // that produced nothing). Fail the job instead of saving a black tile —
-    // the file is removed so no gallery scan can pick it up. An unmeasurable
-    // frame yields no reason and falls through to the normal success path.
-    const emptyFrame = code === 0 ? await rejectDegenerateFrame(outputPath) : null;
-    if (emptyFrame) {
-      job.status = 'error';
-      job.error = emptyFrame;
-      console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
-      broadcastSse(job, { type: 'error', error: emptyFrame });
-      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame });
-      closeJobAfterDelay(jobs, jobId);
-      return;
-    }
-    if (code !== 0) {
-      job.status = 'error';
-      const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
-      // Extract a structured user-error if the runner emitted one
-      // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
-      // the matching `❌ …` prose line that follows it. Fall back to the last
-      // 10 stderr lines if no structured error was emitted (unknown crash).
-      const lines = stderrBuffer.split('\n').map((l) => l.trim()).filter(Boolean);
-      const structIdx = lines.findIndex((l) => l.startsWith('USER_ERROR:'));
-      let userMessage = null;
-      let userKind = null;
-      let userRepo = null;
-      if (structIdx >= 0) {
-        // Split with limit=2 so a kind containing colons can't shred the repo.
-        const [kind, ...rest] = lines[structIdx].slice('USER_ERROR:'.length).split(':');
-        userKind = kind;
-        userRepo = rest.join(':') || null;
-        const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
-        userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
+    // EventEmitter doesn't await async listeners — without this try/catch, a
+    // throw from any of the post-exit work below (rejectDegenerateFrame,
+    // sharp, atomicWrite, autoCleanGeneratedImage) would surface as an
+    // unhandled rejection (process-killing on Node >= 15), leave the job
+    // stuck in 'running' forever, and hang any connected SSE client with no
+    // terminal frame. Mirrors codex.js / grok.js's finalizeJobFailure.
+    // `terminalEmitted` is set right before each branch's `broadcastSse` call
+    // — i.e. once we've committed to a terminal outcome and are about to tell
+    // consumers about it, not after. That ordering matters: it's set BEFORE
+    // the SSE frame goes out, not after imageGenEvents.emit(), so a listener
+    // that itself throws while handling one of these events can't cause the
+    // catch below to retry the very emit that just threw. It's also checked
+    // in the catch so a throw AFTER a terminal event was already dispatched
+    // (e.g. autoCleanGeneratedImage failing once job.status is already
+    // 'complete') logs the secondary failure without re-emitting a
+    // contradictory terminal frame or downgrading a delivered 'complete'.
+    let terminalEmitted = false;
+    try {
+      // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
+      // that decodes fine and holds no content (a solid-black frame from a run
+      // that produced nothing). Fail the job instead of saving a black tile —
+      // the file is removed so no gallery scan can pick it up. An unmeasurable
+      // frame yields no reason and falls through to the normal success path.
+      const emptyFrame = code === 0 ? await rejectDegenerateFrame(outputPath) : null;
+      if (emptyFrame) {
+        job.status = 'error';
+        job.error = emptyFrame;
+        console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
+        terminalEmitted = true;
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: emptyFrame }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame }),
+        );
+        return;
       }
-      // Heuristic detection for non-USER_ERROR failures we can still
-      // surface actionably. mflux's entry-point shim breaks when a partial
-      // package upgrade leaves user-site at the right version number but
-      // with stale file layout — Python imports the wrong `mflux/` first.
-      // Easier to spot at the source than to teach the user to read pip diffs.
-      if (!userMessage) {
-        const mfluxBroken = lines.some((l) => /ModuleNotFoundError: No module named 'mflux\.models\.flux\.cli'/.test(l));
-        if (mfluxBroken) {
-          userKind = 'mflux_install_corrupted';
-          userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
+      if (code !== 0) {
+        job.status = 'error';
+        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+        // Extract a structured user-error if the runner emitted one
+        // (USER_ERROR:gated_repo:black-forest-labs/FLUX.2-klein-9B), and find
+        // the matching `❌ …` prose line that follows it. Fall back to the last
+        // 10 stderr lines if no structured error was emitted (unknown crash).
+        const lines = stderrBuffer.split('\n').map((l) => l.trim()).filter(Boolean);
+        const structIdx = lines.findIndex((l) => l.startsWith('USER_ERROR:'));
+        let userMessage = null;
+        let userKind = null;
+        let userRepo = null;
+        if (structIdx >= 0) {
+          // Split with limit=2 so a kind containing colons can't shred the repo.
+          const [kind, ...rest] = lines[structIdx].slice('USER_ERROR:'.length).split(':');
+          userKind = kind;
+          userRepo = rest.join(':') || null;
+          const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
+          userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
         }
-      }
-      // The precheck passed (or its memoized "healthy" answer is now stale) and
-      // the runtime still failed to import. Bust the health cache so the next
-      // status poll reports the truth instead of the cached pass, and name the
-      // same one-button remedy rather than leaving the caller with "Exit code 1".
-      if (userKind === 'torch_runtime_broken') invalidateFlux2Health();
-      if (!userMessage && usesTorchVenv(model)) {
-        const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
-        if (importBroken) {
-          invalidateFlux2Health();
-          userKind = 'torch_runtime_broken';
-          userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Settings › Image Gen › Local, then retry this render.`;
+        // Heuristic detection for non-USER_ERROR failures we can still
+        // surface actionably. mflux's entry-point shim breaks when a partial
+        // package upgrade leaves user-site at the right version number but
+        // with stale file layout — Python imports the wrong `mflux/` first.
+        // Easier to spot at the source than to teach the user to read pip diffs.
+        if (!userMessage) {
+          const mfluxBroken = lines.some((l) => /ModuleNotFoundError: No module named 'mflux\.models\.flux\.cli'/.test(l));
+          if (mfluxBroken) {
+            userKind = 'mflux_install_corrupted';
+            userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
+          }
         }
-      }
-      // Legacy mflux-generate is a pre-built binary, so it doesn't emit the
-      // structured USER_ERROR markers the flux2/z-image Python runners use.
-      // Match the raw huggingface_hub stack instead — `GatedRepoError` or the
-      // "Cannot access gated repo for url …/<owner>/<name>/…" prose. Extract
-      // the repo so the UI banner can link the user straight to the license
-      // page (and we set kind=gated_repo so the client knows to surface the
-      // token-entry form).
-      if (!userMessage) {
-        const gatedText = lines.join('\n');
-        // Classify as gated ONLY on a gated-specific signal — extractGatedRepo
-        // matches any huggingface.co/<owner>/<repo> URL, so a non-gated failure
-        // (404, network error) that merely prints a HF URL must NOT be turned
-        // into a misleading license-request flow. Extract the repo for the link
-        // only after the gated signal is confirmed.
-        const hasGatedError = isGatedRepoError(gatedText);
-        if (hasGatedError) {
-          userKind = 'gated_repo';
-          userRepo = extractGatedRepo(gatedText);
-          const repoText = userRepo || 'the model';
-          userMessage = `Access to ${repoText} is gated. Accept the license at https://huggingface.co/${userRepo || '<repo>'} and paste your HuggingFace token into Image Gen settings, then retry.`;
+        // The precheck passed (or its memoized "healthy" answer is now stale) and
+        // the runtime still failed to import. Bust the health cache so the next
+        // status poll reports the truth instead of the cached pass, and name the
+        // same one-button remedy rather than leaving the caller with "Exit code 1".
+        if (userKind === 'torch_runtime_broken') invalidateFlux2Health();
+        if (!userMessage && usesTorchVenv(model)) {
+          const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
+          if (importBroken) {
+            invalidateFlux2Health();
+            userKind = 'torch_runtime_broken';
+            userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Settings › Image Gen › Local, then retry this render.`;
+          }
         }
-      }
-      const tail = lines.slice(-10).join('\n');
-      const errorText = userMessage
-        ? `${userMessage}\n\n(diagnostic) ${reason}`
-        : `Generation failed: ${reason}\n${tail}`;
-      console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
-      job.error = userMessage || errorText;
-      job.errorKind = userKind;
-      job.errorRepo = userRepo;
-      broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
-      // Propagate the friendly message (not the raw "Exit code 1") to the
-      // job queue so its `failed` log line and future SSE replays carry it.
-      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error });
-    } else {
-      job.status = 'complete';
-      // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
-      // resolution. Upscale the result back to the requested delivery size so
-      // the watermark-free copy matches the original's resolution. `meta.width/
-      // height` currently hold the render dims; record those as render* and
-      // promote the delivered dims so the gallery shows the real file size.
-      const targetW = Math.round(Number(upscaleTo?.width));
-      const targetH = Math.round(Number(upscaleTo?.height));
-      if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
-        const resized = await sharp(outputPath)
-          .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
-          // compressionLevel 6 (sharp default) — near-identical size to 9 but
-          // markedly faster, and this re-encode is on the render-completion path.
-          .png({ compressionLevel: 6 })
-          .toBuffer()
-          .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
-        if (resized) {
-          await atomicWrite(outputPath, resized).catch(() => {});
-          meta.renderWidth = meta.width;
-          meta.renderHeight = meta.height;
-          meta.width = targetW;
-          meta.height = targetH;
-          console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
+        // Legacy mflux-generate is a pre-built binary, so it doesn't emit the
+        // structured USER_ERROR markers the flux2/z-image Python runners use.
+        // Match the raw huggingface_hub stack instead — `GatedRepoError` or the
+        // "Cannot access gated repo for url …/<owner>/<name>/…" prose. Extract
+        // the repo so the UI banner can link the user straight to the license
+        // page (and we set kind=gated_repo so the client knows to surface the
+        // token-entry form).
+        if (!userMessage) {
+          const gatedText = lines.join('\n');
+          // Classify as gated ONLY on a gated-specific signal — extractGatedRepo
+          // matches any huggingface.co/<owner>/<repo> URL, so a non-gated failure
+          // (404, network error) that merely prints a HF URL must NOT be turned
+          // into a misleading license-request flow. Extract the repo for the link
+          // only after the gated signal is confirmed.
+          const hasGatedError = isGatedRepoError(gatedText);
+          if (hasGatedError) {
+            userKind = 'gated_repo';
+            userRepo = extractGatedRepo(gatedText);
+            const repoText = userRepo || 'the model';
+            userMessage = `Access to ${repoText} is gated. Accept the license at https://huggingface.co/${userRepo || '<repo>'} and paste your HuggingFace token into Image Gen settings, then retry.`;
+          }
         }
-      }
-      // Regen fidelity (issue #912): for a regen pass, measure how much the
-      // delivered image actually changed vs. the source so the sidecar records
-      // the *realized* delta, not just the requested strength. Catches the
-      // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
-      // Best-effort — a decode failure just skips the stamp.
-      if (regenOf && validInitImagePath) {
-        const delta = await import('./regen.js')
-          .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
-          .catch(() => null);
-        if (delta) {
-          meta.regenPixelDeltaPct = delta.pixelDeltaPct;
-          meta.regenPsnr = delta.psnr;
-          console.log(`📐 Regen fidelity [${jobId.slice(0, 8)}]: ${delta.pixelDeltaPct}% changed, PSNR ${delta.psnr}dB`);
-        }
-      }
-      // Sidecar: persist a metadata record next to the PNG so the gallery
-      // and Remix flow can recover prompt/seed/steps even if mflux's own
-      // --metadata sidecar lives at a slightly different filename shape.
-      // A non-gallery target (issue #2264, the Image Cleaner's temp render)
-      // skips this write entirely — the temp bytes are consumed by an explicit
-      // result-fetch, so there's no gallery record to hydrate.
-      const sidecar = join(outputDir, `${jobId}.metadata.json`);
-      if (!skipSidecar) {
-        // Render timing is stamped onto `meta` (not spread at the write) so the
-        // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
-        Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
-        await atomicWrite(sidecar, meta).catch(() => {});
-        // Cleaners run BEFORE the SSE complete + completed events so subscribers
-        // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
-        // cleanC2PA is a no-op on local — denoise is the only mode that does
-        // anything here.
-        await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
-      }
-      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}${skipSidecar ? ' (temp, no sidecar)' : ''}`);
-      // A non-gallery render has no `/data/images` mount — carry the absolute
-      // `outputPath` so the queue/route can read the finished bytes; `path`
-      // stays null so nothing treats it as a gallery URL.
-      const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
-      broadcastSse(job, { type: 'complete', result });
-      // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
-      // (mflux generates a random one if the client didn't pass one). Emit the
-      // gallery `completed` (which drives the media-asset index + peer-sync
-      // hooks) ONLY for a gallery target — a temp render must not be indexed or
-      // federated. The queue's own `completed` handler still fires off the
-      // return value below, so the job settles either way.
-      if (!skipSidecar) {
-        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+        const tail = lines.slice(-10).join('\n');
+        const errorText = userMessage
+          ? `${userMessage}\n\n(diagnostic) ${reason}`
+          : `Generation failed: ${reason}\n${tail}`;
+        console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
+        job.error = userMessage || errorText;
+        job.errorKind = userKind;
+        job.errorRepo = userRepo;
+        terminalEmitted = true;
+        // Propagate the friendly message (not the raw "Exit code 1") to the
+        // job queue so its `failed` log line and future SSE replays carry it.
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error }),
+        );
       } else {
-        // `temp: true` tells the media-asset-index + peer-sync hooks to ignore
-        // this render — there's no gallery file or sidecar to index/federate.
-        imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+        job.status = 'complete';
+        // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
+        // resolution. Upscale the result back to the requested delivery size so
+        // the watermark-free copy matches the original's resolution. `meta.width/
+        // height` currently hold the render dims; record those as render* and
+        // promote the delivered dims so the gallery shows the real file size.
+        const targetW = Math.round(Number(upscaleTo?.width));
+        const targetH = Math.round(Number(upscaleTo?.height));
+        if (targetW > 0 && targetH > 0 && (targetW !== meta.width || targetH !== meta.height)) {
+          const resized = await sharp(outputPath)
+            .resize(targetW, targetH, { fit: 'fill', kernel: 'lanczos3' })
+            // compressionLevel 6 (sharp default) — near-identical size to 9 but
+            // markedly faster, and this re-encode is on the render-completion path.
+            .png({ compressionLevel: 6 })
+            .toBuffer()
+            .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
+          if (resized) {
+            await atomicWrite(outputPath, resized).catch(() => {});
+            meta.renderWidth = meta.width;
+            meta.renderHeight = meta.height;
+            meta.width = targetW;
+            meta.height = targetH;
+            console.log(`🔍 Upscaled regen [${jobId.slice(0, 8)}] ${meta.renderWidth}x${meta.renderHeight} → ${targetW}x${targetH}`);
+          }
+        }
+        // Regen fidelity (issue #912): for a regen pass, measure how much the
+        // delivered image actually changed vs. the source so the sidecar records
+        // the *realized* delta, not just the requested strength. Catches the
+        // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
+        // Best-effort — a decode failure just skips the stamp.
+        if (regenOf && validInitImagePath) {
+          const delta = await import('./regen.js')
+            .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
+            .catch(() => null);
+          if (delta) {
+            meta.regenPixelDeltaPct = delta.pixelDeltaPct;
+            meta.regenPsnr = delta.psnr;
+            console.log(`📐 Regen fidelity [${jobId.slice(0, 8)}]: ${delta.pixelDeltaPct}% changed, PSNR ${delta.psnr}dB`);
+          }
+        }
+        // Sidecar: persist a metadata record next to the PNG so the gallery
+        // and Remix flow can recover prompt/seed/steps even if mflux's own
+        // --metadata sidecar lives at a slightly different filename shape.
+        // A non-gallery target (issue #2264, the Image Cleaner's temp render)
+        // skips this write entirely — the temp bytes are consumed by an explicit
+        // result-fetch, so there's no gallery record to hydrate.
+        const sidecar = join(outputDir, `${jobId}.metadata.json`);
+        if (!skipSidecar) {
+          // Render timing is stamped onto `meta` (not spread at the write) so the
+          // sidecar and the `autoCleanGeneratedImage` rewrite below agree on it.
+          Object.assign(meta, renderTimingFields(job.renderStartedAtMs));
+          await atomicWrite(sidecar, meta).catch(() => {});
+          // Cleaners run BEFORE the SSE complete + completed events so subscribers
+          // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
+          // cleanC2PA is a no-op on local — denoise is the only mode that does
+          // anything here. A throw here (or from the rest of this branch) is
+          // caught below, before any terminal event has gone out for this job.
+          await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
+        }
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}${skipSidecar ? ' (temp, no sidecar)' : ''}`);
+        // A non-gallery render has no `/data/images` mount — carry the absolute
+        // `outputPath` so the queue/route can read the finished bytes; `path`
+        // stays null so nothing treats it as a gallery URL.
+        const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
+        terminalEmitted = true;
+        // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
+        // (mflux generates a random one if the client didn't pass one). Emit the
+        // gallery `completed` (which drives the media-asset index + peer-sync
+        // hooks) ONLY for a gallery target — a temp render must not be indexed or
+        // federated. The queue's own `completed` handler still fires off the
+        // return value below, so the job settles either way.
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result }),
+          () => {
+            if (!skipSidecar) {
+              imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+            } else {
+              // `temp: true` tells the media-asset-index + peer-sync hooks to
+              // ignore this render — there's no gallery file or sidecar to
+              // index/federate.
+              imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+            }
+          },
+        );
       }
+    } catch (err) {
+      const reason = err?.message || String(err);
+      console.error(`❌ Image generation post-exit handler failed [${jobId.slice(0, 8)}]: ${reason}`);
+      // `terminalEmitted` is already true here only when the throw came from
+      // dispatching a terminal event itself (a downstream broadcastSse/
+      // imageGenEvents listener throwing) — that event already reached
+      // consumers, so don't downgrade a delivered outcome (e.g. a 'complete'
+      // frame the client already saw) to 'error', and don't retry the same
+      // emit that just threw.
+      if (!terminalEmitted) {
+        job.status = 'error';
+        job.error = reason;
+        // `dispatchTerminalEvent` guards each call independently — a throwing
+        // SSE writer (a dead client's `res.write`) can't suppress the
+        // `imageGenEvents.emit` (or vice versa), and neither can re-throw out
+        // of this catch, which would escape the close handler as an
+        // unhandled rejection. job.status/job.error above are already correct
+        // even if delivery fails partway, and `finally` below still runs the
+        // job cleanup.
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: reason }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+        );
+      }
+    } finally {
+      closeJobAfterDelay(jobs, jobId);
     }
-    closeJobAfterDelay(jobs, jobId);
   });
 
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: IMAGE_GEN_MODE.LOCAL, model: modelId, seed: actualSeed };

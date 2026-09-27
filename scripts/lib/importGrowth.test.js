@@ -28,6 +28,7 @@ import {
   measureClosures,
   measureGitTree,
   measureWorkingTree,
+  importGrowthSkipReason,
   resolveImportGrowthBase,
   resolveRepoSpecifier,
 } from './importGrowth.js';
@@ -224,6 +225,24 @@ describe('missing base history', () => {
       revParse: (_root, rev) => (rev === 'abc' ? 'abcabc' : null),
       mergeBase: () => null,
     })).toEqual({ sha: 'abcabc', source: 'CI_BASE_SHA' });
+  });
+});
+
+describe('release aggregates', () => {
+  // A release PR's base is the previous release, so the delta is a whole cycle
+  // of individually-gated changes (v2.79.0 summed to 2882 against 2500).
+  it('skips a pull request into release and the push that lands it', () => {
+    expect(importGrowthSkipReason({ GITHUB_BASE_REF: 'release' })).toMatch(/release cycle/);
+    expect(importGrowthSkipReason({ GITHUB_EVENT_NAME: 'push', GITHUB_REF_NAME: 'release' })).toMatch(/release cycle/);
+    expect(evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, env: { GITHUB_BASE_REF: 'release' } }))
+      .toEqual({ ok: true, skipped: expect.stringMatching(/release cycle/) });
+    expect(formatImportGrowthReport({ ok: true, skipped: 'x' })).toMatch(/not measured/);
+  });
+
+  it('still measures pull requests into main and pushes to other branches', () => {
+    expect(importGrowthSkipReason({ GITHUB_BASE_REF: 'main' })).toBeNull();
+    expect(importGrowthSkipReason({ GITHUB_EVENT_NAME: 'push', GITHUB_REF_NAME: 'main' })).toBeNull();
+    expect(importGrowthSkipReason({})).toBeNull();
   });
 });
 

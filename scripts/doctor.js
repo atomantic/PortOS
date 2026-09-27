@@ -7,7 +7,7 @@
  * `lib/slashdo` submodule, four workspace `node_modules` trees, a reachable
  * Postgres with schema + pgvector, migrations applied, `data/` seeded from
  * `data.reference/`, pm2, the media toolchain, an optional TLS cert, `gh`
- * auth, the 5553–5561 port block) and until now the checks for it were
+ * auth, the 5553–5569 port block) and until now the checks for it were
  * scattered across places that only run once something else is already
  * working: `checkNodeVersion.js`/`checkNpmVersion.js` fire inside
  * `npm run dev|start|setup`, `GET /api/system/health/details` needs the server
@@ -73,12 +73,14 @@ const FAST_TIMEOUT_MS = 6_000;
 const WORKSPACES = ['', 'client', 'server', 'autofixer'];
 
 /**
- * The PortOS-owned port block from `ecosystem.config.cjs` (docs/PORTS.md).
- * Anything outside it in `PORTS` belongs to something the operator starts by
- * hand (whisper, llama.cpp, the vLLM/SGLang containers) and is none of a fresh
- * install's business.
+ * The PortOS-owned port block: the core range (`docs/PORTS.md`) plus its
+ * 5562-5569 extension band, where PortOS-managed sidecars (whisper, the
+ * Eidoverse bridge, JEV, llama.cpp) live alongside the core services.
+ * Anything outside it in `PORTS` (the vLLM/SGLang containers, the Tailcat
+ * forward port) belongs to something the operator starts by hand and is none
+ * of a fresh install's business.
  */
-const PORT_BLOCK = { min: 5553, max: 5561 };
+const PORT_BLOCK = { min: 5553, max: 5569 };
 
 /**
  * Read `PORTS` out of the CJS ecosystem config. Isolated (and defensive) so a

@@ -4,13 +4,12 @@ import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ReviewerPicker from '../cos/ReviewerPicker';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
-import useProviderModels from '../../hooks/useProviderModels';
+import useRunWithPicker from '../../hooks/useRunWithPicker';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../hooks/useCodeReviewDefaults';
 import useClaimReviewers from '../../hooks/useClaimReviewers';
 import ClaimReviewerSource from './ClaimReviewerSource';
-import { enabledProcessProviderFilter } from '../../utils/providers';
 import WorkItemPicker from './WorkItemPicker';
 import * as api from '../../services/api';
 
@@ -41,17 +40,8 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
   // Resolved model lists for the reviewer table's Model column (the picker never
   // fetches — see its `modelOptions` prop).
   const reviewerModelOptions = useReviewerModelOptions();
-  const localPicker = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true, enabled: !agentPicker });
-  const {
-    providers, selectedProviderId, selectedModel, availableModels,
-    setSelectedProviderId, setSelectedModel
-    // This picker renders the effort control and sends the value, so Antigravity
-    // lists base models with the effort picked separately.
-  } = agentPicker ?? localPicker;
-
-  const [localEffort, setLocalEffort] = useState('');
-  const effort = agentPicker ? agentPicker.effort : localEffort;
-  const setEffort = agentPicker ? agentPicker.setEffort : setLocalEffort;
+  const localPicker = useRunWithPicker();
+  const picker = agentPicker ?? localPicker;
   const [simplify, setSimplify] = useState(true);
   // Seeded from what the RUN will resolve for display. `review` staying null is
   // what gates whether the fields are SENT — see the component doc.
@@ -101,9 +91,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       // Only send the filter/reviewers the user actually chose — otherwise the
       // app's configured claim-work defaults apply server-side, unchanged.
       issueAuthorFilter: work.issueAuthorFilter || undefined,
-      provider: selectedProviderId || undefined,
-      model: selectedModel || undefined,
-      effort: effort || undefined,
+      ...picker.pin,
       simplify,
       // `isNext &&` states the route's contract rather than leaning on the picker
       // being unrendered: only the `next` branch of POST /tasks/slashdo reads these,
@@ -141,19 +129,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
 
         <section className="space-y-3">
           <div className="text-xs text-gray-500 uppercase tracking-wide">Agent</div>
-          <ProviderModelSelector
-            providers={providers}
-            selectedProviderId={selectedProviderId}
-            selectedModel={selectedModel}
-            availableModels={availableModels}
-            onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
-            onModelChange={setSelectedModel}
-            effort={effort}
-            onEffortChange={setEffort}
-            emptyProviderOption="Auto (default)"
-            emptyModelOption="Default model"
-            highlightToolUse
-          />
+          <ProviderModelSelector {...picker.selectorProps} />
         </section>
 
         <section className="space-y-3">

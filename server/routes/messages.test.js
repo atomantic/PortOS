@@ -4,11 +4,14 @@ import { request } from '../lib/testHelper.js';
 import messagesRoutes from './messages.js';
 
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
-import { generateReplyBody } from '../services/messageEvaluator.js';
+import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
 const observeError = () => {};
 beforeAll(() => errorEvents.on('error', observeError));
 afterAll(() => errorEvents.off('error', observeError));
+
+vi.mock('../services/messageActions.js', () => ({ executeAction: vi.fn() }));
+import { executeAction } from '../services/messageActions.js';
 
 // Mock the services
 vi.mock('../services/messageAccounts.js', () => ({
@@ -24,6 +27,7 @@ vi.mock('../services/messageSync.js', () => ({
   syncAccount: vi.fn(),
   getSyncStatus: vi.fn(),
   getMessages: vi.fn(),
+  updateMessageEvaluations: vi.fn(),
   getMessage: vi.fn(),
   getThread: vi.fn(),
   refreshMessage: vi.fn(),
@@ -36,6 +40,7 @@ vi.mock('../services/messageDrafts.js', () => ({
   createDraft: vi.fn(),
   updateDraft: vi.fn(),
   approveDraft: vi.fn(),
+  reconcileDraftSend: vi.fn(),
   deleteDraft: vi.fn(),
   deleteDraftsByAccountId: vi.fn()
 }));
@@ -80,6 +85,47 @@ describe('Messages Routes', () => {
     app.use(express.json());
     app.use('/api/messages', messagesRoutes);
     vi.clearAllMocks();
+  });
+
+  describe('POST /api/messages/evaluate', () => {
+    it('uses a bounded pending selection and persists evaluations', async () => {
+      const messages = Array.from({ length: 20 }, (_, i) => ({ id: `message-${i}` }));
+      messageSync.getMessages.mockResolvedValue({ messages, total: 51 });
+      const evaluations = Object.fromEntries(messages.map(m => [m.id, { score: 1 }]));
+      evaluateMessages.mockResolvedValue({ evaluations });
+      const response = await request(app).post('/api/messages/evaluate').send({});
+      expect(response.status).toBe(200);
+      expect(messageSync.getMessages).toHaveBeenCalledWith({ unevaluatedOnly: true, limit: 20 });
+      expect(evaluateMessages).toHaveBeenCalledWith(messages);
+      expect(messageSync.updateMessageEvaluations).toHaveBeenCalledWith(evaluations);
+      expect(response.body).toEqual({ evaluations, missingMessageIds: [] });
+    });
+
+    it('selects explicit IDs before pagination and reports missing IDs', async () => {
+      const messages = [{ id: 'message-100' }];
+      messageSync.getMessages.mockResolvedValue({ messages, total: 1 });
+      evaluateMessages.mockResolvedValue({ evaluations: { 'message-100': { score: 1 } } });
+      const messageIds = ['message-100', 'absent'];
+      const response = await request(app).post('/api/messages/evaluate').send({ accountId: VALID_UUID, messageIds });
+      expect(messageSync.getMessages).toHaveBeenCalledWith({ accountId: VALID_UUID, messageIds, unevaluatedOnly: false, limit: 100 });
+      expect(evaluateMessages).toHaveBeenCalledWith(messages);
+      expect(response.body.missingMessageIds).toEqual(['absent']);
+    });
+
+    it('reports an entirely missing selection without calling a provider', async () => {
+      messageSync.getMessages.mockResolvedValue({ messages: [], total: 0 });
+      const response = await request(app).post('/api/messages/evaluate').send({ messageIds: ['absent'] });
+      expect(response.body).toEqual({ evaluations: {}, missingMessageIds: ['absent'] });
+      expect(evaluateMessages).not.toHaveBeenCalled();
+    });
+
+    it.each([{ accountId: 'invalid' }, { accountId: 4 }, { messageIds: 'message-1' }, { messageIds: [] }, { messageIds: [' '] }, { messageIds: [4] }, { messageIds: Array(101).fill('id') }])('rejects invalid selection %j before provider work', async body => {
+      const response = await request(app).post('/api/messages/evaluate').send(body);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBeDefined();
+      expect(messageSync.getMessages).not.toHaveBeenCalled();
+      expect(evaluateMessages).not.toHaveBeenCalled();
+    });
   });
 
   // === Account Routes ===
@@ -497,6 +543,30 @@ describe('Messages Routes', () => {
     });
   });
 
+  describe('POST /api/messages/drafts/:id/reconcile', () => {
+    it('validates the mailbox outcome and attempt identity, returns the updated draft, and emits only invalidation', async () => {
+      const emit = vi.fn();
+      app.set('io', { emit });
+      const updated = { id: DRAFT_UUID, status: 'draft', sendAttemptId: DRAFT_UUID_2 };
+      messageDrafts.reconcileDraftSend.mockResolvedValue(updated);
+      const data = { attemptId: DRAFT_UUID_2, outcome: 'not_sent' };
+      const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(data);
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(updated);
+      expect(messageDrafts.reconcileDraftSend).toHaveBeenCalledWith(DRAFT_UUID, data);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
+      messageDrafts.reconcileDraftSend.mockClear();
+      for (const invalid of [{ outcome: 'not_sent' }, { attemptId: DRAFT_UUID_2, outcome: 'retry' }]) {
+        expect((await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(invalid)).status).toBe(400);
+      }
+      expect(messageDrafts.reconcileDraftSend).not.toHaveBeenCalled();
+      messageDrafts.reconcileDraftSend.mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
+      const conflict = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(data);
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.code).toBe('DRAFT_STATE_CONFLICT');
+    });
+  });
+
   describe('POST /api/messages/drafts/:id/send', () => {
     it('should send a draft', async () => {
       messageSender.sendDraft.mockResolvedValue({ success: true });
@@ -515,14 +585,27 @@ describe('Messages Routes', () => {
       expect(response.status).toBe(404);
     });
 
-    it('should return 400 for non-not-found errors', async () => {
-      messageSender.sendDraft.mockResolvedValue({ success: false, status: 400, code: 'INVALID_STATUS', error: 'Draft not approved' });
+    it('should return a typed 409 for an ineligible send', async () => {
+      messageSender.sendDraft.mockResolvedValue({ success: false, status: 409, code: 'DRAFT_STATE_CONFLICT', error: 'Draft not approved' });
 
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/send`);
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(409);
       expect(response.body.error).toBe('Draft not approved');
+      expect(response.body.code).toBe('DRAFT_STATE_CONFLICT');
     });
+  });
+
+  it.each([
+    ['post', '/approve', 'approveDraft'],
+    ['put', '', 'updateDraft'],
+    ['post', '/send', 'sendDraft']
+  ])('returns the conflict envelope from %s drafts/:id%s', async (method, suffix, service) => {
+    const owner = service === 'sendDraft' ? messageSender : messageDrafts;
+    owner[service].mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
+    const response = await request(app)[method](`/api/messages/drafts/${DRAFT_UUID}${suffix}`).send({});
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'Draft state conflict', code: 'DRAFT_STATE_CONFLICT' });
   });
 
   describe('DELETE /api/messages/drafts/:id', () => {
@@ -773,5 +856,21 @@ describe('Messages Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.api).toEqual({ success: false, status: 401, error: 'InvalidAuthenticationToken' });
     });
+  });
+});
+
+describe('message browser action conflict envelope', () => {
+  it('preserves both IDs and returns a typed 409 without broadcasting a change', async () => {
+    const app = express();
+    const emit = vi.fn();
+    app.set('io', { emit });
+    app.use(express.json());
+    app.use('/api/messages', messagesRoutes);
+    executeAction.mockRejectedValueOnce(new ServerError('Sync the account and retry.', { status: 409, code: 'MESSAGE_IDENTITY_CONFLICT' }));
+    const response = await request(app).post(`/api/messages/${VALID_UUID}/${VALID_UUID_2}/action`).send({ action: 'delete' });
+    expect(executeAction).toHaveBeenCalledWith(VALID_UUID, VALID_UUID_2, 'delete');
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({ error: 'Sync the account and retry.', code: 'MESSAGE_IDENTITY_CONFLICT' });
+    expect(emit).not.toHaveBeenCalledWith('messages:changed', expect.anything());
   });
 });

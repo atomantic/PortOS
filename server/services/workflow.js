@@ -65,7 +65,7 @@ export const WORKFLOW_STAGES = [
     id: 'plan',
     label: 'Plan',
     description: 'Audit PLAN.md against what actually shipped, surface gaps, and plan new features into the work tracker for the build stage to claim.',
-    taskTypes: ['do-replan', 'plan-feature'],
+    taskTypes: ['do-replan', 'plan-feature', 'media-render-research'],
     jobIds: []
   },
   {
@@ -90,8 +90,8 @@ export const WORKFLOW_STAGES = [
   {
     id: 'report',
     label: 'Report',
-    description: 'Externalize status — JIRA tickets, daily briefing, release readiness — once the build cycle has settled.',
-    taskTypes: ['jira-sprint-manager', 'jira-status-report', 'release-check'],
+    description: 'Externalize status — JIRA tickets, daily briefing, releases — once the build cycle has settled.',
+    taskTypes: ['jira-sprint-manager', 'jira-status-report', 'do-release'],
     jobIds: ['job-daily-briefing', 'job-datadog-error-monitor']
   },
   {

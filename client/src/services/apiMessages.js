@@ -6,6 +6,8 @@ export const createMessageAccount = (data, options = {}) => request('/messages/a
 export const updateMessageAccount = (id, data, options = {}) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
+// Returns evaluations plus missingMessageIds for explicit requests (1–100 IDs).
+// Default requests evaluate at most 20 pending messages; accountId is optional.
 export const evaluateMessages = (data = {}, options = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getMessageInbox = (params = {}, options = {}) => {
   const qs = new URLSearchParams();
@@ -30,6 +32,9 @@ export const createMessageDraft = (data) => request('/messages/drafts', { method
 export const generateMessageDraft = (data) => request('/messages/drafts/generate', { method: 'POST', body: JSON.stringify(data) });
 export const updateMessageDraft = (id, data) => request(`/messages/drafts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const approveMessageDraft = (id) => request(`/messages/drafts/${id}/approve`, { method: 'POST' });
+export const reconcileMessageDraft = (id, data, options = {}) => request(`/messages/drafts/${id}/reconcile`, {
+  method: 'POST', body: JSON.stringify(data), ...options
+});
 export const sendMessageDraft = (id) => request(`/messages/drafts/${id}/send`, { method: 'POST' });
 export const deleteMessageDraft = (id) => request(`/messages/drafts/${id}`, { method: 'DELETE' });
 export const getMessageSelectors = () => request('/messages/selectors');

@@ -5,9 +5,16 @@
  * we can control every shell invocation without touching the real filesystem
  * or running actual Docker/psql commands.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+
+vi.mock('../lib/paths.js', async (importOriginal) => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), {
+    dataRoot: lazyTempDataRoot('portos-database-admin-'),
+  });
+});
 
 // resolveBashBinary and the db.sh path are resolved at module load — mock
 // the dependencies before the route is imported.
@@ -55,14 +62,20 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   };
 });
 
-import { POOL_CONFIG } from '../lib/db.js';
+import { POOL_CONFIG, query, checkHealth } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough, Readable } from 'stream';
-import { writeFileSync, mkdtempSync, readFileSync, createReadStream } from 'fs';
+import { writeFileSync, mkdtempSync, readFileSync, createReadStream, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 import databaseRoutes from './database.js';
+import { PATHS } from '../lib/paths.js';
+import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
+import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { hostControlRouteGate } from '../services/authGate.js';
+
+afterAll(cleanupTempDataRoots);
 import { isPg17OnlyDirective, importDumpFile } from '../services/dbAdmin.js';
 
 // Helper: make execFile call the callback with controlled output
@@ -100,6 +113,114 @@ describe('database route boundary', () => {
     expect(source).toContain("from '../services/dbAdmin.js'");
     expect(source).not.toMatch(/childProcess|from 'fs'|from 'fs\/promises'|from '\.\.\/lib\/db\.js'/);
     expect(source).not.toMatch(/\b(?:execFile|spawn|query|mkdirSync|createReadStream)\s*\(/);
+  });
+});
+
+// Regression: an API migration must not start the unfenced snapshot/cutover,
+// even for an older client that still exposes the migration button.
+describe('database migration admission', () => {
+  it.each([['docker', true], ['native', true], ['docker', false], ['native', false]])('refuses repeated cutovers to %s (migrate=%s) without side effects', async (target, migrate) => {
+    vi.clearAllMocks();
+    const app = makeApp();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await request(app).post('/api/database/switch').send({ target, migrate });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('DATABASE_CUTOVER_UNAVAILABLE');
+      expect(res.body.error).toMatch(/coordinated shutdown and restart/);
+    }
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+});
+
+// Regression: raw shell admin operations bypass the pooled DB write fence.
+// Exercise the real durable journal through HTTP, without a live database.
+describe('database admin maintenance admission', () => {
+  it('refuses every admin operation while fenced and resumes after source-only cancellation', async () => {
+    vi.clearAllMocks();
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example_role' };
+    const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+    try {
+      for (const [route, body] of [
+        ['switch', { target: 'docker', migrate: true }],
+        ['sync', {}], ['start', { backend: 'docker' }],
+        ['stop', { backend: 'native' }], ['destroy', { backend: 'docker' }],
+        ['setup-native', {}], ['fix', {}],
+        ['export', {}], ['export', { backend: 'docker' }],
+      ]) {
+        const res = await request(makeApp()).post(`/api/database/${route}`).send(body);
+        expect(res.status, route).toBe(503);
+        expect(res.body.code, route).toBe('DATABASE_MAINTENANCE');
+      }
+      expect(execFile).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(checkHealth).not.toHaveBeenCalled();
+    } finally {
+      journal.cancel(operation.id, source);
+    }
+    mockExecFile([{ exitCode: 0, stdout: 'started' }]);
+    expect((await request(makeApp()).post('/api/database/start').send({ backend: 'docker' })).status).toBe(200);
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A fenced operation must remain inspectable without pool/shell admission,
+// while endpoint identities and damaged on-disk bytes never reach the API.
+describe('database maintenance status', () => {
+  afterEach(() => {
+    rmSync(pathJoin(PATHS.data, 'database-maintenance'), { recursive: true, force: true });
+  });
+
+  it('reports idle and current durable progress without exposing endpoints or reopening admission', async () => {
+    vi.clearAllMocks();
+    const app = makeApp();
+    const idle = await request(app).get('/api/database/maintenance/status');
+    expect(idle.status).toBe(200);
+    expect(idle.body).toEqual({ stage: 'idle', fenced: false });
+    expect(idle.headers['cache-control']).toBe('no-store');
+
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example_role' };
+    const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+    const accepted = await request(app).get('/api/database/maintenance/status');
+    expect(accepted.body).toEqual({
+      id: operation.id, stage: 'accepted', coordinator: 'unclaimed', source: 'native', target: 'docker', fenced: true,
+    });
+    const owner = journal.acquireCoordinator(operation.id);
+    const stages = ['accepted', 'quiescing', 'exporting', 'importing'];
+    for (let i = 1; i < stages.length; i++) {
+      journal.transition(operation.id, owner, stages[i - 1], stages[i]);
+    }
+    const importing = await request(app).get('/api/database/maintenance/status');
+    expect(importing.status).toBe(200);
+    expect(importing.body).toEqual({ ...accepted.body, stage: 'importing', coordinator: 'unregistered' });
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it('returns a non-cacheable maintenance error for damaged state instead of reporting idle', async () => {
+    vi.clearAllMocks();
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'docker', host: 'localhost', port: 5561, database: 'example_test', user: 'example_role' };
+    journal.begin({ source, target: { ...source, mode: 'native', port: 5432 } });
+    writeFileSync(pathJoin(PATHS.data, 'database-maintenance', 'operation.json'), 'example damaged private bytes');
+    const response = await request(makeApp()).get('/api/database/maintenance/status');
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('DATABASE_MAINTENANCE');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.text).not.toContain('example damaged private bytes');
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
   });
 });
 
@@ -634,6 +755,7 @@ describe('POST /api/database/sync endpoint safety', () => {
       ['switch', { target: 'docker', migrate: false }],
       ['destroy', { backend: 'docker' }],
       ['sync', {}],
+      ['export', {}],
     ]) {
       const res = await request(app).post(`/api/database/${route}`).send(body);
       expect(res.status).toBe(409);
@@ -645,5 +767,32 @@ describe('POST /api/database/sync endpoint safety', () => {
     mockExecFile([{ exitCode: 0, stdout: 'Current mode: native' }]);
     const res = await request(app).post('/api/database/destroy').send({ backend: 'docker' });
     expect(res.status).toBe(200);
+  });
+});
+
+// Every host-executing database route requires operator authority (#8897).
+describe('database admin routes host-control gating', () => {
+  const gated = express();
+  gated.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+  gated.use(hostControlRouteGate);
+  gated.use(express.json());
+  gated.use('/api/database', databaseRoutes);
+
+  it.each([
+    ['start', { backend: 'docker' }],
+    ['stop', { backend: 'native' }],
+    ['destroy', { backend: 'docker' }],
+    ['setup-native', {}],
+    ['export', {}],
+    ['sync', {}],
+    ['fix', {}],
+    ['switch', { target: 'docker', migrate: false }],
+  ])('refuses POST /api/database/%s without host control and runs nothing', async (route, body) => {
+    const res = await request(gated).post(`/api/database/${route}`).send(body);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
   });
 });

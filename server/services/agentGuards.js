@@ -1,3 +1,4 @@
+import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
 /**
  * Agent lifecycle guard primitives.
  *
@@ -5,9 +6,8 @@
  * ~470-LOC `spawnAgentForTask` and `handleAgentCompletion` orchestrators
  * (agentLifecycle.js) so the concurrency contracts they enforce are unit-
  * testable against the REAL code path instead of a hand-copied replica
- * (issue #2548). All of them operate purely on the collection/predicate passed
- * in — no module state, no I/O — so a test can drive them with a throwaway
- * collection or a stub predicate.
+ * (issue #2548). Spawn admission also consults the persistent database fence
+ * before registering work; the other guards use the supplied predicates.
  */
 
 /**
@@ -40,6 +40,7 @@ export const SPAWN_DEDUP_SKIP = Symbol('spawn-dedup-skip');
  * @returns {Promise<any|typeof SPAWN_DEDUP_SKIP>}
  */
 export async function withSpawnDedupGuard(spawningTasks, taskId, fn) {
+  assertDatabaseAdmission();
   if (spawningTasks.has(taskId)) return SPAWN_DEDUP_SKIP;
   spawningTasks.add(taskId);
   try {

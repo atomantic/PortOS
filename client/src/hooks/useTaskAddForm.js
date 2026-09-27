@@ -27,6 +27,7 @@ import useReviewerModelOptions from './useReviewerModelOptions.js';
 
 const TASK_DESCRIPTION_DRAFT_KEY = 'portos-cos-task-description-draft';
 const QUICK_TEMPLATES_EXPANDED_KEY = 'portos-cos-quick-templates-expanded';
+export const LAST_TARGET_APP_KEY = 'portos-cos-last-target-app';
 const INVALID_DRAFT = Symbol('invalid task description draft');
 
 const REVIEW_PICKER_TO_PAYLOAD_KEY = {
@@ -46,16 +47,20 @@ const reviewOverridePayload = (reviewOverrides) => Object.fromEntries(
     .map(([pickerKey, payloadKey]) => [payloadKey, reviewOverrides[pickerKey]]),
 );
 
+const readLastTargetApp = () => safeReadStorage(LAST_TARGET_APP_KEY) || '';
+
 const readTaskDescriptionDraft = (defaultApp) => {
+  const lastApp = readLastTargetApp();
+  const fallbackApp = defaultApp || lastApp;
   const raw = safeReadStorage(TASK_DESCRIPTION_DRAFT_KEY);
-  if (raw === null) return { description: '', app: defaultApp };
+  if (raw === null) return { description: '', app: fallbackApp };
   const draft = safeReadJsonStorage(TASK_DESCRIPTION_DRAFT_KEY, INVALID_DRAFT);
-  if (draft === INVALID_DRAFT) return { description: raw, app: defaultApp };
-  if (typeof draft === 'string') return { description: draft, app: defaultApp };
-  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return { description: '', app: defaultApp };
+  if (draft === INVALID_DRAFT) return { description: raw, app: fallbackApp };
+  if (typeof draft === 'string') return { description: draft, app: fallbackApp };
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return { description: '', app: fallbackApp };
   return {
     description: typeof draft.description === 'string' ? draft.description : '',
-    app: typeof draft.app === 'string' && draft.app ? draft.app : defaultApp,
+    app: typeof draft.app === 'string' && draft.app ? draft.app : fallbackApp,
   };
 };
 
@@ -130,7 +135,7 @@ export function createTaskAddFormState({ initialDraft, defaultApp = '', apps, qu
       effort: '',
       temperature: '',
       thinking: '',
-      app: apps?.some((app) => app.id === initialDraft.app) ? initialDraft.app : defaultApp,
+      app: apps?.some((app) => app.id === initialDraft.app) ? initialDraft.app : (defaultApp || initialDraft.app),
     },
     addToTop: false,
     enhancePrompt: false,
@@ -240,6 +245,7 @@ export default function useTaskAddForm({
 
   const handleAppChange = (app) => {
     pendingDraftAppRef.current = false;
+    safeWriteStorage(LAST_TARGET_APP_KEY, app || '');
     dispatch({ type: 'task', patch: { app } });
   };
 
@@ -508,7 +514,10 @@ export default function useTaskAddForm({
   };
 
   const applyTemplate = async (template) => {
-    if (template.app) pendingDraftAppRef.current = false;
+    if (template.app) {
+      pendingDraftAppRef.current = false;
+      safeWriteStorage(LAST_TARGET_APP_KEY, template.app);
+    }
     const seeded = seedModelEffort(
       providers?.find((provider) => provider.id === template.provider),
       template.model,
@@ -703,6 +712,10 @@ export default function useTaskAddForm({
     submittingRef.current = false;
     dispatch({ type: 'patch', patch: { isSubmitting: false, isEnhancing: false } });
     if (!result) return;
+
+    if (state.newTask.app !== undefined && state.newTask.app !== null) {
+      safeWriteStorage(LAST_TARGET_APP_KEY, state.newTask.app || '');
+    }
 
     dispatch({
       type: 'patch',

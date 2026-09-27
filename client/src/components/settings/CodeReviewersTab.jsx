@@ -32,6 +32,12 @@ const REVIEW_VIEWS = [
 const CHAIN_PATH = '/models/code-reviewers';
 const FOLLOW_UP_PATH = '/models/code-reviewers/follow-up';
 
+const CONFIG_FAULT_REMEDIES = {
+  NO_MODEL: 'Select a model on Review chain.',
+  REVIEWER_ACCESS_DENIED: 'Select an accessible service or model, or correct provider access.',
+  REVIEWER_UNSUPPORTED: 'Set its command or switch it to API mode in AI Providers.',
+};
+
 // `null` when the URL is not this page (unit tests render the panel alone).
 // A slug under the page that is not a known view is returned so the caller can
 // replace it with the chain.
@@ -257,13 +263,7 @@ export default function CodeReviewersTab({ view } = {}) {
         <>
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
-              {reviewer}: the last review attempt failed ({fault.code}). A successful review clears this warning. {fault.code === 'NO_MODEL'
-                ? 'Select a model on Review chain.'
-                : fault.code === 'REVIEWER_ACCESS_DENIED'
-                  ? 'Select an accessible service or model, or correct provider access. A successful review clears this warning.'
-                  : fault.code === 'REVIEWER_UNSUPPORTED'
-                    ? 'For tool-free claim/public reviews, configure its command, select API mode, or choose a supported reviewer harness.'
-                    : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
+              {reviewer}: the last review attempt failed ({fault.code}). {CONFIG_FAULT_REMEDIES[fault.code] || 'Enable or configure the reviewer in Settings → Code Reviewers.'} The next successful review clears this warning.
             </Banner>
           ))}
           {activeView === 'chain' ? (

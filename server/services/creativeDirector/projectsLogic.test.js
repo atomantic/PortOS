@@ -149,6 +149,30 @@ describe('buildProjectRecord', () => {
     expect(bad.cast).toEqual([]);
   });
 
+  it('stores commission style references as filenames only, and omits the field when there are none (#8724)', () => {
+    const ctx = { id: 'cd-1', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' };
+    const base = { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 };
+    // A bare or unpinned project's record is unchanged — no key at all.
+    expect(buildProjectRecord(base, ctx)).not.toHaveProperty('styleReferenceImages');
+    expect(buildProjectRecord({ ...base, styleReferenceImages: [] }, ctx)).not.toHaveProperty('styleReferenceImages');
+
+    const record = buildProjectRecord({
+      ...base,
+      styleReferenceImages: [
+        { kind: 'image', filename: 'a.png', label: 'A', origin: 'mood-board', path: '/abs/a.png' },
+        { kind: 'video', filename: 'clip.mp4', label: 'not an image kind', origin: 'mood-board' },
+        { kind: 'image-ref', filename: 'b.png', origin: 'universe' },
+        { kind: 'image', filename: 'c.png' }, { kind: 'image', filename: 'd.png' }, { kind: 'image', filename: 'e.png' },
+      ],
+    }, ctx);
+    expect(record.styleReferenceImages).toEqual([
+      { kind: 'image', filename: 'a.png', label: 'A', origin: 'mood-board' },
+      { kind: 'image-ref', filename: 'b.png', label: 'b.png', origin: 'universe' },
+      { kind: 'image', filename: 'c.png', label: 'c.png', origin: null },
+      { kind: 'image', filename: 'd.png', label: 'd.png', origin: null },
+    ]);
+  });
+
   it('defaults renderBackend to null and persists a supplied pin (#3135)', () => {
     const ctx = { id: 'cd-1', now: '2026-06-07T00:00:00.000Z', collectionId: 'col-1' };
     const base = { name: 'X', aspectRatio: '1:1', quality: 'draft', modelId: 'm', targetDurationSeconds: 9 };

@@ -41,7 +41,7 @@ describe('PersistentMindRecipeLibrary', () => {
     expect(screen.getByText(/Output bindings are checked at invocation/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Save recipe' }));
     expect(await screen.findByRole('button', { name: definition.name })).toBeInTheDocument();
-    expect(screen.getByTestId('location')).toHaveTextContent('?panel=tools&recipe=first');
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('?panel=tools&recipe=first'));
     expect(api.getMindRecipes).toHaveBeenCalledTimes(2);
     expect(api.createMindRecipe).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, name: definition.name }), { silent: true });
   });

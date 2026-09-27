@@ -4,6 +4,7 @@
 
 import { loadSlashdoFile, loadSlashdoBundle, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js';
 import { resolveSlashdoInvocation, buildSlashdoSection, unreachableReviewerIncludes, parseExplicitReviewWith, SLASHDO_REVIEWER_INCLUDE_NAMES, SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
+import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 import { DEFAULT_REVIEWER, resolveReviewerConfig, buildReviewerEffortNote, buildReviewersCsv } from '../../lib/validation.js';
 
 /**
@@ -153,9 +154,10 @@ export async function applySlashdoInvocation(task, {
   providerId = null, providerCommand = null, leanMode = false, hasFileTools = false,
   defaultReviewers = null, codeReviewDefaults = null,
 } = {}) {
-  // Older queued release checks lost this key in metadata sanitization.
+  // Older queued release tasks lost this key in metadata sanitization; tasks
+  // queued before the release-check → do-release rename still carry the old type.
   const taskType = task.metadata?.analysisType || task.metadata?.taskAnalysisType;
-  const command = task.metadata?.slashdoCommand || (taskType === 'release-check' ? 'release' : null);
+  const command = task.metadata?.slashdoCommand || (currentTaskTypeName(taskType) === 'do-release' ? 'release' : null);
   const resolved = resolveSlashdoInvocation({
     command,
     args: task.metadata?.slashdoArgs || '',

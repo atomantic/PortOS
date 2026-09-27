@@ -20,7 +20,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 // Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
-import { isClaimFlowDispatch } from './taskTypeHooks.js';
+import { isClaimFlowDispatch, resolveTaskHookType } from './taskTypeHooks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSections/constants.js';
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
@@ -39,6 +39,7 @@ import {
   buildClaimResumeOverride,
   claimResumeContext,
   buildReleaseFlowCompletionSection,
+  buildReconcileFlowCompletionSection,
   buildAuditFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
@@ -525,6 +526,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // THE completion decision, made once. Every section below renders this key;
   // none re-derives it. See lib/agentCompletionMode.js for the rule order.
   const completionMode = resolveCompletionMode({
+    taskHookType: resolveTaskHookType(task),
     toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands, portosMergesBranch,
     worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
@@ -549,7 +551,7 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: ${worktreeCommitNote} ${[COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW].includes(completionMode) ? 'Follow the bundled workflow branch instructions while preserving unrelated work.' : 'Do NOT manually switch branches or modify the worktree configuration.'}
+**Important**: ${worktreeCommitNote} ${[COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(completionMode) ? 'Follow the bundled workflow branch instructions while preserving unrelated work.' : 'Do NOT manually switch branches or modify the worktree configuration.'}
 ${buildResumeSection(task, worktreeInfo)}` : '';
 
   const simplifySection = buildSimplifySection({
@@ -610,6 +612,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       claimResume: claimResumeContext(task, worktreeInfo),
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
+    [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
     [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
@@ -683,7 +686,7 @@ function buildSimplifySection({
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
   // Discard tasks don't commit, so the simplify-before-commit step is moot.
-  const simplifySection = ![COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
+  const simplifySection = ![COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(mode) && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
 ## Simplify Step
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
 ` : '';
@@ -977,6 +980,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // full one, so a fix applied only there is no fix at all for anything a
   // subscription-quota job can run.
   const completionMode = resolveCompletionMode({
+    taskHookType: resolveTaskHookType(task),
     toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
     portosMergesBranch, worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
@@ -989,7 +993,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // a JIRA run be told to open a PR whose merge section was suppressed — and
   // PortOS opened that PR too. `inlineSection` also names WHICH section follows,
   // so the completion step's cross-reference can't name the wrong one.
-  const inlineSection = claimFlow || [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW].includes(completionMode) ? null : inlinePrLifecycleSection(task, {
+  const inlineSection = claimFlow || [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(completionMode) ? null : inlinePrLifecycleSection(task, {
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
     providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
   });
@@ -1129,6 +1133,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       ].join('\n'));
     },
     [COMPLETION_MODES.AUDIT_FLOW]: () => contractSections.push(buildAuditFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.RECONCILE_FLOW]: () => contractSections.push(buildReconcileFlowCompletionSection({ sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
     [COMPLETION_MODES.TUI]: pushTuiCompletion,
@@ -1192,7 +1197,7 @@ function buildLightTaskContextSections({
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
       worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
-      [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW].includes(mode)
+      [COMPLETION_MODES.RELEASE_FLOW, COMPLETION_MODES.AUDIT_FLOW, COMPLETION_MODES.RECONCILE_FLOW].includes(mode)
         ? 'Follow the bundled workflow branch instructions while preserving unrelated work.'
         : 'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done

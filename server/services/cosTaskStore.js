@@ -30,6 +30,7 @@ import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../
 import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
+import { hasActiveTaskOwner } from './agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
@@ -617,7 +618,11 @@ function mergeUpdateMetadata(existingMetadata, updates) {
 }
 
 async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null }) {
-  return withStateLock(async () => {
+  return withStateLock(() => writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue, expectedStatus }));
+}
+
+// Caller holds withStateLock, including its status and ownership decision.
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, expectedStatus = null }) {
   const state = await loadState();
   const filePath = taskType === 'user'
     ? join(ROOT_DIR, state.config.userTasksFile)
@@ -770,7 +775,6 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   if (suppressDequeue) change.suppressDequeue = true;
   cosEvents.emit('tasks:changed', change);
   return updatedTask;
-  });
 }
 
 /**
@@ -1153,45 +1157,47 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
  * Parks the task in the `challenged` status with the worker's case attached and
  * consumes one of its bounded challenge slots (MAX_CHALLENGES_PER_TASK). A second
  * dispute on the same task is refused — the acceptance contract is "exactly one
- * per task." The read (getTaskById, lock-free) precedes the write (updateTask,
- * lock-held): single-user trust model, no competing writer to race.
+ * per task." Read, budget check, and write share the completion/state lock.
  *
  * @returns the updated task, or `{ error, code }` on not-found / budget-exhausted.
  */
 export async function challengeTask(taskId, { reason, evidence, reviewer } = {}, taskType = 'user', { now = Date.now() } = {}) {
-  const task = await getTaskById(taskId);
-  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
-  const resolvedType = task.taskType || taskType;
-  // A challenge disputes a REJECTION of in-flight work — never a finished task.
-  // Parking a `completed` task in `challenged` would also regress it out of a
-  // terminal state (a completed task never re-completes), so refuse it outright.
-  if (task.status === 'completed') {
-    return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
-  }
-  // Bounded by BOTH the one-shot dispute cap AND the shared retry budget (#2471) —
-  // a challenge that overturns re-queues the task, so refuse one that's already out
-  // of total spawns (it would only get re-blocked by agentLifecycle's spawn gate).
-  if (!canChallenge(task.metadata, { maxTotalSpawns: MAX_TOTAL_SPAWNS })) {
-    const spawns = Number(task.metadata?.totalSpawnCount) || 0;
-    const budgetExhausted = spawns >= MAX_TOTAL_SPAWNS;
-    return {
-      error: budgetExhausted
-        ? `Retry budget exhausted (${spawns}/${MAX_TOTAL_SPAWNS} spawns) — cannot challenge a task out of retries`
-        : `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
-      code: budgetExhausted ? 'CHALLENGE_BUDGET_EXHAUSTED' : 'CHALLENGE_EXHAUSTED',
-    };
-  }
-  const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
-  const updated = await updateTask(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
-  if (updated?.error) return updated;
-  console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
-  cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
-  return updated;
+  return withStateLock(async () => {
+    const task = await getTaskById(taskId);
+    if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+    const resolvedType = task.taskType || taskType;
+    // A challenge disputes a REJECTION of in-flight work — never a finished task.
+    // Parking a `completed` task in `challenged` would also regress it out of a
+    // terminal state (a completed task never re-completes), so refuse it outright.
+    if (task.status === 'completed') {
+      return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
+    }
+    // Bounded by BOTH the one-shot dispute cap AND the shared retry budget (#2471) —
+    // a challenge that overturns re-queues the task, so refuse one that's already out
+    // of total spawns (it would only get re-blocked by agentLifecycle's spawn gate).
+    if (!canChallenge(task.metadata, { maxTotalSpawns: MAX_TOTAL_SPAWNS })) {
+      const spawns = Number(task.metadata?.totalSpawnCount) || 0;
+      const budgetExhausted = spawns >= MAX_TOTAL_SPAWNS;
+      return {
+        error: budgetExhausted
+          ? `Retry budget exhausted (${spawns}/${MAX_TOTAL_SPAWNS} spawns) — cannot challenge a task out of retries`
+          : `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
+        code: budgetExhausted ? 'CHALLENGE_BUDGET_EXHAUSTED' : 'CHALLENGE_EXHAUSTED',
+      };
+    }
+    const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
+    const updated = await writeTaskUpdateLocked(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
+    if (updated?.error) return updated;
+    console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
+    cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
+    return updated;
+  });
 }
 
 /**
  * Resolve a parked challenge (#2441). `upheld` overturns the rejection and
- * re-queues the task (→ pending); `escalated` hands the unresolved dispute to
+ * preserves its active owner (→ in_progress), or requeues an unowned task
+ * (→ pending); `escalated` hands the unresolved dispute to
  * the user — the task is blocked with a challenge-escalation reason AND an
  * approval-required arbitration task is filed into COS-TASKS.md (reusing the same
  * investigation/escalation surface `createInvestigationTask` writes to), so a
@@ -1202,23 +1208,31 @@ export async function challengeTask(taskId, { reason, evidence, reviewer } = {},
  *          invalid-outcome.
  */
 export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
-  const task = await getTaskById(taskId);
-  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
-  if (task.status !== 'challenged') {
-    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
-  }
-  const resolvedType = task.taskType || taskType;
-  const resolutionPatch = buildChallengeResolutionPatch({ outcome, note, resolvedBy, now });
-  if (!resolutionPatch) return { error: `Invalid challenge outcome: ${outcome}`, code: 'INVALID_OUTCOME' };
+  const resolution = await withStateLock(async () => {
+    const task = await getTaskById(taskId);
+    if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+    if (task.status !== 'challenged') {
+      return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
+    }
+    const resolvedType = task.taskType || taskType;
+    const resolutionPatch = buildChallengeResolutionPatch({ outcome, note, resolvedBy, now });
+    if (!resolutionPatch) return { error: `Invalid challenge outcome: ${outcome}`, code: 'INVALID_OUTCOME' };
 
-  const nextStatus = outcome === 'upheld' ? 'pending' : 'blocked';
-  const metadataPatch = { ...resolutionPatch };
-  if (outcome === 'escalated') {
-    metadataPatch.blockedReason = 'Challenge unresolved — escalated to user for arbitration';
-    metadataPatch.blockedCategory = 'challenge-escalation';
-  }
-  const updated = await updateTask(taskId, { status: nextStatus, metadata: metadataPatch }, resolvedType, { now });
-  if (updated?.error) return updated;
+    const state = await loadState();
+    const nextStatus = outcome === 'upheld'
+      ? (hasActiveTaskOwner(taskId, state.agents) ? 'in_progress' : 'pending')
+      : 'blocked';
+    const metadataPatch = { ...resolutionPatch };
+    if (outcome === 'escalated') {
+      metadataPatch.blockedReason = 'Challenge unresolved — escalated to user for arbitration';
+      metadataPatch.blockedCategory = 'challenge-escalation';
+    }
+    const updated = await writeTaskUpdateLocked(taskId, { status: nextStatus, metadata: metadataPatch }, resolvedType, { now });
+    if (updated?.error) return updated;
+    return { task, updated, nextStatus, resolvedType };
+  });
+  if (resolution.error) return resolution;
+  const { task, updated, nextStatus, resolvedType } = resolution;
 
   if (outcome === 'escalated') {
     // Surface the dispute to the single PortOS user as an approval-required

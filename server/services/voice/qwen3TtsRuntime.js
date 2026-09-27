@@ -8,7 +8,6 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
@@ -67,8 +66,8 @@ export async function resolveQwen3Python() {
  * Check if the isolated runtime venv or compatible Python interpreter is installed.
  */
 export async function isQwen3RuntimeInstalled() {
-  const python = await resolveQwen3Python();
-  return Boolean(python);
+  const status = await getQwen3RuntimeStatus();
+  return status.ok;
 }
 
 /**
@@ -87,13 +86,14 @@ export async function getQwen3RuntimeStatus() {
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
       models: {},
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      trainingAdapter: null,
       message: 'Python environment not found for Qwen3-TTS runtime',
     };
   }
 
   try {
     const probeArgs = [QWEN3_TTS_RUNNER_SCRIPT, '--probe', '--models-dir', QWEN3_TTS_MODELS_DIR];
-    const { stdout } = await spawnProbe(python, probeArgs);
+    const { stdout } = await runRuntime(python, probeArgs, 120000);
     const data = JSON.parse(stdout.trim());
 
     const modelsState = {};
@@ -107,8 +107,9 @@ export async function getQwen3RuntimeStatus() {
     }
 
     return {
-      ok: true,
-      installed: true,
+      ok: data.ok === true,
+      installed: data.ok === true,
+      message: data.error || null,
       venvPresent,
       pythonPath: python,
       hardware: {
@@ -120,40 +121,56 @@ export async function getQwen3RuntimeStatus() {
       },
       models: modelsState,
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      // Training is a separate capability: the runner names its adapter only
+      // when one can produce loadable checkpoints (#8857).
+      trainingAdapter: typeof data.training_adapter === 'string' && data.training_adapter ? data.training_adapter : null,
     };
   } catch (err) {
     return {
       ok: false,
-      installed: true,
+      installed: false,
       venvPresent,
       pythonPath: python,
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
       models: {},
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      trainingAdapter: null,
       error: err.message,
     };
   }
 }
 
-function spawnProbe(pythonPath, args) {
+function runRuntime(pythonPath, args, timeout = 10000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, args, safeChildProcessOptions({ timeout: 10000 }));
+    const child = spawn(pythonPath, args, safeChildProcessOptions({ timeout }));
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.stdout.on('data', (d) => { stdout = (stdout + d.toString()).slice(-65536); });
+    child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-8192); });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Probe failed (code ${code}): ${stderr || stdout}`));
+      if (code === 0) return resolve({ stdout, stderr });
+      // Hub progress may precede the runner's final structured error line.
+      let failure = null;
+      try { failure = JSON.parse(stderr.trim().split(/\r?\n/).at(-1)); } catch { /* Non-JSON process failure. */ }
+      if (['QWEN3_DOWNLOAD_UNAVAILABLE', 'QWEN3_DOWNLOAD_FAILED'].includes(failure?.code)) {
+        return reject(new ServerError(failure.error || 'Qwen3 model download failed', {
+          status: failure.code === 'QWEN3_DOWNLOAD_UNAVAILABLE' ? 503 : 502,
+          code: failure.code,
+        }));
+      }
+      reject(new Error(`Qwen3 runtime failed (code ${code}): ${stderr || stdout}`));
     });
     child.on('error', reject);
   });
 }
 
+const downloads = new Map();
+
 /**
- * Explicit user-triggered model download.
+ * Explicit user-triggered model download. Coalesce overlapping requests for one
+ * model; readiness is published by the runner only after checksum verification.
  */
-export async function downloadQwen3Model(modelId, { signal } = {}) {
+export async function downloadQwen3Model(modelId) {
   const modelSpec = SUPPORTED_QWEN3_MODELS.find((m) => m.id === modelId);
   if (!modelSpec) {
     throw new ServerError(`Unsupported Qwen3-TTS model: ${modelId}`, {
@@ -162,25 +179,30 @@ export async function downloadQwen3Model(modelId, { signal } = {}) {
     });
   }
 
-  await mkdir(QWEN3_TTS_MODELS_DIR, { recursive: true });
-  const safeName = modelId.replace('/', '--');
-  const targetDir = join(QWEN3_TTS_MODELS_DIR, safeName);
-  await mkdir(targetDir, { recursive: true });
-
-  // In test/mock or real runtime, mark directory with metadata snapshot
-  await writeFile(
-    join(targetDir, 'model_meta.json'),
-    JSON.stringify({
-      modelId,
-      downloadedAt: new Date().toISOString(),
-      sizeGb: modelSpec.sizeGb,
-    }, null, 2),
-  );
-
-  return {
-    ok: true,
-    modelId,
-    path: targetDir,
-    label: modelSpec.label,
-  };
+  if (downloads.has(modelId)) return downloads.get(modelId);
+  const download = (async () => {
+    const python = await resolveQwen3Python();
+    if (!python) {
+      throw new ServerError('Python with huggingface_hub is required to download Qwen3-TTS models', {
+        status: 503, code: 'QWEN3_DOWNLOAD_UNAVAILABLE',
+      });
+    }
+    const { stdout } = await runRuntime(python, [
+      QWEN3_TTS_RUNNER_SCRIPT, '--download', '--model-id', modelId,
+      '--models-dir', QWEN3_TTS_MODELS_DIR,
+    ], 30 * 60 * 1000);
+    const result = JSON.parse(stdout.trim());
+    if (result.ok !== true || result.modelId !== modelId || !/^[a-f0-9]{40}$/.test(result.revision)) {
+      throw new ServerError('Qwen3-TTS download did not return a verified snapshot', {
+        status: 502, code: 'QWEN3_DOWNLOAD_INVALID_RESULT',
+      });
+    }
+    return result;
+  })();
+  downloads.set(modelId, download);
+  try {
+    return await download;
+  } finally {
+    downloads.delete(modelId);
+  }
 }

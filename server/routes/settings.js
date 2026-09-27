@@ -18,7 +18,8 @@ import { getCredentialInventory } from '../services/credentialInventory.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 import { isGitHubRepoUrl } from '../lib/repoUrl.js';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { isAllowedPython } from '../lib/pythonSetup.js';
 import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
@@ -545,6 +546,16 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.imageGen?.agy !== undefined) {
     validateRequest(imageGenAgySettingsSchema.partial(), req.body.imageGen.agy);
+  }
+  // Every local media lane spawns this interpreter (and image gen spawns the
+  // `mflux-generate` beside it), so hold it to the guard the setup routes use:
+  // a python basename, never an arbitrary binary (#8751). A cleared value
+  // (`''`/`null`) falls back to interpreter discovery, so it stays allowed.
+  const localPython = req.body?.imageGen?.local?.pythonPath;
+  if (localPython != null && localPython !== '' && !isAllowedPython(localPython)) {
+    throw new ServerError('imageGen.local.pythonPath must be a python interpreter (basename python/python3/python3.NN)', {
+      status: 400, code: 'INVALID_PYTHON_PATH',
+    });
   }
   // Per-surface render defaults (#3231) — validate when present so a typo'd
   // target key or a non-enum backend can't persist a slice the render-target
