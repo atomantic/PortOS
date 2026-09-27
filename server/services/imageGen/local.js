@@ -1140,8 +1140,18 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       if (!terminalEmitted) {
         job.status = 'error';
         job.error = reason;
-        broadcastSse(job, { type: 'error', error: reason });
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
+        // Guard the dispatch itself: a throwing SSE writer (a dead client's
+        // res.write) or a throwing imageGenEvents listener must not re-throw
+        // out of this catch — that would escape the close handler as an
+        // unhandled rejection, defeating the whole point of this try/catch.
+        // job.status/job.error above are already correct even if delivery
+        // fails partway, and `finally` below still runs the job cleanup.
+        try {
+          broadcastSse(job, { type: 'error', error: reason });
+          imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
+        } catch (dispatchErr) {
+          console.error(`❌ Image generation terminal-event dispatch failed [${jobId.slice(0, 8)}]: ${dispatchErr?.message || dispatchErr}`);
+        }
       }
     } finally {
       closeJobAfterDelay(jobs, jobId);
