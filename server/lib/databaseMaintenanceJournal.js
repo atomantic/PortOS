@@ -38,6 +38,22 @@ const producerSnapshotSchema = z.object({
     status: z.enum(['online', 'stopped']),
   }).strict()).length(2),
 }).strict();
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+// Transfer evidence. The dump name is derived from the operation, never a path
+// chosen by a caller, so a manifest cannot point the import anywhere else.
+const transferDumpSchema = z.object({
+  id: z.string().uuid(),
+  source: databaseMaintenanceEndpointSchema,
+  file: z.string().regex(/^portos-maintenance-[0-9a-f-]{36}\.sql$/),
+  bytes: z.number().int().positive(),
+  sha256: sha256Schema,
+}).strict();
+const transferImportSchema = z.object({
+  id: z.string().uuid(),
+  target: databaseMaintenanceEndpointSchema,
+  sha256: sha256Schema,
+}).strict();
+const workerGroupSchema = coordinatorSchema.extend({ pgid: z.number().int().positive() }).strict();
 const decisionSchema = coordinatorSchema.extend({
   stage: z.enum(stages),
   action: z.discriminatedUnion('kind', [
@@ -164,24 +180,25 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // Recovery appends an immutable successor instead of overwriting ownership.
   // Each predecessor admits exactly one successor, even across processes. A
   // missing/partial worker receipt never authorizes reclaiming an owner.
-  const readCoordinator = (id, rejectedPredecessor = null) => {
+  // The ordered ownership chain, oldest first; empty when never claimed.
+  const readCoordinatorChain = (id, rejectedPredecessor = null) => {
     const current = read();
     if (!current || current.id !== id) throw databaseMaintenanceError();
     const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
     try { lstatSync(ownerPath); } catch (err) {
-      if (err.code === 'ENOENT') return null;
+      if (err.code === 'ENOENT') return [];
       throw databaseMaintenanceError();
     }
     if (!lstatSync(ownerPath).isFile()) throw databaseMaintenanceError();
     let owner = coordinatorSchema.parse(JSON.parse(readFileSync(ownerPath, 'utf8')));
     if (owner.id !== id) throw databaseMaintenanceError();
-    const visited = new Set();
+    const chain = [];
     while (true) {
-      if (visited.has(owner.token)) throw databaseMaintenanceError();
-      visited.add(owner.token);
+      if (chain.some(value => value.token === owner.token)) throw databaseMaintenanceError();
+      chain.push(owner);
       const nextPath = join(activeDir, 'coordinator-after-' + owner.token + '.json');
       try { lstatSync(nextPath); } catch (err) {
-        if (err.code === 'ENOENT') return owner;
+        if (err.code === 'ENOENT') return chain;
         throw databaseMaintenanceError();
       }
       if (!lstatSync(nextPath).isFile()) throw databaseMaintenanceError();
@@ -190,6 +207,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       owner = { id, token: next.token };
     }
   };
+  const readCoordinator = (id, rejectedPredecessor = null) => readCoordinatorChain(id, rejectedPredecessor).at(-1) ?? null;
 
   const assertCoordinator = (id, token) => {
     const owner = readCoordinator(id);
@@ -267,6 +285,129 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertCoordinatorWorker(id, token);
     return current;
   };
+
+  // Optional JSON record: null when absent, fenced when present but invalid.
+  const readRecord = (path, schema) => {
+    try { lstatSync(path); } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw databaseMaintenanceError();
+    }
+    try {
+      if (!lstatSync(path).isFile()) throw databaseMaintenanceError();
+      return schema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    } catch {
+      throw databaseMaintenanceError();
+    }
+  };
+
+  // For stages that run inside the one entered worker process. Entry itself
+  // stays one-use; this only proves the caller is that entered owner.
+  const assertEnteredCoordinatorWorker = (id, token) => {
+    const current = assertCoordinatorWorker(id, token);
+    const started = readRecord(join(workerDirectory(token), 'started.json'), coordinatorSchema);
+    if (!started || started.id !== id || started.token !== token) throw databaseMaintenanceError();
+    return current;
+  };
+
+  // The entered worker's POSIX process group. Every database child it starts
+  // (dump/import) inherits this group, so a successor can prove none survive.
+  const recordCoordinatorGroup = (id, token, pgid) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance worker group');
+    assertEnteredCoordinatorWorker(id, token);
+    const value = workerGroupSchema.parse({ id, token, pgid });
+    writeDurableExclusive(join(workerDirectory(token), 'group.json'), value);
+    syncDirectory(workerDirectory(token));
+    assertEnteredCoordinatorWorker(id, token);
+    return value;
+  };
+
+  // Earlier owners of this operation. Recovery requires each one's supervisor
+  // exit receipt, but that says nothing about descendants it may have left.
+  // A worker records its group before starting any database child, so a
+  // predecessor without a group record (never entered, crashed before that
+  // point, or an inspection-only legacy worker) started no dump or import.
+  const readPredecessorWorkers = (id, token) => {
+    assertEnteredCoordinatorWorker(id, token);
+    const chain = readCoordinatorChain(id);
+    if (chain.at(-1)?.token !== token) throw databaseMaintenanceError();
+    return chain.slice(0, -1).map(({ token: previous }) => {
+      const directory = workerDirectory(previous);
+      const started = readRecord(join(directory, 'started.json'), coordinatorSchema);
+      const group = readRecord(join(directory, 'group.json'), workerGroupSchema);
+      if ((started && (started.id !== id || started.token !== previous))
+        || (group && (!started || group.id !== id || group.token !== previous))) throw databaseMaintenanceError();
+      return { started: Boolean(started), pgid: group?.pgid ?? null };
+    });
+  };
+
+  const transferDumpPath = id => join(dataDir, 'db-dumps', 'portos-maintenance-' + z.string().uuid().parse(id) + '.sql');
+  const transferDumpRecordPath = join(activeDir, 'transfer-dump.json');
+  const transferImportRecordPath = join(activeDir, 'transfer-import.json');
+
+  const readTransferDump = (id) => {
+    const current = read();
+    if (!current || current.id !== id) throw databaseMaintenanceError();
+    const dump = readRecord(transferDumpRecordPath, transferDumpSchema);
+    if (dump && (dump.id !== id || JSON.stringify(dump.source) !== JSON.stringify(current.source)
+      || dump.file !== 'portos-maintenance-' + id + '.sql')) throw databaseMaintenanceError();
+    return dump;
+  };
+
+  const readTransferImport = (id) => {
+    const current = read();
+    if (!current || current.id !== id) throw databaseMaintenanceError();
+    const receipt = readRecord(transferImportRecordPath, transferImportSchema);
+    if (!receipt) return null;
+    const dump = readTransferDump(id);
+    if (!dump || receipt.id !== id || receipt.sha256 !== dump.sha256
+      || JSON.stringify(receipt.target) !== JSON.stringify(current.target)) throw databaseMaintenanceError();
+    return receipt;
+  };
+
+  // Immutable no-replace publication of already-fsynced bytes. A retry of the
+  // identical record is accepted; a different record is never substituted.
+  const publishImmutable = (destination, value) => {
+    const pending = join(activeDir, 'record-' + randomUUID() + '.pending');
+    writeDurableExclusive(pending, value);
+    try {
+      linkSync(pending, destination);
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    } finally {
+      unlinkSync(pending);
+    }
+    syncDirectory(activeDir);
+    if (readFileSync(destination, 'utf8') !== JSON.stringify(value, null, 2) + '\n') throw databaseMaintenanceError();
+  };
+
+  // Publish the COMPLETE recovery dump's identity. The caller has already
+  // fsynced the dump and its directory; the import may use only these bytes.
+  const recordTransferDump = (id, token, dump) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance dump publication');
+    const current = assertEnteredCoordinatorWorker(id, token);
+    const value = transferDumpSchema.parse(dump);
+    if (current.stage !== 'exporting' || value.id !== id) throw databaseMaintenanceError();
+    publishImmutable(transferDumpRecordPath, value);
+    assertEnteredCoordinatorWorker(id, token);
+    return readTransferDump(id);
+  };
+
+  // A committed single-transaction import into the recorded target.
+  const recordTransferImport = (id, token, receipt) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance import receipt');
+    const current = assertEnteredCoordinatorWorker(id, token);
+    const value = transferImportSchema.parse(receipt);
+    if (current.stage !== 'importing' || value.id !== id) throw databaseMaintenanceError();
+    publishImmutable(transferImportRecordPath, value);
+    assertEnteredCoordinatorWorker(id, token);
+    return readTransferImport(id);
+  };
+
+  // Bounded operator status: never paths, digests, endpoints or tokens.
+  const transferStatus = (id) => ({
+    dump: readTransferDump(id) ? 'recorded' : 'absent',
+    import: readTransferImport(id) ? 'committed' : 'pending',
+  });
 
   // Retain the pre-stop producer identities across same-operation recovery.
   // Partial publication is never interpreted as an empty producer set.
@@ -440,7 +581,9 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
 
   return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition, reconciledWritersDirectory,
     reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker,
-    readProducerSnapshot, recordProducerSnapshot };
+    readProducerSnapshot, recordProducerSnapshot, assertEnteredCoordinatorWorker, recordCoordinatorGroup,
+    readPredecessorWorkers, transferDumpPath, readTransferDump, readTransferImport, recordTransferDump,
+    recordTransferImport, transferStatus };
 }
 
 const journal = createDatabaseMaintenanceJournal();

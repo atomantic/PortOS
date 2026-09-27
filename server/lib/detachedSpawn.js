@@ -594,10 +594,10 @@ export async function spawnDetached(bin, args = [], options = {}) {
 }
 
 /**
- * Internal, one-use launch of the fixed maintenance inspection worker. There
- * is no bin/argv/env/controlDir override and no ordinary-writer bypass option.
- * It retains the supervisor receipt even when the caller exits. Transfer and
- * PM2 lifecycle execution remain disabled pending proven writer quiescence.
+ * Internal, one-use launch of the fixed offline-transfer worker. There is no
+ * bin/argv/env/controlDir override and no ordinary-writer bypass option. It
+ * retains the supervisor receipt even when the caller exits; a successor needs
+ * that receipt before recovery (see databaseMaintenanceTransfer.js).
  */
 export async function spawnDatabaseMaintenanceWorker(id, token) {
   const [{ createDatabaseMaintenanceJournal }, { PATHS }] = await Promise.all([

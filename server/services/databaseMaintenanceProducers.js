@@ -41,12 +41,15 @@ function sameIdentities(current, saved) {
 /**
  * Internal one-use coordinator worker stage. Stops producers only; descendants
  * and pre-fence admitted spawns still require reconciliation before any dump.
- * No public entrypoint invokes this workflow until the transfer stages ship.
+ * A recovered worker at `exporting`/`importing` repeats the same readback and
+ * stop against the ORIGINAL identities before retrying its transfer step.
+ * `entered` is for the transfer worker, which has already claimed its one-use
+ * entry; standalone calls claim it here.
  */
-export async function stopOwnedDatabaseProducers(id, token) {
+export async function stopOwnedDatabaseProducers(id, token, { entered = false } = {}) {
   const journal = createDatabaseMaintenanceJournal();
-  const operation = journal.enterCoordinatorWorker(id, token);
-  if (!['accepted', 'quiescing'].includes(operation.stage)) throw refused();
+  const operation = entered ? journal.assertEnteredCoordinatorWorker(id, token) : journal.enterCoordinatorWorker(id, token);
+  if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(operation.stage)) throw refused();
   const inventory = async () => {
     journal.assertCoordinatorWorker(id, token);
     const rows = await listMaintenanceProcesses();
@@ -77,5 +80,5 @@ export async function stopOwnedDatabaseProducers(id, token) {
   const final = await inventory();
   sameIdentities(final, saved);
   if (final.some(row => row.status !== 'stopped')) throw refused();
-  return { id, stage: 'quiescing', producersStopped: true, quiescenceVerified: false, transferReady: false };
+  return { id, stage: journal.read().stage, producersStopped: true, quiescenceVerified: false, transferReady: false };
 }

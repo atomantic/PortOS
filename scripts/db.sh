@@ -30,7 +30,9 @@ PGUSER="${PGUSER:-portos}"
 PGDATABASE="${PGDATABASE:-portos}"
 PGPASSWORD="${PGPASSWORD:-portos}"
 PGHOST="${PGHOST:-localhost}"
-DUMP_DIR="$ROOT_DIR/data/db-dumps"
+# The maintenance coordinator names its install's dump directory explicitly
+# (its data root can differ from this checkout); otherwise use this checkout.
+DUMP_DIR="${PORTOS_DUMP_DIR:-$ROOT_DIR/data/db-dumps}"
 ENV_FILE="$ROOT_DIR/.env"
 
 # Colors
@@ -524,13 +526,18 @@ cmd_setup_native() {
   info "Coordinated backend migration is not yet available. Keep using the current backend."
 }
 
-# Scope inherited libpq endpoint overrides out of explicit transfers. In
-# particular PGHOSTADDR takes precedence over -h's network destination.
+# Scope inherited libpq settings out of explicit transfers. PGHOSTADDR takes
+# precedence over -h's network destination, PGSERVICE can supply another
+# endpoint, and PGOPTIONS can redirect statements (search_path). Only the
+# password crosses; every connection parameter is an explicit argument.
 run_explicit_pg() (
-  unset PGHOSTADDR PGSERVICE PGSERVICEFILE
-  local binary="$1"
+  local binary="$1" host="$PGHOST" port="$PGPORT" user="$PGUSER" database="$PGDATABASE" password="$PGPASSWORD"
   shift
-  PGPASSWORD="$PGPASSWORD" "$binary" -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" "$@"
+  local name
+  for name in $(compgen -e); do
+    case "$name" in PG*) unset "$name" ;; esac
+  done
+  PGPASSWORD="$password" "$binary" -h "$host" -p "$port" -U "$user" -d "$database" "$@"
 )
 
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable
