@@ -1,5 +1,6 @@
 import { join, resolve } from 'node:path';
-import { open, realpath } from 'node:fs/promises';
+import { open, realpath, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { PATHS, ensureDir, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -28,6 +29,7 @@ export async function renderComposition({ jobId, ...input }) {
   const filename = `composition-${jobId}.mp4`;
   const outputPath = join(PATHS.videos, filename);
   let page;
+  let audioTemp;
   let success = false;
   let result;
   let failure;
@@ -39,8 +41,8 @@ export async function renderComposition({ jobId, ...input }) {
     try { await write(handle); } finally { await handle.close(); }
   };
   try {
-    const { directory, musicTrack, launchVideo } = validateRequest(htmlCompositionRenderSchema, input);
-    const musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
+    const { directory, musicTrack, compositionMusic, launchVideo } = validateRequest(htmlCompositionRenderSchema, input);
+    let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     signal.throwIfAborted();
     let launchPlan;
@@ -54,9 +56,18 @@ export async function renderComposition({ jobId, ...input }) {
       deliveryRoot = join(dataRoot, 'launch-videos', launchVideo.appId, launchVideo.runId);
     }
     const needsLaunchGate = launchVideo || directory.split('/')[0] === 'launch-videos';
-    page = await openComposition(directory, { signal, validateAssets: needsLaunchGate
-      ? assets => { launchPlan = validateLaunchVideoAssets(assets, launchVideo); launchAssets = assets; }
-      : undefined });
+    page = await openComposition(directory, { signal, validateAssets: assets => {
+      if (needsLaunchGate) { launchPlan = validateLaunchVideoAssets(assets, launchVideo); launchAssets = assets; }
+      if (compositionMusic) {
+        if (!needsLaunchGate) throw new Error('compositionMusic requires a launch video');
+        if (!assets.has('/soundtrack.wav')) throw new Error('compositionMusic is missing soundtrack.wav');
+      }
+    } });
+    if (compositionMusic) {
+      audioTemp = await mkdtemp(join(tmpdir(), 'portos-composition-audio-'));
+      musicPath = join(audioTemp, 'soundtrack.wav');
+      await writeFile(musicPath, launchAssets.get('/soundtrack.wav'), { flag: 'wx' });
+    }
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
@@ -111,6 +122,7 @@ export async function renderComposition({ jobId, ...input }) {
     failure = error;
   } finally {
     await page?.close();
+    if (audioTemp) await rm(audioTemp, { recursive: true, force: true });
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});
       await unlinkGuarded(outputPath).catch(() => {});

@@ -47,7 +47,7 @@ describe('launch video drawer', () => {
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
   });
 
-  it('queues generated music and motion graphics without requiring a library track for a longer video', async () => {
+  it.each(['auto', 'service', 'compose'])('queues %s generated music and motion graphics without requiring a library track for a longer video', async musicMethod => {
     createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
     renderPanel('/?launchVideo=true');
     fireEvent.click(screen.getByLabelText('Dynamic motion graphics'));
@@ -55,8 +55,10 @@ describe('launch video drawer', () => {
     fireEvent.click(screen.getByLabelText('Include music'));
     expect(screen.getByLabelText('Generate original music').checked).toBe(false);
     fireEvent.click(screen.getByLabelText('Generate original music'));
+    expect(screen.getByLabelText('Music creation').value).toBe('auto');
+    fireEvent.change(screen.getByLabelText('Music creation'), { target: { value: musicMethod } });
     fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
-    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, motionGraphics: true }), { silent: true }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, musicMethod, motionGraphics: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
   });
 

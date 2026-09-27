@@ -65,6 +65,8 @@ describe('user-triggered launch videos', () => {
     expect(task.prompt).toContain('"name":"Example Product"');
     expect(task.prompt).toContain('"port":4321');
     expect(task.prompt).toContain('"generateMusic":true');
+    expect(task.prompt).toContain('"musicMethod":"auto"');
+    expect(task.prompt).toContain('auto MUST continue with agent composition');
     expect(task.prompt).toContain('"motionGraphics":true');
     expect(task.prompt).toContain('When motionGraphics is true');
     expect(task.prompt).toContain('"targetDurationSec":120');
@@ -75,6 +77,12 @@ describe('user-triggered launch videos', () => {
     expect((await submit({ motionGraphics: 'yes' })).status).toBe(400);
     expect((await submit({ generateMusic: true, musicTrack: 'example.wav' })).status).toBe(400);
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['compose', 'service'])('preserves the explicit %s music method', async musicMethod => {
+    expect((await submit({ generateMusic: true, musicMethod })).status).toBe(202);
+    expect(addTask.mock.calls[0][0].prompt).toContain(`"musicMethod":"${musicMethod}"`);
+    expect((await submit({ generateMusic: true, musicMethod: 'unknown' })).status).toBe(400);
   });
 
   it('refuses invalid options, missing music, and unavailable CoS before queuing', async () => {

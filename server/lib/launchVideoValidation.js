@@ -16,10 +16,24 @@ export function validateLaunchVideoAssets(assets, options) {
     const filename = safeName(name);
     if (filename !== name) fail(`Private filename: ${filename}`);
     const type = extname(name).toLowerCase();
-    // Font bytes are the sole non-text input. Raster screenshots/video could
+    // Only local fonts and a canonical synthesized PCM soundtrack are binary.
+    // Raster screenshots/video could
     // contain private records that text detectors cannot inspect.
     if (type === '.woff' || type === '.woff2') {
       if (bytes.subarray(0, 4).toString('ascii') !== (type === '.woff' ? 'wOFF' : 'wOF2')) fail(`Invalid font: ${filename}`);
+      continue;
+    }
+    if (name === '/soundtrack.wav') {
+      // Reject metadata chunks and non-PCM containers, including disguised playlists.
+      if (bytes.length < 48 || bytes.toString('ascii', 0, 4) !== 'RIFF'
+        || bytes.readUInt32LE(4) !== bytes.length - 8 || bytes.toString('ascii', 8, 16) !== 'WAVEfmt '
+        || bytes.readUInt32LE(16) !== 16 || bytes.readUInt16LE(20) !== 1
+        || ![1, 2].includes(bytes.readUInt16LE(22)) || ![44100, 48000].includes(bytes.readUInt32LE(24))
+        || bytes.readUInt16LE(34) !== 16 || bytes.toString('ascii', 36, 40) !== 'data'
+        || bytes.readUInt32LE(40) !== bytes.length - 44
+        || bytes.readUInt16LE(32) !== bytes.readUInt16LE(22) * 2
+        || bytes.readUInt32LE(28) !== bytes.readUInt32LE(24) * bytes.readUInt16LE(32)
+        || (bytes.length - 44) % bytes.readUInt16LE(32)) fail('Invalid canonical PCM soundtrack.wav');
       continue;
     }
     if (!TEXT_TYPES.has(type)) fail(`Unsupported launch-video asset: ${filename}`);

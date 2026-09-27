@@ -83,6 +83,20 @@ instrumental prompt, waits for its media job, and passes the resulting library
 filename to the renderer. Shorter music beds loop to fill the video. A generation
 failure is reported instead of silently dropping the soundtrack.
 
+Music creation (`generateMusic: true`) offers `musicMethod: "auto"` (default),
+`"service"`, or `"compose"`. Automatic prefers a ready configured engine and
+falls back to agent composition when none is ready. Service-only reports missing
+setup; composition skips music engines entirely. The agent can use available
+Tone.js, Strudel, Web Audio, or a standard-library PCM synthesizer without installs.
+
+Agent composition saves the original instrumental score/source and
+`composition/soundtrack.wav`, then submits `compositionMusic: "soundtrack.wav"`
+instead of `musicTrack`. The file must have a canonical 44-byte RIFF/WAVE header,
+a 16-byte PCM fmt chunk, mono or stereo 16-bit samples at 44100 or 48000 Hz, and
+one data chunk without metadata. The renderer muxes a private temporary copy of
+the validated snapshot, then removes it. Browser audio playback alone is not
+captured. No Music-library write or music model is needed.
+
 Dynamic motion graphics (`motionGraphics: true`, off by default) asks the agent for
 a beat-cut showreel instead of a paced walkthrough: palette color-field swaps,
 kinetic typography, easing showcases, generative geometry seeded from `t`, an
@@ -131,7 +145,9 @@ Admission scans all UTF-8 HTML, CSS, JavaScript, JSON, SVG, Markdown, and text
 assets, including the plan, storyboard, and caption, for the shared PII patterns
 and recognizable secret tokens. It refuses detected values rather than silently
 redacting them; errors identify the pattern and file without quoting the value.
-Only WOFF/WOFF2 fonts are accepted as binary assets. Raster images, footage, and
+Only WOFF/WOFF2 fonts and the canonical synthesized `soundtrack.wav` are accepted
+as binary assets. Audio must be original instrumental synthesis, never copied
+recordings or live user audio; PCM validation cannot establish its provenance. Raster images, footage, and
 other uninspectable formats are refused on this path. Existing general HTML
 composition renders retain their asset support.
 

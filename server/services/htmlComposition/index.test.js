@@ -110,7 +110,12 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({
       posterSec: 11, scenes: [{ durationSec: 15, lines: [] }],
     }));
-    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15, appId: 'example', runId } });
+    // Canonical PCM from a synthesized tone; no music engine or library required.
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.3', '-fflags', '+bitexact', '-c:a', 'pcm_s16le', '-y', join(PATHS.data, input.directory, 'soundtrack.wav')]);
+    const result = await renderComposition({ ...input, compositionMusic: 'soundtrack.wav', launchVideo: { targetDurationSec: 15, appId: 'example', runId } });
+    const audio = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-vn', '-f', 's16le', '-ac', '1', '-ar', '44100', '-'], { maxBuffer: 2 * 1024 * 1024 });
+    expect(audio.length).toBeGreaterThanOrEqual(15 * 44100 * 2);
+    expect(audio.some(byte => byte !== 0)).toBe(true);
     const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
     expect(await readdir(runRoot)).toEqual(expect.arrayContaining(['composition', 'plan.md', 'storyboard.json', 'caption.txt', 'video.mp4', 'poster.jpg']));
     expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));

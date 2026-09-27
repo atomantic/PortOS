@@ -95,6 +95,14 @@ describe('launch-video render admission', () => {
     expect((await submit({ launchVideo: undefined })).status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
+  it('rejects missing, malformed and conflicting composition soundtracks before enqueue', async () => {
+    expect((await submit({ compositionMusic: 'soundtrack.wav' })).status).toBe(400);
+    await put('soundtrack.wav', Buffer.from('not PCM audio'));
+    expect((await submit({ compositionMusic: 'soundtrack.wav' })).status).toBe(400);
+    expect((await submit({ compositionMusic: '../soundtrack.wav' })).status).toBe(400);
+    expect((await submit({ compositionMusic: 'soundtrack.wav', musicTrack: 'library.wav' })).status).toBe(400);
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
   it('fails closed on uninspectable raster assets', async () => {
     await put('screen.png', Buffer.from([0, 1, 2]));
     expect((await submit()).status).toBe(400);
