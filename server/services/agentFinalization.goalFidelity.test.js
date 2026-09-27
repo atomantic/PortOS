@@ -394,7 +394,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
   });
 
   it.each([
-    { analysisType: 'release-check' },
+    { analysisType: 'do-release' },
     { prRemediationFollowUp: true },
     { noCodeOutput: true },
     { creativeDirector: { projectId: 'example-project' } },

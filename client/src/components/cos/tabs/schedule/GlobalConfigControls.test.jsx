@@ -242,22 +242,44 @@ describe('GlobalConfigControls — issue exclude labels', () => {
 
 describe('GlobalConfigControls — require approval', () => {
   it('toggles requireApproval on the task metadata', () => {
-    const onUpdate = renderControls({ taskType: 'release-check', taskMetadata: { useWorktree: false, openPR: false } });
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { useWorktree: false, openPR: false } });
     fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
-    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
       taskMetadata: { useWorktree: false, openPR: false, requireApproval: true },
     });
   });
 
   it('turns requireApproval off when it is already on', () => {
     const onUpdate = renderControls({
-      taskType: 'release-check',
+      taskType: 'do-release',
       taskMetadata: { requireApproval: true },
     });
     fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
-    expect(onUpdate).toHaveBeenCalledWith('release-check', {
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
       taskMetadata: { requireApproval: false },
     });
+  });
+});
+
+describe('GlobalConfigControls — release options', () => {
+  it('is hidden for other tasks', () => {
+    renderControls();
+    expect(screen.queryByText('Release Options')).not.toBeInTheDocument();
+  });
+
+  it('shows options ON by default and writes an explicit false when turned off', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { slashdoCommand: 'release', resolveBlockers: false } });
+    expect(screen.getByRole('button', { name: 'Disable merge dependency updates' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Disable merge dependency updates' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', {
+      taskMetadata: { slashdoCommand: 'release', resolveBlockers: false, mergeDependencyUpdates: false },
+    });
+  });
+
+  it('turns an explicitly disabled option back on', () => {
+    const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { resolveBlockers: false } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enable resolve blockers' }));
+    expect(onUpdate).toHaveBeenCalledWith('do-release', { taskMetadata: { resolveBlockers: true } });
   });
 });
 

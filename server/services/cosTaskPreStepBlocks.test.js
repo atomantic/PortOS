@@ -16,6 +16,7 @@ import { dirname, join } from 'path';
 
 import {
   applyPerpetualDrainCap,
+  applyReleaseOptions,
   resolveIssueAuthorFilterBlock,
   resolveIssueExcludeLabelsBlock,
   resolveReconcileDrainGate,
@@ -376,5 +377,41 @@ describe('applyPerpetualDrainCap', () => {
     const ts = fakeSchedule(5);
     const cronDrain = { type: 'cron', cronExpression: '0 7 * * *', perpetual: true, drainDispatchCap: 5 };
     expect(await applyPerpetualDrainCap(app, 'branch-reconcile', cronDrain, ts)).toEqual({ skip: true });
+  });
+});
+
+describe('applyReleaseOptions — the do-release {releaseOptions} block', () => {
+  it('renders every option ON by default and OFF only for an explicit false', () => {
+    const out = applyReleaseOptions('Options:\n{releaseOptions}\nEnd', 'do-release', { mergeDependencyUpdates: false, autoDecide: 'false' });
+    expect(out).toContain('**Finish in-flight work: ON**');
+    expect(out).toContain('**Merge dependency updates: OFF** — Step 2 is skipped');
+    expect(out).toContain('**Resolve blockers: ON**');
+    // Only a real boolean false disables — the sanitizer drops non-booleans.
+    expect(out).toContain('**Make decisions: ON**');
+    expect(out).not.toContain('{releaseOptions}');
+    expect(out.startsWith('Options:')).toBe(true);
+  });
+
+  it('keeps dependency updates actionable when in-flight work is off', () => {
+    const out = applyReleaseOptions('{releaseOptions}', 'do-release', { finishInFlight: false });
+    expect(out).toContain('**Finish in-flight work: OFF**');
+    expect(out).toContain('dependency-bot PRs follow the Merge dependency updates option');
+    expect(out).toContain('**Merge dependency updates: ON**');
+  });
+
+  it('prepends the block to a customized prompt that dropped the token', () => {
+    const out = applyReleaseOptions('my custom release prompt', 'do-release', { resolveBlockers: false });
+    expect(out.startsWith('## Release options for this run')).toBe(true);
+    expect(out).toContain('**Resolve blockers: OFF**');
+    expect(out.endsWith('my custom release prompt')).toBe(true);
+  });
+
+  it('targets the branch-reconcile trigger at the released app, or PortOS on the global lane', () => {
+    expect(applyReleaseOptions('{"appId":"{appId}"}', 'do-release', { app: 'app-a' })).toContain('{"appId":"app-a"}');
+    expect(applyReleaseOptions('{"appId":"{appId}"}', 'do-release', {})).toContain('{"appId":""}');
+  });
+
+  it('leaves every other task type untouched', () => {
+    expect(applyReleaseOptions('{releaseOptions}', 'branch-reconcile', {})).toBe('{releaseOptions}');
   });
 });

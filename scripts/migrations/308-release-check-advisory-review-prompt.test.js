@@ -42,23 +42,23 @@ describe('migration 308 — make release-check review advisory', () => {
 
     expect(result.updated).toBe(2);
     expect(readJson(cosPath).tasks['release-check']).toEqual({
-      promptVersion: PROMPT_VERSIONS['release-check'],
+      promptVersion: PROMPT_VERSIONS['do-release'],
       promptCustomized: false,
-      prompt: DEFAULT_TASK_PROMPTS['release-check'],
+      prompt: DEFAULT_TASK_PROMPTS['do-release'],
     });
     expect(readJson(cosPath).tasks.custom).toEqual({
       promptVersion: 11,
       promptCustomized: true,
       prompt: 'keep this',
     });
-    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['release-check']);
+    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['do-release']);
   });
 
   it('does not rewrite a current or customized prompt', async () => {
     const path = join(rootDir, 'data', 'cos', 'task-schedule.json');
     writeJson(path, {
       tasks: {
-        current: { promptVersion: PROMPT_VERSIONS['release-check'], promptCustomized: false, prompt: DEFAULT_TASK_PROMPTS['release-check'] },
+        current: { promptVersion: PROMPT_VERSIONS['do-release'], promptCustomized: false, prompt: DEFAULT_TASK_PROMPTS['do-release'] },
         custom: { promptVersion: 11, promptCustomized: true, prompt: 'custom release policy' },
       },
     });

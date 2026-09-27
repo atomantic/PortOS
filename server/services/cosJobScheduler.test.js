@@ -305,7 +305,7 @@ it('wakes at a future app deadline even while the task is ready for another app'
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-01-01T16:00:00Z'));
   try {
-    getUpcomingTasks.mockResolvedValue([{ taskType: 'release-check', status: 'ready', eligibleIn: 0,
+    getUpcomingTasks.mockResolvedValue([{ taskType: 'do-release', status: 'ready', eligibleIn: 0,
       nextScheduledAt: Date.now() + 300000 }]);
     await scheduleNextImprovementCheck();
     expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({

@@ -19,6 +19,7 @@
  *   perpetual gate in cosTaskGenerator.prepareManagedAppImprovementTask.
  */
 
+import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
@@ -494,11 +495,6 @@ function ensureExecutionRecord(schedule, taskType, appId) {
     return top.perApp[appId];
   }
   return top;
-}
-
-/** Normalize a task type to its `task:`-prefixed executions map key. */
-function executionKey(taskType) {
-  return taskType.startsWith('task:') ? taskType : `task:${taskType}`;
 }
 
 /**

@@ -59,6 +59,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
   });
 
+  it('keeps the release prompt history under the renamed do-release key', () => {
+    // The outgoing release-check v14 default must stay recognizable as shipped,
+    // or migration 417 would move an uncustomized prompt that never upgrades.
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['do-release']).toContain('cd936b9a4fb76273b36ec54c3ed6d5ba');
+    expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).not.toHaveProperty('release-check');
+    expect(SNAPSHOT.PROMPT_VERSIONS).not.toHaveProperty('release-check');
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('release-check');
+  });
+
   it('reference-watch leaves tracker IDs and filing mechanics to the shared tracker block', () => {
     const current = DEFAULT_TASK_PROMPTS['reference-watch'];
 
@@ -642,50 +651,55 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(phase3).not.toContain('If ANY of these are true, release the claim and re-pick');
   });
 
-  // release-check READS the changelog rather than writing it, so its fix is the
-  // mirror image: an unreleased set that lives in uncollected fragments must not
-  // read as "not enough work accumulated for a release".
-  it('release-check v14 names releases from their biggest user-visible wins', () => {
-    const current = DEFAULT_TASK_PROMPTS['release-check'];
-    expect(PROMPT_VERSIONS['release-check']).toBeGreaterThanOrEqual(14);
-    expect(current).toContain('Reconcile Missing Releases');
+  // do-release (formerly release-check) READS the changelog rather than writing
+  // it: an unreleased set that lives in uncollected fragments must not read as
+  // "not enough work accumulated for a release".
+  it('do-release v15 ships the release instead of stopping at a filed blocker', () => {
+    const current = DEFAULT_TASK_PROMPTS['do-release'];
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(15);
+    expect(current).toContain('Reconcile missing releases');
     expect(current).toContain('Unpublished release detected');
     expect(current).toContain('--latest=false');
     expect(current).toContain('one or two biggest user-visible wins');
     expect(current).toContain('# Release vX.Y.Z - <Fun Name>');
     expect(current).toContain('GitHub Actions workflow extracts this heading');
     expect(current).toContain('per-branch fragments');
-    expect(current).toContain('assembled');
-    // release-check is a generic {appName} prompt — it runs against managed apps,
-    // which have no `npm run changelog:preview`. It must send the agent to the
-    // repo's own documented command, never name a PortOS script to run.
+    // A generic {appName} prompt — managed apps have no `npm run changelog:preview`.
     expect(current).not.toContain('changelog:preview');
     expect(current).toContain('Do NOT guess a command name');
-    expect(current).toContain('database-backed test suite');
     expect(current).toContain('test-database provisioning/setup command');
     expect(current).toContain('never substitute a production database');
     expect(current).toContain('{reviewers}');
     expect(current).toContain('/do:release');
-    expect(current).toContain('Code review is optional');
     expect(current).toContain('Only CI is the review/merge gate');
     expect(current).toContain('inconclusive review must never stop the release');
-    // v13: a red suite or red CI is work this run must FIX. A pre-existing
-    // failure on the source branch is what ended a v12 run with the release
-    // untouched, so the halt-on-test-failure sentence must be gone and the
-    // repair loop present — including the guard against forcing green by
-    // deleting/skipping/loosening a test.
-    expect(current).toContain('Fix what blocks the release');
-    expect(current).toContain('already existed on the source branch before this run started');
+    // The operator's toggles are rendered at dispatch.
+    expect(current).toContain('{releaseOptions}');
+    // v15: in-flight work and dependency PRs land first, respecting live owners.
+    expect(current).toContain('Finish in-flight work first');
+    expect(current).toContain('/api/cos/agents?active=1');
+    // Scoped to the app being released, never the install's other repos.
+    expect(current).toContain('"taskType":"branch-reconcile","appId":"{appId}"');
+    expect(current).toContain('Do not wait for the triggered agent');
+    // External contributors' PRs stay behind the review/admission flow, and the
+    // sweep targets the development branch, not the release branch.
+    expect(current).toContain('Only trusted work is yours');
+    expect(current).toContain('--base <DEV_BRANCH>');
+    expect(current).toContain('Merge dependency updates');
+    // v15: a blocker that outlasts the fix loop goes to a sub-agent; filing an
+    // issue and leaving the release PR open is no longer an exit (v14 stopped
+    // at its 10-commit bound with the release PR open).
+    expect(current).toContain('Delegate instead of giving up');
+    // Waiting on a queued task can deadlock on the agent slot this run holds.
+    expect(current).toContain('Do not wait for the queued task');
+    expect(current).toContain('Filing an issue and leaving the release PR open is NOT a resolution');
+    expect(current).not.toContain('Bound the loop');
+    expect(current).toContain('Local-only flake');
+    expect(current).toContain('Decisions for operator review');
     expect(current).toContain('are NOT fixes');
     expect(current).toContain('--log-failed');
-    expect(current).toContain('Bound the loop');
-    expect(current).toContain('Environmental blocker');
-    expect(current).not.toContain('its required tests/build checks fail, or CI fails, stop and report');
-    expect(current).not.toContain('If the reviewer list is empty or unavailable, stop');
-    expect(current).not.toContain('If it cannot run or a configured reviewer is unavailable or inconclusive, stop');
     expect(current).not.toMatch(/copilot/i);
     expect(current).not.toContain('reviewThreads');
-    expect(current).not.toContain('copilot-pull-request-reviewer');
   });
 
   // The PortOS custom catalog-refresh job still sources this versioned prompt:

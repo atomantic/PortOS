@@ -2,13 +2,22 @@
 import { PRIVATE_SECURITY_TASK_TYPE } from './privateSecurityPolicy.js';
 import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';
 
+// Retired scheduled task names → their current names. Each rename ships a
+// migration that moves persisted schedule state (408, 417); this map covers
+// what a migration cannot reach — queued/archived tasks carrying the old name
+// and the prompt-integrity history that follows the renamed key.
+export const TASK_TYPE_RENAMES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle', 'release-check': 'do-release' });
+export const currentTaskTypeName = (taskType) => TASK_TYPE_RENAMES[taskType] || taskType;
+// A task type's `task:`-prefixed schedule executions key, under its current name.
+export const taskExecutionKey = (taskType) => `task:${currentTaskTypeName(taskType.startsWith('task:') ? taskType.slice(5) : taskType)}`;
+
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   PRIVATE_SECURITY_TASK_TYPE,
   'model-comparison-refresh',
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-reconcile', 'issue-reconcile', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'claim-issue', 'claim-work', 'error-handling',
-  'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
+  'typing', 'do-release', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
   // Polls the app's GitHub repo for pull requests newly opened against the
   // default branch and dispatches an agent (running the configurable

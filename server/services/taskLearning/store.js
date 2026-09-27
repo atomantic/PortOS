@@ -12,6 +12,7 @@ import { join } from 'path';
 import { cosEvents, emitLog } from '../cosEvents.js';
 import { ensureDir, readJSONFile, PATHS, atomicWrite, tryReadFile } from '../../lib/fileUtils.js';
 import { createMutex } from '../../lib/asyncMutex.js';
+import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 
 export const withLock = createMutex();
 
@@ -700,7 +701,9 @@ export function classifyUntypedTask(task) {
  */
 export function extractTaskType(task) {
   // Check for self-improvement type in metadata (direct or forwarded from task)
-  const analysisType = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType;
+  // A task queued before a rename (TASK_TYPE_RENAMES) records into the current
+  // bucket, which migration 417 moved the pre-rename history into.
+  const analysisType = currentTaskTypeName(task?.metadata?.analysisType || task?.metadata?.taskAnalysisType);
   if (analysisType) {
     return `self-improve:${analysisType}`;
   }
@@ -718,7 +721,7 @@ export function extractTaskType(task) {
 
   // Check for app improvement tasks
   if (task?.metadata?.taskApp && task?.metadata?.selfImprovementType) {
-    return `app-improve:${task.metadata.selfImprovementType}`;
+    return `app-improve:${currentTaskTypeName(task.metadata.selfImprovementType)}`;
   }
 
   // Check description patterns

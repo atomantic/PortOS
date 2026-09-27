@@ -41,12 +41,12 @@ export default {
 
       const task = schedule.tasks['release-check'];
       const currentVersion = task.promptVersion || 1;
-      if (!task.promptCustomized && currentVersion < PROMPT_VERSIONS['release-check']) {
-        task.prompt = DEFAULT_TASK_PROMPTS['release-check'];
-        task.promptVersion = PROMPT_VERSIONS['release-check'];
+      if (!task.promptCustomized && currentVersion < PROMPT_VERSIONS['do-release']) {
+        task.prompt = DEFAULT_TASK_PROMPTS['do-release'];
+        task.promptVersion = PROMPT_VERSIONS['do-release'];
         await writeJson(fullPath, schedule);
         updatedCount += 1;
-        console.log(`📝 ${relPath}: upgraded release-check prompt v${currentVersion} → v${PROMPT_VERSIONS['release-check']}`);
+        console.log(`📝 ${relPath}: upgraded release-check prompt v${currentVersion} → v${PROMPT_VERSIONS['do-release']}`);
       }
     }
     return { updated: updatedCount };

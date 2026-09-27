@@ -201,6 +201,15 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it('treats a task queued under a retired type name as its renamed scheduled type', () => {
+    // A release-check task queued before migration 417 must not fall through to
+    // keyword routing, which would bolt a bug-fix lifecycle onto the release.
+    expect(detectSkillTemplates(makeTask({
+      description: 'Fix the broken release and the failing tests',
+      metadata: { analysisType: 'release-check' },
+    }))).toEqual([]);
+  });
+
   it('still keyword-matches a free-text task, which is what the fallback is for', () => {
     // No task type — an operator-written task keeps the keyword routing.
     expect(detectSkillTemplates(makeTask({
@@ -3632,7 +3641,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it('recovers the bundled release for an older queued task whose command was stripped', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: { analysisType: 'release-check', openPR: false } }),
+      makeTask({ metadata: { analysisType: 'do-release', openPR: false } }),
       {}, '/r', null, isTruthyMeta, { providerType: 'tui', providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('Canonical release procedure.');
     expect(prompt).toContain('Release Workflow Handoff');

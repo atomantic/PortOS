@@ -42,9 +42,9 @@ describe('migration 281 — upgrade release-check task prompt to v9', () => {
     const result = await migration.up({ rootDir });
     expect(result.updated).toBe(1);
     const updated = readJson(schedulePath);
-    expect(updated.tasks['release-check'].promptVersion).toBe(PROMPT_VERSIONS['release-check']);
+    expect(updated.tasks['release-check'].promptVersion).toBe(PROMPT_VERSIONS['do-release']);
     expect(updated.tasks['release-check'].promptVersion).toBeGreaterThanOrEqual(9);
-    expect(updated.tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['release-check']);
+    expect(updated.tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['do-release']);
   });
 
   it('leaves a user-customized release-check prompt untouched', async () => {

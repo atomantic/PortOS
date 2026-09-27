@@ -34,6 +34,7 @@
  */
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
+import { currentTaskTypeName } from './scheduledTaskTypes.js';
 import { requiresInstallWideTarget, requiresManagedAppTarget } from './taskTargetScope.js';
 import { trimTo } from './textUtils.js';
 
@@ -100,7 +101,9 @@ const nullable = (value, max) => trimTo(value, max) || null;
 export function normalizeQuotaBurnTaskRef(raw) {
   if (!isPlainObject(raw)) return null;
   if (raw.kind === QUOTA_BURN_TASK_REF_KIND.BUILTIN) {
-    const taskType = trimTo(raw.taskType, MAX_REF_FIELD);
+    // A step saved before a task rename (TASK_TYPE_RENAMES) resolves to the
+    // current name, or it would read as an unknown task and never run again.
+    const taskType = currentTaskTypeName(trimTo(raw.taskType, MAX_REF_FIELD));
     if (!taskType) return null;
     return { kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType, appId: nullable(raw.appId, MAX_REF_FIELD) };
   }

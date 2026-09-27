@@ -42,16 +42,16 @@ describe('migration 332 — make release-check fix release blockers', () => {
 
     expect(result.updated).toBe(2);
     expect(readJson(cosPath).tasks['release-check']).toEqual({
-      promptVersion: PROMPT_VERSIONS['release-check'],
+      promptVersion: PROMPT_VERSIONS['do-release'],
       promptCustomized: false,
-      prompt: DEFAULT_TASK_PROMPTS['release-check'],
+      prompt: DEFAULT_TASK_PROMPTS['do-release'],
     });
     expect(readJson(cosPath).tasks.custom).toEqual({
       promptVersion: 12,
       promptCustomized: true,
       prompt: 'keep this',
     });
-    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['release-check']);
+    expect(readJson(legacyPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['do-release']);
   });
 
   // Both guards are keyed on the 'release-check' task itself, so the mocks must be
@@ -63,9 +63,9 @@ describe('migration 332 — make release-check fix release blockers', () => {
     writeJson(cosPath, {
       tasks: {
         'release-check': {
-          promptVersion: PROMPT_VERSIONS['release-check'],
+          promptVersion: PROMPT_VERSIONS['do-release'],
           promptCustomized: false,
-          prompt: DEFAULT_TASK_PROMPTS['release-check'],
+          prompt: DEFAULT_TASK_PROMPTS['do-release'],
         },
       },
     });
@@ -79,7 +79,7 @@ describe('migration 332 — make release-check fix release blockers', () => {
     const result = await migration.up({ rootDir });
 
     expect(result.updated).toBe(0);
-    expect(readJson(cosPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['release-check']);
+    expect(readJson(cosPath).tasks['release-check'].prompt).toBe(DEFAULT_TASK_PROMPTS['do-release']);
     expect(readJson(legacyPath).tasks['release-check']).toEqual({
       promptVersion: 12,
       promptCustomized: true,

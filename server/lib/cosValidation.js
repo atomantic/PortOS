@@ -904,6 +904,14 @@ export const MAX_TOTAL_SPAWNS = 5;
 // drifting would silently drop a toggle at the app-override boundary.
 export const REPO_SYNC_ACTION_KEYS = ['syncPush', 'syncPull', 'switchDefault', 'cleanupMerged', 'dropStashes', 'reapRemotes'];
 
+// do-release's per-app / per-schedule options, each ON unless explicitly `false`:
+// finish in-flight work no live agent owns, merge dependency-bot PRs, fix
+// release blockers (delegating to a sub-agent rather than stopping), and make
+// routine design/preference decisions for later operator review. One list read
+// by the sanitizer allowlist, the schedule defaults, and the {releaseOptions}
+// prompt block, so a toggle cannot be dropped at one boundary.
+export const RELEASE_OPTION_KEYS = ['finishInFlight', 'mergeDependencyUpdates', 'resolveBlockers', 'autoDecide'];
+
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',
   'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'finishAbandoned', 'autoClose',
@@ -916,6 +924,7 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // independent settings. Turning it off on branch-reconcile does NOT turn it off
   // here; each task type carries its own value.
   ...REPO_SYNC_ACTION_KEYS,
+  ...RELEASE_OPTION_KEYS,
   // repo-sync's per-app opt-OUT. The sweep is install-wide by design, so it
   // needs a key of its own rather than reading the per-app `enabled` flag next
   // to it: createApp SEEDS `{ enabled: false }` for every task type, so
@@ -1400,7 +1409,7 @@ export const runEventReconcileSchema = z.object({
 //
 // `taskTypes` is bounded by the audit catalog rather than by
 // SELF_IMPROVEMENT_TASK_TYPES: the planner lays out AUDITS, and a request
-// naming `release-check` would otherwise have its cadence rewritten by a form
+// naming `do-release` would otherwise have its cadence rewritten by a form
 // that never showed it. `fileIssuesByType` is keyed the same way and read only
 // for the types actually scheduled.
 export const qualitySchedulePlanSchema = z.object({

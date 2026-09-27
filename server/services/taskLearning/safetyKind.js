@@ -19,6 +19,8 @@
  * Pure, deterministic (same input → same output), and side-effect free.
  */
 
+import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
+
 /** Reversible internal work — retains today's confidence success-rate gate. */
 export const REVERSIBLE_SAFETY_KIND = 'reversible';
 
@@ -40,11 +42,12 @@ const OUTWARD_KIND_SET = new Set(OUTWARD_SAFETY_KINDS);
  * a false negative would auto-approve genuinely outward work (the dangerous one
  * this feature exists to prevent).
  *
- * Bare `\brelease\b` is intentionally NOT a publish signal. It matches
- * `release-check` (a readiness coordinator the user clicks Run on) and
- * `pre-release` (a check, not a ship). Shipping names still match via
- * `\bpublish\b` (`publish-release`) or the explicit `cut/create/ship/do-release`
- * forms below.
+ * Bare `\brelease\b` is intentionally NOT a publish signal. It matched the old
+ * `release-check` coordinator and `pre-release` (a check, not a ship). Shipping
+ * names still match via `\bpublish\b` (`publish-release`) or the explicit
+ * `cut/create/ship/do-release` forms below — except the scheduled `do-release`
+ * task itself (under either name): the operator configured it, and its
+ * Run Now or cadence is the consent, exactly as it was under its old name.
  */
 const KIND_SIGNATURES = [
   { kind: 'federation', re: /federat|peer[-\s]?sync|sync[-\s]?peer|fan[-\s]?out[-\s]?record/ },
@@ -53,13 +56,17 @@ const KIND_SIGNATURES = [
   { kind: 'content', re: /social[-\s]?media|newsletter|\bblog\b|generate[-\s]?content/ }
 ];
 
+const isScheduledReleaseTaskType = (key) => typeof key === 'string'
+  && currentTaskTypeName(key.replace(/^(self|app)-improve:/, '')) === 'do-release';
+
 const normalizeKind = (k) => (typeof k === 'string' ? k.trim().toLowerCase() : '');
 
 /**
  * Classify a task's safety kind from its task-type key and metadata.
  *
  * Priority order: explicit `metadata.safetyKind` / `metadata.outwardFacing`
- * override → boolean capability hints → keyword signatures → reversible default.
+ * override → boolean capability hints → the scheduled release task → keyword
+ * signatures → reversible default.
  *
  * @param {{ taskTypeKey?: string, metadata?: object }} [input]
  * @returns {{ kind: string, outwardFacing: boolean, reason: string }}
@@ -94,7 +101,13 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
     return { kind: 'external-pr', outwardFacing: true, reason: 'metadata capability: external PR' };
   }
 
-  // 3) Keyword signatures over the task-type key + free-form description hints.
+  // 3) The operator-configured scheduled release coordinator keeps the
+  //    confidence gate — its prompt title would otherwise match `do-release`.
+  if ([taskTypeKey, meta.analysisType, meta.selfImprovementType].some(isScheduledReleaseTaskType)) {
+    return { kind: REVERSIBLE_SAFETY_KIND, outwardFacing: false, reason: 'operator-configured scheduled release task' };
+  }
+
+  // 4) Keyword signatures over the task-type key + free-form description hints.
   const haystack = [taskTypeKey, meta.analysisType, meta.selfImprovementType, meta.taskDescription]
     .filter((s) => typeof s === 'string' && s)
     .join(' ')
@@ -107,7 +120,7 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
     }
   }
 
-  // 4) Default — reversible internal work; keeps the success-rate gate.
+  // 5) Default — reversible internal work; keeps the success-rate gate.
   return { kind: REVERSIBLE_SAFETY_KIND, outwardFacing: false, reason: 'no outward signal — reversible internal work' };
 }
 
