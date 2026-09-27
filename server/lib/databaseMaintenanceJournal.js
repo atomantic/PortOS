@@ -435,7 +435,10 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return { id, stage: 'cancelled' };
   };
 
-  return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition,
+  // Operation-scoped archive for detached-writer records proven quiescent.
+  const reconciledWritersDirectory = join(activeDir, 'reconciled-writers');
+
+  return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition, reconciledWritersDirectory,
     reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker,
     readProducerSnapshot, recordProducerSnapshot };
 }

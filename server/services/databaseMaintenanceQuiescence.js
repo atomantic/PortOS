@@ -1,4 +1,4 @@
-import { join, sep } from 'node:path';
+import { sep } from 'node:path';
 import { PATHS } from '../lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { classifyWriterQuiescence, createDatabaseWriterRegistry } from '../lib/databaseWriterRegistry.js';
@@ -92,8 +92,7 @@ export async function reconcileDetachedWriters(id, token, { graceMs = TERMINATE_
     assertNoUnknownSupervisors(processes, new Set());
   }
   journal.assertCoordinatorWorker(id, token);
-  const archive = join(PATHS.data, 'database-maintenance', 'reconciled-writers');
-  for (const { row } of results) registry.retire(row.id, archive);
+  for (const { row } of results) registry.retire(row.id, journal.reconciledWritersDirectory);
   if (registry.read().length !== 0) throw refused('the writer inventory is not empty after retirement');
   return { id, stage: 'quiescing', writersReconciled: rows.length, writersTerminated: terminated,
     quiescenceVerified: true, transferReady: false };

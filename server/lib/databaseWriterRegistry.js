@@ -175,14 +175,18 @@ const START_SLACK_MS = 2000;
  *   recorded groups reaches only this launch's tree.
  * - orphaned:  the job is gone but its groups still hold survivors.
  * - pending:   an admitted launch that recorded no process identity yet.
- * - ambiguous: legacy/compacted history, no launcher group, or an identity
- *   mismatch (possible PID reuse). Never safe to signal or to ignore.
+ * - ambiguous: legacy/compacted history, no launcher group, a process-group
+ *   job whose own group was never recorded, or an identity mismatch (possible
+ *   PID reuse). Never safe to signal or to ignore.
  */
 export function classifyWriterQuiescence(row, processes) {
   if (row.kind === 'retired-exits') return { verdict: 'ambiguous', groups: [] };
   if (row.state === 'abandoned') return { verdict: 'quiescent', groups: [] };
   if (row.state === 'unresolved') return { verdict: 'pending', groups: [] };
   if (!row.launcherPid || (row.pid && !row.launchedAt)) return { verdict: 'ambiguous', groups: [] };
+  // A process-group job leaves the launcher group for its own; without its
+  // recorded PID that group is unknown, so an empty launcher group proves nothing.
+  if (row.processGroup && !row.pid) return { verdict: 'ambiguous', groups: [row.launcherPid] };
   const groups = [...new Set([row.launcherPid, ...(row.processGroup && row.pid ? [row.pid] : [])])];
   const earliest = Math.floor(Date.parse(row.createdAt) / 1000) * 1000 - START_SLACK_MS;
   const latest = (row.launchedAt ? Date.parse(row.launchedAt) : Date.now()) + START_SLACK_MS;

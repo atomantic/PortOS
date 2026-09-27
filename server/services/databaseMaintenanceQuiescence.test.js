@@ -135,9 +135,14 @@ describe.skipIf(process.platform === 'win32')('detached writer quiescence reconc
     const legacyLaunch = registry.reserve(join(root, 'old-control'));
     const writers = join(context.data, 'database-writers');
     writeFileSync(join(writers, legacyLaunch.id, 'launch.json'), JSON.stringify({ pid: 999999 }) + '\n');
+    // A process-group job that crashed its supervisor before recording its PID
+    // may live on in its own group; an empty launcher group proves nothing.
+    const groupLaunch = registry.reserve(join(root, 'group-control'), true);
+    groupLaunch.launcher(999998);
     const { id, token } = quiescingOperation();
-    await expect(reconcileDetachedWriters(id, token, fast)).rejects.toThrow(/legacy, compacted/);
+    await expect(reconcileDetachedWriters(id, token, fast)).rejects.toThrow(/2 writer record\(s\) are legacy, compacted/);
     rmSync(join(writers, legacyLaunch.id), { recursive: true });
+    rmSync(join(writers, groupLaunch.id), { recursive: true });
 
     writeFileSync(join(writers, 'unreconciled-exits.json'), JSON.stringify({ version: 1 }) + '\n');
     await expect(reconcileDetachedWriters(id, token, fast)).rejects.toThrow(/legacy, compacted/);
