@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, readdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, symlink, rm, truncate } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -197,15 +197,21 @@ describe('user-triggered launch videos', () => {
   });
 });
 
+// Minimal real magic-byte headers — the route sniffs the leading bytes of an
+// `image` reference (#8961) so an arbitrary non-image file already sitting in
+// a bucket can't silently become one via a direct API call.
+const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.from('fake png bytes')]);
+const JPEG_HEADER = Buffer.from([0xff, 0xd8, 0xff, ...Buffer.from('uploaded bytes')]);
+
 describe('style reference (#8961)', () => {
   it('copies a gallery image reference beside composition/ and names its path in the prompt', async () => {
     await mkdir(PATHS.images, { recursive: true });
-    await writeFile(join(PATHS.images, 'ref.png'), 'fake png bytes');
+    await writeFile(join(PATHS.images, 'ref.png'), PNG_HEADER);
     const response = await submit({ styleReference: { kind: 'image', source: 'gallery', filename: 'ref.png' } });
     expect(response.status).toBe(202);
     const runRoot = join(PATHS.data, 'launch-videos', 'example', response.body.runId);
     expect(await readdir(join(runRoot, 'reference'))).toEqual(['style-reference.png']);
-    expect(await readFile(join(runRoot, 'reference', 'style-reference.png'), 'utf8')).toBe('fake png bytes');
+    expect(await readFile(join(runRoot, 'reference', 'style-reference.png'))).toEqual(PNG_HEADER);
     // composition/ never receives reference bytes — the launch asset gate
     // refuses raster files there, and a later revision only snapshots it.
     expect(await readdir(join(runRoot, 'composition'))).toEqual(['portos-motion.js']);
@@ -220,11 +226,24 @@ describe('style reference (#8961)', () => {
 
   it('resolves an uploaded reference from the generic uploads store, not the gallery', async () => {
     await mkdir(PATHS.uploads, { recursive: true });
-    await writeFile(join(PATHS.uploads, 'abc12345-mine.jpg'), 'uploaded bytes');
+    await writeFile(join(PATHS.uploads, 'abc12345-mine.jpg'), JPEG_HEADER);
     const response = await submit({ styleReference: { kind: 'image', source: 'upload', filename: 'abc12345-mine.jpg' } });
     expect(response.status).toBe(202);
     const runRoot = join(PATHS.data, 'launch-videos', 'example', response.body.runId);
-    expect(await readFile(join(runRoot, 'reference', 'style-reference.jpg'), 'utf8')).toBe('uploaded bytes');
+    expect(await readFile(join(runRoot, 'reference', 'style-reference.jpg'))).toEqual(JPEG_HEADER);
+  });
+
+  it('rejects an oversized reference and a file claiming to be an image that is not one', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(join(PATHS.images, 'not-an-image.png'), 'plain text, no magic bytes');
+    expect((await submit({ styleReference: { kind: 'image', source: 'gallery', filename: 'not-an-image.png' } })).status).toBe(400);
+    const hugePath = join(PATHS.images, 'huge.png');
+    await writeFile(hugePath, PNG_HEADER);
+    // A sparse extend, not a 200MB in-memory buffer — the route only reads
+    // this file's `stat().size` and its leading bytes, never the whole thing.
+    await truncate(hugePath, 201 * 1024 * 1024);
+    expect((await submit({ styleReference: { kind: 'image', source: 'gallery', filename: 'huge.png' } })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it.skipIf(!ffmpeg)('samples a video reference into a contact sheet every 0.5s and names both paths', async () => {

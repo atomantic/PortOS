@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
-import { mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { join, dirname, extname, resolve } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublishSchema, validateRequest } from '../../lib/validation.js';
 import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, detectImageFormat } from '../../lib/fileUtils.js';
 import { copyFileGuarded } from '../../lib/fileCore.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 import { APP_LAUNCH_VIDEO_PROMPT } from '../../services/taskPromptDefaults/appLaunchVideo.js';
@@ -39,17 +39,43 @@ const missingReferenceSource = err => {
   if (err.code === 'ENOENT') throw new ServerError('Style reference file is missing', { status: 404 });
   throw err;
 };
+// A generous cap for a single reference file — well above a real frame or a
+// short reference clip, but bounded so a stray multi-GB file in the uploads
+// scratch dir (unrelated to this feature; not size-capped at every write
+// path that lands there) can't be copied into a run and driven through
+// ffmpeg. Independent of MAX_BASE64_UPLOAD_BYTES, which bounds the JSON body
+// wire size for the upload itself, not a file a `source: 'gallery'` pick
+// resolves straight off disk.
+const MAX_STYLE_REFERENCE_BYTES = 200 * 1024 * 1024;
 // A style reference names a filename, never a path (#8961) — resolve it
 // against exactly the bucket its `source`/`kind` claims (Media History's own
 // images/videos folders, or the generic uploads scratch dir) and refuse
 // anything that escapes it via a symlink or a directory it does not sit in
 // directly, the same containment shape `publish` uses for its selected take.
+// A direct API call (bypassing the form) could otherwise point `kind:
+// 'image'` at an arbitrary non-image file already sitting in one of these
+// buckets — sniff the leading bytes to make sure it actually is one. There is
+// no equivalent narrow video signature that wouldn't also reject the mov/webm
+// containers the gallery genuinely stores (unlike PNG/JPEG/WEBP/GIF, "is this
+// really a video" has no single magic-byte test that fits every container
+// PortOS accepts) — `encodeReferenceContactSheet`'s ffmpeg duration probe
+// already fails closed on non-video bytes, so that check stays the video gate.
 async function resolveStyleReferenceSource(dataRoot, { source, kind, filename }) {
   const bucket = source === 'gallery' ? (kind === 'video' ? 'videos' : 'images') : 'uploads';
   const root = await realpath(join(dataRoot, bucket)).catch(missingReferenceSource);
   const sourcePath = await realpath(join(root, filename)).catch(missingReferenceSource);
-  if (dirname(sourcePath) !== root || !(await stat(sourcePath).catch(missingReferenceSource)).isFile()) {
+  const info = await stat(sourcePath).catch(missingReferenceSource);
+  if (dirname(sourcePath) !== root || !info.isFile()) {
     throw new ServerError('Style reference source is invalid', { status: 400 });
+  }
+  if (info.size > MAX_STYLE_REFERENCE_BYTES) {
+    throw new ServerError('Style reference file is too large', { status: 400 });
+  }
+  if (kind === 'image') {
+    const handle = await open(sourcePath, 'r');
+    const head = Buffer.alloc(16);
+    await handle.read(head, 0, 16, 0).finally(() => handle.close());
+    if (!detectImageFormat(head)) throw new ServerError('Style reference is not a recognized image', { status: 400 });
   }
   return sourcePath;
 }
