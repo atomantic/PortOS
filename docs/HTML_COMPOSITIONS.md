@@ -70,7 +70,8 @@ explicitly when either binary is unavailable; route and queue tests still run.
 This option is required for directories rooted at `launch-videos/` and can also
 be applied to other composition directories. An app's **Launch Video** tab
 (`/apps/<appId>/launch-video`, also linked from Overview) queues a user-triggered CoS task with
-tone, direction, format, duration (15–120 seconds), optional generated original
+tone, direction, format, duration (15–120 seconds), an optional **Dynamic motion
+graphics** style, optional generated original
 music or an existing Music-library track (each listed with its filename and an
 inline audio preview), and an optional
 provider/model/effort pin (Auto uses the normal CoS provider selection).
@@ -81,6 +82,13 @@ opted into for this run: the agent selects a ready music engine, writes an
 instrumental prompt, waits for its media job, and passes the resulting library
 filename to the renderer. Shorter music beds loop to fill the video. A generation
 failure is reported instead of silently dropping the soundtrack.
+
+Dynamic motion graphics (`motionGraphics: true`, off by default) asks the agent for
+a beat-cut showreel instead of a paced walkthrough: palette color-field swaps,
+kinetic typography, easing showcases, generative geometry seeded from `t`, an
+optional HUD frame, and a name lockup endcard, with the recreated key flow kept
+as one or two beats. The same privacy and reading-time gates apply, so every
+kinetic word and HUD label is a storyboard line with a readable hold.
 
 The task supplies the selected app repository and process ports separately from
 the PortOS media API origin. Product evidence comes from that repository; PortOS

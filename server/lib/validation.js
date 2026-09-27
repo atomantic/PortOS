@@ -2448,6 +2448,7 @@ export const appLaunchVideoRequestSchema = z.object({
   format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
   targetDurationSec: z.number().int().min(15).max(120).default(20),
   generateMusic: z.boolean().default(false),
+  motionGraphics: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
 }).strict();
 

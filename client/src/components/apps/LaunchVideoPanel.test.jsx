@@ -36,7 +36,7 @@ describe('launch video drawer', () => {
     expect(screen.getByRole('button', { name: 'Queuing…' }).disabled).toBe(true);
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
     expect(createAppLaunchVideo).toHaveBeenCalledWith('example', {
-      tone: 'cinematic', direction: '', format: 'vertical', targetDurationSec: 22, musicTrack: 'track-1a2b.wav',
+      tone: 'cinematic', direction: '', format: 'vertical', targetDurationSec: 22, motionGraphics: false, musicTrack: 'track-1a2b.wav',
       provider: 'example-provider', model: 'example-model',
     }, { silent: true });
     finish({ taskId: 'task-example' });
@@ -47,15 +47,16 @@ describe('launch video drawer', () => {
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
   });
 
-  it('queues generated music without requiring a library track for a longer video', async () => {
+  it('queues generated music and motion graphics without requiring a library track for a longer video', async () => {
     createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
     renderPanel('/?launchVideo=true');
+    fireEvent.click(screen.getByLabelText('Dynamic motion graphics'));
     fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '90' } });
     fireEvent.click(screen.getByLabelText('Include music'));
     expect(screen.getByLabelText('Generate original music').checked).toBe(false);
     fireEvent.click(screen.getByLabelText('Generate original music'));
     fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
-    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true }), { silent: true }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, motionGraphics: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
   });
 
