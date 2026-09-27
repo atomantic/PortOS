@@ -45,6 +45,14 @@ The original H3 quantizations share the same conditioner and VAE downloads.
 They retain the conservative 128 GB memory requirement until end-to-end
 measurements justify a lower floor. Transformer file size is not peak RAM.
 
+For MiniMax H3 image-to-video, start with a motion-only prompt and a model-native
+resolution, then inspect the whole clip. A prompt describing a different
+environment can replace the source scene: image conditioning does not guarantee
+continuity. In a controlled synthetic comparison, motion-only clips retained
+the scene through five seconds, while a conflicting snowy-forest prompt replaced
+it. These observations cover one source and seed, not a guarantee for arbitrary
+images. See the [sampled frames and validation details](../research/minimax-h3-continuity.md#hardware-validation-on-2026-09-27).
+
 Animation presets now include **Rotoscope cinematic** and **Unreal stylized
 cinema**. These describe a visual treatment in the generation prompt; they do
 not run an Unreal renderer or perform literal tracing of source footage.
