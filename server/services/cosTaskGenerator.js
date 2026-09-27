@@ -31,6 +31,7 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
+import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
@@ -2619,8 +2620,7 @@ export function applyUserActionDeliveryMode(promptTemplate, taskType, metadata) 
   const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
   const block = resolveUserActionDeliveryBlock(taskType, metadata);
   if (!block) return prompt;
-  if (prompt.includes('{userActionDelivery}')) return prompt.replace(/\{userActionDelivery\}/g, () => block);
-  return `## Delivery mode\n\n${block}\n\n---\n\n${prompt}`;
+  return renderOrPrependSection(prompt, '{userActionDelivery}', 'Delivery mode', block);
 }
 
 /**
@@ -2636,8 +2636,7 @@ export async function applyUserActionDetectorSection(promptTemplate, taskType) {
     return [];
   });
   const block = formatUserActionDetectorBlock(findings) || 'No leftover-branch findings.';
-  if (prompt.includes('{userActionDetectors}')) return prompt.replace(/\{userActionDetectors\}/g, () => block);
-  return `## Detectors\n\n${block}\n\n---\n\n${prompt}`;
+  return renderOrPrependSection(prompt, '{userActionDetectors}', 'Detectors', block);
 }
 
 
