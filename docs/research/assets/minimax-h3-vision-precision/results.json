@@ -19,7 +19,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -55,7 +56,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -91,7 +93,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -127,7 +130,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -164,7 +168,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "float32",
       "mlx_enable_tf32": "1",
@@ -200,7 +205,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "float32",
       "mlx_enable_tf32": "1",
@@ -236,7 +242,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -273,7 +280,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -309,7 +317,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -346,7 +355,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "0",
@@ -382,7 +392,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -416,7 +427,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -452,7 +464,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -488,7 +501,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -524,7 +538,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -561,7 +576,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "float32",
       "mlx_enable_tf32": "1",
@@ -597,7 +613,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "float32",
       "mlx_enable_tf32": "1",
@@ -633,7 +650,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -670,7 +688,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -706,7 +725,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -743,7 +763,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "0",
@@ -779,7 +800,8 @@
           [1, 64, 36]
         ],
         "versions": {"torch": "2.12.0", "torchvision": "0.27.0", "mlx": "0.32.0", "mlx-metal": "0.32.0", "mlx-vlm": "0.6.10", "transformers": "5.14.1"},
-        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d"
+        "vision_config_sha256": "82b48aeeea2f41d0cdb61ca43d92ce2829d8876470859f53a4ef8f941dfa252d",
+        "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0"
       },
       "normalization": "native",
       "mlx_enable_tf32": "default",
@@ -820,5 +842,7 @@
       "reference": "gradient-torch-float32-cpu-native-native",
       "outputs": {"deepstack_0": 0.019055985581729926, "deepstack_1": 0.03791796903332008, "deepstack_2": 0.05180164591959443, "merged": 0.07595725797523957}
     }
-  ]
+  ],
+  "vision_weights_sha256": "aa0fbed9e9cc450f914df5069ab26dfb160ff0fbaa0cc09b857ad39e596608f0",
+  "final_recheck": "All 26 configurations rerun with weight hashing; all 22 comparison-case output archives bit-identical to the earlier matrix."
 }

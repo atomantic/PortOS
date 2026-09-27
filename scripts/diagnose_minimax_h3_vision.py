@@ -27,6 +27,30 @@ def gradient_noise_source():
     return Image.fromarray(pixels.astype(np.uint8))
 
 
+
+def read_vision_weights(root, keys, digests):
+    """Hash original tensor bytes, independent of shard names and compute dtype."""
+    import torch
+    from safetensors import safe_open
+    for shard in sorted(set(keys.values())):
+        with safe_open(root / 'text_encoder' / shard, framework='pt', device='cpu') as f:
+            for key in sorted(k for k, value in keys.items() if value == shard):
+                tensor = f.get_tensor(key)
+                name = key.removeprefix('model.visual.')
+                digests[name] = {
+                    'dtype': str(tensor.dtype), 'shape': list(tensor.shape),
+                    'sha256': hashlib.sha256(tensor.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest(),
+                }
+                yield name, tensor
+
+
+def weights_digest(digests, reference):
+    digest = hashlib.sha256(json.dumps(digests, sort_keys=True).encode()).hexdigest()
+    if reference is not None and reference['vision_weights_sha256'] != digest:
+        raise ValueError('Replay requires identical vision checkpoint weights')
+    return digest
+
+
 def install_trace(model, backend, directory, replay=None):
     """Observe real calls; stream arrays to disk instead of retaining a full tower."""
     import numpy as np
@@ -177,7 +201,6 @@ def main():
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
     import numpy as np
     from PIL import Image
-    from safetensors import safe_open
     root = a.checkpoint_dir
     raw = json.loads((root / 'text_encoder/config.json').read_text())['vision_config']
     index = json.loads((root / 'text_encoder/model.safetensors.index.json').read_text())['weight_map']
@@ -189,6 +212,7 @@ def main():
     inputs = processor(images=[source], return_tensors='np')
     pixel_sha256 = hashlib.sha256(inputs['pixel_values'].tobytes()).hexdigest()
     config_sha256 = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()
+    reference = None
     if a.replay_dir:
         reference = json.loads((a.replay_dir / 'manifest.json').read_text())
         if (reference['pixel_sha256'] != pixel_sha256 or reference['dtype'] != a.dtype
@@ -197,6 +221,7 @@ def main():
             raise ValueError('Replay requires identical processed pixels, grid, configuration and dtype')
     started = time.perf_counter()
     records = []
+    digests = {}
     if a.backend == 'torch':
         import torch
         from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLVisionConfig
@@ -206,12 +231,9 @@ def main():
         cfg._attn_implementation = 'eager'
         with torch.device('meta'):
             model = Qwen3VLVisionModel(cfg)
-        weights = {}
-        for shard in sorted(set(keys.values())):
-            with safe_open(root / 'text_encoder' / shard, framework='pt', device='cpu') as f:
-                for k, v in keys.items():
-                    if v == shard:
-                        weights[k.removeprefix('model.visual.')] = f.get_tensor(k).to(getattr(torch, a.dtype))
+        weights = {name: tensor.to(getattr(torch, a.dtype))
+                   for name, tensor in read_vision_weights(root, keys, digests)}
+        vision_weights_sha256 = weights_digest(digests, reference)
         model.load_state_dict(weights, strict=True, assign=True)
         model.eval()
         from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionRotaryEmbedding
@@ -242,12 +264,9 @@ def main():
         from mlx_vlm.models.qwen3_vl.vision import VisionModel
         from generate_minimax_h3 import sanitize_vision_weights
         model = VisionModel(VisionConfig.from_dict(raw))
-        weights = {}
-        for shard in sorted(set(keys.values())):
-            with safe_open(root / 'text_encoder' / shard, framework='pt', device='cpu') as f:
-                for k, v in keys.items():
-                    if v == shard:
-                        weights[k.removeprefix('model.visual.')] = mx.array(f.get_tensor(k).float().numpy()).astype(getattr(mx, a.dtype))
+        weights = {name: mx.array(tensor.float().numpy()).astype(getattr(mx, a.dtype))
+                   for name, tensor in read_vision_weights(root, keys, digests)}
+        vision_weights_sha256 = weights_digest(digests, reference)
         expected = {key for key, _ in tree_flatten(model.parameters())}
         if expected != set(weights):
             raise ValueError('Vision checkpoint keys do not match the MLX model')
@@ -277,6 +296,7 @@ def main():
             'replay': bool(a.replay_dir),
             'grid_thw': inputs['image_grid_thw'].tolist(), 'stages': records,
             'vision_config_sha256': config_sha256,
+            'vision_weights_sha256': vision_weights_sha256,
             'versions': {name: importlib.metadata.version(name) for name in
                          ('torch', 'torchvision', 'mlx', 'mlx-metal', 'mlx-vlm', 'transformers')},
         }

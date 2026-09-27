@@ -28,7 +28,7 @@ latter has no random-library seed dependency. Both yield grid [1,64,36],
 2,304 patch rows, and 576 merged rows. No private image was used.
 
 [results.json](assets/minimax-h3-vision-precision/results.json) stores input
-hashes, configuration hash, package versions, final/deepstack metrics, selected
+hashes, configuration and vision-weight hashes, package versions, final/deepstack metrics, selected
 intermediates, and all 27 block-output relative differences for native runs.
 Numbers in JSON are ratios; tables below are percentages. The metric is
 norm(actual-reference)/norm(reference), accumulated in NumPy float64, with
@@ -131,9 +131,11 @@ explains or repairs the accumulated bfloat16 difference.
 Keep production behavior unchanged. The observations separate reference
 operation rounding (interpolation), framework kernel arithmetic
 (normalization and matmul), and input-dependent propagation through the tower.
-They do not demonstrate a PortOS adapter defect or a consistently beneficial
-precision correction. Adopting one of the controls solely because one fixture
-gets closer would trade one unvalidated behavior for another.
+They do not demonstrate a PortOS adapter defect, reference equivalence, or a
+visible benefit from changing production precision. The combined interpolation
+and normalization control gets modestly closer on both fixtures, but still
+leaves 12.71% and 6.75% differences. That numerical improvement alone does not
+justify an unvalidated production change.
 
 This investigation completes the layer-level characterization requested in
 #8948; it does not certify every image, precision, backend or future version.
@@ -170,7 +172,7 @@ CHECKPOINT=<cached-FL2VA>
 ~~~
 
 Repeat with --fixture gradient-noise in place of --source, using new paths.
-The replay trace must have the same processed pixels and dtype. For the
+The replay trace must have the same processed pixels, grid, configuration, vision weights and dtype. For the
 bfloat16 operation matrix, add --position float32, --attention eager,
 --normalization float32, or the combinations in the table, only on MLX.
 These flags exist solely in this diagnostic and never affect production.

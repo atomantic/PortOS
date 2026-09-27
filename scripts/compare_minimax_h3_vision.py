@@ -8,7 +8,7 @@ from pathlib import Path
 def compare(actual, reference):
     import numpy as np
     manifests = [json.loads((p / 'manifest.json').read_text()) for p in (actual, reference)]
-    for key in ('pixel_sha256', 'grid_thw', 'vision_config_sha256'):
+    for key in ('pixel_sha256', 'grid_thw', 'vision_config_sha256', 'vision_weights_sha256'):
         if manifests[0][key] != manifests[1][key]:
             raise ValueError(f'Cannot compare different inputs: {key}')
     for manifest in manifests:

@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory() as root:
     root = Path(root)
     actual, reference = root / 'a', root / 'b'
     manifest = {'pixel_sha256': 'synthetic-pixels', 'grid_thw': [[1, 2, 2]], 'vision_config_sha256': 'synthetic-config',
+                'vision_weights_sha256': 'synthetic-weights',
                 'stages': [{'name': 'merged'}]}
     for directory, values in [(actual, [6., 8.]), (reference, [3., 4.])]:
         directory.mkdir()
@@ -60,6 +61,12 @@ with tempfile.TemporaryDirectory() as root:
     np.save(reference / 'merged.npy', [float('nan'), 4.])
     assert run(root / 'invalid.json').returncode != 0
     assert not (root / 'invalid.json').exists()
+    np.save(reference / 'merged.npy', [3., 4.])
+    manifest['vision_weights_sha256'] = 'different-weights'
+    (reference / 'manifest.json').write_text(json.dumps(manifest))
+    assert run(root / 'weights-mismatch.json').returncode != 0
+    assert not (root / 'weights-mismatch.json').exists()
+    manifest['vision_weights_sha256'] = 'synthetic-weights'
     manifest['pixel_sha256'] = 'different-pixels'
     (reference / 'manifest.json').write_text(json.dumps(manifest))
     assert run(root / 'mismatch.json').returncode != 0
