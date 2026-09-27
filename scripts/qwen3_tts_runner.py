@@ -12,9 +12,107 @@ Provides CLI entry points for:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
+import re
 import json
 import sys
 from pathlib import Path
+
+
+SUPPORTED_MODELS = (
+    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+)
+# Both the language model and speech codec are required. A directory, old
+# metadata.json, or a lone language-model weight is not an installed snapshot.
+REQUIRED_FILES = (
+    "config.json", "generation_config.json", "merges.txt", "model.safetensors",
+    "preprocessor_config.json", "tokenizer_config.json", "vocab.json",
+    "speech_tokenizer/config.json", "speech_tokenizer/configuration.json",
+    "speech_tokenizer/model.safetensors", "speech_tokenizer/preprocessor_config.json",
+)
+
+
+def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
+    """Read only a completely verified revision; never perform network access."""
+    try:
+        manifest = json.loads((model_dir / "verified.json").read_text())
+        revision = manifest["revision"]
+        if manifest["model_id"] != model_id or not re.fullmatch(r"[0-9a-f]{40}", revision):
+            return None
+        snapshot = model_dir / revision
+        sizes = manifest["files"]
+        for filename in REQUIRED_FILES:
+            expected = sizes[filename]
+            if not isinstance(expected, int) or expected <= 0:
+                return None
+            if (snapshot / filename).stat().st_size != expected:
+                return None
+        return snapshot
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def download_model(model_id: str, models_dir: Path) -> dict:
+    """Fetch an immutable Hub revision and verify every required file's digest.
+
+    Hub blob IDs are Git SHA-1 for ordinary files and SHA-256 for LFS weights.
+    Only publish the readiness marker after verification, leaving a prior
+    installed revision usable if an update fails or the process is interrupted.
+    """
+    if model_id not in SUPPORTED_MODELS:
+        raise ValueError("Unsupported Qwen3-TTS model")
+    from huggingface_hub import HfApi, hf_hub_download
+
+    info = HfApi().model_info(model_id, files_metadata=True)
+    revision = info.sha
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Model repository did not return an immutable revision")
+    files = {entry.rfilename: entry for entry in info.siblings}
+    if not all(filename in files for filename in REQUIRED_FILES):
+        raise ValueError("Model repository is missing required Qwen3-TTS files")
+    model_dir = models_dir / model_id.replace("/", "--")
+    snapshot = model_dir / revision
+    sizes = {}
+    for filename in REQUIRED_FILES:
+        entry = files[filename]
+        if not isinstance(entry.size, int) or entry.size <= 0:
+            raise ValueError(f"Missing file size: {filename}")
+        lfs = entry.lfs
+        digest = lfs.sha256 if lfs else entry.blob_id
+        algorithm = "sha256" if lfs else "sha1"
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}" if lfs else r"[0-9a-f]{40}", digest):
+            raise ValueError(f"Missing file digest: {filename}")
+        # The explicit download operation is the only path allowed to fetch.
+        hf_hub_download(repo_id=model_id, filename=filename, revision=revision, local_dir=snapshot)
+        target = snapshot / filename
+        if target.stat().st_size != entry.size:
+            raise ValueError(f"Incomplete model file: {filename}")
+        checksum = hashlib.new(algorithm)
+        if not lfs:
+            checksum.update(f"blob {entry.size}\0".encode())
+        with target.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        if checksum.hexdigest() != digest:
+            raise ValueError(f"Model file checksum mismatch: {filename}")
+        sizes[filename] = entry.size
+
+    marker = model_dir / "verified.json"
+    # Unique temporary markers also make separate explicit CLI downloads safe.
+    import tempfile
+    descriptor, temporary = tempfile.mkstemp(prefix=".verified-", dir=model_dir)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump({"model_id": model_id, "revision": revision, "files": sizes}, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, marker)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return {"ok": True, "modelId": model_id, "revision": revision, "path": str(snapshot)}
 
 
 def probe_runtime(models_dir: Path | None = None) -> dict:
@@ -55,26 +153,13 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
     except ImportError:
         pass
 
-    supported_models = [
-        "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-        "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
-        "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
-    ]
-
-    if models_dir and models_dir.exists():
-        for model_id in supported_models:
-            safe_name = model_id.replace("/", "--")
-            model_path = models_dir / safe_name
-            result["models"][model_id] = {
-                "downloaded": False,
-                "path": str(model_path) if model_path.exists() else None,
-            }
-    else:
-        for model_id in supported_models:
-            result["models"][model_id] = {
-                "downloaded": False,
-                "path": None,
-            }
+    for model_id in SUPPORTED_MODELS:
+        model_path = models_dir / model_id.replace("/", "--") if models_dir else None
+        snapshot = installed_snapshot(model_path, model_id) if model_path else None
+        result["models"][model_id] = {
+            "downloaded": snapshot is not None,
+            "path": str(snapshot) if snapshot else None,
+        }
 
     return result
 
@@ -99,6 +184,7 @@ def run_fine_tuning(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--download", action="store_true", help="Explicitly download and verify a model snapshot")
     parser.add_argument("--probe", action="store_true", help="Probe runtime and available models")
     parser.add_argument("--models-dir", type=str, help="Directory containing downloaded model weights")
     parser.add_argument("--mode", choices=["design", "clone", "synthesize", "fine-tune"], default="synthesize")
@@ -118,6 +204,16 @@ def main() -> int:
     parser.add_argument("--checkpoint-interval", type=int, default=50, help="Steps between checkpoints")
     
     args = parser.parse_args()
+
+    if args.download:
+        if not args.model_id or not args.models_dir:
+            parser.error("--download requires --model-id and --models-dir")
+        try:
+            print(json.dumps(download_model(args.model_id, Path(args.models_dir))))
+            return 0
+        except Exception as error:
+            print(json.dumps({"ok": False, "code": "QWEN3_DOWNLOAD_FAILED", "error": str(error)}), file=sys.stderr)
+            return 1
 
     if args.probe:
         models_dir = Path(args.models_dir) if args.models_dir else None
