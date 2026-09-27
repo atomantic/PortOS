@@ -78,7 +78,8 @@ request, a job renders the composition's own size exactly as before.
 
 Each format is its own Media History entry (`<jobId>-<format>`), all written in
 one history update, so a job registers every format or none. The completed
-job result keeps `filename`/`thumbnail` for the first format and lists all of
+job result keeps `generationId` as the job and names the first format in
+`id`/`filename`/`thumbnail`, and lists all of
 them in `videos: [{ format, id, filename, thumbnail, path }]`.
 
 ## Motion kit

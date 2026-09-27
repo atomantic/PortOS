@@ -177,7 +177,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     const result = await renderComposition({ ...input, jobId, launchVideo, formats: ['square', 'landscape', 'vertical'] });
     const expected = [['landscape', 1920, 1080, [255, 0, 0]], ['vertical', 1080, 1920, [0, 255, 0]], ['square', 1080, 1080, [0, 0, 255]]];
     expect(result.videos.map(video => video.format)).toEqual(expected.map(([format]) => format));
-    expect(result).toMatchObject({ generationId: jobId, id: jobId, appId: 'example', filename: `composition-${jobId}-landscape.mp4` });
+    expect(result).toMatchObject({ generationId: jobId, id: `${jobId}-landscape`, appId: 'example', filename: `composition-${jobId}-landscape.mp4` });
     const history = await loadHistory();
     for (const [format, width, height, rgb] of expected) {
       const video = result.videos.find(item => item.format === format);

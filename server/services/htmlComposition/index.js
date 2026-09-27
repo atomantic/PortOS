@@ -181,9 +181,11 @@ export async function renderComposition({ jobId, ...input }) {
       }));
       await mutateVideoHistory(history => { history.unshift(...metas); return history; });
       success = true;
+      // `id`/`filename` name a real history entry (the first format); `generationId`
+      // is the job. A single-format render keeps id === generationId as before.
       const summary = ({ id, filename, thumbnail }) => ({ id, filename, thumbnail, path: `/data/videos/${filename}` });
       const [first] = rendered;
-      result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first), id: jobId,
+      result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, ...summary(first),
         ...(formats ? { videos: rendered.map(video => ({ format: video.format, ...summary(video) })) } : {}) };
     }
   } catch (error) {
