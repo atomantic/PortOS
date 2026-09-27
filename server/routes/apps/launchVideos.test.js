@@ -262,6 +262,16 @@ describe('feedback revisions', () => {
     expect(task.prompt).toContain('"format":"vertical"');
     expect(task.prompt).toContain('"synthesizeMusic":true');
   });
+  it('drops a stale beats.json copied from the source take when this revision has no musicTrack (#8958)', async () => {
+    // Simulates a source composition carrying a leftover beats.json from an
+    // earlier run whose musicTrack this revision no longer uses.
+    await writeFile(join(source, 'beats.json'), JSON.stringify({ bpm: 90, beats: [0], downbeats: [0], hits: [0] }));
+    const response = await submit({ sourceVideoId: video.id, feedback: 'Drop the soundtrack' });
+    expect(response.status).toBe(202);
+    const destination = join(PATHS.data, 'launch-videos/example', response.body.runId, 'composition');
+    expect(await readdir(destination)).not.toContain('beats.json');
+    expect(getBeatGrid).not.toHaveBeenCalled();
+  });
   it('rejects invalid feedback, cross-app selections and missing editable source before dispatch', async () => {
     expect((await submit({ sourceVideoId: video.id, feedback: '  ' })).status).toBe(400);
     expect((await submit({ sourceVideoId: video.id })).status).toBe(400);

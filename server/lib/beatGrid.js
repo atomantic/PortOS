@@ -424,6 +424,13 @@ async function analyzeBeatGridFile(audioPath, { signal } = {}) {
 // re-measures on next request.
 const beatGridCache = new Map();
 
+// Re-entrancy guard: two overlapping requests for the SAME unmeasured track
+// (e.g. the launch-video form re-submitted quickly, or two runs that pick the
+// same library track) would otherwise each spawn their own ffmpeg decode and
+// run the DSP independently. Tracks the in-flight analysis promise per path so
+// a second caller awaits the first's result instead of duplicating the work.
+const beatGridInFlight = new Map();
+
 /**
  * Resolve the beat grid for an absolute audio file path, cached in memory per
  * (path, mtime). Returns `{ bpm, beats, downbeats, hits }` — `bpm` and its
@@ -439,12 +446,24 @@ export async function getBeatGrid(audioPath, { signal } = {}) {
   if (!stats) return null;
   const cached = beatGridCache.get(audioPath);
   if (cached && cached.mtimeMs === stats.mtimeMs) return cached.result;
-  const analyzed = await analyzeBeatGridFile(audioPath, { signal });
-  if (!analyzed) return null;
-  const result = { bpm: analyzed.bpm, beats: analyzed.beats, downbeats: analyzed.downbeats, hits: analyzed.hits };
-  beatGridCache.set(audioPath, { mtimeMs: stats.mtimeMs, result });
-  return result;
+
+  const inFlight = beatGridInFlight.get(audioPath);
+  if (inFlight) return inFlight;
+
+  const analysis = (async () => {
+    const analyzed = await analyzeBeatGridFile(audioPath, { signal });
+    if (!analyzed) return null;
+    const result = { bpm: analyzed.bpm, beats: analyzed.beats, downbeats: analyzed.downbeats, hits: analyzed.hits };
+    beatGridCache.set(audioPath, { mtimeMs: stats.mtimeMs, result });
+    return result;
+  })();
+  beatGridInFlight.set(audioPath, analysis);
+  try {
+    return await analysis;
+  } finally {
+    beatGridInFlight.delete(audioPath);
+  }
 }
 
 // Test seam — clears the in-memory cache between cases.
-export const __clearBeatGridCache = () => beatGridCache.clear();
+export const __clearBeatGridCache = () => { beatGridCache.clear(); beatGridInFlight.clear(); };

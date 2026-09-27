@@ -134,9 +134,15 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     // edited) copy and an older take without one gets it added.
     await installMotionKit(join(outputRoot, 'composition'));
     // Plain UTF-8 JSON, so it passes the launch-video asset gate like any
-    // other composition source (see motionKit.js). Written only when the
-    // track actually decoded — a missing beats.json means "no library track,
-    // or it couldn't be measured", never a false/empty grid.
+    // other composition source (see motionKit.js). A revision's snapshotted
+    // assets can carry the SOURCE take's own beats.json (a prior successful
+    // measurement); drop it unconditionally first so a dropped/changed track,
+    // or a measurement that fails on this run, can't leave this run cutting
+    // against a stale grid that no longer matches its own musicTrack. Written
+    // only when the track actually decoded on THIS run — a missing beats.json
+    // means "no library track, or it couldn't be measured", never a false or
+    // stale grid.
+    await rm(join(outputRoot, 'composition', BEATS_FILENAME), { force: true });
     if (musicTrackBeatGrid) {
       await writeFile(join(outputRoot, 'composition', BEATS_FILENAME), JSON.stringify(musicTrackBeatGrid, null, 2));
     }
