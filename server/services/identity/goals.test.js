@@ -5,6 +5,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({ goalsData: null, aiText: '' }));
 
 vi.mock('./store.js', () => ({
+  editGoals: vi.fn(async fn => fn(h.goalsData)),
+  mutateGoals: vi.fn(async fn => {
+    h.goalsData = await fn(h.goalsData);
+    return h.goalsData;
+  }),
   GOALS_FILE: 'goals.json',
   LONGEVITY_FILE: 'longevity.json',
   DEFAULT_GOALS: { goals: [], birthDate: null },

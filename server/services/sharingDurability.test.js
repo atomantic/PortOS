@@ -380,3 +380,19 @@ it('does not register a bucket whose existing identity cannot be read', async ()
   expect(await readFile(registryPath, 'utf8')).toBe(before);
   expect(await readFile(identityPath, 'utf8')).toBe('{"id":');
 });
+
+it('merges federated goals without dropping a queued local edit', async () => {
+  const { mutateGoals } = await import('./identity/store.js');
+  const goalsPath = join(PATHS.digitalTwin, 'goals.json');
+  await seed(goalsPath, { goals: [{ id: 'local', progress: 0 }] });
+  await Promise.all([
+    dataSync.applyRemote('goals', { goals: [{ id: 'remote', updatedAt: '2026-01-01' }] }),
+    mutateGoals(doc => {
+      doc.goals.find(goal => goal.id === 'local').progress = 50;
+      return doc;
+    })
+  ]);
+  expect(JSON.parse(await readFile(goalsPath, 'utf8')).goals).toEqual([
+    { id: 'local', progress: 50 }, { id: 'remote', updatedAt: '2026-01-01' }
+  ]);
+});

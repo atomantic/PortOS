@@ -13,7 +13,7 @@ import {
   DEFAULT_GOALS,
   DEFAULT_LONGEVITY,
   loadJSON,
-  saveJSON,
+  editGoals,
   mutateGoals
 } from './store.js';
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
@@ -186,19 +186,7 @@ function hasAncestorCycle(goals, goalId, newParentId) {
 
 // === Service Functions ===
 
-/**
- * @param {{ strict?: boolean }} [options] - `strict: true` throws when goals.json is
- *   present-but-unreadable/corrupt rather than reporting it as "no goals filed"
- *   (#2726). Off by default — every existing caller wants the empty fallback.
- */
-export async function getGoals(options) {
-  const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, options);
-  // A goals.json that parsed but carries no goals array is as untrustworthy as one
-  // that failed to parse — validate before the count downstream trusts it. Only
-  // under strict: the non-strict path keeps its existing behavior for this shape.
-  if (options?.strict && !Array.isArray(data?.goals)) {
-    throw new Error(`Goals malformed: ${GOALS_FILE}`);
-  }
+function normalizeGoals(data) {
   // Lazy migration: backfill parentId, tags, linkedActivities on goals missing them
   let needsSave = false;
   for (const goal of data.goals) {
@@ -222,7 +210,29 @@ export async function getGoals(options) {
       if (!Array.isArray(ms.tasks)) { ms.tasks = []; needsSave = true; }
     }
   }
-  if (needsSave) await saveJSON(GOALS_FILE, data);
+  return needsSave;
+}
+
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when goals.json is
+ *   present-but-unreadable/corrupt rather than reporting it as "no goals filed"
+ *   (#2726). Off by default — every existing caller wants the empty fallback.
+ */
+export async function getGoals(options) {
+  let data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, options);
+  // A goals.json that parsed but carries no goals array is as untrustworthy as one
+  // that failed to parse — validate before the count downstream trusts it. Only
+  // under strict: the non-strict path keeps its existing behavior for this shape.
+  if (options?.strict && !Array.isArray(data?.goals)) {
+    throw new Error(`Goals malformed: ${GOALS_FILE}`);
+  }
+  if (normalizeGoals(data)) {
+    // Re-read under the writer queue; never save the snapshot from this read.
+    data = await mutateGoals(fresh => {
+      normalizeGoals(fresh);
+      return fresh;
+    });
+  }
 
   // Urgency is only *persisted* when a goal is written or a birth date is set, so the
   // stored value is as old as that write — and it ranks off `timeHorizons.yearsRemaining`,
@@ -246,140 +256,146 @@ export async function getGoals(options) {
 }
 
 export async function setBirthDate(birthDate) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  goals.birthDate = birthDate;
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
+  let goals = await mutateGoals(goals => {
+    goals.birthDate = birthDate;
+    goals.updatedAt = new Date().toISOString();
+    return goals;
+  });
 
-  // Sync to meatspace config (canonical source), skip goals sync since we just wrote it
+  // External work stays outside the goal queue.
   const { updateBirthDate } = await import('../meatspace.js');
   await updateBirthDate(birthDate, { syncGoals: false });
-
-  // Re-derive longevity with new birth date
   const longevity = await deriveLongevity(birthDate);
 
-  // Recalculate urgency for all active goals
   if (longevity.timeHorizons) {
-    for (const goal of goals.goals) {
-      if (goal.status === 'active') {
-        goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
+    goals = await mutateGoals(fresh => {
+      // A newer birth-date edit owns its own derived metadata.
+      if (fresh.birthDate !== birthDate) return fresh;
+      for (const goal of fresh.goals) {
+        if (goal.status === 'active') goal.urgency = computeGoalUrgency(goal, longevity.timeHorizons);
       }
-    }
-    goals.lifeExpectancy = longevity.lifeExpectancy;
-    goals.timeHorizons = longevity.timeHorizons;
-    await saveJSON(GOALS_FILE, goals);
+      fresh.lifeExpectancy = longevity.lifeExpectancy;
+      fresh.timeHorizons = longevity.timeHorizons;
+      return fresh;
+    });
   }
-
   return goals;
 }
 
 export async function createGoal({ title, description, horizon, category, goalType, parentId, tags, targetDate, timeBlockConfig, featureAreas }) {
-  // getGoals() already refreshed `goals.timeHorizons` against today, so read it from
-  // there rather than paying for a second longevity load.
-  const goals = await getGoals();
+  return editGoals(async goals => {
+    // Refresh horizons against the document read inside the writer queue.
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
 
-  // Validate parentId references an existing goal
-  if (parentId && !goals.goals.find(g => g.id === parentId)) {
-    throw new ServerError('Parent goal not found', { status: 400, code: 'INVALID_PARENT' });
-  }
+    // Validate parentId references an existing goal
+    if (parentId && !goals.goals.find(g => g.id === parentId)) {
+      throw new ServerError('Parent goal not found', { status: 400, code: 'INVALID_PARENT' });
+    }
 
-  const id = `goal-${uuidv4()}`;
-  const goal = {
-    id,
-    title,
-    description: description || '',
-    horizon: horizon || '5-year',
-    category: category || 'mastery',
-    goalType: goalType || 'standard',
-    parentId: parentId || null,
-    tags: [...new Set((tags || []).map(t => t.trim()).filter(Boolean))],
-    linkedActivities: [],
-    linkedCalendars: [],
-    featureAreas: Array.isArray(featureAreas) ? featureAreas : [],
-    targetDate: targetDate || null,
-    timeBlockConfig: timeBlockConfig || null,
-    scheduledEvents: [],
-    checkIns: [],
-    urgency: null,
-    status: 'active',
-    milestones: [],
-    progress: 0,
-    progressHistory: [],
-    todos: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+    const id = `goal-${uuidv4()}`;
+    const goal = {
+      id,
+      title,
+      description: description || '',
+      horizon: horizon || '5-year',
+      category: category || 'mastery',
+      goalType: goalType || 'standard',
+      parentId: parentId || null,
+      tags: [...new Set((tags || []).map(t => t.trim()).filter(Boolean))],
+      linkedActivities: [],
+      linkedCalendars: [],
+      featureAreas: Array.isArray(featureAreas) ? featureAreas : [],
+      targetDate: targetDate || null,
+      timeBlockConfig: timeBlockConfig || null,
+      scheduledEvents: [],
+      checkIns: [],
+      urgency: null,
+      status: 'active',
+      milestones: [],
+      progress: 0,
+      progressHistory: [],
+      todos: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
 
-  // Calculate urgency if time horizons available
-  if (goals.timeHorizons) {
-    goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
-  }
+    // Calculate urgency if time horizons available
+    if (goals.timeHorizons) {
+      goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
+    }
 
-  goals.goals.push(goal);
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
+    goals.goals.push(goal);
+    goals.updatedAt = new Date().toISOString();
 
-  console.log(`🎯 Goal created: "${title}" (${horizon}, urgency: ${goal.urgency ?? 'n/a'})`);
-  return goal;
+    console.log(`🎯 Goal created: "${title}" (${horizon}, urgency: ${goal.urgency ?? 'n/a'})`);
+    return goal;
+  });
 }
 
 export async function updateGoal(goalId, updates) {
-  const goals = await getGoals();
-  const idx = goals.goals.findIndex(g => g.id === goalId);
-  if (idx === -1) return null;
+  return editGoals(async goals => {
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
+    const idx = goals.goals.findIndex(g => g.id === goalId);
+    if (idx === -1) return null;
 
-  const goal = goals.goals[idx];
+    const goal = goals.goals[idx];
 
-  // Validate parentId doesn't create a cycle
-  if (updates.parentId !== undefined && updates.parentId !== null) {
-    if (!goals.goals.find(g => g.id === updates.parentId)) {
-      throw new ServerError('Parent goal not found', { status: 400, code: 'INVALID_PARENT' });
+    // Validate parentId doesn't create a cycle
+    if (updates.parentId !== undefined && updates.parentId !== null) {
+      if (!goals.goals.find(g => g.id === updates.parentId)) {
+        throw new ServerError('Parent goal not found', { status: 400, code: 'INVALID_PARENT' });
+      }
+      if (hasAncestorCycle(goals.goals, goalId, updates.parentId)) {
+        throw new ServerError('Cannot set parent: would create a cycle', { status: 400, code: 'CYCLE_DETECTED' });
+      }
     }
-    if (hasAncestorCycle(goals.goals, goalId, updates.parentId)) {
-      throw new ServerError('Cannot set parent: would create a cycle', { status: 400, code: 'CYCLE_DETECTED' });
+
+    const allowed = ['title', 'description', 'horizon', 'category', 'goalType', 'status', 'parentId', 'tags', 'targetDate', 'timeBlockConfig', 'featureAreas'];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) goal[key] = updates[key];
     }
-  }
+    // Normalize tags: deduplicate and trim
+    if (goal.tags) {
+      goal.tags = [...new Set(goal.tags.map(t => t.trim()).filter(Boolean))];
+    }
+    goal.updatedAt = new Date().toISOString();
 
-  const allowed = ['title', 'description', 'horizon', 'category', 'goalType', 'status', 'parentId', 'tags', 'targetDate', 'timeBlockConfig', 'featureAreas'];
-  for (const key of allowed) {
-    if (updates[key] !== undefined) goal[key] = updates[key];
-  }
-  // Normalize tags: deduplicate and trim
-  if (goal.tags) {
-    goal.tags = [...new Set(goal.tags.map(t => t.trim()).filter(Boolean))];
-  }
-  goal.updatedAt = new Date().toISOString();
+    // Recalculate urgency against the refreshed horizons.
+    if (goals.timeHorizons) {
+      goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
+    }
 
-  // Recalculate urgency if horizon changed — against the horizons getGoals() already
-  // refreshed, not a second longevity load.
-  if (goals.timeHorizons) {
-    goal.urgency = computeGoalUrgency(goal, goals.timeHorizons);
-  }
-
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return goal;
+    goals.updatedAt = new Date().toISOString();
+    return goal;
+  });
 }
 
 export async function deleteGoal(goalId) {
-  const goals = await getGoals();
-  const idx = goals.goals.findIndex(g => g.id === goalId);
-  if (idx === -1) return false;
+  return editGoals(async goals => {
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
+    const idx = goals.goals.findIndex(g => g.id === goalId);
+    if (idx === -1) return false;
 
-  const deletedGoal = goals.goals[idx];
-  // Orphan children: reparent to deleted goal's parent (or root)
-  const now = new Date().toISOString();
-  for (const goal of goals.goals) {
-    if (goal.parentId === goalId) {
-      goal.parentId = deletedGoal.parentId || null;
-      goal.updatedAt = now;
+    const deletedGoal = goals.goals[idx];
+    // Orphan children: reparent to deleted goal's parent (or root)
+    const now = new Date().toISOString();
+    for (const goal of goals.goals) {
+      if (goal.parentId === goalId) {
+        goal.parentId = deletedGoal.parentId || null;
+        goal.updatedAt = now;
+      }
     }
-  }
 
-  goals.goals.splice(idx, 1);
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return true;
+    goals.goals.splice(idx, 1);
+    goals.updatedAt = new Date().toISOString();
+    return true;
+  });
 }
 
 export async function getGoalsTree() {
@@ -430,65 +446,71 @@ export async function getGoalsTree() {
 }
 
 export async function linkActivity(goalId, { activityName, requiredFrequency, note }) {
-  const goals = await getGoals();
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(async goals => {
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  // Prevent duplicates
-  if (goal.linkedActivities.some(l => l.activityName === activityName)) {
-    // Update existing link
-    const link = goal.linkedActivities.find(l => l.activityName === activityName);
-    if (requiredFrequency !== undefined) link.requiredFrequency = requiredFrequency;
-    if (note !== undefined) link.note = note;
-  } else {
-    goal.linkedActivities.push({
-      activityName,
-      requiredFrequency: requiredFrequency || null,
-      note: note || ''
-    });
-  }
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  console.log(`🔗 Activity "${activityName}" linked to goal "${goal.title}"`);
-  return goal;
+    // Prevent duplicates
+    if (goal.linkedActivities.some(l => l.activityName === activityName)) {
+      // Update existing link
+      const link = goal.linkedActivities.find(l => l.activityName === activityName);
+      if (requiredFrequency !== undefined) link.requiredFrequency = requiredFrequency;
+      if (note !== undefined) link.note = note;
+    } else {
+      goal.linkedActivities.push({
+        activityName,
+        requiredFrequency: requiredFrequency || null,
+        note: note || ''
+      });
+    }
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    console.log(`🔗 Activity "${activityName}" linked to goal "${goal.title}"`);
+    return goal;
+  });
 }
 
 export async function unlinkActivity(goalId, activityName) {
-  const goals = await getGoals();
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(async goals => {
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  const idx = goal.linkedActivities.findIndex(l => l.activityName === activityName);
-  if (idx === -1) return goal;
+    const idx = goal.linkedActivities.findIndex(l => l.activityName === activityName);
+    if (idx === -1) return goal;
 
-  goal.linkedActivities.splice(idx, 1);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  console.log(`🔗 Activity "${activityName}" unlinked from goal "${goal.title}"`);
-  return goal;
+    goal.linkedActivities.splice(idx, 1);
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    console.log(`🔗 Activity "${activityName}" unlinked from goal "${goal.title}"`);
+    return goal;
+  });
 }
 
 export async function addMilestone(goalId, { title, targetDate }) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  const milestone = {
-    id: `ms-${uuidv4()}`,
-    title,
-    targetDate: targetDate || null,
-    completedAt: null,
-    tasks: [],
-    createdAt: new Date().toISOString()
-  };
+    const milestone = {
+      id: `ms-${uuidv4()}`,
+      title,
+      targetDate: targetDate || null,
+      completedAt: null,
+      tasks: [],
+      createdAt: new Date().toISOString()
+    };
 
-  goal.milestones.push(milestone);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return milestone;
+    goal.milestones.push(milestone);
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    return milestone;
+  });
 }
 
 export async function addProgressEntry(goalId, { date, note, durationMinutes }) {
@@ -561,63 +583,63 @@ export async function reconcileCalendarProgress(sourceKey, { goalId, date, note,
 }
 
 export async function completeMilestone(goalId, milestoneId) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  const milestone = goal.milestones.find(m => m.id === milestoneId);
-  if (!milestone) return null;
+    const milestone = goal.milestones.find(m => m.id === milestoneId);
+    if (!milestone) return null;
 
-  milestone.completedAt = new Date().toISOString();
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return milestone;
+    milestone.completedAt = new Date().toISOString();
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    return milestone;
+  });
 }
 
 export async function linkCalendarToGoal(goalId, { subcalendarId, subcalendarName, matchPattern }) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  if (!goal.linkedCalendars) goal.linkedCalendars = [];
+    if (!goal.linkedCalendars) goal.linkedCalendars = [];
 
-  // Prevent duplicates
-  const existing = goal.linkedCalendars.find(lc => lc.subcalendarId === subcalendarId);
-  if (existing) {
-    existing.subcalendarName = subcalendarName;
-    existing.matchPattern = matchPattern || '';
-  } else {
-    goal.linkedCalendars.push({
-      subcalendarId,
-      subcalendarName,
-      matchPattern: matchPattern || '',
-      linkedAt: new Date().toISOString()
-    });
-  }
+    // Prevent duplicates
+    const existing = goal.linkedCalendars.find(lc => lc.subcalendarId === subcalendarId);
+    if (existing) {
+      existing.subcalendarName = subcalendarName;
+      existing.matchPattern = matchPattern || '';
+    } else {
+      goal.linkedCalendars.push({
+        subcalendarId,
+        subcalendarName,
+        matchPattern: matchPattern || '',
+        linkedAt: new Date().toISOString()
+      });
+    }
 
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  console.log(`📅 Calendar "${subcalendarName}" linked to goal "${goal.title}"`);
-  return goal;
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    console.log(`📅 Calendar "${subcalendarName}" linked to goal "${goal.title}"`);
+    return goal;
+  });
 }
 
 export async function unlinkCalendarFromGoal(goalId, subcalendarId) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  if (!goal.linkedCalendars) return goal;
-  const idx = goal.linkedCalendars.findIndex(lc => lc.subcalendarId === subcalendarId);
-  if (idx === -1) return goal;
+    if (!goal.linkedCalendars) return goal;
+    const idx = goal.linkedCalendars.findIndex(lc => lc.subcalendarId === subcalendarId);
+    if (idx === -1) return goal;
 
-  goal.linkedCalendars.splice(idx, 1);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  console.log(`📅 Calendar unlinked from goal "${goal.title}"`);
-  return goal;
+    goal.linkedCalendars.splice(idx, 1);
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    console.log(`📅 Calendar unlinked from goal "${goal.title}"`);
+    return goal;
+  });
 }
 
 export async function getGoalCalendarEvents(goalId, startDate, endDate) {
@@ -715,27 +737,27 @@ Respond with a JSON array only (no markdown fences, no explanation). Each elemen
 }
 
 export async function acceptGoalPhases(goalId, phases) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
-  assertNoScheduledEvents(goal);
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+    assertNoScheduledEvents(goal);
 
-  goal.milestones = phases.map((phase, idx) => ({
-    id: `ms-${uuidv4()}`,
-    title: phase.title,
-    description: phase.description || '',
-    targetDate: phase.targetDate || null,
-    order: phase.order ?? idx,
-    completedAt: null,
-    tasks: [],
-    createdAt: new Date().toISOString()
-  }));
+    goal.milestones = phases.map((phase, idx) => ({
+      id: `ms-${uuidv4()}`,
+      title: phase.title,
+      description: phase.description || '',
+      targetDate: phase.targetDate || null,
+      order: phase.order ?? idx,
+      completedAt: null,
+      tasks: [],
+      createdAt: new Date().toISOString()
+    }));
 
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  console.log(`🎯 Accepted ${phases.length} phases for goal "${goal.title}"`);
-  return goal;
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    console.log(`🎯 Accepted ${phases.length} phases for goal "${goal.title}"`);
+    return goal;
+  });
 }
 
 // =============================================================================
@@ -803,58 +825,58 @@ ${goal.targetDate ? '- "targetDate": string (YYYY-MM-DD format)\n' : ''}- "order
 // tasks into the stored shape (mirrors acceptGoalPhases). Overwrites
 // goal.milestones — the proposal is the new plan.
 export async function acceptGoalDecomposition(goalId, milestones) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
-  assertNoScheduledEvents(goal);
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+    assertNoScheduledEvents(goal);
 
-  const now = new Date().toISOString();
-  goal.milestones = milestones.map((ms, idx) => ({
-    id: `ms-${uuidv4()}`,
-    title: ms.title,
-    description: ms.description || '',
-    targetDate: ms.targetDate || null,
-    order: ms.order ?? idx,
-    completedAt: null,
-    tasks: (Array.isArray(ms.tasks) ? ms.tasks : []).map(t => ({
-      id: `ms-task-${uuidv4()}`,
-      title: t.title,
-      priority: t.priority || 'medium',
-      estimateMinutes: t.estimateMinutes ?? null,
-      status: 'pending',
+    const now = new Date().toISOString();
+    goal.milestones = milestones.map((ms, idx) => ({
+      id: `ms-${uuidv4()}`,
+      title: ms.title,
+      description: ms.description || '',
+      targetDate: ms.targetDate || null,
+      order: ms.order ?? idx,
       completedAt: null,
+      tasks: (Array.isArray(ms.tasks) ? ms.tasks : []).map(t => ({
+        id: `ms-task-${uuidv4()}`,
+        title: t.title,
+        priority: t.priority || 'medium',
+        estimateMinutes: t.estimateMinutes ?? null,
+        status: 'pending',
+        completedAt: null,
+        createdAt: now
+      })),
       createdAt: now
-    })),
-    createdAt: now
-  }));
+    }));
 
-  goal.updatedAt = now;
-  goals.updatedAt = now;
-  await saveJSON(GOALS_FILE, goals);
-  const taskCount = goal.milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
-  console.log(`🧩 Accepted decomposition for "${goal.title}": ${goal.milestones.length} milestones / ${taskCount} tasks`);
-  return goal;
+    goal.updatedAt = now;
+    goals.updatedAt = now;
+    const taskCount = goal.milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
+    console.log(`🧩 Accepted decomposition for "${goal.title}": ${goal.milestones.length} milestones / ${taskCount} tasks`);
+    return goal;
+  });
 }
 
 // Toggles a milestone task's done state (mirrors updateTodo's done/pending flip).
 export async function completeMilestoneTask(goalId, milestoneId, taskId) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  const milestone = goal.milestones?.find(m => m.id === milestoneId);
-  if (!milestone) return null;
+    const milestone = goal.milestones?.find(m => m.id === milestoneId);
+    if (!milestone) return null;
 
-  const task = milestone.tasks?.find(t => t.id === taskId);
-  if (!task) return null;
+    const task = milestone.tasks?.find(t => t.id === taskId);
+    if (!task) return null;
 
-  const done = task.status === 'done';
-  task.status = done ? 'pending' : 'done';
-  task.completedAt = done ? null : new Date().toISOString();
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return task;
+    const done = task.status === 'done';
+    task.status = done ? 'pending' : 'done';
+    task.completedAt = done ? null : new Date().toISOString();
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
+    return task;
+  });
 }
 
 // =============================================================================
@@ -933,46 +955,47 @@ Respond with JSON only (no markdown fences). The response must be an object with
 }
 
 export async function applyGoalOrganization(organization) {
-  const goals = await getGoals();
-  const now = new Date().toISOString();
-  const goalMap = new Map(goals.goals.map(g => [g.id, g]));
-  let changed = 0;
+  return editGoals(async goals => {
+    normalizeGoals(goals);
+    const longevity = await loadLongevityFor(goals);
+    if (longevity.timeHorizons) goals.timeHorizons = longevity.timeHorizons;
+    const now = new Date().toISOString();
+    const goalMap = new Map(goals.goals.map(g => [g.id, g]));
+    let changed = 0;
 
-  for (const item of organization) {
-    const goal = goalMap.get(item.id);
-    if (!goal) continue;
+    for (const item of organization) {
+      const goal = goalMap.get(item.id);
+      if (!goal) continue;
 
-    let goalChanged = false;
+      let goalChanged = false;
 
-    if (item.goalType && goalTypeEnum.options.includes(item.goalType)) {
-      if (goal.goalType !== item.goalType) {
-        goal.goalType = item.goalType;
-        goalChanged = true;
+      if (item.goalType && goalTypeEnum.options.includes(item.goalType)) {
+        if (goal.goalType !== item.goalType) {
+          goal.goalType = item.goalType;
+          goalChanged = true;
+        }
       }
-    }
-    if (item.suggestedParentId !== undefined) {
-      const newParentId = item.suggestedParentId;
-      if (newParentId === null || goalMap.has(newParentId)) {
-        if (!newParentId || !hasAncestorCycle(goals.goals, goal.id, newParentId)) {
-          if (goal.parentId !== newParentId) {
-            goal.parentId = newParentId;
-            goalChanged = true;
+      if (item.suggestedParentId !== undefined) {
+        const newParentId = item.suggestedParentId;
+        if (newParentId === null || goalMap.has(newParentId)) {
+          if (!newParentId || !hasAncestorCycle(goals.goals, goal.id, newParentId)) {
+            if (goal.parentId !== newParentId) {
+              goal.parentId = newParentId;
+              goalChanged = true;
+            }
           }
         }
       }
+      if (goalChanged) {
+        goal.updatedAt = now;
+        changed++;
+      }
     }
-    if (goalChanged) {
-      goal.updatedAt = now;
-      changed++;
-    }
-  }
 
-  if (changed > 0) {
-    goals.updatedAt = now;
-    await saveJSON(GOALS_FILE, goals);
-  }
-  console.log(`🎯 Applied organization to ${changed} goals`);
-  return { applied: changed };
+    if (changed > 0) goals.updatedAt = now;
+    console.log(`🎯 Applied organization to ${changed} goals`);
+    return { applied: changed };
+  });
 }
 
 // =============================================================================
@@ -1065,11 +1088,13 @@ Respond with JSON only (no markdown fences). The response must be an object with
     createdAt: new Date().toISOString()
   };
 
-  if (!Array.isArray(goal.checkIns)) goal.checkIns = [];
-  goal.checkIns.push(checkIn);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
+  await mutateGoals(fresh => {
+    const current = fresh.goals.find(g => g.id === goalId);
+    if (!current) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
+    (current.checkIns ||= []).push(checkIn);
+    current.updatedAt = fresh.updatedAt = new Date().toISOString();
+    return fresh;
+  });
 
   console.log(`📋 Check-in for "${goal.title}": ${checkIn.status} (${goal.progress}%${expectedProgress != null ? ` vs ${expectedProgress}% expected` : ''})`);
   return checkIn;
@@ -1080,30 +1105,30 @@ Respond with JSON only (no markdown fences). The response must be an object with
 // =============================================================================
 
 export async function updateGoalProgress(goalId, value) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  return editGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return null;
 
-  const prev = goal.progress ?? 0;
-  goal.progress = value;
-  if (!goal.progressHistory) goal.progressHistory = [];
+    const prev = goal.progress ?? 0;
+    goal.progress = value;
+    if (!goal.progressHistory) goal.progressHistory = [];
 
-  // Only log if value changed; deduplicate same-day entries to prevent bloat
-  if (prev !== value) {
-    const today = new Date().toISOString().slice(0, 10);
-    const lastEntry = goal.progressHistory[goal.progressHistory.length - 1];
-    if (lastEntry?.date === today) {
-      lastEntry.value = value;
-      lastEntry.timestamp = new Date().toISOString();
-    } else {
-      goal.progressHistory.push({ date: today, value, timestamp: new Date().toISOString() });
+    // Only log if value changed; deduplicate same-day entries to prevent bloat
+    if (prev !== value) {
+      const today = new Date().toISOString().slice(0, 10);
+      const lastEntry = goal.progressHistory[goal.progressHistory.length - 1];
+      if (lastEntry?.date === today) {
+        lastEntry.value = value;
+        lastEntry.timestamp = new Date().toISOString();
+      } else {
+        goal.progressHistory.push({ date: today, value, timestamp: new Date().toISOString() });
+      }
     }
-  }
 
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
+    goal.updatedAt = new Date().toISOString();
+    goals.updatedAt = new Date().toISOString();
 
-  console.log(`📊 Progress for "${goal.title}": ${prev}% → ${value}%`);
-  return goal;
+    console.log(`📊 Progress for "${goal.title}": ${prev}% → ${value}%`);
+    return goal;
+  });
 }

@@ -330,9 +330,12 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
 
   // Keep goals.json in sync for backward compatibility
   if (goals) {
-    goals.birthDate = birthDate;
-    goals.updatedAt = new Date().toISOString();
-    await atomicWrite(GOALS_FILE, goals);
+    const { mutateGoals } = await import('./identity/store.js');
+    await mutateGoals(fresh => {
+      fresh.birthDate = birthDate;
+      fresh.updatedAt = new Date().toISOString();
+      return fresh;
+    });
   }
 
   await mlPatchProfileIfEnabled({ birthDate });
