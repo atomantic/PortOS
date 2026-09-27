@@ -76,6 +76,7 @@ export async function synthesizeCompositionMusic(page, durationSec) {
     if (typeof renderAudio !== 'function') throw new Error('portosComposition.renderAudio is required for synthesized music');
     const samples = await renderAudio({ sampleRate: ${sampleRate}, durationSec: ${durationSec} });
     if (!Array.isArray(samples) || samples.length !== ${length}) throw new Error('renderAudio must return exactly ${length} mono PCM samples');
+    if (samples.some(value => !Number.isFinite(value) || value < -1 || value > 1)) throw new Error('renderAudio must return finite mono PCM samples in [-1, 1]');
     return samples;
   })()`);
   if (!Array.isArray(samples) || samples.length !== length || samples.some(value => !Number.isFinite(value) || value < -1 || value > 1)) {
