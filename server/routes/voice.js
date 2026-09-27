@@ -27,7 +27,7 @@ import {
   createClonedVoiceCandidate,
   promoteVoiceProfile,
 } from '../services/voice/profiles.js';
-import { renderProfileBenchmark, benchmarkProfileInteractive } from '../services/voice/profileBenchmarks.js';
+import { renderProfileBenchmark, benchmarkProfileInteractive, completeProfileInteractiveBenchmark } from '../services/voice/profileBenchmarks.js';
 import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
 import {
   startFineTuningJob,
@@ -252,6 +252,11 @@ const interactiveBenchmarkSchema = z.object({
   maxFirstAudioMs: z.number().min(50).max(5000).optional(),
 }).strict();
 
+const interactivePlaybackReceiptSchema = z.object({
+  benchmarkId: z.string().uuid(),
+  playbackLatencyMs: z.number().min(0).max(120000),
+}).strict();
+
 const fineTuneStartSchema = z.object({
   epochs: z.number().int().min(1).max(50).optional(),
   checkpointInterval: z.number().int().min(10).max(500).optional(),
@@ -413,7 +418,14 @@ router.post('/profiles/:id/benchmark', asyncHandler(async (req, res) => {
 router.post('/profiles/:id/benchmark-interactive', asyncHandler(async (req, res) => {
   const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
   const body = validateRequest(interactiveBenchmarkSchema, req.body || {});
-  const profile = await benchmarkProfileInteractive(profileId, body);
+  const benchmark = await benchmarkProfileInteractive(profileId, body);
+  res.json({ benchmark });
+}));
+
+router.post('/profiles/:id/benchmark-interactive/complete', asyncHandler(async (req, res) => {
+  const { id: profileId } = validateRequest(profileIdParamsSchema, req.params);
+  const body = validateRequest(interactivePlaybackReceiptSchema, req.body || {});
+  const profile = await completeProfileInteractiveBenchmark(profileId, body);
   res.json({ profile });
 }));
 

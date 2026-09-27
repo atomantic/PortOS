@@ -16,7 +16,7 @@ vi.mock('../../services/apiVoice', () => ({
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
   promoteVoiceProfile: vi.fn(),
-  benchmarkProfileInteractive: vi.fn(),
+
   startFineTuningJob: vi.fn(),
 }));
 
@@ -25,8 +25,10 @@ import {
   listVoiceProfiles,
   promoteVoicePreset,
   createVoiceDesignCandidate,
-  benchmarkProfileInteractive,
 } from '../../services/apiVoice';
+
+vi.mock('../../services/voiceProfileBenchmark', () => ({ qualifyProfilePlayback: vi.fn() }));
+import { qualifyProfilePlayback } from '../../services/voiceProfileBenchmark';
 
 const ARIA = { id: 'chr-aria', name: 'Aria' };
 const BRAM = { id: 'chr-bram', name: 'Bram' };
@@ -287,7 +289,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
         routes: { studio: { enabled: true }, interactive: { enabled: false, maxFirstAudioMs: 900 } },
       }],
     });
-    benchmarkProfileInteractive.mockResolvedValueOnce({
+    qualifyProfilePlayback.mockResolvedValueOnce({
       profile: {
         id: 'voice-profile-1', version: 1, approval: { status: 'approved' },
         routes: { studio: { enabled: true }, interactive: { enabled: true, maxFirstAudioMs: 900 } },
@@ -301,7 +303,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     fireEvent.click(await screen.findByRole('button', { name: /Qualify interactive route/i }));
 
-    await waitFor(() => expect(benchmarkProfileInteractive).toHaveBeenCalledWith(
+    await waitFor(() => expect(qualifyProfilePlayback).toHaveBeenCalledWith(
       'voice-profile-1', { maxFirstAudioMs: 900 }, { silent: true },
     ));
   });

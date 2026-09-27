@@ -47,9 +47,9 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
-  benchmarkProfileInteractive,
   startFineTuningJob,
 } from '../../services/apiVoice';
+import { qualifyProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
 import TabPills from '../ui/TabPills';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -902,7 +902,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
 
   const [qualifyInteractive, qualifyingInteractive] = useAsyncAction(async () => {
     if (!profile?.id) return null;
-    const result = await benchmarkProfileInteractive(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+    const result = await qualifyProfilePlayback(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
     await refreshProfiles();
     return result;
   }, { errorMessage: 'Interactive benchmark qualification failed' });
@@ -959,7 +959,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
               </p>
               {profile.benchmark?.interactiveLatencyMs ? (
                 <p className="text-[10px] text-port-success">
-                  Interactive Latency Benchmark: {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
+                  Request-to-playback benchmark: {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
                 </p>
               ) : null}
             </div>

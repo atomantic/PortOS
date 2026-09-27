@@ -150,6 +150,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
+| `voiceProfileBenchmark.js` | Measures request-to-playing latency for fresh profile probes and submits a one-use playback receipt. |
 | `voiceClient.js` | Browser-side voice capture + playback (two modes). |
 | `browserLlm.js` | Client for Chrome's on-device "Gemini Nano" (Prompt API): dual-shape detection, availability enum, cached `promptNano()` with timeout. Tier 2 of the voice fast-resolution cascade. |
 | `voiceFastPath.js` | Voice fast-resolution cascade: trigger nav → on-device Nano → server LLM. Decides how each spoken/typed turn is resolved. |

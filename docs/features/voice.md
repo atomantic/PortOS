@@ -61,13 +61,18 @@ reported revisions before treating this as a validated speech runtime. The
 reference is generated, so no personal recording or consent is needed for this
 smoke. A successful command or non-silent WAV alone does not establish quality.
 
-Interactive profile benchmarks measure elapsed time until the buffered WAV is
-available at the synthesis service boundary. This includes model startup and
-rendering, but excludes browser/network playback latency. They record no
-similarity score without an actual similarity evaluator. Passing this latency
-gate does not establish intelligibility, speaker identity, or non-silent speech.
-Qualification and its
-route decision are saved together only for the profile revision rendered.
+Interactive profile qualification plays a fresh buffered WAV in the browser.
+Timing starts before the render request and stops at the browser's `playing`
+event, so it includes rendering, response transfer, decoding and playback startup.
+It is a request-to-playback benchmark, not first-chunk streaming latency. Rendering
+alone never enables the route. A one-use receipt expires after two minutes, binds
+the measurement to the rendered profile revision, and saves its boundary, model
+revision and route decision together. Restarting the server or changing the
+profile requires a fresh benchmark. Playback rejection or timeout cannot qualify.
+The browser reports its own playback event; this is an operator measurement,
+not an attestation of another machine's audio output. No similarity score is
+invented, and passing this latency gate does not establish intelligibility or
+speaker identity.
 
 ### FaceTime Audio control plane
 

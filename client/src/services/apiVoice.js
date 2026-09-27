@@ -31,6 +31,10 @@ export const benchmarkProfileInteractive = (profileId, payload = {}, options) =>
   `/voice/profiles/${encodeURIComponent(profileId)}/benchmark-interactive`, payload, options,
 );
 
+export const completeVoiceProfileInteractiveBenchmark = (profileId, payload, options) => api.post(
+  `/voice/profiles/${encodeURIComponent(profileId)}/benchmark-interactive/complete`, payload, options,
+);
+
 // Fine-tuning
 export const startFineTuningJob = (profileId, payload = {}, options) => api.post(
   `/voice/profiles/${encodeURIComponent(profileId)}/fine-tune/start`, payload, options,

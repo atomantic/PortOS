@@ -103,6 +103,12 @@ const sanitizeBenchmark = (raw) => {
     lines,
     mastering: sanitizeMastering(raw.mastering),
     interactiveLatencyMs: Number.isFinite(raw.interactiveLatencyMs) ? Math.round(raw.interactiveLatencyMs) : null,
+    interactiveMeasurement: raw.interactiveMeasurement?.boundary === 'browser-playing' &&
+      Number.isFinite(raw.interactiveMeasurement.synthesisLatencyMs) ? {
+        boundary: 'browser-playing',
+        synthesisLatencyMs: Math.max(0, Math.round(raw.interactiveMeasurement.synthesisLatencyMs)),
+        modelRevision: trimTo(raw.interactiveMeasurement.modelRevision, MAX_REVISION) || null,
+      } : null,
     similarityScore: Number.isFinite(raw.similarityScore) ? Number(raw.similarityScore.toFixed(3)) : null,
   };
 };
@@ -568,13 +574,19 @@ export async function saveProfileBenchmark(profile, benchmark, { interactive } =
   // Patch only the measured fields in one DB statement. A concurrent profile
   // revision change invalidates the evidence instead of qualifying new audio
   // against an old render or overwriting another writer's profile changes.
-  const patch = { benchmark: cleanBenchmark, updatedAt: timestamp() };
+  // Each workflow supplies only its own fields: a playback receipt must not
+  // erase fixed-script renders produced while the operator was playing it.
+  const benchmarkPatch = Object.fromEntries(Object.entries(cleanBenchmark || {})
+    .filter(([key]) => Object.hasOwn(benchmark, key)));
+  const patch = { benchmark: benchmarkPatch, updatedAt: timestamp() };
   const route = interactive ? sanitizeRoutes({ interactive }).interactive : null;
   const { rows } = await query(
     `UPDATE voice_profiles SET
-       data = CASE WHEN $4::jsonb IS NULL THEN data || $2::jsonb
+       data = jsonb_set(
+         CASE WHEN $4::jsonb IS NULL THEN data || $2::jsonb
          ELSE jsonb_set(data || $2::jsonb, '{routes}',
            COALESCE(data->'routes', '{}'::jsonb) || jsonb_build_object('interactive', $4::jsonb)) END,
+         '{benchmark}', COALESCE(data->'benchmark', '{}'::jsonb) || ($2::jsonb->'benchmark')),
        updated_at = $5
      WHERE id = $1 AND (data->>'version')::int = $3
      RETURNING data`,
