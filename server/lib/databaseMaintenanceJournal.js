@@ -227,8 +227,22 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // export/import a successor must re-establish writer/child quiescence: the
   // worker's exit says nothing about descendants it might have left behind.
   // No PID probe, clock, reverse operation, or source-success inference occurs.
-  const recoverCoordinator = (id, previousToken) => {
+  const recoverCoordinator = (id, previousToken, recoveryToken) => {
     assertNotRealDataWrite(activeDir, 'database maintenance coordinator recovery');
+    coordinatorSchema.parse({ id, token: recoveryToken });
+    coordinatorSchema.parse({ id, token: previousToken });
+    if (recoveryToken === previousToken) throw databaseMaintenanceError();
+    const owner = readCoordinator(id);
+    // The caller persists its recovery token before attempting publication.
+    // A crash after link/fsync but before returning must be retryable by that
+    // same claimant; another claimant must never learn or reuse its token.
+    if (owner?.token === recoveryToken) {
+      const published = successorSchema.parse(JSON.parse(readFileSync(
+        join(activeDir, 'coordinator-after-' + previousToken + '.json'), 'utf8')));
+      if (published.id !== id || published.previousToken !== previousToken || published.token !== recoveryToken) throw databaseMaintenanceError();
+      syncDirectory(activeDir);
+      return recoveryToken;
+    }
     assertCoordinator(id, previousToken);
     const current = read();
     if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(current.stage)
@@ -237,13 +251,15 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     const fd = openSync(join(directory, 'exit'), 'r+');
     try { fsyncSync(fd); } finally { closeSync(fd); }
     syncDirectory(directory);
-    const next = { id, token: randomUUID(), previousToken };
-    const pending = join(activeDir, 'coordinator-' + next.token + '.pending');
+    const next = { id, token: recoveryToken, previousToken };
+    const pending = join(activeDir, 'coordinator-' + randomUUID() + '.pending');
     writeDurableExclusive(pending, next);
     try {
-      // EEXIST is a LOST recovery race, unlike an idempotent stage publication:
-      // the winner owns a different token and this caller must not execute.
+      // EEXIST is a lost race unless this is the SAME recorded recovery
+      // request. Different claimants must never receive the winning token.
       linkSync(pending, join(activeDir, 'coordinator-after-' + previousToken + '.json'));
+    } catch (err) {
+      if (err.code !== 'EEXIST' || readCoordinator(id)?.token !== recoveryToken) throw err;
     } finally {
       unlinkSync(pending);
     }

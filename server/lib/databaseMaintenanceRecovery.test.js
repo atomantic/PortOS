@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,9 +61,10 @@ async function launchWorker(operation, token, stage = 'importing') {
   return { ...child, controlDir };
 }
 
-function recoveryProcess(operation, token) {
+function recoveryProcess(operation, token, recoveryToken = randomUUID(), crashAfterPublication = false) {
   const code = `import {createDatabaseMaintenanceJournal} from ${JSON.stringify(moduleUrl)};
-    try {console.log(createDatabaseMaintenanceJournal(${JSON.stringify(data)}).recoverCoordinator(${JSON.stringify(operation.id)},${JSON.stringify(token)}));}
+    try {const token = createDatabaseMaintenanceJournal(${JSON.stringify(data)}).recoverCoordinator(${JSON.stringify(operation.id)},${JSON.stringify(token)},${JSON.stringify(recoveryToken)});
+      if (${crashAfterPublication}) process.exit(7); console.log(token);}
     catch {process.exitCode=1;}`;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -81,7 +83,7 @@ describe('same-operation coordinator recovery', () => {
     // A paused import is not a recoverable dead owner, however old its PID or
     // timestamps appear. Only the supervisor's completed exit receipt counts.
     expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'awaiting-exit' });
-    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     expect(() => journal.reserveCoordinatorWorker(operation.id, token)).toThrow();
     expect(() => journal.assertAdmission()).toThrow();
     writeFileSync(join(worker.controlDir, 'finish'), '');
@@ -95,7 +97,7 @@ describe('same-operation coordinator recovery', () => {
     expect(journal.read()).toEqual({ ...operation, stage: 'importing' });
     expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
     expect(() => journal.transition(operation.id, token, 'importing', 'committing')).toThrow();
-    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     expect(() => journal.begin({ source: to, target: from })).toThrow();
     expect(() => journal.cancel(operation.id, from)).toThrow();
     expect(() => journal.assertAdmission()).toThrow();
@@ -106,7 +108,7 @@ describe('same-operation coordinator recovery', () => {
     // No worker was launched into the new reservation; recovery cannot invent
     // success from a missing/dead PID, even on repeated attempts.
     writeFileSync(join(nextDirectory, 'pid'), '2147483647');
-    expect(() => journal.recoverCoordinator(operation.id, successor)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, successor, randomUUID())).toThrow();
   }, 40_000);
 
   it('recovers a killed worker only after its supervisor acknowledges exit', async () => {
@@ -115,24 +117,44 @@ describe('same-operation coordinator recovery', () => {
     const worker = await launchWorker(operation, token, 'exporting');
     worker.handle.kill('SIGKILL');
     await worker.done;
-    const next = journal.recoverCoordinator(operation.id, token);
+    const next = journal.recoverCoordinator(operation.id, token, randomUUID());
     expect(next).not.toBe(token);
     expect(journal.read()).toEqual({ ...operation, stage: 'exporting' });
+    expect(() => journal.assertAdmission()).toThrow();
+  }, 40_000);
+
+  it('recovers a published ownership handoff after its caller crashes before receiving the result', async () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const worker = await launchWorker(operation, token, 'exporting');
+    writeFileSync(join(worker.controlDir, 'finish'), '');
+    await worker.done;
+    // This request identity is recorded BEFORE launching the recovery process.
+    const recoveryToken = randomUUID();
+    writeFileSync(join(root, 'recovery-request.json'), JSON.stringify({ id: operation.id, previousToken: token, recoveryToken }));
+    expect(await recoveryProcess(operation, token, recoveryToken, true)).toEqual({ status: 7, token: '' });
+    const request = JSON.parse(readFileSync(join(root, 'recovery-request.json'), 'utf8'));
+    const retry = await recoveryProcess(operation, request.previousToken, request.recoveryToken);
+    expect(retry).toEqual({ status: 0, token: recoveryToken });
+    expect((await recoveryProcess(operation, token)).status).toBe(1);
+    expect(journal.read()).toEqual({ ...operation, stage: 'exporting' });
+    journal.reserveCoordinatorWorker(operation.id, retry.token);
+    expect(() => journal.reserveCoordinatorWorker(operation.id, retry.token)).toThrow();
     expect(() => journal.assertAdmission()).toThrow();
   }, 40_000);
 
   it('refuses absent, partial, foreign, or damaged completion evidence and preserves the fence', () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);
-    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     const controlDir = journal.reserveCoordinatorWorker(operation.id, token);
     for (const value of ['', 'success', '0 trailing', '99999999999', '1\n0']) {
       writeFileSync(join(controlDir, 'exit'), value);
-      expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+      expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     }
     writeFileSync(join(controlDir, 'exit'), '0\n');
     writeFileSync(join(controlDir, 'owner.json'), JSON.stringify({ id: operation.id, token: '00000000-0000-4000-8000-000000000000' }));
-    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     expect(journal.read()).toEqual(operation);
     expect(() => journal.assertAdmission()).toThrow();
   });
@@ -147,7 +169,7 @@ describe('same-operation coordinator recovery', () => {
       journal.transition(operation.id, token, current, next);
       current = next;
     }
-    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
     expect(journal.read().stage).toBe('committing');
     expect(() => journal.assertAdmission()).toThrow();
   });
