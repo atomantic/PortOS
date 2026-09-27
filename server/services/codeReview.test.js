@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock the settings store before importing the SUT — the resolver reads
@@ -64,6 +65,17 @@ import {
 } from './codeReview.js'
 import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS } from '../lib/cosValidation.js'
 import { updateSettingsWith } from './settings.js'
+
+// Preserve the real transport for the explicitly requested local-model evaluation.
+const nativeFetch = global.fetch
+const processManifestCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-process-manifest.json', import.meta.url), 'utf8'))
+const manifestDiffParts = processManifestCase.diff.split(/(?=^diff --git )/m).filter(Boolean)
+const manifestCases = [
+  ['complete runtime and seed removal', processManifestCase.diff, 'ship'],
+  ['seed only', manifestDiffParts.find(part => part.startsWith('diff --git a/data.reference/')), 'fix-first'],
+  ['tests only', manifestDiffParts.find(part => part.startsWith('diff --git a/server/services/apps.test.js')), 'rethink'],
+  ['runtime process entry retained', processManifestCase.diff.replace("-      { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },", "       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },").replace('@@ -57,7 +57,6 @@', '@@ -57,7 +57,7 @@'), 'fix-first'],
+]
 
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
@@ -1035,6 +1047,40 @@ describe('codeReview helpers', () => {
       expect(prompt).toContain('same complete named section')
       expect(prompt).toContain('added duplicate whose old copy remains')
     })
+
+    // Transport/contract regression; the opt-in real-model test below checks judgement.
+    it.each(manifestCases)('preserves the bounded manifest calibration and verdict: %s', async (_name, diff, verdict) => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[1].content).toContain(processManifestCase.objective)
+        expect(messages[1].content).toContain(diff.trim())
+        expect(messages[0].content).toContain('even without a literal UI assertion or a changed UI file')
+        expect(messages[0].content).toContain('paired production removal plus fresh/legacy registry evidence')
+        expect(messages[0].content).toContain('a seed-only edit, a test-only change, removal from only one array')
+        expect(messages[0].content).toContain('Do not infer an unseen consumer repair or waive a separate UI behavior')
+        expect(messages[0].content).toContain('Return fix-first or rethink for these incomplete shapes, never ship')
+        expect(messages[0].content).toContain('Added expectations cannot substitute for or override contradictory production code')
+        expect(messages[0].content).toContain('not proof that tests were run or passed')
+        return mockJsonResponse({ choices: [{ message: { content: JSON.stringify({
+          verdict, missing: verdict === 'ship' ? [] : ['complete production manifest removal'],
+          unrequested: [], evidence: 'Registry regression assertions are present only in cases carrying the test diff.',
+        }) } }] })
+      })
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: processManifestCase.objective, diff })
+      expect(result).toMatchObject({ ok: true, verdict })
+    })
+
+    // Explicit opt-in only: ordinary CI never calls an AI provider.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(manifestCases)('judges the manifest fixture with a real local model: %s', async (_name, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: processManifestCase.objective, diff, timeoutMs: 180_000,
+      })
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+    }, 190_000)
 
     it('escapes a diff that carries its own fence so it cannot break out into the objective half', async () => {
       await runLocalGoalFidelityReview({
