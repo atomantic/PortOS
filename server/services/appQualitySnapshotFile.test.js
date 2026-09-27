@@ -563,7 +563,7 @@ it('serializes worktree cleanup, retries a failed Git removal, and reports stale
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const order = [];
   let removals = 0;
-  const run = async ({ retrySucceeds }) => {
+  const run = async ({ retrySucceeds, listingFails = false }) => {
     removals = 0;
     order.length = 0;
     __resetQualitySnapshotPublishState();
@@ -579,6 +579,7 @@ it('serializes worktree cleanup, retries a failed Git removal, and reports stale
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         if (args[0] === 'worktree' && args[1] === 'list') {
+          if (listingFails) return { exitCode: 128, stdout: '', stderr: 'Git listing failed' };
           const stale = retrySucceeds ? '' : `worktree /private${worktreePath}\ndetached\n\n`;
           return { exitCode: 0, stdout: `worktree /repo/example-app\nbranch refs/heads/main\n\n${stale}worktree /repo/other\n`, stderr: '' };
         }
@@ -600,5 +601,8 @@ it('serializes worktree cleanup, retries a failed Git removal, and reports stale
   expect(message).toContain('registration remains');
   expect(message).toContain('<snapshot-worktree>');
   expect(message).not.toContain(worktreePath);
+  warn.mockClear();
+  expect((await run({ retrySucceeds: false, listingFails: true })).published).toBe(true);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining('registration verification unavailable'));
   warn.mockRestore();
 });

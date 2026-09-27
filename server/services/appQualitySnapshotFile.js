@@ -408,10 +408,12 @@ async function cleanupSnapshotWorktree(app, git, worktreePath, removeTemp) {
   const listing = await git.execGit(['worktree', 'list', '--porcelain'], app.repoPath, { ignoreExitCode: true })
     .catch(() => null);
   const name = basename(worktreePath);
+  const verificationFailed = !listing || listing.exitCode !== 0 || typeof listing.stdout !== 'string';
   const stillRegistered = String(listing?.stdout || '').split('\n')
     .some(line => line.startsWith('worktree ') && basename(line.slice(9).trim()) === name);
-  if (!stillRegistered && !rmError) return;
+  if (!verificationFailed && !stillRegistered && !rmError) return;
   const reasons = [
+    verificationFailed && 'registration verification unavailable',
     stillRegistered && `registration remains (${redact(gitError) || 'no error reported'})`,
     rmError && `directory removal failed (${redact(rmError)})`,
   ].filter(Boolean).join('; ');
