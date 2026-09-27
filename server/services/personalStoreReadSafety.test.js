@@ -37,7 +37,7 @@ vi.mock('./obsidian.js', () => ({}));
 vi.mock('./notifications.js', () => ({ addNotification: vi.fn(), NOTIFICATION_TYPES: {}, exists: async () => false }));
 vi.mock('./calendarSync.js', () => ({}));
 vi.mock('./calendarAccounts.js', () => ({}));
-vi.mock('./identity.js', () => ({ addProgressEntry: vi.fn(), getGoals: async () => ({ goals: [] }) }));
+vi.mock('./identity.js', () => ({ reconcileCalendarProgress: vi.fn(), getGoals: async () => ({ goals: [] }) }));
 
 vi.mock('./settings.js', async () => {
   const { EventEmitter } = await import('events');

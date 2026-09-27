@@ -119,6 +119,26 @@ Coordinator ownership and cancellation share one exclusive durable claim. Once o
 
 A cancelled unowned accepted operation moves to `data/database-maintenance-cancelled/<operation-id>/` as local recovery evidence. These records remain filesystem-backed and included in backups; they are not a growing application collection. Restoring an active journal deliberately restores its fence: do not delete it merely to make startup succeed. See [database maintenance admission](BACKUP.md#database-maintenance-admission) for the operator contract and current limitations.
 
+### Calendar daily-review recovery
+
+Daily reviews remain in the existing `data/calendar/daily-reviews/<date>.json`
+file-primary store. An optional per-event `pendingOperations` map records each desired confirmation,
+its stable date/event `sourceKey`, and prior goal link before goal effects run.
+Only a successful goal-store write publishes the confirmation and clears the intent.
+An explicit daily-review read or confirmation retry replays pending work locally;
+missing goals remain visible as pending confirmations without blocking the day.
+History stays a read-only projection of completed confirmations. No recovery path
+calls an AI or calendar provider.
+
+Goal progress carries the same optional `sourceKey` in the existing identity goal
+store (including its MortalLoom mirror). A serialized goal mutation replaces or
+removes only matching entries, preserving manual and legacy progress. These are
+additive optional fields: old reviews and goal logs are read unchanged, with no
+backfill, seed, or install migration, because historical free-form entries cannot
+be safely assigned provenance. The journal stays machine-local; no new peer sync
+category is introduced. Existing filesystem backups cover the review intents and
+goal data together; interrupted intents remain retryable after restore.
+
 ## `asset-file-db-indexed` — bytes on disk, metadata in DB
 
 **Definition.** Large binary payloads (images, video, audio, model weights) stay on disk as bytes, while their **searchable metadata** — provenance, gen params, favorites, notes, lineage, collection membership — lives in PostgreSQL as asset rows that reference the file by a stable key.
