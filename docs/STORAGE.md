@@ -601,3 +601,40 @@ before manually retiring history.
 Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
 
 `passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.
+
+### CoS raw recording maintenance
+
+CoS historical `metadata.json`, prompts, parsed `output.txt`, feedback and history
+indexes have no automatic age expiry. `cosAgentIndex.pruneOldAgentArchives` is a
+compatibility no-op. Data Management → Chief of Staff → Recording cleanup offers
+verified gzip compression and separately opted-in deletion of **raw terminal
+recordings only**. Unknown files, parsed output, prompts and metadata are never
+removed by this maintenance. The separate explicit Delete/Clear history actions
+remain destructive; they are not storage maintenance.
+
+The existing machine-local CoS config owns `agentStorage` and a bounded
+`lastAgentStorageJob` audit. Defaults compress after seven days, with irreversible
+deletion off. Migration 416 adopts those defaults for existing config without
+converting any recording or overwriting user policy. While CoS is running, hourly maintenance handles
+at most 25 eligible runs; manual previews handle at most 1,000 per batch and
+expire after 15 minutes. Saving policy reconciles it immediately. No provider
+calls occur. A cancellation preserves the original until verified publication.
+
+`raw.txt.gz` is a lossless local asset alternative to `raw.txt`; a same-directory
+`raw-storage.json` is **file-primary asset lifecycle metadata**, inseparable from
+that archive's pin, checksum and disposition. It is not a new relational history
+store. A plain file wins if interrupted publication leaves both forms; a later
+maintenance pass verifies and converges them. History and learning consumers keep
+reading unchanged metadata/output/prompt files. The download endpoint serves the
+available raw or gzip asset without loading it into memory; deleted recordings
+return an explicit unavailable response. The flat active-run layout is excluded.
+
+Compression requires an old, completed, state-evicted, unpinned run with regular,
+unmodified artifacts and no preserved worktree or known live/resume/pipeline
+reference. Deletion additionally requires a retained task summary and nonempty
+parsed output. A stale preview is revalidated before publication/deletion. The
+raw sidecar and compressed asset stay machine-local; existing peer CoS sync
+continues its unchanged allowlist (`metadata.json`, `output.txt`, `prompt.txt`).
+Filesystem backups include both gzip assets and their sidecars, and restore keeps
+them readable without a conversion. Data Management's backup export keeps its
+originals and is distinct from space reclamation.

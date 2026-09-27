@@ -366,7 +366,7 @@ export const deleteBackupSnapshot = (snapshotId, source, options = {}) => {
 
 // Data Manager
 export const getDataOverview = () => request('/data');
-export const getDataCategory = (key) => request(`/data/${key}`);
+export const getDataCategory = (key, options = {}) => request(`/data/${key}${options.measure ? '?measure=1' : ''}`, options);
 export const archiveDataCategory = (key, opts) => request(`/data/${key}/archive`, { method: 'POST', body: JSON.stringify(opts || {}) });
 export const purgeDataCategory = (key, opts, options = {}) => request(`/data/${key}`, {
   method: 'DELETE',
@@ -600,3 +600,11 @@ export const getEidoverseDestinations = (options) => request('/eidoverse/travel/
 export const departEidoverse = (peerId, options) => request('/eidoverse/travel/depart', { method: 'POST', body: JSON.stringify({ peerId }), ...options });
 
 export const saveCredential = (id, value, options) => request(`/settings/credentials/${encodeURIComponent(id)}`, { ...options, method: 'PUT', body: JSON.stringify({ value }) });
+
+// CoS raw recordings; metadata, prompts and parsed output are retained.
+export const getCosStorage = (options) => request('/data/cos/storage', options);
+export const previewCosStorage = (filter, offset = 0, options) => request(`/data/cos/storage/preview?offset=${offset}`, { ...options, method: 'POST', body: JSON.stringify(filter) });
+export const runCosStorage = (input, options) => request('/data/cos/storage/run', { ...options, method: 'POST', body: JSON.stringify(input) });
+export const cancelCosStorage = (options) => request('/data/cos/storage/cancel', { ...options, method: 'POST' });
+export const saveCosStoragePolicy = (policy, options) => request('/data/cos/storage/policy', { ...options, method: 'PUT', body: JSON.stringify(policy) });
+export const pinCosRecording = (input, options) => request('/data/cos/storage/pin', { ...options, method: 'PUT', body: JSON.stringify(input) });
