@@ -31,6 +31,7 @@ import { getCodeReviewDefaults } from './codeReview.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
+import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { worktreeAgentId } from '../lib/worktreeOwnership.js';
 import {
   appendReviewerEffortBlock,
@@ -207,9 +208,7 @@ export function applyReleaseOptions(promptTemplate, taskType, metadata) {
   if (taskType !== 'do-release') return typeof promptTemplate === 'string' ? promptTemplate : '';
   const prompt = (typeof promptTemplate === 'string' ? promptTemplate : '')
     .replace(/\{appId\}/g, () => metadata?.app ?? '');
-  const block = resolveReleaseOptionsBlock(metadata);
-  if (prompt.includes('{releaseOptions}')) return prompt.replace(/\{releaseOptions\}/g, () => block);
-  return `## Release options for this run\n\n${block}\n\n---\n\n${prompt}`;
+  return renderOrPrependSection(prompt, '{releaseOptions}', 'Release options for this run', resolveReleaseOptionsBlock(metadata));
 }
 
 // Per-forge nouns/commands for the swarm directive. The orchestration shape is
