@@ -255,7 +255,12 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // import.meta.url-derived path so a server booted from inside a CoS agent
     // worktree still resolves to the real install; runMigrations also skips a
     // worktree-rooted path as a backstop (#1947).
-    applyDataMigrations: () => runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) }),
+    applyDataMigrations: async () => {
+      await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) });
+      // Local recovery only: no mail, browser, or LLM provider calls.
+      const { initializeMessageDrafts } = await import('./messageDrafts.js');
+      await initializeMessageDrafts();
+    },
 
     // usage.js and migration 304 both update usage.json. Initialize the service
     // only after migrations finish so their whole-file writes cannot race and

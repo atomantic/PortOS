@@ -186,6 +186,18 @@ Each file→Postgres migrator parks its source aside (`<domain>.imported`, per-r
 
 ---
 
+### Existing Messages draft send state
+
+Messages retains its existing machine-local `data/messages/drafts.json` store.
+Migration 415 adds send-attempt identity and a history capped at 20 attempts per
+draft, including interruption and operator reconciliation timestamps. It preserves
+draft content and states; startup recovery then marks abandoned sends as
+`delivery_unknown` without contacting a provider. Unknown delivery cannot be
+edited, deleted, approved, or sent until the operator checks their mailbox and
+records sent or not sent. Confirmed nondelivery returns to an unapproved draft.
+These fields stay with the existing draft backup and never federate; this change
+adds no new store or seed.
+
 ## PostgreSQL is required — `MEMORY_BACKEND=file` is test-only
 
 PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every install and every federated peer machine (decision: [ADR — PostgreSQL as the Primary Datastore](./decisions/2026-06-07-postgres-as-primary-datastore.md)). Run it as either:

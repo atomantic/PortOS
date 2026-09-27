@@ -13,21 +13,49 @@ const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
 // now that Tribe outreach (#2158) permits several draft generations in flight at
 // once — each finishing LLM call lands its own createDraft.
 const queueWrite = createFileWriteQueue();
+const activeAttempts = new Map();
+const MAX_SEND_ATTEMPTS = 20;
 
+// Called only under queueWrite. A persisted send with no live dispatcher is
+// ambiguous even if it never reached the transport. Never retry it at boot.
 async function loadDrafts() {
   await ensureDir(PATHS.messages);
   const content = await tryReadFile(DRAFTS_FILE);
   if (!content) return [];
   const parsed = safeJSONParse(content, [], { context: 'messageDrafts' });
-  return Array.isArray(parsed) ? parsed : [];
+  const drafts = Array.isArray(parsed) ? parsed : [];
+  let recovered = false;
+  for (const draft of drafts) {
+    if (draft.status !== 'sending' || activeAttempts.has(draft.id)) continue;
+    const now = new Date().toISOString();
+    draft.sendAttemptId ||= uuidv4();
+    draft.sendAttempts = (draft.sendAttempts || []).slice(-MAX_SEND_ATTEMPTS);
+    let attempt = draft.sendAttempts.find(a => a.id === draft.sendAttemptId);
+    if (!attempt) {
+      attempt = { id: draft.sendAttemptId, startedAt: draft.updatedAt || null };
+      draft.sendAttempts = [...draft.sendAttempts, attempt].slice(-MAX_SEND_ATTEMPTS);
+    }
+    attempt.outcome = 'delivery_unknown';
+    attempt.interruptedAt = now;
+    draft.status = 'delivery_unknown';
+    draft.updatedAt = now;
+    recovered = true;
+  }
+  if (recovered) await saveDrafts(drafts);
+  return drafts;
 }
 
 async function saveDrafts(drafts) {
   await atomicWrite(DRAFTS_FILE, drafts);
 }
 
+// Boot and request-time recovery share the same queue and active-attempt guard.
+export async function initializeMessageDrafts() {
+  await queueWrite(loadDrafts);
+}
+
 export async function listDrafts(filters = {}) {
-  let drafts = await loadDrafts();
+  let drafts = await queueWrite(loadDrafts);
   if (filters.accountId) drafts = drafts.filter(d => d.accountId === filters.accountId);
   if (filters.status) {
     // `status` accepts a single value or an array (OR filter), so callers like
@@ -42,7 +70,7 @@ export async function listDrafts(filters = {}) {
 }
 
 export async function getDraft(id) {
-  const drafts = await loadDrafts();
+  const drafts = await queueWrite(loadDrafts);
   return drafts.find(d => d.id === id) || null;
 }
 
@@ -63,6 +91,8 @@ export async function createDraft(data) {
       subject: data.subject || '',
       body: data.body || '',
       status: 'draft',
+      sendAttemptId: null,
+      sendAttempts: [],
       generatedBy: data.generatedBy || 'manual',
       sendVia: data.sendVia || 'api',
       createdAt: new Date().toISOString(),
@@ -80,7 +110,7 @@ export async function updateDraft(id, updates) {
     const drafts = await loadDrafts();
     const idx = drafts.findIndex(d => d.id === id);
     if (idx === -1) return null;
-    if (['sending', 'sent'].includes(drafts[idx].status) || ['sending', 'sent', 'failed'].includes(updates.status)) {
+    if (['sending', 'delivery_unknown', 'sent'].includes(drafts[idx].status) || ['sending', 'delivery_unknown', 'sent', 'failed'].includes(updates.status)) {
       throw new ServerError('Draft cannot be edited in its current send state', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
     const allowed = ['to', 'cc', 'subject', 'body', 'status'];
@@ -106,21 +136,57 @@ export async function claimDraftForSend(id) {
     // Keep uncertain delivery blocked after a crash; never silently retry it.
     draft.status = 'sending';
     draft.updatedAt = new Date().toISOString();
+    draft.sendAttemptId = uuidv4();
+    draft.sendAttempts = [...(draft.sendAttempts || []), {
+      id: draft.sendAttemptId, startedAt: draft.updatedAt, outcome: 'sending'
+    }].slice(-MAX_SEND_ATTEMPTS);
+    await saveDrafts(drafts);
+    activeAttempts.set(id, draft.sendAttemptId);
+    return draft;
+  });
+}
+
+export async function finishDraftSend(id, attemptId, success) {
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const draft = drafts.find(d => d.id === id);
+    if (!draft) return null;
+    if (draft.status !== 'sending' || draft.sendAttemptId !== attemptId || activeAttempts.get(id) !== attemptId) {
+      throw new ServerError('Draft is not sending', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    }
+    draft.status = success ? 'sent' : 'failed';
+    draft.updatedAt = new Date().toISOString();
+    const attempt = draft.sendAttempts.find(a => a.id === attemptId);
+    attempt.outcome = draft.status;
+    attempt.finishedAt = draft.updatedAt;
     await saveDrafts(drafts);
     return draft;
   });
 }
 
-export async function finishDraftSend(id, success) {
+// Only the dispatcher releases its own lease, after all transport I/O settles.
+// A failed terminal write remains sending on disk and is recovered on next read.
+export function releaseDraftSend(id, attemptId) {
+  if (activeAttempts.get(id) === attemptId) activeAttempts.delete(id);
+}
+
+export async function reconcileDraftSend(id, { attemptId, outcome }) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
     const draft = drafts.find(d => d.id === id);
-    if (!draft) return null;
-    if (draft.status !== 'sending') {
-      throw new ServerError('Draft is not sending', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    if (!draft) throw new ServerError('Draft not found', { status: 404, code: 'DRAFT_NOT_FOUND' });
+    if (activeAttempts.has(id) || draft.status !== 'delivery_unknown' || draft.sendAttemptId !== attemptId) {
+      throw new ServerError('Draft delivery cannot be reconciled in its current state', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
-    draft.status = success ? 'sent' : 'failed';
-    draft.updatedAt = new Date().toISOString();
+    if (!['sent', 'not_sent'].includes(outcome)) {
+      throw new ServerError('Confirm sent or not sent after checking your mailbox', { status: 400 });
+    }
+    const now = new Date().toISOString();
+    const attempt = draft.sendAttempts.find(a => a.id === attemptId);
+    attempt.reconciliation = outcome;
+    attempt.reconciledAt = now;
+    draft.status = outcome === 'sent' ? 'sent' : 'draft';
+    draft.updatedAt = now;
     await saveDrafts(drafts);
     return draft;
   });
@@ -133,8 +199,8 @@ export async function approveDraft(id) {
 export async function deleteDraftsByAccountId(accountId) {
   return queueWrite(async () => {
     const drafts = await loadDrafts();
-    if (drafts.some(d => d.accountId === accountId && d.status === 'sending')) {
-      throw new ServerError('Account has a draft being sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    if (drafts.some(d => d.accountId === accountId && ['sending', 'delivery_unknown'].includes(d.status))) {
+      throw new ServerError('Account has a draft sending or awaiting delivery reconciliation', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
     const remaining = drafts.filter(d => d.accountId !== accountId);
     if (remaining.length < drafts.length) {
@@ -149,8 +215,8 @@ export async function deleteDraft(id) {
     const drafts = await loadDrafts();
     const idx = drafts.findIndex(d => d.id === id);
     if (idx === -1) return false;
-    if (drafts[idx].status === 'sending') {
-      throw new ServerError('Draft is being sent', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
+    if (['sending', 'delivery_unknown'].includes(drafts[idx].status)) {
+      throw new ServerError('Draft is sending or awaiting delivery reconciliation', { status: 409, code: 'DRAFT_STATE_CONFLICT' });
     }
     drafts.splice(idx, 1);
     await saveDrafts(drafts);

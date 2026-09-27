@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
 
 const doubles = vi.hoisted(() => ({
-  files: new Map(), getAccount: vi.fn(), sendGmail: vi.fn(), sendPlaywright: vi.fn()
+  files: new Map(), failTerminal: false, getAccount: vi.fn(), sendGmail: vi.fn(), sendPlaywright: vi.fn()
 }));
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { messages: '/mock/messages' },
   ensureDir: async () => {},
   tryReadFile: async path => doubles.files.get(path) ?? null,
-  atomicWrite: async (path, data) => { doubles.files.set(path, JSON.stringify(data)); },
+  atomicWrite: async (path, data) => {
+    if (doubles.failTerminal && data.some(d => d.status === 'sent')) throw new Error('Example disk failure');
+    doubles.files.set(path, JSON.stringify(data));
+  },
   safeJSONParse: JSON.parse
 }));
 vi.mock('./messageAccounts.js', () => ({ getAccount: doubles.getAccount }));
@@ -16,7 +19,7 @@ vi.mock('./messageGmailSync.js', () => ({ sendGmail: doubles.sendGmail }));
 vi.mock('./messagePlaywrightSync.js', () => ({ sendPlaywright: doubles.sendPlaywright }));
 
 import { sendDraft } from './messageSender.js';
-import { getDraft, approveDraft, updateDraft, deleteDraft, deleteDraftsByAccountId } from './messageDrafts.js';
+import { getDraft, approveDraft, updateDraft, deleteDraft, deleteDraftsByAccountId, initializeMessageDrafts, reconcileDraftSend } from './messageDrafts.js';
 
 function barrier() {
   let resolve;
@@ -33,6 +36,7 @@ function seed(...drafts) {
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.files.clear();
+  doubles.failTerminal = false;
   doubles.getAccount.mockResolvedValue({ id: 'account-1', type: 'gmail' });
   doubles.sendGmail.mockResolvedValue({ success: true });
   doubles.sendPlaywright.mockResolvedValue({ success: true });
@@ -58,6 +62,10 @@ describe('draft send workflow', () => {
 
     const sends = Promise.allSettled([sendDraft('draft-1'), sendDraft('draft-1')]);
     await dispatchStarted.promise;
+    const active = await getDraft('draft-1');
+    expect(active.status).toBe('sending');
+    await initializeMessageDrafts();
+    await expect(reconcileDraftSend('draft-1', { attemptId: active.sendAttemptId, outcome: 'not_sent' })).rejects.toMatchObject({ status: 409 });
     expect((await getDraft('draft-1')).status).toBe('sending');
     await expect(approveDraft('draft-1')).rejects.toMatchObject({ status: 409, code: 'DRAFT_STATE_CONFLICT' });
     await expect(updateDraft('draft-1', { status: 'draft', body: 'Changed' })).rejects.toMatchObject({ status: 409 });
@@ -134,6 +142,79 @@ describe('draft send workflow', () => {
     expect(await sendDraft('mismatch')).toMatchObject({ code: 'SEND_VIA_MISMATCH' });
     expect((await getDraft('missing-account')).status).toBe('approved');
     expect((await getDraft('mismatch')).status).toBe('approved');
+    expect(doubles.sendGmail).not.toHaveBeenCalled();
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+  });
+});
+
+describe('interrupted send reconciliation', () => {
+  it.each(['before dispatch', 'after external success'])('recovers a restart %s without dispatching and fences reconciliation by attempt', async point => {
+    vi.resetModules();
+    const original = await import('./messageDrafts.js');
+    seed({ id: 'draft-1' });
+    if (point === 'before dispatch') {
+      await original.claimDraftForSend('draft-1');
+    } else {
+      const sender = await import('./messageSender.js');
+      doubles.failTerminal = true;
+      await expect(sender.sendDraft('draft-1')).rejects.toThrow('Example disk failure');
+      doubles.failTerminal = false;
+      expect(doubles.sendGmail).toHaveBeenCalledTimes(1);
+    }
+    const dispatchCount = doubles.sendGmail.mock.calls.length;
+    vi.resetModules(); // a new process has no active dispatch leases
+    const restarted = await import('./messageDrafts.js');
+    const sender = await import('./messageSender.js');
+    await restarted.initializeMessageDrafts();
+    const unknown = await restarted.getDraft('draft-1');
+    expect(unknown.status).toBe('delivery_unknown');
+    expect(unknown.sendAttempts).toEqual([expect.objectContaining({
+      id: unknown.sendAttemptId, outcome: 'delivery_unknown', interruptedAt: expect.any(String)
+    })]);
+    await restarted.initializeMessageDrafts();
+    expect(await restarted.getDraft('draft-1')).toEqual(unknown);
+    await expect(restarted.approveDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    await expect(restarted.updateDraft('draft-1', { status: 'draft', body: 'Changed' })).rejects.toMatchObject({ status: 409 });
+    await expect(restarted.deleteDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    await expect(restarted.deleteDraftsByAccountId('account-1')).rejects.toMatchObject({ status: 409 });
+    expect(await sender.sendDraft('draft-1')).toMatchObject({ status: 409 });
+    expect(doubles.sendGmail).toHaveBeenCalledTimes(dispatchCount);
+    expect(doubles.sendPlaywright).not.toHaveBeenCalled();
+
+    await expect(restarted.reconcileDraftSend('draft-1', { attemptId: 'stale', outcome: 'not_sent' })).rejects.toMatchObject({ status: 409 });
+    const outcome = point === 'before dispatch' ? 'not_sent' : 'sent';
+    const reconciled = await restarted.reconcileDraftSend('draft-1', { attemptId: unknown.sendAttemptId, outcome });
+    expect(reconciled.status).toBe(outcome === 'sent' ? 'sent' : 'draft');
+    expect(reconciled.sendAttempts[0]).toMatchObject({ reconciliation: outcome, reconciledAt: expect.any(String) });
+    expect(await sender.sendDraft('draft-1')).toMatchObject({ status: 409 });
+    await expect(restarted.reconcileDraftSend('draft-1', { attemptId: unknown.sendAttemptId, outcome })).rejects.toMatchObject({ status: 409 });
+    if (outcome === 'sent') {
+      await expect(restarted.approveDraft('draft-1')).rejects.toMatchObject({ status: 409 });
+    } else {
+      await restarted.updateDraft('draft-1', { body: 'Updated after mailbox check' });
+      await restarted.approveDraft('draft-1');
+      expect(await sender.sendDraft('draft-1')).toEqual({ success: true });
+      const sent = await restarted.getDraft('draft-1');
+      expect(sent.sendAttemptId).not.toBe(unknown.sendAttemptId);
+      expect(sent.sendAttempts).toHaveLength(2);
+      await expect(restarted.finishDraftSend('draft-1', unknown.sendAttemptId, true)).rejects.toMatchObject({ status: 409 });
+    }
+  });
+
+  it('recovers legacy sends and bounds retained attempt history', async () => {
+    vi.resetModules();
+    const drafts = await import('./messageDrafts.js');
+    seed({ id: 'legacy', status: 'sending' }, {
+      id: 'retry', sendAttempts: Array.from({ length: 25 }, (_, i) => ({ id: `old-${i}`, outcome: 'failed' }))
+    });
+    await drafts.initializeMessageDrafts();
+    const legacy = await drafts.getDraft('legacy');
+    expect(legacy).toMatchObject({ status: 'delivery_unknown', body: 'Example message' });
+    expect(legacy.sendAttempts).toHaveLength(1);
+    expect(legacy.sendAttempts[0].id).toBe(legacy.sendAttemptId);
+    const attempt = await drafts.claimDraftForSend('retry');
+    expect(attempt.sendAttempts).toHaveLength(20);
+    expect(attempt.sendAttempts.at(-1).id).toBe(attempt.sendAttemptId);
     expect(doubles.sendGmail).not.toHaveBeenCalled();
     expect(doubles.sendPlaywright).not.toHaveBeenCalled();
   });

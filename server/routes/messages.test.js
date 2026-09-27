@@ -40,6 +40,7 @@ vi.mock('../services/messageDrafts.js', () => ({
   createDraft: vi.fn(),
   updateDraft: vi.fn(),
   approveDraft: vi.fn(),
+  reconcileDraftSend: vi.fn(),
   deleteDraft: vi.fn(),
   deleteDraftsByAccountId: vi.fn()
 }));
@@ -539,6 +540,30 @@ describe('Messages Routes', () => {
       const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID_2}/approve`);
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/messages/drafts/:id/reconcile', () => {
+    it('validates the mailbox outcome and attempt identity, returns the updated draft, and emits only invalidation', async () => {
+      const emit = vi.fn();
+      app.set('io', { emit });
+      const updated = { id: DRAFT_UUID, status: 'draft', sendAttemptId: DRAFT_UUID_2 };
+      messageDrafts.reconcileDraftSend.mockResolvedValue(updated);
+      const data = { attemptId: DRAFT_UUID_2, outcome: 'not_sent' };
+      const response = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(data);
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(updated);
+      expect(messageDrafts.reconcileDraftSend).toHaveBeenCalledWith(DRAFT_UUID, data);
+      expect(emit).toHaveBeenCalledWith('messages:changed', {});
+      messageDrafts.reconcileDraftSend.mockClear();
+      for (const invalid of [{ outcome: 'not_sent' }, { attemptId: DRAFT_UUID_2, outcome: 'retry' }]) {
+        expect((await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(invalid)).status).toBe(400);
+      }
+      expect(messageDrafts.reconcileDraftSend).not.toHaveBeenCalled();
+      messageDrafts.reconcileDraftSend.mockRejectedValueOnce(new ServerError('Draft state conflict', { status: 409, code: 'DRAFT_STATE_CONFLICT' }));
+      const conflict = await request(app).post(`/api/messages/drafts/${DRAFT_UUID}/reconcile`).send(data);
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.code).toBe('DRAFT_STATE_CONFLICT');
     });
   });
 
