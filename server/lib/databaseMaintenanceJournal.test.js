@@ -6,17 +6,22 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 
-// Pass-through fs whose readFileSync can run one hook first: the only way to
-// land a concurrent fence move deterministically between read()'s fence check
-// and its record read (the two are separate syscalls in one sync call).
-const fsHook = vi.hoisted(() => ({ beforeRead: null }));
+// Pass-through fs whose readFileSync can run one hook before or after it: the
+// only way to land a concurrent fence move deterministically between read()'s
+// separate syscalls (fence check, record read, published-stage walk) in one
+// sync call.
+const fsHook = vi.hoisted(() => ({ beforeRead: null, afterRead: null }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal();
   const readFileSync = (...args) => {
     const hook = fsHook.beforeRead;
     fsHook.beforeRead = null;
     hook?.(String(args[0]));
-    return actual.readFileSync(...args);
+    const result = actual.readFileSync(...args);
+    const after = fsHook.afterRead;
+    fsHook.afterRead = null;
+    after?.(String(args[0]));
+    return result;
   };
   return { ...actual, readFileSync, default: { ...actual, readFileSync } };
 });
@@ -235,6 +240,28 @@ describe('persistent database maintenance boundary', () => {
     renameSync(join(root, 'archived'), active);
     expect(journal.read()).toMatchObject({ id: operation.id });
     fsHook.beforeRead = () => rmSync(join(active, 'operation.json'));
+    expect(() => journal.read()).toThrowError(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
+  });
+
+  // Regression caught (#8929): a release that moved the fence after the record
+  // read but before the published-stage walk truncated the history to an
+  // earlier stage, so a booting server's release poll saw "the fenced
+  // operation changed" and exited fenced although admission had just opened.
+  it('never reports a stage history truncated by a fence move mid-walk', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    journal.transition(operation.id, token, 'accepted', 'quiescing');
+    journal.transition(operation.id, token, 'quiescing', 'exporting');
+    const active = join(data, 'database-maintenance');
+    fsHook.afterRead = () => renameSync(active, join(root, 'released'));
+    expect(journal.read()).toBeNull();
+    expect(() => journal.assertAdmission()).not.toThrow();
+
+    renameSync(join(root, 'released'), active);
+    expect(journal.read()).toMatchObject({ id: operation.id, stage: 'exporting' });
+    // A different fence now at the same path never inherits the moved one's
+    // partial history; it fails closed until read again.
+    fsHook.afterRead = () => { renameSync(active, join(root, 'released')); mkdirSync(active); };
     expect(() => journal.read()).toThrowError(expect.objectContaining({ code: 'DATABASE_MAINTENANCE' }));
   });
 

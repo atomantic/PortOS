@@ -59,14 +59,20 @@ export default { Pool, types: { setTypeParser() {} } };
   const surrogate = join(dir, 'server-surrogate.mjs');
   writeFileSync(surrogate, `import { appendFileSync } from 'node:fs';
 const log = line => appendFileSync(${JSON.stringify(events)}, line + '\\n');
+// Timestamped progress on stderr lets a failed wait tell a refusal from a
+// boot that was still pending (or never started) when the test gave up.
+const trace = step => console.error(new Date().toISOString() + ' surrogate ' + process.pid + ' port ' + process.env.PGPORT + ' ' + step);
+trace('started');
 try {
   const { awaitDatabaseCutoverRelease } = await import(${JSON.stringify(handshakeUrl)});
-  await awaitDatabaseCutoverRelease({ pollMs: 20, releaseTimeoutMs: 20000 });
+  const released = await awaitDatabaseCutoverRelease({ pollMs: 20, releaseTimeoutMs: 20000 });
+  trace('handshake returned released=' + released.released);
   await import(${JSON.stringify(bootFenceUrl)});
   log('server booted ' + process.env.PGPORT);
+  trace('booted');
 } catch (err) {
   log('server refused ' + (err.code ?? 'error'));
-  console.error('surrogate ' + process.pid + ' refused: ' + String(err?.message ?? err).slice(0, 300));
+  trace('refused ' + (err.code ?? 'error') + ': ' + String(err?.message ?? err).slice(0, 300));
   process.exit(1);
 }
 setInterval(() => {}, 1000);
