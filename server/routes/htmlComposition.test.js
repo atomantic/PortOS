@@ -24,7 +24,7 @@ describe('HTML composition admission', () => {
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition', params });
   });
 
-  it.each([{ directory: '../private' }, { directory: '/etc' }, { directory: 'C:\\private' }, { directory: 'valid', musicTrack: '../track.wav' }, {}])('rejects invalid paths before queue admission: %j', async body => {
+  it.each([{ directory: 'valid', synthesizeMusic: true, musicTrack: 'example.wav' }, { directory: '../private' }, { directory: '/etc' }, { directory: 'C:\\private' }, { directory: 'valid', musicTrack: '../track.wav' }, {}])('rejects invalid paths before queue admission: %j', async body => {
     enqueueJob.mockClear();
     const response = await request(app).post('/api/html-composition/render').send(body);
     expect(response.status).toBe(400);

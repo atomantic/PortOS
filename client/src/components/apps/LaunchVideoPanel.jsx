@@ -29,6 +29,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [motionGraphics, setMotionGraphics] = useState(false);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
+  const [musicMethod, setMusicMethod] = useState('agent');
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
   const [error, setError] = useState('');
@@ -48,7 +49,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     submitting.current = true;
     await createAppLaunchVideo(appId, {
       tone, direction, format, targetDurationSec: duration, motionGraphics,
-      ...(music ? (generateMusic ? { generateMusic: true } : { musicTrack }) : {}),
+      ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
   });
@@ -65,7 +66,15 @@ function LaunchVideoForm({ appId, onQueued }) {
     <div><label htmlFor="launch-duration">Duration (15–120 seconds)</label><input id="launch-duration" type="number" min={15} max={120} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
     <div><label htmlFor="launch-motion-graphics"><input id="launch-motion-graphics" type="checkbox" checked={motionGraphics} onChange={event => setMotionGraphics(event.target.checked)} /> Dynamic motion graphics</label><p className="text-sm text-port-text-muted">Beat-cut showreel style: kinetic type, color-field swaps and generative shapes around the key flow.</p></div>
     <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
-    {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">The agent uses your configured music engine; provider charges may apply.</p></div>}
+    {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">Choose how the original soundtrack is made.</p></div>}
+    {music && generateMusic && <div>
+      <label htmlFor="launch-music-method">Music creation</label>
+      <select id="launch-music-method" className={inputClass} value={musicMethod} onChange={event => setMusicMethod(event.target.value)}>
+        <option value="agent">Agent composition (no music model required)</option>
+        <option value="service">Configured music service</option>
+      </select>
+      <p className="text-sm text-port-text-muted">{musicMethod === 'agent' ? 'The agent writes an instrumental score using available synthesis tools, such as Web Audio or Tone.js.' : 'Uses a ready PortOS music engine. Setup and provider charges may apply.'}</p>
+    </div>}
     {music && !generateMusic && <fieldset className="space-y-2">
       <legend>Music-library track</legend>
       {tracks === null && <p className="text-sm text-port-text-muted">Loading tracks…</p>}

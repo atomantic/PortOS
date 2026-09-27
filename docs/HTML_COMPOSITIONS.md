@@ -37,6 +37,19 @@ Submit `POST /api/html-composition/render` with:
 shorter than the video, is trimmed to duration, and fades out over the final half
 second. A missing requested track fails the job.
 
+For procedural music, submit `synthesizeMusic: true` instead of `musicTrack`.
+Define `async portosComposition.renderAudio({ sampleRate, durationSec })` to return
+an ordinary array containing exactly `Math.round(sampleRate * durationSec)` mono
+PCM samples. The renderer supplies 24000 Hz and the video duration; every sample
+must be finite and between -1 and 1, and the soundtrack must not be silent.
+Use native `OfflineAudioContext`, deterministic JavaScript synthesis, or locally
+available Tone.js/Strudel code capable of returning this contract. Convert an
+AudioBuffer channel with `Array.from(buffer.getChannelData(0))`. Live browser
+playback is not captured. The renderer writes temporary PCM WAV audio, muxes it
+with the same tail fade, and removes the temporary file after completion or
+failure. No music model, Python runtime, downloaded samples or music-library
+write is required. Missing or invalid audio fails the job.
+
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,
 complete, error and canceled SSE frames. Cancel through
@@ -78,9 +91,13 @@ provider/model/effort pin (Auto uses the normal CoS provider selection).
 Closing its drawer does not cancel the run; use CoS agents to follow or cancel it.
 Overlapping submissions for the same app are refused until its task settles.
 No schedule or boot-time provider call is installed. Generated music is explicitly
-opted into for this run: the agent selects a ready music engine, writes an
-instrumental prompt, waits for its media job, and passes the resulting library
-filename to the renderer. Shorter music beds loop to fill the video. A generation
+opted into for this run. **Music creation** offers **Agent composition**
+(`musicMethod: "agent"`, the default) and **Configured music service**
+(`musicMethod: "service"`). Agent composition writes an instrumental score using
+the PCM contract above, so absent music engines do not block it. The service
+option selects a ready music engine, writes an instrumental prompt, waits for its
+media job, and passes the resulting library filename to the renderer. An explicit
+service choice still reports missing setup rather than silently changing methods. Shorter music beds loop to fill the video. A generation
 failure is reported instead of silently dropping the soundtrack.
 
 Dynamic motion graphics (`motionGraphics: true`, off by default) asks the agent for
