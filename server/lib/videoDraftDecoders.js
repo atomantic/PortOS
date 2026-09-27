@@ -4,8 +4,8 @@
  * A diffusion video model produces a latent sequence; a VAE decoder turns that
  * sequence into pixels. On MiniMax H3 the decode is not a rounding error on the
  * render — it is a full-sequence pass over every latent frame at the output
- * canvas, and it happens twice over: once at the end of the render, and once
- * per denoise step for the stepwise preview PortOS publishes to the Video Gen
+ * canvas at the end of the render. Each denoise step also decodes a bounded
+ * temporal window for the stepwise preview PortOS publishes to the Video Gen
  * stage. Most of the time a user spends looking at an H3 render is spent
  * deciding whether the PROMPT and the COMPOSITION are right, which a
  * lower-fidelity decode answers just as well as the shipped one.
