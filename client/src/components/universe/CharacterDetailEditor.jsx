@@ -1146,7 +1146,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
 
       {activeTab === 'finetune' && (
         <div className="space-y-2">
-          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Checkpointed and cancellable; never assumes the last checkpoint is best.</p>
+          <p className="text-[10px] text-gray-400">Optional character voice fine-tuning. Requires a supported Qwen training adapter; without one the request is refused and no checkpoint is created.</p>
           <div className="flex gap-2">
             <label className="block text-[10px] text-gray-400 flex-1">
               Epochs

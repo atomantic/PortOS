@@ -174,6 +174,9 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
         "mps_available": False,
         "vram_gb": None,
         "models": {},
+        # Name of a real training adapter once one exists. Inference readiness
+        # never implies training support; PortOS refuses fine-tuning while null.
+        "training_adapter": None,
     }
 
     try:

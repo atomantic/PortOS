@@ -6,6 +6,8 @@
  * checkpoint promotion.
  *
  * Training is machine-local, optional, and never assumes the last checkpoint is best.
+ * It starts only when the runner's probe names a real training adapter; today
+ * none exists, so starts refuse and adapter-less legacy checkpoints never promote.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -20,7 +22,7 @@ import { closeJobAfterDelay } from '../../lib/sseUtils.js';
 import {
   DEFAULT_CLONE_MODEL,
   QWEN3_TTS_RUNNER_SCRIPT,
-  resolveQwen3Python,
+  getQwen3RuntimeStatus,
 } from './qwen3TtsRuntime.js';
 import {
   getVoiceProfileRequired,
@@ -183,11 +185,13 @@ export async function startFineTuningJob({
     });
   }
 
-  const python = await resolveQwen3Python();
-  if (!python) {
-    throw new ServerError('Python runtime is unavailable for fine-tuning', {
+  // Refuse before a job record or child exists. Inference readiness is not
+  // training support; only a runner that names a real adapter may train.
+  const runtime = await getQwen3RuntimeStatus();
+  if (!runtime.ok || !runtime.pythonPath || !runtime.trainingAdapter) {
+    throw new ServerError('Qwen3-TTS fine-tuning is unavailable: no supported training adapter is installed', {
       status: 503,
-      code: 'QWEN3_RUNTIME_UNAVAILABLE',
+      code: 'QWEN3_TRAINING_UNAVAILABLE',
     });
   }
 
@@ -211,6 +215,7 @@ export async function startFineTuningJob({
     checkpoints: [],
     outputDir,
     baseModel,
+    trainingAdapter: runtime.trainingAdapter,
     startedAt: new Date().toISOString(),
     completedAt: null,
     error: null,
@@ -231,7 +236,7 @@ export async function startFineTuningJob({
     '--model-id', baseModel,
   ];
 
-  const child = spawn(python, args, safeChildProcessOptions({ signal: abortController.signal }));
+  const child = spawn(runtime.pythonPath, args, safeChildProcessOptions({ signal: abortController.signal }));
   // Keep a handle on the child so a future shutdown hook can reach in-flight training.
   jobState.child = child;
 
@@ -350,6 +355,14 @@ export async function promoteCheckpoint({ profileId, jobId, checkpointId }) {
   const ckpt = job.checkpoints.find((c) => c.id === checkpointId || String(c.step) === String(checkpointId));
   if (!ckpt) {
     throw new ServerError(`Checkpoint not found: ${checkpointId}`, { status: 404, code: 'CHECKPOINT_NOT_FOUND' });
+  }
+  // Earlier runners wrote text placeholders named .safetensors. A job without
+  // the adapter that produced it can never become an approved voice.
+  if (!job.trainingAdapter) {
+    throw new ServerError('Checkpoint was not produced by a supported training adapter', {
+      status: 409,
+      code: 'CHECKPOINT_UNVERIFIED',
+    });
   }
 
   return promoteFineTunedProfile({

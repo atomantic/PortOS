@@ -46,6 +46,12 @@ describe('qwen3TtsRuntime', () => {
     expect(status.models[modelId].downloaded).toBe(true);
     expect(spawn.mock.calls[0][1]).toContain('--probe');
     expect(spawn.mock.calls[0][1]).not.toContain('--download');
+    expect(status.trainingAdapter).toBeNull();
+  });
+
+  it('keeps training unavailable when inference is ready but the runner names no adapter', async () => {
+    runnerResponse({ ok: true, models: {}, training_adapter: null });
+    expect(await getQwen3RuntimeStatus()).toMatchObject({ ok: true, trainingAdapter: null });
   });
 
   it('downloads explicitly, coalesces duplicate requests, and requires verified results', async () => {

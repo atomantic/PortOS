@@ -86,6 +86,7 @@ export async function getQwen3RuntimeStatus() {
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
       models: {},
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      trainingAdapter: null,
       message: 'Python environment not found for Qwen3-TTS runtime',
     };
   }
@@ -120,6 +121,9 @@ export async function getQwen3RuntimeStatus() {
       },
       models: modelsState,
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      // Training is a separate capability: the runner names its adapter only
+      // when one can produce loadable checkpoints (#8857).
+      trainingAdapter: typeof data.training_adapter === 'string' && data.training_adapter ? data.training_adapter : null,
     };
   } catch (err) {
     return {
@@ -130,6 +134,7 @@ export async function getQwen3RuntimeStatus() {
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
       models: {},
       supportedModels: SUPPORTED_QWEN3_MODELS,
+      trainingAdapter: null,
       error: err.message,
     };
   }
