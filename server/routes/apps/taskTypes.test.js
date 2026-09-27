@@ -541,7 +541,7 @@ describe('Apps Task-Type Routes', () => {
     it('refuses a task type that is not an audit, so a form cannot rewrite the release cadence', async () => {
       const response = await request(app)
         .post('/api/apps/app-001/quality-schedule/apply')
-        .send({ taskTypes: ['release-check'] });
+        .send({ taskTypes: ['do-release'] });
       expect(response.status).toBe(400);
       expect(applyQualitySchedulePlan).not.toHaveBeenCalled();
     });

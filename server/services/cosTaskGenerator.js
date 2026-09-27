@@ -92,6 +92,7 @@ import { appendTaskDataInputs, resolveTaskDataInputs } from './taskDataInputs.js
 import { ensurePrReviewerPipeline, runPrReviewerSecurityPreflight, scopeDescriptionToPullRequest } from './prReviewerPipeline.js';
 import {
   applyPerpetualDrainCap,
+  applyReleaseOptions,
   buildImprovementTaskDescription,
   buildPlanConstraintBlock,
   resolveBranchReconcileBlock,
@@ -1719,7 +1720,7 @@ async function resolveConfidenceApproval(state, taskTypeKey, logLabel, metadata 
  * APPROVAL tasks).
  *
  * `metadata.requireApproval` is the escape hatch: a type the user marked
- * "always ask" (e.g. release-check when they want to review the merge)
+ * "always ask" (e.g. do-release when they want to review the merge)
  * keeps the hold even on Run Now.
  */
 export function applyOnDemandConsent(task) {
@@ -1820,6 +1821,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   // user-action-review: render the delivery posture the operator chose
   // (fileIssues on = tracker issues, off = queued CoS tasks).
   description = applyUserActionDeliveryMode(description, taskType, metadata);
+  description = applyReleaseOptions(description, taskType, metadata);
   description = await applyUserActionDetectorSection(description, taskType);
 
   const repoSync = await resolveRepoSyncBlock(null, taskType, metadata);
@@ -1836,7 +1838,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   stampApprovalReason(metadata, approval);
 
   // Self-improvement tasks do not pass through the managed-app prompt renderer,
-  // but release-check still names the install's configured reviewers explicitly.
+  // but do-release still names the install's configured reviewers explicitly.
   // Resolve that token here so the global/on-demand path gets the same reviewer
   // contract and local-review procedure as an app-scoped release task.
   if (description.includes('{reviewers}')) {
@@ -2955,7 +2957,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
     ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
     : '';
   const baseDescription = await buildImprovementTaskDescription({
-    promptTemplate: applyAuditModeWrapper(promptTemplate, modeInstructions),
+    promptTemplate: applyAuditModeWrapper(applyReleaseOptions(promptTemplate, promptTaskType, metadata), modeInstructions),
     app, promptTaskType, metadata,
     blocks: {
       referenceData: referenceDataBlock,

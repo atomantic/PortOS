@@ -191,12 +191,12 @@ describe('CoS Schedule Routes', () => {
       taskSchedule.shouldRunTask.mockResolvedValue(status);
 
       const response = await request(app)
-        .put('/api/cos/schedule/task/release-check')
+        .put('/api/cos/schedule/task/do-release')
         .send({ type: 'cron', cronExpression: status.cronExpression });
 
       expect(response.status).toBe(200);
       expect(response.body.status).toEqual(status);
-      expect(taskSchedule.shouldRunTask).toHaveBeenCalledWith('release-check');
+      expect(taskSchedule.shouldRunTask).toHaveBeenCalledWith('do-release');
     });
 
     it('should return 400 for invalid enabled type', async () => {

@@ -24,7 +24,7 @@
  * them to static imports.
  */
 
-import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS } from '../lib/validation.js';
+import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/validation.js';
 import { emitLog } from './cosEvents.js';
 import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -172,6 +172,41 @@ export function resolveIssueExcludeLabelsBlock(extraLabels = []) {
   const extras = Array.isArray(extraLabels) ? extraLabels.filter((l) => typeof l === 'string' && l.trim()) : [];
   const all = [...NON_ACTIONABLE_ISSUE_LABELS, ...extras];
   return all.map((l) => `\`${l}\``).join(', ');
+}
+
+// One line per RELEASE_OPTION_KEYS entry: what ON asks of the agent, and what
+// OFF forbids. Keyed by the same list the sanitizer allowlists, so an option
+// cannot be settable yet silently absent from the prompt.
+const RELEASE_OPTION_LINES = {
+  finishInFlight: ['Finish in-flight work', 'Step 1 runs: finish open PRs and lingering branches no live agent owns before releasing.', 'Step 1 is skipped: do not merge, close, or rebase other open PRs or branches.'],
+  mergeDependencyUpdates: ['Merge dependency updates', 'Step 2 runs: merge open dependency-bot PRs, fixing any that break the build.', 'Step 2 is skipped: leave dependency-bot PRs untouched.'],
+  resolveBlockers: ['Resolve blockers', 'Step 4 runs: fix failing tests, red CI, and blocking bugs yourself or through a sub-agent.', 'Step 4 is skipped: report each blocker with its evidence and stop without fixing it.'],
+  autoDecide: ['Make decisions', 'Make routine design and preference decisions yourself and list them for operator review.', 'Stop at the first design or preference decision and report the question.'],
+};
+
+/**
+ * Resolve the do-release `{releaseOptions}` block from the task's merged
+ * (global → per-app) metadata. Each option is ON unless explicitly `false`.
+ */
+function resolveReleaseOptionsBlock(metadata = {}) {
+  return RELEASE_OPTION_KEYS.map((key) => {
+    const [label, on, off] = RELEASE_OPTION_LINES[key];
+    const enabled = metadata?.[key] !== false;
+    return `- **${label}: ${enabled ? 'ON' : 'OFF'}** — ${enabled ? on : off}`;
+  }).join('\n');
+}
+
+/**
+ * Render the operator's release options into a do-release prompt. A customized
+ * stored prompt that dropped `{releaseOptions}` still gets the block PREPENDED,
+ * so turning an option off is never a silent no-op on that install.
+ */
+export function applyReleaseOptions(promptTemplate, taskType, metadata) {
+  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
+  if (taskType !== 'do-release') return prompt;
+  const block = resolveReleaseOptionsBlock(metadata);
+  if (prompt.includes('{releaseOptions}')) return prompt.replace(/\{releaseOptions\}/g, () => block);
+  return `## Release options for this run\n\n${block}\n\n---\n\n${prompt}`;
 }
 
 // Per-forge nouns/commands for the swarm directive. The orchestration shape is

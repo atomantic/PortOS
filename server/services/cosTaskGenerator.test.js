@@ -329,7 +329,7 @@ describe('applyOnDemandConsent', () => {
       approvalRequired: true,
       autoApproved: false,
       approvalReason: 'safety-kind:publish',
-      metadata: { analysisType: 'release-check', approvalReason: 'safety-kind:publish' }
+      metadata: { analysisType: 'do-release', approvalReason: 'safety-kind:publish' }
     };
     expect(applyOnDemandConsent(task)).toBe(task);
     expect(task).toMatchObject({ approvalRequired: false, autoApproved: true });
@@ -342,7 +342,7 @@ describe('applyOnDemandConsent', () => {
       approvalRequired: true,
       autoApproved: false,
       approvalReason: 'config:requireApproval',
-      metadata: { analysisType: 'release-check', requireApproval: true }
+      metadata: { analysisType: 'do-release', requireApproval: true }
     };
     applyOnDemandConsent(task);
     expect(task).toMatchObject({
@@ -362,7 +362,7 @@ describe('isConfiguredApprovalRequired', () => {
   it('is true only for an explicit requireApproval: true', () => {
     expect(isConfiguredApprovalRequired({ requireApproval: true })).toBe(true);
     expect(isConfiguredApprovalRequired({ requireApproval: false })).toBe(false);
-    expect(isConfiguredApprovalRequired({ analysisType: 'release-check' })).toBe(false);
+    expect(isConfiguredApprovalRequired({ analysisType: 'do-release' })).toBe(false);
     expect(isConfiguredApprovalRequired(undefined)).toBe(false);
   });
 

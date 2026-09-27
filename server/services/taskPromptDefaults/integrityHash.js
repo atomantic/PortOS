@@ -23,6 +23,7 @@ import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
+import { TASK_TYPE_RENAMES } from '../../lib/scheduledTaskTypes.js';
 
 export const PROMPT_INTEGRITY_SNAPSHOT_PATH = join(dirname(fileURLToPath(import.meta.url)), 'integrity.snapshot.json');
 
@@ -57,10 +58,9 @@ const API_URL_PLACEHOLDER = '{{PORTOS_API_URL}}';
 // (issue #3359).
 const LEGACY_API_ORIGIN = 'http://localhost:5555';
 
-// Prompt history follows a scheduled task when its public task key is renamed.
-// The old key remains here only so installs carrying its persisted prompt body
-// can still recognize that body as shipped after the task config is migrated.
-const PROMPT_KEY_RENAMES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
+// Prompt history follows a scheduled task when its public task key is renamed
+// (TASK_TYPE_RENAMES), so installs carrying the old persisted prompt body still
+// recognize it as shipped after the task config is migrated.
 
 // Longest first: the two origins can overlap — `PORTOS_API_URL=http://localhost`
 // (port 80) is a prefix of the legacy literal, and replacing it first would turn
@@ -125,7 +125,7 @@ export const advancePromptIntegritySnapshot = (committed, defaults) => {
   const retired = [];
   const drift = [];
 
-  for (const [oldKey, newKey] of Object.entries(PROMPT_KEY_RENAMES)) {
+  for (const [oldKey, newKey] of Object.entries(TASK_TYPE_RENAMES)) {
     const moved = [...(history[oldKey] || [])];
     const oldCurrent = committed.DEFAULT_TASK_PROMPTS[oldKey];
     if (oldCurrent && oldCurrent !== next.DEFAULT_TASK_PROMPTS[newKey]) moved.push(oldCurrent);

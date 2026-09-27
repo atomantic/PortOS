@@ -23,6 +23,7 @@
     "data-integrity": "5fcc4f5044101e89da5bbf4890c11a1c",
     "data-safety": "eb97988dfc16d4c655f1834acc91d665",
     "dependency-updates": "2d94021c979a86a349e125f5c15665d8",
+    "do-release": "18db3caa14eda4892ad23cfdc6db83e2",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
@@ -48,7 +49,6 @@
     "privacy": "ecf3c57c064e3c4ab662d70252c686fb",
     "reference-watch": "57221102b6245d40852ac258fbf9ebbf",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
-    "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
     "reliability": "2a99be77b8f34653f4b926db0a773ea5",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "4bd26243a5792a39040da0b49321ca27",
@@ -84,6 +84,7 @@
     "data-integrity": 1,
     "data-safety": 2,
     "dependency-updates": 7,
+    "do-release": 15,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
@@ -105,7 +106,6 @@
     "privacy": 1,
     "reference-watch": 4,
     "refresh-local-llm-catalog": 4,
-    "release-check": 14,
     "reliability": 1,
     "repo-sync": 1,
     "security": 4,
@@ -261,6 +261,22 @@
       "f34cfa7e495d2bd6d3ac3c80b44447e8",
       "44de787b45e037fbce281efc87706873"
     ],
+    "do-release": [
+      "655180dfbab22e11fab79072ac49c9d6",
+      "d567ce8c4033687d5a9177439e00d0a6",
+      "133c221608545a26f328dead099a4d0a",
+      "609167c41331e6bbfc6d5f5edc452d4c",
+      "9c7508598ee772d1cee8f609f9ed7372",
+      "8436a47b5b1c9b2a342795e5634552da",
+      "746f11daaf721eae9e16845858ef55ee",
+      "08c928e6f79f83535e40b6988ff6eae3",
+      "afa9039cfbff21d77d601dc74eb5b81f",
+      "2d2a6700c23b73bf738c2aa915e37277",
+      "64be10f6ac7bcf74d4fc257089fc179b",
+      "644e5f2f6df1daf06f3792a81ba7a51a",
+      "5a82eec9f86ad05185ed77a42dbfd9d4",
+      "cd936b9a4fb76273b36ec54c3ed6d5ba"
+    ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
     ],
@@ -359,21 +375,6 @@
       "525bd0077672bf2f8beec9c0124740c8",
       "a9dce67bb9f0837ba904f3412b03637f",
       "ca7324a0f2251a66b46ea534940c9da8"
-    ],
-    "release-check": [
-      "655180dfbab22e11fab79072ac49c9d6",
-      "d567ce8c4033687d5a9177439e00d0a6",
-      "133c221608545a26f328dead099a4d0a",
-      "609167c41331e6bbfc6d5f5edc452d4c",
-      "9c7508598ee772d1cee8f609f9ed7372",
-      "8436a47b5b1c9b2a342795e5634552da",
-      "746f11daaf721eae9e16845858ef55ee",
-      "08c928e6f79f83535e40b6988ff6eae3",
-      "afa9039cfbff21d77d601dc74eb5b81f",
-      "2d2a6700c23b73bf738c2aa915e37277",
-      "64be10f6ac7bcf74d4fc257089fc179b",
-      "644e5f2f6df1daf06f3792a81ba7a51a",
-      "5a82eec9f86ad05185ed77a42dbfd9d4"
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",

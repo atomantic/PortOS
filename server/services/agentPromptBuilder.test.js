@@ -3632,7 +3632,7 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
   it('recovers the bundled release for an older queued task whose command was stripped', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: { analysisType: 'release-check', openPR: false } }),
+      makeTask({ metadata: { analysisType: 'do-release', openPR: false } }),
       {}, '/r', null, isTruthyMeta, { providerType: 'tui', providerId: 'codex-tui', providerCommand: 'codex' });
     expect(prompt).toContain('Canonical release procedure.');
     expect(prompt).toContain('Release Workflow Handoff');

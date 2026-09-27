@@ -90,8 +90,8 @@ export const WORKFLOW_STAGES = [
   {
     id: 'report',
     label: 'Report',
-    description: 'Externalize status — JIRA tickets, daily briefing, release readiness — once the build cycle has settled.',
-    taskTypes: ['jira-sprint-manager', 'jira-status-report', 'release-check'],
+    description: 'Externalize status — JIRA tickets, daily briefing, releases — once the build cycle has settled.',
+    taskTypes: ['jira-sprint-manager', 'jira-status-report', 'do-release'],
     jobIds: ['job-daily-briefing', 'job-datadog-error-monitor']
   },
   {

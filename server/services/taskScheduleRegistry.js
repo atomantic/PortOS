@@ -6,7 +6,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE } from '../lib/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
@@ -31,7 +31,7 @@ export { SELF_IMPROVEMENT_TASK_TYPES };
 
 // Shared taskMetadata posture for the NON-COMMITTING COORDINATOR types
 // (NON_COMMITTING_COORDINATOR_TASK_TYPES in taskTypeHooks.js — branch-reconcile /
-// issue-reconcile / branch-cleanup / jira-status-report / release-check). Each delivers its work
+// issue-reconcile / branch-cleanup / jira-status-report / do-release). Each delivers its work
 // as a SIDE EFFECT in the app's live checkout — a deleted branch, a merged PR, a
 // relabeled issue, a posted report — and by design produces no commit of its own.
 // Two code-shipping criteria therefore have to be switched off or every SUCCESSFUL
@@ -51,10 +51,17 @@ export { SELF_IMPROVEMENT_TASK_TYPES };
 // A guard test in taskSchedule.test.js asserts every member of that set carries
 // this posture, so a new coordinator type can't be added to one list only.
 const NON_COMMITTING_COORDINATOR_METADATA = { useWorktree: false, openPR: false, worktreeChangesExpected: false };
-// Release-check delegates its release lifecycle to the bundled slashdo workflow.
+// do-release delegates its release lifecycle to the bundled slashdo workflow.
 // Keep the command in managed metadata so a customized prompt or app override
-// cannot silently fall back to a second, drifting release implementation.
-const RELEASE_CHECK_METADATA = { ...NON_COMMITTING_COORDINATOR_METADATA, slashdoCommand: 'release' };
+// cannot silently fall back to a second, drifting release implementation. The
+// release options (RELEASE_OPTION_KEYS — finish in-flight work, merge dependency
+// updates, resolve blockers, make routine decisions) are seeded ON and stay
+// operator-editable, globally and per app; each is ON unless explicitly false.
+const DO_RELEASE_METADATA = {
+  ...NON_COMMITTING_COORDINATOR_METADATA,
+  slashdoCommand: 'release',
+  ...Object.fromEntries(RELEASE_OPTION_KEYS.map((key) => [key, true])),
+};
 // Migration 274 removes branch-cleanup from new schedules, but a partially
 // upgraded install may still load its stored task before the migration runs.
 // Keep its safety posture available without making it a newly-shipped task.
@@ -288,11 +295,12 @@ const TASK_INTERVAL_DEFAULTS = {
   'claim-work':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
   'error-handling':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'typing':              { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
-  // Release-check inspects and mutates release state (for example, the main →
-  // release PR) rather than producing source commits. It must run from the app's
+  // do-release ships the release: it finishes in-flight PRs, merges dependency
+  // updates, and drives the main → release PR rather than producing source
+  // commits of its own. It must run from the app's
   // live main checkout so its branch/ref checks describe the real release flow;
   // a CoS worktree hides that checkout and creates an irrelevant task branch.
-  'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...RELEASE_CHECK_METADATA } },
+  'do-release':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...DO_RELEASE_METADATA } },
   // stash-cleanup triages `git stash list` and drops what's superseded/stale,
   // leaving real unlanded work in place for the user to recover by hand. It
   // runs in the app's live checkout (never a CoS worktree — a stash is a
@@ -480,7 +488,7 @@ export const MANAGED_AGENT_OPTIONS = {
   // claim-work delegates to one of the above prompt bodies, each of which
   // creates its own worktree + PR — so the same lock applies to the router.
   'claim-work': ['useWorktree', 'openPR', 'claimFlow'],
-  'release-check': ['useWorktree', 'openPR', 'worktreeChangesExpected', 'slashdoCommand']
+  'do-release': ['useWorktree', 'openPR', 'worktreeChangesExpected', 'slashdoCommand']
 };
 
 // Strip managed-agent fields from a per-app override map before merging on top
@@ -559,7 +567,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'branch-reconcile': "Finish this machine's in-flight local branches: clean up merged ones, open PRs, resolve conflicts, drive review, auto-merge when green",
   'issue-reconcile': "Remediate trusted operator and collaborator issues: heal zombies (open + in-progress but their PR already merged with no live claim — close + file a scoped follow-up or release the claim) and auto-unblock: remove the `blocked` label once every issue named in its `Blocked by #N` line has closed",
   'dependency-updates': 'Land or resolve open Dependabot/Renovate PRs, then update the dependencies they missed',
-  'release-check': 'Check for release readiness',
+  'do-release': 'Ship a release: finish in-flight work, merge dependency updates, fix blockers, then run the release workflow',
   'error-handling': 'Failure-path audit — file issues or implement fixes',
   'typing': 'TypeScript types — file issues or implement fixes',
   'pr-reviewer': 'Watch external contributor PRs: screen content, gate eligibility, and validate review actions',

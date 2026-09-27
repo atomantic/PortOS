@@ -627,7 +627,7 @@ describe('taskSchedule', () => {
 
     it('versions the basic self-improvement tasks so deployed installs can auto-upgrade', () => {
       for (const t of ['security', 'code-quality', 'test-coverage', 'performance', 'accessibility',
-        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'release-check']) {
+        'dependency-updates', 'documentation', 'ui-bugs', 'mobile-responsive', 'do-release']) {
         expect(PROMPT_VERSIONS[t], `PROMPT_VERSIONS['${t}']`).toBeGreaterThanOrEqual(2)
       }
     })
@@ -1351,20 +1351,20 @@ describe('taskSchedule', () => {
         getAppTaskTypeInterval.mockResolvedValue(null)
         const lastRun = '2026-09-08T05:01:00Z'
         const schedule = {
-          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
-          executions: { 'task:release-check': { perApp: { 'app-1': { lastRun, count: 1 } } } }
+          tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
+          executions: { 'task:do-release': { perApp: { 'app-1': { lastRun, count: 1 } } } }
         }
         mockSchedule(schedule)
 
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, reason: 'cron-cooldown', nextRunAt: '2026-09-09T11:30:00.000Z'
         })
         vi.setSystemTime(new Date('2026-09-09T11:30:20Z'))
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
 
-        schedule.executions['task:release-check'].perApp['app-1'].lastRun = '2026-09-09T11:30:20Z'
+        schedule.executions['task:do-release'].perApp['app-1'].lastRun = '2026-09-09T11:30:20Z'
         mockSchedule(schedule)
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
         })
       })
@@ -1376,9 +1376,9 @@ describe('taskSchedule', () => {
         parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
         getAppTaskTypeInterval.mockResolvedValue('30 4 * * *')
         mockSchedule({
-          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '0 8 * * *', createdAt: '2026-09-01T00:00:00Z', runAfter: [] } }
+          tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '0 8 * * *', createdAt: '2026-09-01T00:00:00Z', runAfter: [] } }
         })
-        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+        expect(await shouldRunTask('do-release', 'app-1')).toMatchObject({
           shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
         })
         getAppTaskTypeInterval.mockResolvedValue(null)
@@ -1594,8 +1594,8 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('does NOT touch PLAN.md')
     })
 
-    it('release-check delegates to slashdo release and requires a named release heading', async () => {
-      const prompt = await getTaskPrompt('release-check')
+    it('do-release delegates to slashdo release and requires a named release heading', async () => {
+      const prompt = await getTaskPrompt('do-release')
       expect(prompt).toContain('/do:release')
       expect(prompt).toContain('{reviewers}')
       expect(prompt).toContain('# Release vX.Y.Z - <Fun Name>')
@@ -1635,7 +1635,7 @@ describe('taskSchedule', () => {
         // Locked, so a per-app override can't re-attach what the defaults cleared.
         // worktreeChangesExpected is managed too — see MANAGED_AGENT_OPTIONS.
         const managed = ['useWorktree', 'openPR', 'worktreeChangesExpected']
-        if (taskType === 'release-check') {
+        if (taskType === 'do-release') {
           managed.push('slashdoCommand')
           expect(meta.slashdoCommand).toBe('release')
         }
@@ -1661,7 +1661,7 @@ describe('taskSchedule', () => {
         expect(meta.useWorktree).toBe(false)
         expect(meta.openPR).toBe(false)
         expect(meta.worktreeChangesExpected).toBe(false)
-        if (taskType === 'release-check') expect(meta.slashdoCommand).toBe('release')
+        if (taskType === 'do-release') expect(meta.slashdoCommand).toBe('release')
         if (taskType === 'branch-reconcile') expect(meta.branchesPerAgent).toBe(3)
       }
     )
@@ -2703,12 +2703,12 @@ describe('taskSchedule', () => {
         for (const app of apps) {
           getAppTaskTypeInterval.mockResolvedValueOnce(cron(app.id))
           getAppTaskTypeOverrides.mockResolvedValueOnce({
-            'release-check': { enabled: true, interval: cron(app.id) }
+            'do-release': { enabled: true, interval: cron(app.id) }
           })
         }
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         const upcoming = await getUpcomingTasks(50)
-        expect(upcoming.find(t => t.taskType === 'release-check')).toMatchObject({
+        expect(upcoming.find(t => t.taskType === 'do-release')).toMatchObject({
           status: 'ready', nextScheduledAt: new Date('2026-01-01T16:05:00Z').getTime()
         })
       })
@@ -2724,13 +2724,13 @@ describe('taskSchedule', () => {
         isTaskTypeEnabledForApp.mockResolvedValueOnce(true)
         getAppTaskTypeInterval.mockResolvedValueOnce('15 9 * * *')
         getAppTaskTypeOverrides.mockResolvedValueOnce({
-          'release-check': { enabled: true, interval: '15 9 * * *' }
+          'do-release': { enabled: true, interval: '15 9 * * *' }
         })
         mockSchedule({
-          tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } }
+          tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } }
         })
         const upcoming = await getUpcomingTasks(50)
-        const release = upcoming.find(t => t.taskType === 'release-check')
+        const release = upcoming.find(t => t.taskType === 'do-release')
 
         expect(release).toMatchObject({
           status: 'scheduled',
@@ -2748,24 +2748,24 @@ describe('taskSchedule', () => {
     describe('getUpcomingTasks — propagates input failures instead of swallowing them (#7527)', () => {
       it('propagates a rejected active-apps read instead of treating it as no apps', async () => {
         getActiveApps.mockRejectedValueOnce(new Error('app inventory unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app inventory unavailable')
       })
 
       it('propagates a rejected app-override read instead of treating it as no overrides', async () => {
         getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
         getAppTaskTypeOverrides.mockRejectedValueOnce(new Error('app overrides unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app overrides unavailable')
       })
 
       it('propagates a rejected per-app readiness read instead of treating the app as not-ready', async () => {
         getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
         getAppTaskTypeOverrides.mockResolvedValueOnce({
-          'release-check': { enabled: true, interval: '15 9 * * *' }
+          'do-release': { enabled: true, interval: '15 9 * * *' }
         })
         isTaskTypeEnabledForApp.mockRejectedValueOnce(new Error('app readiness unavailable'))
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
         await expect(getUpcomingTasks(50)).rejects.toThrow('app readiness unavailable')
       })
     })
@@ -2799,11 +2799,11 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
         const status = await getScheduleStatus()
-        expect(status.tasks['release-check'].appSchedules).toEqual([{
+        expect(status.tasks['do-release'].appSchedules).toEqual([{
           appId: 'app-1',
           appName: 'Acme',
           cronExpression: '15 9 * * *',
@@ -2819,10 +2819,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue(null)
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true } })
-        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true } })
+        mockSchedule({ tasks: { 'do-release': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
 
       // An app restating the task's own expression adds no schedule the global
@@ -2833,10 +2833,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(true)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
 
       it('omits an app that is disabled for the task', async () => {
@@ -2844,10 +2844,10 @@ describe('taskSchedule', () => {
         getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
         isTaskTypeEnabledForApp.mockResolvedValue(false)
         getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
-        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: false, interval: '15 9 * * *' } })
-        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: false, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'do-release': { type: 'on-demand', enabled: true, runAfter: [] } } })
 
-        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+        expect((await getScheduleStatus()).tasks['do-release'].appSchedules).toEqual([])
       })
     })
 
