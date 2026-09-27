@@ -62,13 +62,19 @@ describe('migration 417 — rename release-check to do-release', () => {
       byTaskType: { 'self-improve:release-check': lowConfidence, 'self-improve:release-checker': { completed: 1 } },
       routingAccuracy: { 'app-improve:release-check': { a: 1 } },
       byTaskTypeExecution: { 'self-improve:release-check|codex|model-x|high': lowConfidence },
+      correlationWindow: [{ taskType: 'self-improve:release-check', success: false }],
+      errorPatterns: { timeout: { count: 2, taskTypes: { 'self-improve:release-check': 2 } } },
+      failureSignatures: { sig: { recent: [{ taskType: 'self-improve:release-check' }] } },
     });
 
-    expect(await migration.up({ rootDir })).toMatchObject({ learningBuckets: 3 });
+    expect(await migration.up({ rootDir })).toMatchObject({ learningBuckets: 6 });
     expect(readJson(learningPath)).toEqual({
       byTaskType: { 'self-improve:do-release': lowConfidence, 'self-improve:release-checker': { completed: 1 } },
       routingAccuracy: { 'app-improve:do-release': { a: 1 } },
       byTaskTypeExecution: { 'self-improve:do-release|codex|model-x|high': lowConfidence },
+      correlationWindow: [{ taskType: 'self-improve:do-release', success: false }],
+      errorPatterns: { timeout: { count: 2, taskTypes: { 'self-improve:do-release': 2 } } },
+      failureSignatures: { sig: { recent: [{ taskType: 'self-improve:do-release' }] } },
     });
     expect(await migration.up({ rootDir })).toMatchObject({ learningBuckets: 0 });
   });

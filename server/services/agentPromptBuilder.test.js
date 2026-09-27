@@ -201,6 +201,15 @@ describe('composable skill template routing', () => {
     }
   });
 
+  it('treats a task queued under a retired type name as its renamed scheduled type', () => {
+    // A release-check task queued before migration 417 must not fall through to
+    // keyword routing, which would bolt a bug-fix lifecycle onto the release.
+    expect(detectSkillTemplates(makeTask({
+      description: 'Fix the broken release and the failing tests',
+      metadata: { analysisType: 'release-check' },
+    }))).toEqual([]);
+  });
+
   it('still keyword-matches a free-text task, which is what the fallback is for', () => {
     // No task type — an operator-written task keeps the keyword routing.
     expect(detectSkillTemplates(makeTask({

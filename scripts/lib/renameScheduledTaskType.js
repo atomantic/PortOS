@@ -199,30 +199,51 @@ export async function renameScheduledTaskType({ rootDir, from, to }) {
 }
 
 /**
- * Move a renamed task type's learning buckets to the new name, so the
- * confidence gate keeps its history — without it the renamed type reads as
- * "new" and auto-approves even when its record required approval. A bucket
- * whose target already exists is left in place rather than guessed at.
+ * Move a renamed task type's learning history to the new name, so the
+ * confidence gate and failure-signal routing keep it — without it the renamed
+ * type reads as "new" and auto-approves even when its record required
+ * approval. Covers the bucket-keyed aggregates plus the nested references:
+ * `taskTypes` maps/lists (errorPatterns, environmentalFailures) and
+ * `taskType` fields on history entries (correlationWindow, failure-signature
+ * `recent` lists). A key whose target already exists is left in place rather
+ * than guessed at.
  */
 export async function renameLearningBuckets({ rootDir, from, to }) {
   const stored = await readJson(rootDir, LEARNING_PATH);
   if (!isObject(stored?.value)) return { learningBuckets: 0 };
-  const renameKey = (key) => {
-    const match = /^(self-improve|app-improve):([^|]+)(\|.*)?$/.exec(key);
+  const renameBucket = (key) => {
+    const match = typeof key === 'string' && /^(self-improve|app-improve):([^|]+)(\|.*)?$/.exec(key);
     return match && match[2] === from ? `${match[1]}:${to}${match[3] || ''}` : null;
   };
   let learningBuckets = 0;
-  for (const mapName of LEARNING_KEYED_MAPS) {
-    const map = stored.value[mapName];
-    if (!isObject(map)) continue;
+  const renameKeys = (map) => {
     for (const key of Object.keys(map)) {
-      const target = renameKey(key);
+      const target = renameBucket(key);
       if (!target || hasOwn(map, target)) continue;
       map[target] = map[key];
       delete map[key];
       learningBuckets += 1;
     }
+  };
+  // Nested references: walk every value below the top-level maps.
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach((item, index) => {
+        const target = renameBucket(item);
+        if (target) { node[index] = target; learningBuckets += 1; } else walk(item);
+      });
+      return;
+    }
+    if (!isObject(node)) return;
+    const taskTypeTarget = renameBucket(node.taskType);
+    if (taskTypeTarget) { node.taskType = taskTypeTarget; learningBuckets += 1; }
+    if (isObject(node.taskTypes)) renameKeys(node.taskTypes);
+    for (const value of Object.values(node)) walk(value);
+  };
+  for (const mapName of LEARNING_KEYED_MAPS) {
+    if (isObject(stored.value[mapName])) renameKeys(stored.value[mapName]);
   }
+  walk(stored.value);
   if (learningBuckets) await writeJson(stored.fullPath, stored.value);
   return { learningBuckets };
 }
