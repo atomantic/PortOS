@@ -1239,3 +1239,69 @@ describe('TaskAddForm tool-use warning', () => {
     expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
   });
 });
+
+describe('TaskAddForm target application persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+    apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
+  it('restores the last used target application from storage when initialized', async () => {
+    localStorage.setItem('portos-cos-last-target-app', 'custom-app');
+    const apps = [{ id: 'custom-app', name: 'Custom App' }, { id: 'other-app', name: 'Other App' }];
+    render(<TaskAddForm providers={[]} apps={apps} onTaskAdded={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Target application')).toHaveValue('custom-app');
+    });
+  });
+
+  it('updates storage when the user selects a different target application', async () => {
+    const user = userEvent.setup();
+    const apps = [{ id: 'app-a', name: 'App A' }, { id: 'app-b', name: 'App B' }];
+    render(<TaskAddForm providers={[]} apps={apps} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('Target application'), 'app-b');
+    expect(localStorage.getItem('portos-cos-last-target-app')).toBe('app-b');
+  });
+
+  it('updates storage when submitting a task for a target app', async () => {
+    api.addCosTask.mockResolvedValue({ id: 'task-1' });
+    const user = userEvent.setup();
+    const apps = [{ id: 'app-a', name: 'App A' }, { id: 'app-b', name: 'App B' }];
+    render(<TaskAddForm providers={[]} apps={apps} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('Target application'), 'app-b');
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'New task for app B');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-b' }), { silent: true });
+    expect(localStorage.getItem('portos-cos-last-target-app')).toBe('app-b');
+  });
+
+  it('updates storage when applying a template that specifies an app', async () => {
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'tmpl-1', name: 'App B Template', description: 'Do B stuff', app: 'app-b', isBuiltin: false }],
+    });
+    const user = userEvent.setup();
+    const apps = [{ id: 'app-a', name: 'App A' }, { id: 'app-b', name: 'App B' }];
+    render(<TaskAddForm providers={[]} apps={apps} onTaskAdded={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText('Quick Templates')).toBeInTheDocument());
+    await user.click(screen.getByText('Quick Templates'));
+
+    const templateBtn = await screen.findByRole('button', { name: /App B Template/i });
+    await user.click(templateBtn);
+
+    expect(screen.getByLabelText('Target application')).toHaveValue('app-b');
+    expect(localStorage.getItem('portos-cos-last-target-app')).toBe('app-b');
+  });
+});
