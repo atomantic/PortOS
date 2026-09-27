@@ -46,6 +46,8 @@ export const universesDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    `ALTER TABLE voice_profiles ALTER COLUMN universe_id DROP NOT NULL`,
+    `ALTER TABLE voice_profiles ALTER COLUMN character_id DROP NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_voice_profiles_binding ON voice_profiles (universe_id, character_id, updated_at DESC)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profiles_approved_binding ON voice_profiles (universe_id, character_id) WHERE approval_status = 'approved'`,
 

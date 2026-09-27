@@ -507,3 +507,9 @@ describe('CharacterDetailEditor — sheet navigation', () => {
     expect(screen.getByRole('button', { name: 'AI: expand character' })).toBeDisabled();
   });
 });
+
+it('links directly from character design to the shared voice studio with its casting target', () => {
+  render(<CharacterDetailEditor entry={ARIA} universeId="example-universe" onPatch={() => {}} />);
+  expect(screen.getByRole('link', { name: 'Create or assign a voice in Voice Studio' }))
+    .toHaveAttribute('href', '/voices?universeId=example-universe&characterId=chr-aria');
+});

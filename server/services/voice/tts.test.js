@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 vi.mock('./config.js', () => ({
   getVoiceConfig: vi.fn(),
   piperVoiceTildePath: vi.fn((voice) => `~/.portos/voice/voices/${voice}.onnx`),
 }));
+vi.mock('./aukRuntime.js', () => ({ synthesizeAuk: vi.fn() }));
 vi.mock('./tts-piper.js', () => ({ synthesizePiper: vi.fn(), listPiperVoices: vi.fn() }));
 vi.mock('./tts-qwen3.js', () => ({ synthesizeQwen3: vi.fn(), listQwen3Voices: vi.fn() }));
 vi.mock('./piper-voices.js', () => ({ findPiperVoice: vi.fn() }));
-vi.mock('./profiles.js', () => ({ getProfileForSynthesis: vi.fn() }));
+vi.mock('./profiles.js', () => ({ getProfileForSynthesis: vi.fn(), profileArtifactDirectory: id => `/voice-profiles/${id}` }));
 vi.mock('./bootstrap.js', () => ({ which: vi.fn() }));
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn().mockResolvedValue(null) }));
 
@@ -108,4 +110,19 @@ describe('profile-aware TTS', () => {
       },
     });
   });
+});
+
+it('uses the approved AuK reference for dialogue without repeating its pitch edit', async () => {
+  const { synthesizeAuk } = await import('./aukRuntime.js');
+  getVoiceConfig.mockResolvedValue(CONFIG);
+  getProfileForSynthesis.mockResolvedValue({ id: 'voice-example', version: 1, engine: 'auk', kind: 'designed',
+    voiceId: 'auk:example', modelRevision: 'auk-flash', delivery: { rate: 1 },
+    inference: { instructions: 'Warm alto', seed: 7, pitchSemitones: -4 },
+    sourceAssets: [{ filename: 'reference.wav' }],
+  });
+  synthesizeAuk.mockResolvedValue({ wav: Buffer.from('audio'), latencyMs: 1000 });
+  await synthesize('Example dialogue.', { profileId: 'voice-example' });
+  expect(synthesizeAuk).toHaveBeenCalledWith('Example dialogue.', expect.objectContaining({
+    referenceAudio: join('/voice-profiles', 'voice-example', 'source', 'reference.wav'), pitchSemitones: 0, seed: 7,
+  }), undefined);
 });

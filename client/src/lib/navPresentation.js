@@ -1,4 +1,4 @@
-import {
+import { AudioLines,
   Wrench,
   Home,
   Package,
@@ -191,6 +191,7 @@ export const NAV_PRESENTATION = {
   '/start-story': { icon: Rocket },
   '/story-builder': { icon: Wand2 },
   '/media/threejs': { icon: Box },
+  '/voices': { icon: AudioLines },
   '/universes': { icon: Globe, dynamic: 'universes' },
   '/writers-room': { icon: NotebookPen },
   '/devtools/agents': { icon: Cpu },

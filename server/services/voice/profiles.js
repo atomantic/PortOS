@@ -16,7 +16,7 @@ import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
 import { trimTo } from '../../lib/textUtils.js';
 
-export const VOICE_PROFILE_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts']);
+export const VOICE_PROFILE_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts', 'auk']);
 export const VOICE_PROFILE_KINDS = new Set(['preset', 'designed', 'cloned', 'fine-tuned']);
 export const VOICE_PROFILE_ROUTES = new Set(['studio', 'interactive']);
 
@@ -74,6 +74,8 @@ const sanitizeInference = (raw) => ({
   rate: boundedNumber(raw?.rate, 0.25, 4, 1.0),
   checkpointPath: trimTo(raw?.checkpointPath, 500) || null,
   modelId: trimTo(raw?.modelId, 160) || null,
+  pitchSemitones: boundedNumber(raw?.pitchSemitones, -12, 12, 0),
+  genSeconds: boundedNumber(raw?.genSeconds, 2, 12, 4),
 });
 
 const sanitizeBenchmark = (raw) => {
@@ -131,7 +133,7 @@ export function sanitizeVoiceProfile(raw) {
     ? raw.engine
     : (parsePresetVoiceId(raw.voiceId)?.engine || 'kokoro');
 
-  if (!PROFILE_ID_RE.test(id) || !universeId || !characterId) return null;
+  if (!PROFILE_ID_RE.test(id) || (raw.library !== true && (!universeId || !characterId))) return null;
 
   const approvalStatus = raw?.approval?.status === 'approved'
     ? 'approved'
@@ -143,7 +145,9 @@ export function sanitizeVoiceProfile(raw) {
   return {
     id,
     version: positiveInteger(raw.version),
-    binding: { universeId, characterId },
+    binding: raw.library === true ? { universeId: null, characterId: null } : { universeId, characterId },
+    library: raw.library === true,
+    originProfileId: PROFILE_ID_RE.test(raw.originProfileId || '') ? raw.originProfileId : null,
     label: trimTo(raw.label, MAX_LABEL) || null,
     kind,
     engine,
@@ -174,8 +178,8 @@ export function profileArtifactDirectory(id) {
   return profileDirectory(id);
 }
 
-const persist = async (profile) => {
-  await query(
+export const persistVoiceProfile = async (profile, execute = query) => {
+  await execute(
     `INSERT INTO voice_profiles (id, universe_id, character_id, approval_status, data, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
      ON CONFLICT (id) DO UPDATE SET
@@ -196,6 +200,8 @@ const persist = async (profile) => {
   );
   return profile;
 };
+
+const persist = persistVoiceProfile;
 
 export async function getVoiceProfile(id) {
   const profileId = trimTo(id, 80);
@@ -225,6 +231,31 @@ export async function listVoiceProfiles({ universeId, characterId } = {}) {
     params,
   );
   return rows.map((row) => sanitizeVoiceProfile(row.data)).filter(Boolean);
+}
+
+/** Bounded metadata only; transcripts and training assets load with one selected profile. */
+export async function listStudioProfiles({ limit = 30, cursor } = {}) {
+  let before = null;
+  if (cursor) {
+    try { before = JSON.parse(Buffer.from(cursor, 'base64url').toString()); } catch { /* validated below */ }
+    if (!before || !PROFILE_ID_RE.test(before.id || '') || typeof before.at !== 'string' || !Number.isFinite(Date.parse(before.at))) {
+      throw new ServerError('Invalid voice library cursor', { status: 400 });
+    }
+  }
+  const filter = "(data->>'library' = 'true' OR approval_status = 'approved')";
+  const [page, count] = await Promise.all([
+    query(`SELECT id, data->>'label' AS label, data->>'voiceId' AS "voiceId", data->>'engine' AS engine,
+      (data->>'library' = 'true') AS library,
+      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "updatedAt"
+      FROM voice_profiles WHERE ${filter}
+      ${before ? 'AND (updated_at, id) < ($2::timestamptz, $3)' : ''}
+      ORDER BY updated_at DESC, id DESC LIMIT $1`, before ? [limit + 1, before.at, before.id] : [limit + 1]),
+    query(`SELECT count(*)::int AS total FROM voice_profiles WHERE ${filter}`),
+  ]);
+  const items = page.rows.slice(0, limit);
+  const last = items.at(-1);
+  return { items, total: count.rows[0].total, nextCursor: page.rows.length > limit
+    ? Buffer.from(JSON.stringify({ at: last.updatedAt, id: last.id })).toString('base64url') : null };
 }
 
 async function getBoundProfile(universeId, characterId) {
@@ -269,7 +300,7 @@ export async function createVoiceDesignCandidate({
   instructions = '',
   seed = 42,
   modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-  delivery = DEFAULT_DELIVERY,
+  delivery: _delivery = DEFAULT_DELIVERY,
   rate = 1.0,
 } = {}) {
   const universe = trimTo(universeId, MAX_ID);
@@ -408,7 +439,7 @@ export async function promoteFineTunedProfile({
   universeId,
   characterId,
   checkpointPath,
-  checkpointId,
+  checkpointId: _checkpointId,
   modelRevision = null,
   step = 100,
 } = {}) {
@@ -492,7 +523,7 @@ export async function promotePresetProfile({
   const universe = trimTo(universeId, MAX_ID);
   const character = trimTo(characterId, MAX_ID);
   const preset = parsePresetVoiceId(voiceId);
-  if (!universe || !character || !preset) {
+  if (!universe || !character || !preset || preset.engine === 'auk') {
     throw new ServerError('A universe, character, and valid preset are required', {
       status: 400,
       code: 'VOICE_PROFILE_INVALID_PRESET',
@@ -509,6 +540,9 @@ export async function promotePresetProfile({
     binding: { universeId: universe, characterId: character },
     label: trimTo(characterName, MAX_LABEL) || current?.label || null,
     kind: 'preset',
+    sourceAssets: samePreset ? current?.sourceAssets : [],
+    inference: samePreset ? current?.inference : {},
+    originProfileId: samePreset ? current?.originProfileId : null,
     engine: preset.engine,
     voiceId: preset.voiceId,
     modelRevision: trimTo(modelRevision, MAX_REVISION) || 'configured-preset',

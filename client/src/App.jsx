@@ -96,6 +96,7 @@ const Privacy = lazyWithReload(() => import('./pages/Privacy'));
 const Agents = lazyWithReload(() => import('./pages/Agents'));
 const Uploads = lazyWithReload(() => import('./pages/Uploads'));
 const Settings = lazyWithReload(() => import('./pages/Settings'));
+const VoiceStudio = lazyWithReload(() => import('./pages/VoiceStudio'));
 const VoiceCallHost = lazyWithReload(() => import('./pages/VoiceCallHost'));
 const ApiExplorer = lazyWithReload(() => import('./pages/ApiExplorer'));
 const LocalLlmPlayground = lazyWithReload(() => import('./pages/LocalLlmPlayground'));
@@ -388,6 +389,8 @@ export default function App() {
           {/* The FaceTime call host runs in its own tab on the Mac — device
               permissions and setSinkId need a real browser profile, and the
               page holds a Web Lock so a second tab cannot double-answer. */}
+          <Route path="voices" element={<VoiceStudio />} />
+          <Route path="voices/:profileId" element={<VoiceStudio />} />
           <Route path="voice/call-host" element={<VoiceCallHost />} />
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="api-reference/:tab" element={<ApiExplorer />} />

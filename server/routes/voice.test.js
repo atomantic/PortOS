@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 const { request } = await import('../lib/testHelper.js');
 
+vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
+
 // Mock all voice service modules before importing the router so the route
 // file's top-level imports resolve to the mocks.
 vi.mock('../services/voice/config.js', () => ({
@@ -635,5 +637,20 @@ describe('Voice Routes', () => {
       expect(res.status).toBe(400);
       expect(facetimeBridge.call).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Voice Studio HTTP contract', () => {
+  it('validates controls before generation and emits only a payload-free invalidation after success', async () => {
+    const { createStudioVoice } = await import('../services/voice/studio.js');
+    const emit = vi.fn();
+    const app = buildApp({ io: { emit } });
+    createStudioVoice.mockResolvedValue({ id: 'voice-example', label: 'Example voice' });
+    const invalid = await request(app).post('/api/voice/studio/design').send({ label: 'Example', instructions: 'Alto', text: 'Hello', pitchSemitones: 99 });
+    expect(invalid.status).toBe(400);
+    expect(createStudioVoice).not.toHaveBeenCalled();
+    const valid = await request(app).post('/api/voice/studio/design').send({ label: 'Example', instructions: 'Alto', text: 'Hello' });
+    expect(valid.status).toBe(201);
+    expect(emit).toHaveBeenCalledWith('voice-studio:changed', {});
   });
 });

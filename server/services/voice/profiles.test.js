@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,7 +19,6 @@ const {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteFineTunedProfile,
-  promoteVoiceProfile,
   resolveCharacterVoice,
   getProfileForSynthesis,
   profileArtifactDirectory,
@@ -107,6 +106,18 @@ describe('voice profile contract', () => {
     const { stat } = await import('node:fs/promises');
     expect((await stat(profileArtifactDirectory(profile.id))).isDirectory()).toBe(true);
     expect(queryMock.mock.calls.at(-1)[0]).toContain('INSERT INTO voice_profiles');
+  });
+
+  it('requires an auditioned AuK profile and clears its reference when switching to a preset', async () => {
+    await expect(promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'auk:invented' }))
+      .rejects.toMatchObject({ code: 'VOICE_PROFILE_INVALID_PRESET' });
+    expect(queryMock).not.toHaveBeenCalled();
+    queryMock.mockResolvedValue({ rows: [] }).mockResolvedValueOnce({ rows: [{ data: {
+      ...PROFILE, engine: 'auk', voiceId: 'auk:voice-profile-1', kind: 'designed', originProfileId: 'library-1',
+      sourceAssets: [{ filename: 'reference.wav', transcript: 'Hello.' }], inference: { instructions: 'Old voice' },
+    } }] });
+    const replacement = await promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'piper:example' });
+    expect(replacement).toMatchObject({ engine: 'piper', sourceAssets: [], originProfileId: null, inference: { instructions: null } });
   });
 
   it('creates voice design candidate profile as draft without altering approved profile', async () => {

@@ -10,7 +10,6 @@ import {
   initialPhaseForNode,
   processHostedUtterance,
   revalidateLiveConversationGate,
-  sanitizeHostedSession,
   startHostedListening,
   startHostedSessionSweep,
   stopHostedSessionSweep,
@@ -288,7 +287,7 @@ describe('fableLoom hostedSession', () => {
 
   describe('half-duplex turn execution', () => {
     it('executes full speech-first turn and commits story transition', async () => {
-      const { session, token } = await createHostedSession('loom-1', 'ep-1');
+      const { session } = await createHostedSession('loom-1', 'ep-1');
       const mockIo = {
         of: () => ({
           to: () => ({
@@ -322,20 +321,22 @@ describe('fableLoom hostedSession', () => {
       expect(afterSession.transcript.length).toBeGreaterThan(1);
     });
 
-    it('synthesizes live replies with the approved interactive voice profile', async () => {
-      const { session } = await createHostedSession('loom-1', 'ep-1');
-      await startHostedListening(session.id);
+    it('synthesizes the selected protagonist with its approved AuK profile regardless of character order', async () => {
+      vi.spyOn(records, 'getLoom').mockResolvedValue({ ...mockLoom, protagonistCharacterId: 'character-1' });
       vi.spyOn(universeBuilder, 'getUniverse').mockResolvedValue({
-        characters: [{ id: 'character-1', voiceId: 'kokoro:af_heart' }],
+        characters: [{ id: 'another-character' }, { id: 'character-1', voiceId: 'piper:example' }],
       });
       vi.spyOn(voiceProfiles, 'resolveCharacterVoice').mockResolvedValue({
         source: 'profile',
         profileId: 'voice-profile-1',
         profileRevision: 3,
-        voiceId: 'qwen3-tts:character-1',
+        voiceId: 'auk:character-1',
         degraded: false,
         warning: null,
       });
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      expect(voiceProfiles.resolveCharacterVoice).toHaveBeenLastCalledWith(expect.objectContaining({ characterId: 'character-1', route: 'interactive' }));
+      await startHostedListening(session.id);
       vi.spyOn(weave, 'playTurn').mockResolvedValue({
         action: 'stay',
         narration: 'The signal is clear.',
@@ -344,8 +345,9 @@ describe('fableLoom hostedSession', () => {
 
       await processHostedUtterance(session.id, { textMessage: 'Can you hear me?' });
 
+      expect(voiceProfiles.resolveCharacterVoice).toHaveBeenLastCalledWith(expect.objectContaining({ characterId: 'character-1', route: 'interactive' }));
       expect(tts.synthesize).toHaveBeenCalledWith('The signal is clear.', {
-        engine: 'qwen3-tts',
+        engine: 'auk',
         profileId: 'voice-profile-1',
         route: 'interactive',
         signal: expect.any(AbortSignal),
