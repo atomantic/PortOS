@@ -101,6 +101,30 @@ function LaunchVideoForm({ appId, onQueued }) {
   </form>;
 }
 
+function ReviseLaunchVideo({ appId, videoId }) {
+  const [feedback, setFeedback] = useState('');
+  const [taskId, setTaskId] = useState(null);
+  const submitting = useRef(false);
+  const picker = useRunWithPicker();
+  const [revise, running] = useAsyncAction(async () => {
+    if (submitting.current || !feedback.trim()) return;
+    submitting.current = true;
+    await createAppLaunchVideo(appId, { sourceVideoId: videoId, feedback: feedback.trim(), ...picker.pin }, { silent: true })
+      .then(result => setTaskId(result.taskId))
+      .finally(() => { submitting.current = false; });
+  });
+  return <form className="space-y-2 rounded border border-port-border p-3" onSubmit={event => { event.preventDefault(); revise(); }}>
+    <h3 className="font-medium">Revise this version</h3>
+    <p className="text-sm text-port-text-muted">Give feedback on the selected video. The agent edits a copy and saves a new version, preserving this take.</p>
+    {taskId ? <p role="status">Revision queued. <Link className="text-port-accent" to="/cos/agents">Follow the revision in CoS agents</Link></p> : <>
+      <label htmlFor="launch-feedback">Feedback</label>
+      <textarea id="launch-feedback" className={inputClass} required maxLength={4000} value={feedback} disabled={running} onChange={event => setFeedback(event.target.value)} placeholder="For example: slow down the closing scene and make the headline larger." />
+      <ProviderModelSelector {...picker.selectorProps} />
+      <button type="submit" className={buttonClass} disabled={running || !feedback.trim()}>{running ? 'Queuing revision…' : 'Revise as new version'}</button>
+    </>}
+  </form>;
+}
+
 function PublishLaunchVideo({ appId, videoId }) {
   const picker = useRunWithPicker();
   const submitting = useRef(false);
@@ -166,6 +190,8 @@ export default function LaunchVideoPanel({ app }) {
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
       <p className="whitespace-pre-wrap">{selected.caption}</p>
+      {selected.sourceVideoId && <p className="text-sm text-port-text-muted">Revised from version {selected.sourceVideoId}</p>}
+      <ReviseLaunchVideo key={`revision:${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
       <PublishLaunchVideo key={`${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
     </div>}
     {videos.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">

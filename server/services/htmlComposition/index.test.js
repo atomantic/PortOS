@@ -110,11 +110,11 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({
       posterSec: 11, scenes: [{ durationSec: 15, lines: [] }],
     }));
-    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15, appId: 'example', runId } });
+    const result = await renderComposition({ ...input, launchVideo: { targetDurationSec: 15, appId: 'example', runId, sourceVideoId: 'parent-take' } });
     const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
     expect(await readdir(runRoot)).toEqual(expect.arrayContaining(['composition', 'plan.md', 'storyboard.json', 'caption.txt', 'video.mp4', 'poster.jpg']));
     expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
-    expect(await loadHistory()).toContainEqual(expect.objectContaining({ id: input.jobId, appId: 'example', launchVideo: { appId: 'example', runId, caption: 'Make a clear plan.', posterSec: 11 } }));
+    expect(await loadHistory()).toContainEqual(expect.objectContaining({ id: input.jobId, appId: 'example', launchVideo: { appId: 'example', runId, sourceVideoId: 'parent-take', musicTrack: null, synthesizeMusic: false, caption: 'Make a clear plan.', posterSec: 11 } }));
     const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videoThumbnails, result.thumbnail),
       '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
     expect(pixel[0]).toBeGreaterThan(220);

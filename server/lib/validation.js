@@ -2449,6 +2449,8 @@ export const appLaunchVideoPublishSchema = z.object({
 }).strict();
 
 export const appLaunchVideoRequestSchema = z.object({
+  sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  feedback: z.string().trim().min(1).max(4000).optional(),
   tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
   direction: z.string().trim().max(2000).default(''),
   format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
@@ -2460,6 +2462,7 @@ export const appLaunchVideoRequestSchema = z.object({
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({
+  sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   targetDurationSec: z.number().min(15).max(120),
   appId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
   runId: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(128).optional(),
