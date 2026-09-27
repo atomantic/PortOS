@@ -187,7 +187,7 @@ module.exports = {
   apps: [
     {
       name: 'portos-server',
-      script: 'server/index.js',
+      script: 'server/start.js',
       cwd: __dirname,
       interpreter: 'node',
       log_date_format: LOG_DATE_FORMAT,
