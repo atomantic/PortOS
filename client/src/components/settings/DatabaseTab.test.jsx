@@ -157,4 +157,32 @@ describe('DatabaseTab migration', () => {
     await renderTab();
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  it('fails closed on competing actions when this tab has an unresolved operation but the status read errors', async () => {
+    safeReadJsonSession.mockReturnValue({ id: 'op-6', source: 'docker', target: 'native', acceptedAt: Date.now() });
+    getDatabaseMaintenanceStatus.mockRejectedValue(new Error('server unreachable'));
+    render(<DatabaseTab />);
+    await waitFor(() => expect(getDatabaseStatus).toHaveBeenCalled());
+    // Never learned this operation's outcome — must not read as idle.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Backup$/i })[0]).toBeDisabled());
+  });
+
+  it('does not attribute a later, different verified operation to this tab\'s earlier success', async () => {
+    safeReadJsonSession.mockReturnValue({ id: 'op-7', source: 'docker', target: 'native', acceptedAt: Date.now() });
+    getDatabaseMaintenanceStatus.mockResolvedValueOnce({
+      stage: 'idle', fenced: false, lastCutover: { id: 'op-7', source: 'docker', target: 'native', sourceRetained: true },
+    });
+    await renderTab();
+    await waitFor(() => expect(screen.getByText(/Verified — now running on native/i)).toBeTruthy());
+
+    // A different (e.g. CLI-run) operation later becomes the recorded
+    // lastCutover. This tab never claimed op-8, so it must not keep — or
+    // re-show — a verified banner for it.
+    getDatabaseMaintenanceStatus.mockResolvedValue({
+      stage: 'idle', fenced: false, lastCutover: { id: 'op-8', source: 'native', target: 'docker', sourceRetained: true },
+    });
+    fireEvent.click(screen.getByTitle('Refresh status'));
+    await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Verified — now running on/i)).toBeNull();
+  });
 });

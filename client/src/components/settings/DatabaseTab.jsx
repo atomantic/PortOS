@@ -175,7 +175,7 @@ function BackendCard({ label, icon: Icon, backend, isActive, dbStatus, runAction
  * a saved-mode change alone. Only a `fenced: false` read whose `lastCutover.id`
  * matches the operation THIS tab started counts as a verified success.
  */
-function MigrationPanel({ dbStatus, maintenance, maintenanceLoading, downtimeMs, justVerified, onMigrate, onRecover, recovering, busy, recoverDisabled }) {
+function MigrationPanel({ dbStatus, maintenance, maintenanceLoading, downtimeMs, verifiedOperationId, onMigrate, onRecover, recovering, busy, recoverDisabled }) {
   if (maintenanceLoading && !maintenance) {
     return <BrailleSpinner text="Checking migration status" />;
   }
@@ -227,7 +227,7 @@ function MigrationPanel({ dbStatus, maintenance, maintenanceLoading, downtimeMs,
 
   return (
     <div className="space-y-2">
-      {justVerified && maintenance.lastCutover && (
+      {maintenance.lastCutover && verifiedOperationId === maintenance.lastCutover.id && (
         <div className="flex items-center gap-2 text-sm text-port-success bg-port-success/10 border border-port-success/20 rounded-lg px-3 py-2">
           <CheckCircle2 size={14} />
           <span>
@@ -262,7 +262,11 @@ export function DatabaseTab() {
   const [maintenanceLoading, setMaintenanceLoading] = useState(true);
   const [recovering, setRecovering] = useState(false);
   const [downtimeMs, setDowntimeMs] = useState(null);
-  const [justVerified, setJustVerified] = useState(false);
+  // The operation id THIS tab has confirmed verified, if any. Pinned to an id
+  // (not a bare boolean) so a later CLI/other-tab cutover replacing
+  // `maintenance.lastCutover` with a DIFFERENT operation can't make this tab
+  // keep showing an earlier success as if it were that new operation's.
+  const [verifiedOperationId, setVerifiedOperationId] = useState(null);
   const progressTimer = useRef(null);
   // The operation THIS tab started, if any: { id, source, target, acceptedAt }.
   // Session-scoped because the server restarts mid-operation; a page reload in
@@ -297,7 +301,7 @@ export function DatabaseTab() {
           if (status.lastCutover?.id === own.id) {
             const downtime = wentDownAtRef.current ? Date.now() - wentDownAtRef.current : null;
             setDowntimeMs(downtime);
-            setJustVerified(true);
+            setVerifiedOperationId(own.id);
             toast.success(`Database migrated to ${status.lastCutover.target}`, { id: CUTOVER_TOAST_ID });
           } else {
             // No matching verified record — cancelled or superseded. Never
@@ -387,7 +391,7 @@ export function DatabaseTab() {
         safeWriteJsonSession(OWN_OPERATION_KEY, own);
         wentDownAtRef.current = null;
         setDowntimeMs(null);
-        setJustVerified(false);
+        setVerifiedOperationId(null);
         // Accepted only — never a success toast. PortOS is about to restart.
         toast.loading(`Cutover accepted (${accepted.source} → ${accepted.target}) — PortOS will restart`, {
           id: CUTOVER_TOAST_ID, duration: Infinity,
@@ -409,7 +413,7 @@ export function DatabaseTab() {
         safeWriteJsonSession(OWN_OPERATION_KEY, own);
         wentDownAtRef.current = null;
         setDowntimeMs(null);
-        setJustVerified(false);
+        setVerifiedOperationId(null);
         toast.loading('Resuming interrupted cutover — PortOS will restart', { id: CUTOVER_TOAST_ID, duration: Infinity });
         reconcileMaintenance();
       })
@@ -417,7 +421,14 @@ export function DatabaseTab() {
       .finally(() => setRecovering(false));
   }, [reconcileMaintenance]);
 
-  const busy = actionInProgress != null || Boolean(maintenance?.fenced) || recovering;
+  // Fail closed: an unknown maintenance read (never loaded, or a failed
+  // re-read with nothing previously confirmed — see reconcileMaintenance)
+  // still counts as busy when THIS tab knows it has an unresolved operation
+  // from session storage, so a reload mid-outage can't re-enable competing
+  // actions just because the fresh status read hasn't landed yet.
+  const maintenanceUnknown = maintenance == null;
+  const busy = actionInProgress != null || recovering || Boolean(maintenance?.fenced)
+    || (maintenanceUnknown && ownOperationRef.current != null);
   // The Recover button lives INSIDE the fenced/interrupted state, so it must
   // not be gated by `maintenance.fenced` — that would make it permanently
   // disabled the one time it needs to be clickable.
@@ -474,7 +485,7 @@ export function DatabaseTab() {
               maintenance={maintenance}
               maintenanceLoading={maintenanceLoading}
               downtimeMs={downtimeMs}
-              justVerified={justVerified}
+              verifiedOperationId={verifiedOperationId}
               onMigrate={(direction) => setConfirmAction({
                 type: 'migrate',
                 label: `Migrate from ${direction.source} to ${direction.target}?`,
