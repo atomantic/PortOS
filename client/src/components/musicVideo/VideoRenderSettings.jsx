@@ -11,6 +11,12 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
     audioReactiveReady, audioReactiveSelected, change,
   } = videoSettings;
+  // fal.ai (#8968) is image-to-video only here — every scene render already
+  // starts from the director's chosen reference frame, so no generation-mode
+  // picker or model knob is exposed; the server resolves fal.ai's verified
+  // image-to-video model by default (videoGen/fal.js#FAL_DEFAULT_IMAGE_MODEL).
+  // The audio-reactive lane stays local-only (root AGENTS.md's environmental-
+  // motion contract needs an independently verified provider capability).
   const locked = saving || generating;
   return (
     <>
@@ -26,6 +32,7 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
         <option value="">Install default</option>
         <option value="local">Local video</option>
         <option value="grok">Grok video</option>
+        <option value="fal">fal.ai video</option>
       </select>
       {settings.backend === 'local' && (
         <>
@@ -134,6 +141,23 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
               <option key={duration} value={duration}>{duration}s clips</option>
             ))}
           </select>
+        </>
+      )}
+      {settings.backend === 'fal' && (
+        <>
+          <label htmlFor="mv-fal-duration" className="sr-only">fal.ai scene clip duration</label>
+          <input
+            id="mv-fal-duration"
+            type="number"
+            min={1}
+            max={60}
+            value={settings.falDuration ?? ''}
+            onChange={(e) => change({ falDuration: e.target.value === '' ? null : Number(e.target.value) })}
+            disabled={locked}
+            placeholder="model default"
+            title="Clip length in seconds for this project's fal.ai scene renders (blank uses the model's default)"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-24"
+          />
         </>
       )}
     </>

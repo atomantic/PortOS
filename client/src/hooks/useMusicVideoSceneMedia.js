@@ -194,12 +194,17 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
         ? { grokDuration: settings.grokDuration }
-        : settings.backend === 'local'
-          ? { modelId: settings.modelId || undefined, disableAudio: true }
-          // A named model is local-only machinery at the server boundary and
-          // would force the resolver off a Grok install default. Keep the
-          // shared pin saved, but omit it until this peer chooses Local.
-          : { grokDuration: settings.grokDuration, disableAudio: true }),
+        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings); an
+        // absent falDuration lets the server fall back to the resolved
+        // model's own default rather than forcing a value.
+        : settings.backend === 'fal'
+          ? { falDuration: settings.falDuration || undefined }
+          : settings.backend === 'local'
+            ? { modelId: settings.modelId || undefined, disableAudio: true }
+            // A named model is local-only machinery at the server boundary and
+            // would force the resolver off a Grok install default. Keep the
+            // shared pin saved, but omit it until this peer chooses Local.
+            : { grokDuration: settings.grokDuration, disableAudio: true }),
       mode: audioReactiveSelected ? 'a2v' : 'image',
       sourceImageFile: scene.referenceImageId,
       ...(audioReactiveSelected ? {

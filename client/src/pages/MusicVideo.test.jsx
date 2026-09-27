@@ -473,6 +473,63 @@ describe('MusicVideo project video renderer', () => {
     ));
   });
 
+  it('persists the fal.ai backend pin (#8968)', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({
+      connected: true,
+      defaultModel: 'ltx23_distilled_q4',
+      falEnabled: true,
+      models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
+    });
+    await openProject(PROJECT_NO_CLIP);
+
+    fireEvent.change(await screen.findByLabelText('Scene video renderer'), {
+      target: { value: 'fal' },
+    });
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-2',
+      { videoSettings: { backend: 'fal' } },
+      { silent: true },
+    ));
+    expect(await screen.findByLabelText('fal.ai scene clip duration')).toBeTruthy();
+  });
+
+  it('renders a scene image-to-video through a saved fal.ai pin (#8968)', async () => {
+    getVideoGenStatus.mockResolvedValueOnce({
+      connected: true,
+      defaultModel: 'ltx23_distilled_q4',
+      falEnabled: true,
+      models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
+    });
+    generateVideo.mockResolvedValue({ jobId: 'fal-video-job' });
+    await openProject({
+      ...PROJECT_NO_CLIP,
+      videoSettings: { backend: 'fal', falDuration: 6 },
+    });
+
+    expect(await screen.findByLabelText('fal.ai scene clip duration')).toHaveProperty('value', '6');
+    fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'fal',
+      falDuration: 6,
+      mode: 'image',
+      sourceImageFile: 'img1',
+    })));
+    expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('modelId');
+    expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('disableAudio');
+  });
+
+  it('blocks fal.ai scene generation with a clear preflight reason when no API key is configured', async () => {
+    // getVideoGenStatus's default mock omits falEnabled, so it resolves false —
+    // exactly the "no fal.ai API key configured" install this covers.
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'fal' } });
+
+    const generate = await screen.findByRole('button', { name: /^Generate video$/ });
+    expect(generate).toBeDisabled();
+    expect(generate).toHaveProperty('title', expect.stringContaining('No fal.ai API key configured'));
+    fireEvent.click(generate);
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
   it('warns when ready scenes reuse the same frames and clips', async () => {
     await openProject({
       ...PROJECT_WITH_CLIP,
