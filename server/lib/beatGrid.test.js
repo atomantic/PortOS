@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { writeFile, mkdtemp, rm } from 'fs/promises';
+import { writeFile, mkdtemp, rm, stat, utimes } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -196,7 +196,7 @@ describe('getBeatGrid (mtime-keyed cache)', () => {
     expect(await getBeatGrid(null)).toBeNull();
   });
 
-  it('caches by path+mtime and re-measures after the file changes (skipped without ffmpeg)', async () => {
+  it('caches strictly by mtime, not by content (skipped without ffmpeg)', async () => {
     if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping beat-grid cache round-trip'); return; }
     const wavSampleRate = 44100;
     const wavPath = join(tmpDir, 'cache-track.wav');
@@ -207,18 +207,27 @@ describe('getBeatGrid (mtime-keyed cache)', () => {
     expect(first.bpm).toBeGreaterThan(100 - BPM_TOLERANCE);
     expect(first.bpm).toBeLessThan(100 + BPM_TOLERANCE);
 
-    // A second call against the unchanged file must hit the cache: overwrite
-    // the file with SILENCE but keep serving the first (cached) result until
-    // the mtime moves.
-    const cached = await getBeatGrid(wavPath);
-    expect(cached).toEqual(first);
+    // A repeat call against the unchanged file must be an actual cache HIT,
+    // not a coincidentally-identical recomputation (the DSP is deterministic,
+    // so `toEqual` alone can't tell the two apart). `toBe` asserts the same
+    // object reference, which only a real cache hit can produce — a fresh
+    // analysis always allocates a new result object.
+    const second = await getBeatGrid(wavPath);
+    expect(second).toBe(first);
 
-    // Bump mtime forward so a filesystem with coarse mtime resolution still
-    // registers the change, then overwrite with a different tempo.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 140, durationSec: 6, sampleRate: wavSampleRate }), wavSampleRate));
+    // Overwrite with a different tempo, then bump mtime forward explicitly
+    // (rather than relying on write-induced mtime resolution, which can be
+    // coarser than the gap between two writes on some filesystems — a plain
+    // write's own timestamp could otherwise land in the same millisecond as
+    // the original). The cache must invalidate and return a freshly measured,
+    // distinct result.
+    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 130, durationSec: 6, sampleRate: wavSampleRate }), wavSampleRate));
+    const stats = await stat(wavPath);
+    await utimes(wavPath, stats.atime, new Date(stats.mtime.getTime() + 1000));
     const updated = await getBeatGrid(wavPath);
     expect(updated).not.toBeNull();
-    expect(updated.bpm).not.toBe(first.bpm);
+    expect(updated).not.toBe(first);
+    expect(updated.bpm).toBeGreaterThan(130 - BPM_TOLERANCE);
+    expect(updated.bpm).toBeLessThan(130 + BPM_TOLERANCE);
   });
 });
