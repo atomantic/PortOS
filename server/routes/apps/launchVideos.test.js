@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -139,6 +139,14 @@ describe('README publication admission', () => {
     await symlink(join(PATHS.data, 'outside.mp4'), join(PATHS.data, 'videos', 'escape.mp4'));
     loadHistory.mockResolvedValue([{ ...video, filename: 'escape.mp4' }]);
     expect((await publish({ videoId: video.id })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('reports missing media when the entire video directory was removed', async () => {
+    await rm(join(PATHS.data, 'videos'), { recursive: true, force: true });
+    const response = await publish({ videoId: video.id });
+    expect(response.status).toBe(404);
+    expect(response.body.error).toContain('Launch video file is missing');
     expect(addTask).not.toHaveBeenCalled();
   });
 

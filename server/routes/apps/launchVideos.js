@@ -21,6 +21,10 @@ const launchVideoTaskSchema = appLaunchVideoRequestSchema
 // into an unbounded per-app export.
 const LAUNCH_VIDEO_LIST_LIMIT = 50;
 const publishTaskSchema = appLaunchVideoPublishSchema.extend(pullRequestProviderOverrideSchema.shape);
+const missingVideoSource = err => {
+  if (err.code === 'ENOENT') throw new ServerError('Launch video file is missing', { status: 404 });
+  throw err;
+};
 
 router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res) => {
   const { videoId, provider, model, effort } = validateRequest(publishTaskSchema, req.body);
@@ -35,12 +39,9 @@ router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res)
   if (!/^[a-zA-Z0-9_-]+\.mp4$/.test(video.filename ?? '')) {
     throw new ServerError('Launch video source is invalid', { status: 400 });
   }
-  const root = await realpath(join(PATHS.data, 'videos'));
-  const source = await realpath(join(root, video.filename)).catch(err => {
-    if (err.code === 'ENOENT') throw new ServerError('Launch video file is missing', { status: 404 });
-    throw err;
-  });
-  if (dirname(source) !== root || !(await stat(source)).isFile()) {
+  const root = await realpath(join(PATHS.data, 'videos')).catch(missingVideoSource);
+  const source = await realpath(join(root, video.filename)).catch(missingVideoSource);
+  if (dirname(source) !== root || !(await stat(source).catch(missingVideoSource)).isFile()) {
     throw new ServerError('Launch video source is invalid', { status: 400 });
   }
   const cos = await import('../../services/cos.js');
