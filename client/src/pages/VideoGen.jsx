@@ -1226,8 +1226,8 @@ export default function VideoGen() {
         })}
       </div>
 
-      <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+      <form onSubmit={handleGenerate} className="@container/video-form min-w-0">
+        <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-4 space-y-3">
           {/* A cross-page Remix that could not be restored (#6290). Silence
               would be the worst outcome here: the user pressed Remix, landed on
               a form holding whatever it held before, and would start a render
@@ -1398,7 +1398,9 @@ export default function VideoGen() {
               Options
               <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
             </summary>
-            <div className="mt-3 min-w-0 space-y-3 lg:mt-0">
+            <div className="mt-3 grid min-w-0 grid-cols-1 gap-4 lg:mt-0 @3xl/video-form:grid-cols-2">
+              <section aria-label="Prompt styling and reference media" className="min-w-0 space-y-3">
+              <div className="grid min-w-0 grid-cols-1 gap-3 @5xl/video-form:grid-cols-2">
               <UniverseStylePicker
                 value={selectedUniverse?.id || ''}
                 onChange={setSelectedUniverse}
@@ -1407,6 +1409,7 @@ export default function VideoGen() {
                 value={stylePreset?.id || ''}
                 onChange={setStylePreset}
               />
+              </div>
               {negativePromptSupported && (
                 <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                   <AutoSizeTextarea
@@ -1566,6 +1569,8 @@ export default function VideoGen() {
             />
           )}
 
+              </section>
+              <section aria-label="Render settings" className="min-w-0 space-y-3">
           {!rendersOffMachine && (
             <RemoteMediaTargetPicker
               target={remoteTarget}
@@ -1842,6 +1847,7 @@ export default function VideoGen() {
             </label>
           )}
 
+              </section>
             </div>
           </details>
         </div>
