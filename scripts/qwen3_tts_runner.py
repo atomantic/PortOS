@@ -200,10 +200,20 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
     except ImportError:
         pass
 
-    # Apple Silicon is deliberately unavailable until the MLX adapter exists;
-    # the presence of a Torch MPS device must not advertise supported inference.
+    # Probe the actual backend without loading a model or acquiring weights.
     if platform.system() == "Darwin" and platform.machine() == "arm64":
-        result["error"] = "Qwen3-TTS MLX inference is unavailable on Apple Silicon"
+        result["error"] = "Qwen3-TTS inference requires mlx-audio and soundfile on Apple Silicon"
+        try:
+            import mlx.core as mx
+            from mlx_audio.tts.models.qwen3_tts import Model
+            from mlx_audio.tts.utils import load_model
+            import soundfile
+            if mx.metal.is_available():
+                result["ok"] = True
+                result["error"] = None
+                result["device"] = "mlx"
+        except ImportError:
+            pass
     elif result["torch_installed"] and result["transformers_installed"]:
         try:
             from qwen_tts import Qwen3TTSModel
@@ -241,8 +251,7 @@ def run_synthesis(args: argparse.Namespace) -> int:
         return unavailable("custom checkpoints/model paths")
     if args.rate != 1.0:
         return unavailable("speech-rate control")
-    if platform.system() == "Darwin" and platform.machine() == "arm64":
-        return unavailable("MLX inference on Apple Silicon")
+    use_mlx = platform.system() == "Darwin" and platform.machine() == "arm64"
     if args.model_id not in SUPPORTED_MODELS or not args.models_dir:
         return unavailable("inference without a supported verified local model")
     model_dir = Path(args.models_dir) / args.model_id.replace("/", "--")
@@ -258,6 +267,10 @@ def run_synthesis(args: argparse.Namespace) -> int:
         return unavailable("cloning without a local reference recording")
     if not design and args.instructions:
         return unavailable("instruction-controlled reference cloning")
+    # MLX Base uses in-context cloning. Without both a transcript and an
+    # encoder it falls back to unconditioned speech, which is not cloning.
+    if use_mlx and not design and not (args.reference_transcript or "").strip():
+        return unavailable("MLX reference cloning without a transcript")
 
     # qwen-tts loads its processor/codec independently. Offline flags cover those
     # nested loads too; status and inference cannot acquire unrequested weights.
@@ -267,29 +280,58 @@ def run_synthesis(args: argparse.Namespace) -> int:
         with contextlib.redirect_stdout(sys.stderr):
             import numpy as np
             import soundfile as sf
-            import torch
-            from qwen_tts import Qwen3TTSModel
+            if use_mlx:
+                import mlx.core as mx
+                from mlx_audio.tts.utils import load_model
 
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            dtype = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if device != "cpu" else torch.float32
-            torch.manual_seed(args.seed)
-            model = Qwen3TTSModel.from_pretrained(
-                str(snapshot), device_map=device, dtype=dtype,
-                attn_implementation="eager", local_files_only=True,
-            )
-            with torch.inference_mode():
+                mx.random.seed(args.seed)
+                model = load_model(snapshot, strict=True)
+                if model.tokenizer is None or model.speech_tokenizer is None:
+                    raise ValueError("MLX model tokenizer is unavailable")
                 if design:
-                    wavs, sample_rate = model.generate_voice_design(
-                        text=args.text, language="Auto",
+                    results = list(model.generate_voice_design(
+                        text=args.text, language="auto",
                         instruct=args.instructions or "A clear natural speaking voice.",
-                    )
+                        stream=False, verbose=False,
+                    ))
                 else:
-                    wavs, sample_rate = model.generate_voice_clone(
-                        text=args.text, language="Auto",
+                    if not model.speech_tokenizer.has_encoder:
+                        raise ValueError("MLX reference encoder is unavailable")
+                    results = list(model.generate(
+                        text=args.text, lang_code="auto",
                         ref_audio=str(Path(args.reference_audio).resolve()),
-                        ref_text=args.reference_transcript or None,
-                        x_vector_only_mode=not bool(args.reference_transcript),
-                    )
+                        ref_text=args.reference_transcript,
+                        split_pattern=None, stream=False, verbose=False,
+                    ))
+                if len(results) != 1:
+                    raise ValueError("Invalid MLX model audio result")
+                # Materialize lazy MLX output before publishing any audio.
+                mx.eval(results[0].audio)
+                wavs, sample_rate = [results[0].audio], results[0].sample_rate
+            else:
+                import torch
+                from qwen_tts import Qwen3TTSModel
+
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
+                dtype = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if device != "cpu" else torch.float32
+                torch.manual_seed(args.seed)
+                model = Qwen3TTSModel.from_pretrained(
+                    str(snapshot), device_map=device, dtype=dtype,
+                    attn_implementation="eager", local_files_only=True,
+                )
+                with torch.inference_mode():
+                    if design:
+                        wavs, sample_rate = model.generate_voice_design(
+                            text=args.text, language="Auto",
+                            instruct=args.instructions or "A clear natural speaking voice.",
+                        )
+                    else:
+                        wavs, sample_rate = model.generate_voice_clone(
+                            text=args.text, language="Auto",
+                            ref_audio=str(Path(args.reference_audio).resolve()),
+                            ref_text=args.reference_transcript or None,
+                            x_vector_only_mode=not bool(args.reference_transcript),
+                        )
             if len(wavs) != 1 or not isinstance(sample_rate, int) or sample_rate <= 0:
                 raise ValueError("Invalid model audio result")
             audio = np.asarray(wavs[0])
@@ -305,7 +347,7 @@ def run_synthesis(args: argparse.Namespace) -> int:
         }))
         return 0
     except ImportError:
-        return unavailable("inference dependencies (install qwen-tts in the isolated environment)")
+        return unavailable("inference dependencies (install mlx-audio on Apple Silicon or qwen-tts on CPU/CUDA)")
     except Exception:
         # Provider exceptions may contain private reference paths/transcripts.
         # Return a bounded error instead of publishing their raw exception text.
@@ -339,7 +381,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=str, help="Output directory for training checkpoints")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs")
     parser.add_argument("--checkpoint-interval", type=int, default=50, help="Steps between checkpoints")
-    
+
     args = parser.parse_args()
 
     if args.download:
