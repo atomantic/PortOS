@@ -35,7 +35,7 @@ export const MOTION_SKILL_PACKS = Object.freeze([
 
 // The skills CLI writes the canonical copy to ~/.agents/skills (read by Codex)
 // and links it into ~/.claude/skills for Claude Code.
-export const motionSkillDirs = (home = homedir()) => [join(home, '.agents', 'skills'), join(home, '.claude', 'skills')];
+const motionSkillDirs = (home = homedir()) => [join(home, '.agents', 'skills'), join(home, '.claude', 'skills')];
 
 /** Each pack with the skill names found on disk; `installed` means all of them. */
 export function detectMotionSkills({ home = homedir(), exists = existsSync } = {}) {

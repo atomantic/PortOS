@@ -2497,7 +2497,8 @@ export const htmlCompositionRenderSchema = z.object({
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
   // A proof renders a silent contact sheet for review instead of the video.
   proof: z.object({ everySec: z.number().min(0.25).max(10).default(1) }).strict().optional(),
-}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both');
+}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
+  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack');
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),

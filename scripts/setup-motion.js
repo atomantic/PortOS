@@ -27,6 +27,8 @@ import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { platform as osPlatform } from 'node:os';
 import { MOTION_SKILL_PACKS, detectMotionSkills } from '../server/lib/motionSkills.js';
+import { whichFirstSync } from '../server/lib/processEnv.js';
+import { findFfmpeg } from '../server/lib/ffmpeg.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 // Agents the skills CLI links each installed skill into (Claude Code + Codex
@@ -64,7 +66,10 @@ export function skillInstallCommand(pack) {
   return ['npx', ['-y', 'skills@latest', 'add', pack.source, '--global', '--yes', '--agent', ...SKILL_AGENTS, '--skill', ...pack.skills]];
 }
 
-const hasCommand = (command) => spawnSync(osPlatform() === 'win32' ? 'where' : 'which', [command], { stdio: 'ignore' }).status === 0;
+const hasCommand = (command) => Boolean(whichFirstSync(command));
+// The server's own lookup (PATH plus Homebrew/system locations), so this CLI
+// and the launch-video form agree on whether ffmpeg is present.
+const hasFfmpeg = async () => Boolean(await findFfmpeg());
 
 const run = ([command, args]) => spawnSync(command, args, { stdio: 'inherit', shell: osPlatform() === 'win32' }).status === 0;
 
@@ -73,8 +78,8 @@ function ask(question) {
   return new Promise(resolve => rl.question(question, answer => { rl.close(); resolve(/^y(es)?$/i.test(answer.trim())); }));
 }
 
-function status() {
-  return { ffmpeg: hasCommand('ffmpeg'), skillPacks: detectMotionSkills() };
+async function status() {
+  return { ffmpeg: await hasFfmpeg(), skillPacks: detectMotionSkills() };
 }
 
 function printStatus({ ffmpeg, skillPacks }) {
@@ -86,7 +91,7 @@ function printStatus({ ffmpeg, skillPacks }) {
 }
 
 async function ensureFfmpeg({ yes }) {
-  if (hasCommand('ffmpeg')) return true;
+  if (await hasFfmpeg()) return true;
   const command = ffmpegInstallCommand(osPlatform(), hasCommand);
   if (!command) {
     console.warn('⚠️ ffmpeg is missing and no supported package manager was found — install ffmpeg yourself (https://ffmpeg.org/download.html).');
@@ -99,6 +104,7 @@ async function ensureFfmpeg({ yes }) {
     return false;
   }
   console.log(`📦 ${printable}`);
+  // Re-probe from PATH: findFfmpeg caches its earlier miss for the process.
   if (!run(command) || !hasCommand('ffmpeg')) {
     console.error('❌ ffmpeg install failed');
     return false;
@@ -127,7 +133,7 @@ function installSkills(ids) {
 async function main() {
   const options = parseMotionSetupArgs(process.argv.slice(2));
   if (options.status) {
-    const current = status();
+    const current = await status();
     if (options.json) console.log(JSON.stringify(current, null, 2));
     else printStatus(current);
     return;
@@ -135,7 +141,8 @@ async function main() {
   console.log('🎬 Motion studio setup');
   const ffmpegReady = await ensureFfmpeg(options);
   const skillsReady = options.skills.length ? installSkills(options.skills) : true;
-  printStatus(status());
+  // ffmpegReady reflects a fresh install that findFfmpeg's cached miss would not.
+  printStatus({ ...(await status()), ffmpeg: ffmpegReady });
   if (!options.skills.length) console.log('💡 Optional: npm run setup:motion -- --skills installs HyperFrames, Remotion and Claude Animation technique skills for launch-video agents.');
   if (!ffmpegReady || !skillsReady) process.exitCode = 1;
 }

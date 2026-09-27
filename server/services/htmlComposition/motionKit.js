@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 // `<script src="portos-motion.js">`. Plain UTF-8 JavaScript, so it passes the
 // launch-video asset gate like any other composition source.
 export const MOTION_KIT_FILENAME = 'portos-motion.js';
-export const MOTION_KIT_SOURCE = join(dirname(fileURLToPath(import.meta.url)), 'kit', MOTION_KIT_FILENAME);
+const MOTION_KIT_SOURCE = join(dirname(fileURLToPath(import.meta.url)), 'kit', MOTION_KIT_FILENAME);
 
 /** Copy the kit into a composition directory, keeping any copy already there. */
 export async function installMotionKit(compositionDir) {

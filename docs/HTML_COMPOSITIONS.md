@@ -78,7 +78,8 @@ Add `proof: { everySec: 1 }` (0.25–10 seconds) to the render request to get a
 silent contact sheet instead of a video. The renderer applies the same contract
 and launch-video gates, seeks one frame per interval (at most 60), and tiles
 them six across at phone size (360px wide, 240px for vertical) into one PNG.
-Soundtrack options are ignored. Nothing is registered in Media History and no
+A proof is silent, so the request must omit `musicTrack` and
+`synthesizeMusic`. Nothing is registered in Media History and no
 launch-video artifacts are delivered. The completed job's result carries
 `proof: { path, times, columns, width, height }`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other

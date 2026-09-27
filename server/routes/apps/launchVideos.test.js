@@ -96,7 +96,8 @@ describe('user-triggered launch videos', () => {
     expect((await submit({ motionSkills: true, motionStyle: 'ui-morph' })).status).toBe(202);
     const [task] = addTask.mock.calls[0];
     expect(task.prompt).toContain('"motionStyle":"ui-morph"');
-    expect(task.prompt).toContain('"motionSkills":["motion-graphics"]');
+    expect(task.prompt).toContain('"motionSkills":true');
+    expect(task.prompt).toContain('"installedMotionSkills":["motion-graphics"]');
   });
 
   it('preserves an explicit service choice and rejects unknown music methods', async () => {

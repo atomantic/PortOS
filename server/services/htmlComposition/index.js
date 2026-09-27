@@ -43,9 +43,8 @@ export async function renderComposition({ jobId, ...input }) {
   };
   try {
     const { directory, musicTrack, launchVideo, synthesizeMusic, proof } = validateRequest(htmlCompositionRenderSchema, input);
-    // A proof is a silent review pass: soundtrack options are ignored.
-    let musicPath = musicTrack && !proof ? await resolveMusicTrackPath(musicTrack) : null;
-    if (musicTrack && !proof && !musicPath) throw new Error('musicTrack is missing from the Music library');
+    let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
+    if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     signal.throwIfAborted();
     let launchPlan;
     let launchAssets;
@@ -79,13 +78,13 @@ export async function renderComposition({ jobId, ...input }) {
       await ensureDir(proofDir);
       proofPath = join(proofDir, `contact-${jobId}.png`);
       const times = proofTimes(contract.durationSec, proof.everySec);
-      await encodeContactSheet(page, contract, proofPath, { times, signal });
+      const { columns } = await encodeContactSheet(page, contract, proofPath, { times, signal });
       page.check();
       await page.close({ verify: true });
       page = null;
       signal.throwIfAborted();
       success = true;
-      result = { generationId: jobId, id: jobId, proof: { path: proofPath, times, columns: Math.min(6, times.length), ...contract } };
+      result = { generationId: jobId, id: jobId, proof: { path: proofPath, times, columns, ...contract } };
     } else {
       if (synthesizeMusic) {
         const wav = await synthesizeCompositionMusic(page, contract.durationSec);

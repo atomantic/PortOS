@@ -55,13 +55,14 @@ function LaunchVideoForm({ appId, onQueued }) {
     return () => { active = false; };
   }, []);
   const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
+  const consultSkills = motionSkills && installedSkills.length > 0;
 
   const [submit, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
     await createAppLaunchVideo(appId, {
       tone, direction, format, targetDurationSec: duration, motionStyle, critiqueRounds,
-      ...(motionSkills && installedSkills.length ? { motionSkills: true } : {}),
+      ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
@@ -92,7 +93,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       <p className="text-sm text-port-text-muted">The agent renders a contact sheet, scores its own frames and fixes the worst problems before the final render.</p>
     </div>
     <div>
-      <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={motionSkills && installedSkills.length > 0} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
+      <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
       <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
         ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
         : 'Install HyperFrames, Remotion and Claude Animation skills with npm run setup:motion -- --skills.'}</p>

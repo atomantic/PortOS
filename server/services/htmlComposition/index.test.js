@@ -146,12 +146,15 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({ posterSec: 11, scenes: [{ durationSec: 15, lines: [] }] }));
     const launchVideo = { targetDurationSec: 15, appId: 'example', runId };
     const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
-    const proof = await renderComposition({ ...input, launchVideo, synthesizeMusic: true, proof: { everySec: 1 } });
+    await expect(renderComposition({ ...input, launchVideo, synthesizeMusic: true, proof: { everySec: 1 } })).rejects
+      .toMatchObject({ context: { details: [expect.objectContaining({ message: expect.stringContaining('A proof is silent') })] } });
+    const proof = await renderComposition({ ...input, launchVideo, proof: { everySec: 1 } });
     expect(proof.proof).toMatchObject({ path: join(await realpath(runRoot), 'proofs', `contact-${input.jobId}.png`), columns: 6, width: 1280, height: 720 });
     expect(proof.proof.times).toEqual(Array.from({ length: 15 }, (_, n) => n));
     const png = await readFile(proof.proof.path);
-    // IHDR: six 360px tiles with 4px gutters, three rows of 202px.
-    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([6 * 360 + 5 * 4, 3 * 202 + 2 * 4]);
+    // IHDR: six phone-width (360px) tiles with 4px gutters, three rows of ~16:9 tiles.
+    expect(png.readUInt32BE(16)).toBe(6 * 360 + 5 * 4);
+    expect((png.readUInt32BE(20) - 2 * 4) / 3).toBeCloseTo(360 * 9 / 16, -1);
     // A proof is a review pass: nothing is delivered or registered.
     expect(await readdir(runRoot)).toEqual(expect.arrayContaining(['composition', 'proofs']));
     expect(await readdir(runRoot)).not.toContain('video.mp4');

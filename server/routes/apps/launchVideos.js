@@ -75,9 +75,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     const { detectMotionSkills } = await import('../../lib/motionSkills.js');
     const installed = detectMotionSkills().flatMap(pack => pack.found);
     if (!installed.length) throw new ServerError('No motion skills are installed; run npm run setup:motion -- --skills', { status: 400, code: 'MOTION_SKILLS_MISSING' });
-    options.motionSkills = installed;
-  } else {
-    delete options.motionSkills;
+    options.installedMotionSkills = installed;
   }
   const { getInstanceId } = await import('../../services/instanceIdentity.js');
   const targetInstanceId = await getInstanceId();
