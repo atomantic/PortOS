@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { PATHS } from '../lib/paths.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { isDisposableRoot } from '../lib/dataRoot.js';
@@ -54,7 +55,7 @@ function readSavedEndpoint(env) {
   const config = join(PATHS.installRoot, 'ecosystem.config.cjs');
   const code = `const c=require(${JSON.stringify(config)});process.stdout.write(JSON.stringify(c.DATABASE_ENDPOINTS?.[c.DATABASE_MODE]??null))`;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['-e', code], { cwd: PATHS.installRoot, env, stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(process.execPath, ['-e', code], { cwd: PATHS.installRoot, env: withSpawnCwdEnv(env, PATHS.installRoot), stdio: ['ignore', 'pipe', 'ignore'] });
     let stdout = '';
     child.stdout.on('data', chunk => { if (stdout.length < 4096) stdout += chunk; });
     child.once('error', () => resolve(null));
