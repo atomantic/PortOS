@@ -1,6 +1,15 @@
 // Shared TTS engine metadata. The registry is returned by /api/voice/engines so
 // clients can render and update engines without copying IDs or config keys.
 export const TTS_ENGINE_REGISTRY = Object.freeze({
+  auk: Object.freeze({
+    configKey: 'auk', label: 'AuK-Flash', description: 'Local character voice design on Apple Silicon',
+    voiceHint: 'Create and audition reusable character voices in Create → Voice Studio.',
+    capabilities: {
+      preset: false, voiceDesign: true, instantClone: false, fineTune: false,
+      streaming: false, instructionControl: true, emotionControl: true,
+      seed: true, wordTimings: false, rate: true, pitch: true, formant: false,
+    },
+  }),
   piper: Object.freeze({
     configKey: 'piper',
     label: 'Piper',

@@ -42,7 +42,7 @@ export const FABLELOOM_RENDER_PREFERENCE_KEYS = Object.freeze([
 ]);
 
 const isRecord = (value) => value != null && typeof value === 'object' && !Array.isArray(value);
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const hasOwn = (value, key) => Object.hasOwn(value, key);
 const trimModelId = (value) => (typeof value === 'string' && value.trim()
   ? value.trim().slice(0, 64)
   : null);
@@ -715,6 +715,7 @@ export function buildEpisodeProductionPlan({
         profile.binding?.characterId === interactionCharacterId
         && (!universe?.id || profile.binding?.universeId === universe.id)
         && profile.approval?.status === 'approved'
+        && profile.routes?.interactive?.enabled === true
       ));
       if (!approvedProfile && !interactionCharacter?.voiceId && !loom?.defaultVoiceId) {
         nodeBlockers.push(`Live interaction protagonist "${interactionCharacterId || 'unknown'}" has no approved voice binding.`);
@@ -878,6 +879,7 @@ export function buildEpisodeProductionPlan({
         p.binding?.characterId === charId
         && (!universe?.id || p.binding?.universeId === universe.id)
         && p.approval?.status === 'approved'
+        && p.routes?.interactive?.enabled === true
       ));
 
       const dialogueBlockers = [];

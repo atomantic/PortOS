@@ -277,3 +277,41 @@ reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
 | Whisper base.en (no CoreML) | 0 (server resident) | 400–800 ms / 2 s of audio | Good |
 | Whisper base.en + CoreML | 0 | 150–300 ms / 2 s of audio | Good |
 | Whisper small.en + CoreML | 0 | 300–600 ms / 2 s of audio | Better |
+
+## Character Voice Studio
+
+**Create → Voice Studio** (`/voices`) is the reusable voice library. A character's
+sheet links here with its universe and character selected. `/voices/new`
+creates a voice; `/voices/:profileId` auditions and assigns it. Series dialogue
+and FableLoom live conversations reuse the universe-character voice resolver.
+Assigning copies an approved reference into a separate character profile, so
+experimentation in the library does not silently replace a cast voice. Profiles
+and reference audio remain machine-local, following the existing voice policy.
+
+AuK-Flash uses the official `feat/mlx-apple-silicon` backend with 8-bit inference.
+On Apple Silicon, **Set up AuK locally** provisions an isolated Python runtime
+under `~/.portos/auk`, downloads weights, and converts them to MLX. It requires
+`uv`, network access, and at least 40 GB free disk space. Setup is explicit;
+startup and page reads never download weights or generate speech. Other hosts
+can browse their stored library but cannot run this MLX engine.
+
+Timbre/accent/delivery use natural-language direction. Pitch is a separate AuK
+acoustic edit in semitones. Pace changes target duration; the operator must
+listen for intelligibility and clipping before assigning. Previews are 2–6
+base seconds, scaled by pace. Longer dialogue is split without dropping text
+into model segments of at most 12 seconds, all conditioned on the same voice
+reference, then joined into one WAV (up to 32 segments per request). Controls take
+effect on generation, not continuously during playback. Each generation creates
+a new candidate, with a preserved WAV reference, transcript, seed, and settings.
+The resident model is reused for previews and unloaded after ten idle minutes
+or through **Unload model**. Inference is serialized and times out after three
+minutes. Assignment offers an explicit **Use this voice in FableLoom live
+conversations too** option. It accepts buffered playback (the whole reply must
+finish before playback, up to the three-minute runtime timeout), not low-latency
+streaming qualification. Without that opt-in, AuK remains studio-only and the
+existing interactive fallback is retained. The production planner checks the
+interactive route rather than treating every approved studio voice as live-ready.
+
+The legacy Qwen runtime has placeholder inference/training and is excluded from
+Voice Studio assignment until repaired (issue #8857). Voice Studio does not
+claim a Qwen runtime is working merely because its metadata exists.
