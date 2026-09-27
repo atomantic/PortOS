@@ -81,9 +81,58 @@ of the scene change: no render has compared the two inputs. The synthetic source
 from the diagnostic is already 768×1344, so its native cases never took this
 path. VAE normalization/posterior sampling, packed tags and rotary positions
 matched the reference in structure and are covered by the runtime's own parity
-tests. The only other difference found is the PIL twin of the image processor,
-used when torch is absent, whose resampling differs numerically from the
-torchvision processor.
+tests. The only other difference found was the image-processor backend,
+examined next.
+
+## Reference parity finding: image-processor backends
+
+The reference encodes keyframes with the checkpoint-declared torchvision
+`Qwen2VLImageProcessor`. The MLX runner has no PyTorch, so it binds that
+processor's PIL twin, `Qwen2VLImageProcessorPil`. At the pinned transformers
+5.14.1, the two share `smart_resize`, BICUBIC resampling, RGB conversion, the
+checkpoint's configuration (patch 16, merge 2, temporal patch 2, 65,536 to
+16,777,216 pixels, mean and std 0.5) and the patch flattening order. They differ
+in two ways. The twin resamples through Pillow on `uint8` and normalizes as
+`(x / 255 - 0.5) / 0.5`. The reference resamples with antialiased torchvision
+bicubic and normalizes as a fused `(x - 127.5) / 127.5`. Both return float32
+arrays with an identical `[1, h/16, w/16]` grid.
+
+`scripts/diagnose_minimax_h3_processor.py` runs both backends on the CPU over
+deterministic synthetic images. The images are half gradient and half full-band
+noise, the worst case for a resampler. The script reads only the cached
+checkpoint's `FL2VA/processor` directory and never loads a model. Run it with
+an existing interpreter that has transformers at the H3 lock's version, torch
+and torchvision. The H3 venv has no torch, so it cannot run this check.
+
+```sh
+<python-with-torch> scripts/diagnose_minimax_h3_processor.py \
+  --processor-dir <hf-cache>/models--MiniMaxAI--MiniMax-H3/snapshots/<revision>/FL2VA/processor
+```
+
+A run at transformers 5.14.1, torch 2.13 and torchvision 0.28, against checkpoint
+revision `6818f6c3`, produced:
+
+| Input (w×h) | Processor resamples | Max abs diff | bfloat16 mismatch |
+| --- | --- | --- | --- |
+| 576×1024, 768×1344, 1344×768, 512×288 (canvases) | no | 5.9e-8 | 0 |
+| 1080×1920, 720×1280 (raw frames) | yes | 1/127.5 (one 8-bit level) | 0.1–0.2% |
+| 128×256 (below the pixel floor) | yes | 2/127.5 | 10.7% |
+
+Every H3 canvas is a multiple of 32, which is the processor's resize factor.
+Canvases at H3's released sizes are also well inside its pixel bounds. After
+the runner places keyframes on the canvas, the processor therefore never
+resamples them. The twin's output then matches the reference to float32
+rounding. After the port casts it to the vision tower's bfloat16, it is
+bit-identical. The backend difference is real only for inputs the processor
+resamples: raw uploads before the vision-geometry correction, or a custom canvas
+smaller than 65,536 pixels. In this run that gap was at most two 8-bit levels,
+and the reference resamples those inputs too. The PIL twin is **excluded as a cause** of the scene
+change on the production path. No correction is warranted. The script exits
+nonzero if a future transformers pin breaks this parity on a canvas.
+
+The continuity harness now records the backend class and keyframe input sizes as
+`vision_processor` in each `report.json`. A render can then show which processor
+read its keyframes and whether they arrived canvas-sized.
 
 ## What remains to establish
 
@@ -92,9 +141,14 @@ explicit even after rendering: inspect the sampled frames and full clip, looking
 for the colored room and objects beyond frame 12. Record whether a scene change
 occurs and when; first-frame resemblance alone cannot pass the comparison.
 
-Compare VAE normalization/posterior sampling, vision features, token tags and
-rotary positions against the pinned FL2VA reference before changing the adapter.
-Matching shapes cannot prove those numerical contracts. Repeat the synthetic
+Image-processor features are now established as matching on the production
+path; see above. VAE normalization/posterior sampling, vision-tower features,
+token tags and rotary positions still need a numerical comparison against the
+pinned FL2VA reference. That needs the reference's PyTorch weights on a
+CUDA or large-memory host. Matching shapes cannot prove those contracts. The
+`small-motion` case stretches the 768×1344 source onto 576×1024, so it
+exercises the vision-geometry correction. For a before/after comparison, render
+it once from this tree and once with `place_keyframes_on_canvas` reverted. Repeat the synthetic
 source and motion prompt on an installed image-capable LTX model, with its native
 canvas, frame grid and stock encoder; record that model's pins and separate phase
 timings. The H3 script intentionally does not imply that an LTX run occurred.

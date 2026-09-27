@@ -69,13 +69,21 @@ def instrument(pipe, report, clock=time.perf_counter):
     keyframes = pipe._encode_keyframes
     dit = pipe.dit
 
-    def encode_observed(*args, **kwargs):
-        result = encode(*args, **kwargs)
+    def encode_observed(prompt, images=None, *args, **kwargs):
+        result = encode(prompt, images, *args, **kwargs)
         features, tags = result
         report["vision_conditioning"] = {
             "embedding_shape": list(features.shape),
             "token_tag_counts": dict(Counter(str(tag) for tag in tags.tolist())),
         }
+        if images:
+            # Which backend read the keyframes (the torch-free runner binds the
+            # PIL twin), and at what size: a canvas-sized input is the one both
+            # backends process identically.
+            report["vision_processor"] = {
+                "class": type(pipe.text_encoder.processor.image_processor).__name__,
+                "input_sizes": [list(image.size) for image in images],
+            }
         return result
 
     def keyframes_observed(*args, **kwargs):

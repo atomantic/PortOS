@@ -52,13 +52,16 @@ def fail_decode(*args):
     raise ValueError('decode failed')
 def dit(*args, **kwargs):
     return rows
-pipe = SimpleNamespace(text_encoder=SimpleNamespace(encode=lambda *a: encode_result),
+class ExampleImageProcessorPil:
+    pass
+processor = SimpleNamespace(image_processor=ExampleImageProcessorPil())
+pipe = SimpleNamespace(text_encoder=SimpleNamespace(encode=lambda *a: encode_result, processor=processor),
     _encode_keyframes=lambda *a: rows, dit=dit,
     _decode_video=fail_decode, _decode_audio=lambda *a: rows)
 report = {'timings': {}}
 ticks = iter([10, 13])
 restore = d.instrument(pipe, report, clock=lambda: next(ticks))
-assert pipe.text_encoder.encode('motion', [object()]) is encode_result
+assert pipe.text_encoder.encode('motion', [SimpleNamespace(size=(576, 1024))]) is encode_result
 assert pipe._encode_keyframes([object()], 1024, 576) is rows
 video = SimpleNamespace(shape=(1, 1000, 96))
 audio = SimpleNamespace(shape=(1, 414, 32))
@@ -76,6 +79,7 @@ assert report['timings']['decode_video_seconds'] == 3
 assert report['vae_conditioning_shape'] == [576, 96]
 assert report['packed_conditioning']['position_shape'] == [1500, 3]
 assert report['vision_conditioning']['token_tag_counts'] == {'0': 1, '1': 2}
+assert report['vision_processor'] == {'class': 'ExampleImageProcessorPil', 'input_sizes': [[576, 1024]]}
 print('ok')
 `)).toContain('ok');
   });
