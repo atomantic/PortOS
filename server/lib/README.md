@@ -447,6 +447,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerProbeDiagnostics.js` | Classify federated peer probe failures (`local_refused` / `tunnel_dial` / `probe_http` / timeout / auth / DNS) so Instances UI and logs can tell a dead local forward from a tunnel dial miss from a PortOS health-details failure; messages stay redacted (no full `tc…` capabilities). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
+| `perpetualSkipCauses.js` | `formatSkipCauses(skipCauses, maxCauses?, excludeCause?)` — renders a perpetual work-detector's per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string; the one definition shared by the park log line, the on-demand toast, and the work-item picker. Re-exported at `client/src/lib/perpetualSkipCauses.js`. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
 | `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |

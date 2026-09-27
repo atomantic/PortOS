@@ -4,6 +4,7 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { timeUntil } from '../utils/formatters';
 import { formatLiReason } from '../utils/layeredIntelligenceReasons';
+import { formatSkipCauses } from '../lib/perpetualSkipCauses';
 
 // Humanize a perpetual work-detector park reason for a user-facing toast. The
 // raw reason strings are the same ones surfaced in the CoS → Schedule tab; here
@@ -129,7 +130,14 @@ export function useOnDemandTaskToast() {
       } else if (c && typeof c.open === 'number' && c.open > 0) {
         const parts = [];
         if (c.inFlight) parts.push(`${c.inFlight} in-flight`);
-        if (c.filtered) parts.push(`${c.filtered} filtered`);
+        // Per-cause attribution ("49 needs-input, 17 blocked") — the answer to
+        // "why is nothing claimable when 88 issues are open". Replaces the bare
+        // "N filtered" when present, since the causes ARE the filtered detail.
+        // `in-flight` is excluded: the counts breakdown already shows it, and
+        // the detector includes it in the map as informational only.
+        const causes = formatSkipCauses(data?.skipCauses, 3, 'in-flight');
+        if (causes) parts.push(causes);
+        else if (c.filtered) parts.push(`${c.filtered} filtered`);
         const detail = parts.length ? ` — ${parts.join(', ')}` : '';
         countSuffix = ` (0 of ${c.open} open${detail})`;
       }

@@ -56,6 +56,14 @@ export const NON_ACTIONABLE_ISSUE_LABELS = new Set([
   IN_PROGRESS_LABEL, 'blocked', 'needs-input', 'future', 'wontfix', 'question', 'discussion'
 ]);
 
+// Structural skip causes that are NOT label names. A configured exclude label
+// colliding with one of these (`in-flight` especially — both UI consumers
+// suppress that cause because counts.inFlight already carries it) would be
+// indistinguishable from the structural skip, so the cause is prefixed on
+// collision. Label-shaped structural names need no entry: the structural label
+// check runs first and shadows a same-named configured label by design.
+const STRUCTURAL_NON_LABEL_CAUSES = new Set(['assigned', 'in-flight', 'decomposed-epic', 'malformed']);
+
 // Exported so the timeout path is directly testable with fake timers rather
 // than a real 15s wait.
 export const CLI_TIMEOUT_MS = 15000;
@@ -257,25 +265,50 @@ const assigneeLogin = (assignee) => normalizeLogin(
  * structural (in-progress/blocked/etc.), not user-configurable.
  */
 export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = null, currentLogin = null) {
-  if (!issue || typeof issue.number !== 'number') return false;
-  if (inFlight.has(issue.number)) return false;
+  return issueSkipCause(issue, inFlight, excludeLabels, currentLogin) === null;
+}
+
+/**
+ * Attribute WHY an issue is not claimable: the FIRST failing check from
+ * `isActionableIssue`'s predicate order, as a short cause string. The cause
+ * vocabulary is what the park breakdown (`skipCauses`) shows the user, so a
+ * queue that parks on "0 of 88 open" reads as "49 needs-input, 17 blocked, 13
+ * decomposed-epic" — the difference between "the task is broken" and "the work
+ * is waiting on you". Returns null for a claimable issue (the same contract
+ * `isActionableIssue` keys on), the structural label's own name for a
+ * label-skip (e.g. `needs-input`, `blocked`), the configured exclude label's
+ * name for a user-reserved skip, and `assigned` / `in-flight` /
+ * `decomposed-epic` / `malformed` for the structural checks. Not exported: the
+ * detector tests exercise it behaviorally through `skipCauses`, and the
+ * dead-exports guard keeps it honest about that.
+ */
+function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null, currentLogin = null) {
+  if (!issue || typeof issue.number !== 'number') return 'malformed';
+  if (inFlight.has(issue.number)) return 'in-flight';
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
   const normalizedCurrentLogin = normalizeLogin(currentLogin);
   const hasOtherAssignee = assignees.length > 0 && (
     !normalizedCurrentLogin || !assignees.some((assignee) => assigneeLogin(assignee) === normalizedCurrentLogin)
   );
-  if (hasOtherAssignee) return false;
+  if (hasOtherAssignee) return 'assigned';
   const labels = (Array.isArray(issue.labels) ? issue.labels : [])
     .map((l) => (typeof l === 'string' ? l : l?.name) || '')
     .map((s) => s.toLowerCase());
-  if (labels.some((l) => NON_ACTIONABLE_ISSUE_LABELS.has(l))) return false;
-  if (excludeLabels && labels.some((l) => excludeLabels.has(l))) return false;
+  const structural = labels.find((l) => NON_ACTIONABLE_ISSUE_LABELS.has(l));
+  if (structural) return structural;
+  if (excludeLabels) {
+    const excluded = labels.find((l) => excludeLabels.has(l));
+    // Prefix only on collision with a non-label structural cause so the two
+    // remain distinguishable in the park breakdown; every other configured
+    // label keeps its bare name.
+    if (excluded) return STRUCTURAL_NON_LABEL_CAUSES.has(excluded) ? `excluded-label:${excluded}` : excluded;
+  }
   // Marker first: the label scan is a 2–5 element array walk, while isEpicIssue
   // lowercases and regex-tests the title. Only a decomposed issue needs the
   // epic check, so this skips that work for essentially every issue in a
   // 500-issue fetch.
-  if (labels.includes(EPIC_DECOMPOSED_LABEL) && isEpicIssue(issue.title, labels)) return false;
-  return true;
+  if (labels.includes(EPIC_DECOMPOSED_LABEL) && isEpicIssue(issue.title, labels)) return 'decomposed-epic';
+  return null;
 }
 
 /**
@@ -746,12 +779,28 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     : null;
   const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight, excludeSet, currentLogin));
   const filteredCount = Math.max(0, total - actionable.length - inFlightCount);
+  // Per-cause attribution of every skip, so a park on a non-empty queue can say
+  // WHY each issue was filtered ("49 needs-input, 17 blocked, …") instead of a
+  // bare "78 filtered". `inFlightCount` already accounts for the in-flight
+  // skips separately, so `in-flight` here is informational only — the counts
+  // sum to `total` only when the queue holds no malformed records.
+  // Null-prototype: a configured exclude label named `constructor` (or any
+  // other Object.prototype key) must count as a cause, not inherit the
+  // inherited property and corrupt the counter.
+  const skipCauses = Object.create(null);
+  if (actionable.length === 0 && total > 0) {
+    for (const issue of issues) {
+      const cause = issueSkipCause(issue, inFlight, excludeSet, currentLogin);
+      if (cause != null) skipCauses[cause] = (skipCauses[cause] || 0) + 1;
+    }
+  }
   return {
     actionable: actionable.length > 0,
     count: actionable.length,
     total,
     inFlightCount,
     filteredCount,
+    skipCauses,
     reason: actionable.length > 0 ? 'actionable-issues' : 'no-actionable-issues',
     sample: actionable.slice(0, 5).map((i) => i.number),
     // The perpetual drain uses the complete candidate set to detect a

@@ -31,6 +31,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `eidoverseWorldReset.js` | Client reset-reconciliation maps for Eidoverse source kinds and district asset slots; parity-tested against the authoritative server world-design contracts. |
 | `postQuickSession.js` | Pure Quick POST duration presets, local-observation estimator, deterministic budget composer, and preview metadata. |
 | `postRotation.js` | Re-export of `server/lib/postRotation.js` — `orderByRecencyRotation` sorts POST practice candidates fresh-before-recently-practiced, then by priority, rotating equivalent ones by local day. |
+| `perpetualSkipCauses.js` | Re-export of `server/lib/perpetualSkipCauses.js` — `formatSkipCauses(skipCauses, maxCauses?, excludeCause?)` renders a perpetual work-detector's per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string; used by the on-demand "Run" toast and the work-item picker. |
 
 ---
 

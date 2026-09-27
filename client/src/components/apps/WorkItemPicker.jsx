@@ -2,6 +2,7 @@ import { useState, useCallback, useId, useRef } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { ISSUE_AUTHOR_FILTER_OPTIONS } from '../cos/constants';
 import { WORK_TRACKER_LABELS, workItemNoun } from './constants';
+import { formatSkipCauses } from '../../lib/perpetualSkipCauses';
 import * as api from '../../services/api';
 
 // Trackers with an author gate — PLAN.md items and JIRA sprint tickets have none.
@@ -17,7 +18,7 @@ const EMPTY_REASONS = {
   'no-actionable-plan-items': 'Every PLAN.md item is checked, blocked, or already claimed.',
   'no-open-issues': 'The tracker has no open issues.',
   'no-authored-issues': 'Open issues exist, but none match the author filter — widen it to see them.',
-  'no-actionable-issues': 'Every open issue is assigned, blocked, in flight, or an already-decomposed epic.',
+  'no-actionable-issues': 'Every open issue is assigned, blocked, in flight, needs input, or an already-decomposed epic.',
   'owner-is-org': 'The repo owner is an organization, which never authors issues — switch the filter to "Any author".',
   'owner-is-group': 'The project namespace is a group, which never authors issues — switch the filter to "Any author".',
   'jira-not-configured': 'JIRA is not configured for this app.',
@@ -38,6 +39,11 @@ function emptyMessage(work) {
       ? `Couldn't complete the check — ${work.remedy}.`
       : `Couldn't reach the tracker (${work.reason}) — retry, or let the agent decide.`;
   }
+  // The detector's per-cause attribution answers "why is nothing claimable"
+  // with the real counts ("49 needs-input, 17 blocked") rather than a static
+  // sentence that must re-enumerate the cause vocabulary by hand.
+  const causes = formatSkipCauses(work.skipCauses, 3, 'in-flight');
+  if (causes) return `${EMPTY_REASONS[work.reason] || `Nothing to pick (${work.reason || 'unknown'}).`} (${causes})`;
   return EMPTY_REASONS[work.reason] || `Nothing to pick (${work.reason || 'unknown'}).`;
 }
 

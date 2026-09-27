@@ -36,6 +36,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
+import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
@@ -2360,7 +2361,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
     actionableCount: parkInfo?.parkActionableCount ?? null,
-    counts: parkInfo?.parkCounts || null
+    counts: parkInfo?.parkCounts || null,
+    skipCauses: parkInfo?.parkSkipCauses || null
   });
 }
 
@@ -2588,9 +2590,15 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const counts = detection.total != null
     ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
     : null;
+  // Per-cause skip attribution for the same question at one level deeper: not
+  // just "78 filtered" but "49 needs-input, 17 blocked, …". Only the claim
+  // detectors report it; every other park shape keeps the field absent.
+  // parkPerpetual's own log line renders the summary (it is the single choke
+  // point every park flows through), so this one stays bare.
+  const skipCauses = detection.skipCauses ?? null;
   // Terminal park — parkPerpetual zeroes the dispatch budget in the same write, so
   // the next drain window starts fresh instead of capping early on this one's spend.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, signature: null });
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, skipCauses, signature: null });
   emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
   return { skip: true };
 }
