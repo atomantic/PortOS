@@ -31,9 +31,17 @@ export const musicVideoConceptSchema = z.object({
 // the authoritative installed-model validation when a local render starts.
 export const musicVideoVideoSettingsSchema = z.object({
   // null clears the per-project pin so this install's configured default wins.
-  backend: z.enum(['local', 'grok']).nullable().optional(),
+  // 'fal' is the metered fal.ai queue REST backend (server/services/videoGen/fal.js,
+  // #8968) — image-to-video only here; the audio-reactive lane stays local-only
+  // (see generationMode below).
+  backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union([z.literal(6), z.literal(10)]).optional(),
+  // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
+  // same reason routes/videoGen.js's falDuration is: fal's own model catalog,
+  // not PortOS, owns the set of valid durations per model. null/omitted lets
+  // the backend's model default apply.
+  falDuration: z.number().min(1).max(60).nullable().optional(),
   generationMode: z.enum(['image', 'audioReactive']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),

@@ -159,6 +159,20 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
   });
 
+  it('PATCH /:id accepts the fal.ai video backend with a bounded clip duration (#8968)', async () => {
+    const videoSettings = { backend: 'fal', falDuration: 6 };
+    const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });
+    expect(r.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
+  });
+
+  it('PATCH /:id rejects an out-of-range fal.ai clip duration', async () => {
+    const r = await request(app).patch('/api/music-video/mv-1')
+      .send({ videoSettings: { backend: 'fal', falDuration: 90 } });
+    expect(r.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+  });
+
   it('PATCH /:id accepts null to clear the project video-backend pin', async () => {
     const videoSettings = { backend: null };
     const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });

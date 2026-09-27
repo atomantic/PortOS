@@ -26,6 +26,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const [modelsLoading, setModelsLoading] = useState(true);
   const [loras, setLoras] = useState([]);
   const [defaultModel, setDefaultModel] = useState('');
+  const [falEnabled, setFalEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [framePinSaving, setFramePinSaving] = useState(false);
 
@@ -37,6 +38,11 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
         // whose runtime supports both text and image conditioning.
         setModels((status?.models || []).filter((model) => model.mode !== 't2v' && !model.deprecated));
         setDefaultModel(status?.defaultModel || '');
+        // fal.ai's queue REST backend (#8968) — usability-gated on a
+        // configured API key, computed server-side by the same
+        // isVideoModeUsable() check a render itself is gated on (mirrors the
+        // general Video Gen page's `falEnabled`).
+        setFalEnabled(status?.falEnabled === true);
         setModelsLoading(false);
       })
       .catch(() => {
@@ -58,6 +64,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // distinct from pinning the model that happens to be default today.
     modelId: project?.videoSettings?.modelId || '',
     grokDuration: project?.videoSettings?.grokDuration || 10,
+    // null/absent means "use fal's model default duration" — distinct from an
+    // explicit pin, same null-means-unset contract as modelId above.
+    falDuration: project?.videoSettings?.falDuration ?? null,
     generationMode: project?.videoSettings?.generationMode || 'image',
     audioReactiveLora: project?.videoSettings?.audioReactiveLora || '',
     audioReactiveScale: project?.videoSettings?.audioReactiveScale ?? 1.2,
@@ -79,10 +88,15 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
 
   // One reason string for every scene-video kickoff gate, so the disabled
   // buttons, their tooltips, and the toast a blocked call raises all say the
-  // same resolvable thing. `null` means nothing is blocking.
+  // same resolvable thing. `null` means nothing is blocking. The fal.ai check
+  // mirrors the general Video Gen page: an unconfigured backend is a clear
+  // preflight reason rather than a request that reaches the server only to
+  // fail with FAL_NOT_CONFIGURED (#8968) — no silent fallback to local/Grok.
   const videoBlockedReason = audioReactiveSelected && !audioReactiveReady
     ? 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model'
-    : null;
+    : settings.backend === 'fal' && !falEnabled
+      ? 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'
+      : null;
 
   const change = (patch) => {
     if (!project || saving) return;
@@ -136,6 +150,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     models,
     modelsLoading,
     defaultModel,
+    falEnabled,
     saving,
     framePinSaving,
     settings,
