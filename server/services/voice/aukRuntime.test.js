@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { pinPlatform, pinArch } from '../../lib/testHelper.js';
 const children = [];
 const access = vi.fn();
 vi.mock('node:fs/promises', () => ({ access: (...args) => access(...args), mkdir: vi.fn(),
@@ -15,17 +16,17 @@ vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => va
 vi.mock('../../lib/spawnCwd.js', () => ({ withSpawnCwdEnv: (env, cwd) => ({ ...env, PWD: cwd }) }));
 vi.mock('../../lib/paths.js', () => ({ PATHS: { root: '/example' } }));
 const { synthesizeAuk, getAukStatus, unloadAuk } = await import('./aukRuntime.js');
-const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-const arch = Object.getOwnPropertyDescriptor(process, 'arch');
+let restorePlatform;
+let restoreArch;
 beforeEach(() => {
-  Object.defineProperty(process, 'platform', { value: 'darwin' });
-  Object.defineProperty(process, 'arch', { value: 'arm64' });
+  restorePlatform = pinPlatform('darwin');
+  restoreArch = pinArch('arm64');
   access.mockReset().mockResolvedValue(); children.length = 0;
 });
 afterEach(() => {
   unloadAuk();
-  Object.defineProperty(process, 'platform', platform);
-  Object.defineProperty(process, 'arch', arch);
+  restorePlatform();
+  restoreArch();
   vi.useRealTimers();
 });
 const response = child => child.stdout.write(`${JSON.stringify({ ok: true, latencyMs: 1500, firstAudioMs: 1500 })}\n`);
