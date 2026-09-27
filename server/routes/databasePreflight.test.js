@@ -1,0 +1,188 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { request } from '../lib/testHelper.js';
+
+vi.mock('../lib/paths.js', async importOriginal => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), {
+    dataRoot: () => lazyTempDataRoot('portos-database-preflight-'),
+    extraOverrides: root => ({ installRoot: root }),
+  });
+});
+vi.mock('../lib/db.js', () => ({
+  POOL_CONFIG: { host: 'localhost', port: 5432, user: 'example_role', database: 'example_test', password: 'example-only' },
+  checkHealth: vi.fn(), query: vi.fn(),
+}));
+vi.mock('../services/activeProcessing.js', () => ({ getSystemActivity: vi.fn() }));
+vi.mock('../services/updatePreflight.js', () => ({
+  countActiveCosAgents: vi.fn(), getPersistentMindImageWorkGuard: vi.fn(),
+}));
+vi.mock('../lib/childProcess.js', async importOriginal => ({
+  ...await importOriginal(), execFile: vi.fn(), spawn: vi.fn(),
+}));
+
+import databaseRoutes from './database.js';
+import { PATHS } from '../lib/paths.js';
+import { POOL_CONFIG, query } from '../lib/db.js';
+import { execFile, spawn } from '../lib/childProcess.js';
+import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
+import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
+import { getSystemActivity } from '../services/activeProcessing.js';
+import { countActiveCosAgents, getPersistentMindImageWorkGuard } from '../services/updatePreflight.js';
+
+const idle = () => ({
+  jobs: [], extras: { imageTo3d: [] }, agents: { trusted: true, active: 0, queued: 0 },
+  mind: { trusted: true, thinking: false, queued: 0 }, llm: { trusted: true, active: 0 },
+  appOperations: [], update: { inProgress: false }, backup: { inProgress: false },
+});
+const saveMode = mode => writeFileSync(join(PATHS.installRoot, '.env'), `PGMODE=${mode}\n`);
+const app = express();
+app.use(express.json());
+app.use('/api/database', databaseRoutes);
+app.use((err, _req, res, _next) => res.status(err.status ?? 500).json({ error: err.message, code: err.code }));
+const preflight = (body = { source: 'native', target: 'docker' }) => request(app).post('/api/database/maintenance/preflight').send(body);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const [key, value] of Object.entries({ PGHOST: 'localhost', PGPORT: '5432', PORTOS_NATIVE_PGPORT: '5432', PGPORT_DOCKER: '5561', PGUSER: 'example_role', PGDATABASE: 'example_test', PGPASSWORD: 'example-only' })) vi.stubEnv(key, value);
+  Object.assign(POOL_CONFIG, { host: 'localhost', port: 5432, user: 'example_role', database: 'example_test' });
+  copyFileSync(new URL('../../ecosystem.config.cjs', import.meta.url), join(PATHS.installRoot, 'ecosystem.config.cjs'));
+  saveMode('native');
+  getSystemActivity.mockResolvedValue(idle());
+  countActiveCosAgents.mockResolvedValue(0);
+  getPersistentMindImageWorkGuard.mockResolvedValue({ trusted: true, safe: true });
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  rmSync(join(PATHS.data, 'database-maintenance'), { recursive: true, force: true });
+  expect(execFile).not.toHaveBeenCalled();
+  expect(spawn).not.toHaveBeenCalled();
+  expect(query).not.toHaveBeenCalled();
+});
+afterAll(cleanupTempDataRoots);
+
+describe('database maintenance preflight HTTP contract', () => {
+  it.each(['native', 'docker'])('returns only non-accepted advice for a trusted idle %s source', async source => {
+    saveMode(source);
+    POOL_CONFIG.port = source === 'native' ? 5432 : 5561;
+    const target = source === 'native' ? 'docker' : 'native';
+    const result = await preflight({ source, target });
+    expect(result.status).toBe(200);
+    expect(result.headers['cache-control']).toBe('no-store');
+    expect(result.body).toEqual({ source, target, advisory: true, accepted: false });
+    expect(createDatabaseMaintenanceJournal(PATHS.data).read()).toBeNull();
+    expect(readFileSync(join(PATHS.installRoot, '.env'), 'utf8')).toBe(`PGMODE=${source}\n`);
+  });
+
+  it.each([
+    {}, { source: 'native', target: 'native' }, { source: 'native', target: 'other' },
+    { source: 'native', target: 'docker', force: true },
+  ])('rejects invalid or bypass-shaped requests before work inspection: %j', async body => {
+    expect((await preflight(body)).status).toBe(400);
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
+  it.each(['host', 'port', 'user', 'database'])('refuses when saved source differs from the actual pool %s', async key => {
+    POOL_CONFIG[key] = key === 'port' ? 6000 : 'example-mismatch';
+    const result = await preflight();
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    expect(result.body.error).not.toContain('example-mismatch');
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
+  it('refuses reversed requests and aliased backends', async () => {
+    expect((await preflight({ source: 'docker', target: 'native' })).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    vi.stubEnv('PGPORT_DOCKER', '5432');
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['queued media', s => { s.jobs = [{ status: 'queued', prompt: 'example private prompt' }]; }],
+    ['active agent', s => { s.agents.active = 1; }],
+    ['queued mind', s => { s.mind.queued = 1; }],
+    ['LLM run', s => { s.llm.active = 1; }],
+    ['backup', s => { s.backup.inProgress = true; }],
+    ['update', s => { s.update.inProgress = true; }],
+    ['app operation', s => { s.appOperations = [{ name: 'example-private-app' }]; }],
+    ['image build', s => { s.extras.imageTo3d = [{ name: 'example-private-model' }]; }],
+  ])('refuses %s without exposing activity records', async (_label, mutate) => {
+    const snapshot = idle(); mutate(snapshot); getSystemActivity.mockResolvedValue(snapshot);
+    const result = await preflight();
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+    expect(JSON.stringify(result.body)).not.toContain('example');
+  });
+
+  it.each([
+    ['missing slice', s => { delete s.jobs; }],
+    ['unreadable builds', s => { s.extras.imageTo3d = null; }],
+    ['untrusted agents', s => { s.agents.trusted = false; }],
+    ['untrusted mind', s => { s.mind.trusted = false; }],
+    ['untrusted LLM', s => { s.llm.trusted = false; }],
+    ['malformed count', s => { s.agents.active = -1; }],
+  ])('refuses %s instead of manufacturing an idle snapshot', async (_label, mutate) => {
+    const snapshot = idle(); mutate(snapshot); getSystemActivity.mockResolvedValue(snapshot);
+    const result = await preflight();
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+  });
+
+  it('includes the spawn window and independent Persistent Mind guard', async () => {
+    countActiveCosAgents.mockResolvedValue(1);
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_BUSY');
+    countActiveCosAgents.mockResolvedValue(0);
+    getPersistentMindImageWorkGuard.mockResolvedValue({ trusted: true, safe: false });
+    const mindBusy = await preflight();
+    expect(mindBusy.body.code, JSON.stringify(mindBusy)).toBe('DATABASE_PREFLIGHT_BUSY');
+    getPersistentMindImageWorkGuard.mockResolvedValue({ trusted: false, safe: false });
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+  });
+
+  it('sanitizes failed inspections and unreadable saved configuration', async () => {
+    getSystemActivity.mockRejectedValue(new Error('example private connection detail'));
+    const result = await preflight();
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    expect(JSON.stringify(result.body)).not.toContain('example');
+    rmSync(join(PATHS.installRoot, '.env'));
+    mkdirSync(join(PATHS.installRoot, '.env'));
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    rmSync(join(PATHS.installRoot, '.env'), { recursive: true });
+  });
+
+  it('refuses missing saved configuration rather than assuming the default direction', async () => {
+    rmSync(join(PATHS.installRoot, '.env'));
+    POOL_CONFIG.port = 5561;
+    const result = await preflight({ source: 'docker', target: 'native' });
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
+  it('re-reads saved settings after asynchronous work inspection', async () => {
+    getSystemActivity.mockImplementation(async () => { saveMode('docker'); return idle(); });
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    // Same active source, but the target identity changed during the observation.
+    saveMode('native');
+    getSystemActivity.mockImplementation(async () => { vi.stubEnv('PGPORT_DOCKER', '6000'); return idle(); });
+    expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+  });
+
+  it('rechecks the persistent fence before returning advice', async () => {
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    getSystemActivity.mockImplementation(async () => {
+      const source = { mode: 'native', host: 'localhost', port: 5432, user: 'example_role', database: 'example_test' };
+      journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+      return idle();
+    });
+    const result = await preflight();
+    expect(result.status).toBe(503);
+    expect(result.body.code).toBe('DATABASE_MAINTENANCE');
+    getSystemActivity.mockClear();
+    expect((await preflight()).status).toBe(503);
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+});

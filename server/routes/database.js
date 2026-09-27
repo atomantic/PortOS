@@ -4,7 +4,8 @@ import {
   validateRequest,
   databaseSwitchSchema,
   databaseBackendSchema,
-  databaseExportSchema
+  databaseExportSchema,
+  databaseMaintenancePreflightSchema
 } from '../lib/validation.js';
 import * as dbAdmin from '../services/dbAdmin.js';
 
@@ -15,6 +16,13 @@ const router = Router();
 router.get('/maintenance/status', asyncHandler(async (_req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(dbAdmin.getMaintenanceStatus());
+}));
+
+// Advisory validation only: acceptance must repeat this under the admission fence.
+router.post('/maintenance/preflight', asyncHandler(async (req, res) => {
+  const direction = validateRequest(databaseMaintenancePreflightSchema, req.body);
+  res.set('Cache-Control', 'no-store');
+  res.json(await dbAdmin.preflightDatabaseMaintenance(direction));
 }));
 
 // GET /api/database/status — current mode, connectivity, row counts, resource stats
