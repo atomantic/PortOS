@@ -46,8 +46,10 @@ mode enabled, never a repository ID that might trigger an implicit download.
 The returned model revision includes the immutable commit hash. No model
 download runs automatically. Audio is buffered, not streamed.
 
-A real-model intelligibility smoke run is still pending in #8857; fixture tests
-prove the adapter contract, not speech quality. On a supported host with the
+Apple Silicon real-model generation and an independent transcript check passed
+on 2026-09-27 (evidence below); listening confirmation of naturalness and speaker
+continuity remains pending in #8857. Fixture tests prove the adapter contract,
+not speech quality. On a supported host with the
 isolated environment and verified weights, run the following manually from
 the repository root (substitute the isolated Python executable and model root):
 
@@ -67,6 +69,46 @@ Listen to both files and record intelligibility and voice continuity with the
 reported revisions before treating this as a validated speech runtime. The
 reference is generated, so no personal recording or consent is needed for this
 smoke. A successful command or non-silent WAV alone does not establish quality.
+
+**Apple Silicon smoke evidence — 2026-09-27 (#8857).** The two commands above
+ran successfully on macOS arm64 through the production runner at `4a8dafc3a`,
+with seed 42 and rate 1.0. No runtime code changes were needed. The reference
+was the generated design WAV, not a personal recording. Model acquisition used
+the runner's explicit `--download` operation for each model; all required files
+passed upstream size/digest verification before inference loaded local snapshots
+with Hub/Transformers offline mode enabled.
+
+| Model | Verified revision |
+|-------|-------------------|
+| `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | `5ecdb67327fd37bb2e042aab12ff7391903235d3` |
+| `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | `fd4b254389122332181a7c3db7f27e918eec64e3` |
+
+The isolated environment used Python 3.11.11, MLX 0.32.2, MLX Audio 0.4.8
+at the pinned commit above, Transformers 5.17.0, NumPy 2.4.6, SoundFile 0.14.0,
+and huggingface-hub 1.33.0. PyTorch was absent; the probe reported `device: mlx`,
+both 1.7B snapshots downloaded, and `training_adapter: null`.
+
+| Output | Format | Duration | RMS | Peak | Independent local transcript |
+|--------|--------|----------|-----|------|------------------------------|
+| `design.wav` | Mono PCM16, 24 kHz | 1.76 s | 0.115736 | 0.622681 | The example Garden Gate is open. |
+| `clone.wav` | Mono PCM16, 24 kHz | 1.84 s | 0.098126 | 0.410736 | Please close the gate after you enter. |
+
+Both decoded WAVs were finite and non-silent. Local MLX Whisper 0.4.3
+(`mlx-community/whisper-small.en-mlx` revision
+`52a88bf6e98b114a210c21bb83e22d6e1505cb73`, English, no supplied transcript prompt)
+recovered every requested word, ignoring case and punctuation. This supports
+intelligibility for these two short samples; it does not establish naturalness,
+speaker identity, general quality, or browser playback latency. WAV SHA-256:
+
+```text
+design.wav c05344914d4c81b7099c427483f44d620edfe743f7b17af1f08cdb93044ace29
+clone.wav  7ff72e5745adb753b36f318f567cddceaf13e42c37f5e7d21e6a9969492dee0e
+```
+
+A real `--mode fine-tune` invocation on this host exited 1 with
+`QWEN3_RUNTIME_UNAVAILABLE` (requires CUDA with bf16), creating no checkpoint
+directory. Listening review of both WAVs and a real CUDA training/checkpoint
+audition remain open in #8857; these MLX results do not close that issue.
 
 Interactive profile qualification plays a fresh buffered WAV in the browser.
 The first click renders and transfers the probe. A second explicit playback
