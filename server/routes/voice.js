@@ -254,7 +254,8 @@ const interactiveBenchmarkSchema = z.object({
 
 const interactivePlaybackReceiptSchema = z.object({
   benchmarkId: z.string().uuid(),
-  playbackLatencyMs: z.number().min(0).max(120000),
+  renderRequestLatencyMs: z.number().min(0).max(3600000),
+  playbackStartupMs: z.number().min(0).max(30000),
 }).strict();
 
 const fineTuneStartSchema = z.object({

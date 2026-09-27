@@ -210,13 +210,13 @@ describe('Voice Routes', () => {
 
     it('validates a playback receipt before completing interactive qualification', async () => {
       profileBenchmarks.completeProfileInteractiveBenchmark.mockResolvedValue({ id: 'voice-profile-1' });
-      const receipt = { benchmarkId: '12345678-1234-4234-8234-123456789012', playbackLatencyMs: 200 };
+      const receipt = { benchmarkId: '12345678-1234-4234-8234-123456789012', renderRequestLatencyMs: 150, playbackStartupMs: 50 };
       const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive/complete').send(receipt);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
       expect(profileBenchmarks.completeProfileInteractiveBenchmark).toHaveBeenCalledWith('voice-profile-1', receipt);
       const invalid = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive/complete')
-        .send({ ...receipt, playbackLatencyMs: -1 });
+        .send({ ...receipt, playbackStartupMs: -1 });
       expect(invalid.status).toBe(400);
     });
 

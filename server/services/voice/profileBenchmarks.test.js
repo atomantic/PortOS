@@ -68,17 +68,17 @@ describe('interactive qualification', () => {
     expect(saveProfileBenchmark).not.toHaveBeenCalled();
     expect(probe).toMatchObject({ profileRevision: 2, audioBase64: expect.any(String) });
     await completeProfileInteractiveBenchmark(PROFILE.id, {
-      benchmarkId: probe.benchmarkId, playbackLatencyMs: 1200,
+      benchmarkId: probe.benchmarkId, renderRequestLatencyMs: 1100, playbackStartupMs: 100,
     });
     expect(saveProfileBenchmark).toHaveBeenLastCalledWith(PROFILE, expect.objectContaining({
       interactiveLatencyMs: 1200, similarityScore: null, profileRevision: 2,
-      interactiveMeasurement: { boundary: 'browser-playing', synthesisLatencyMs: 0, modelRevision: 'example-model@revision' },
+      interactiveMeasurement: { boundary: 'browser-playing-segmented', synthesisLatencyMs: 0, renderRequestLatencyMs: 1100, playbackStartupMs: 100, modelRevision: 'example-model@revision' },
     }), { interactive: { enabled: false, maxFirstAudioMs: 900 } });
     await expect(completeProfileInteractiveBenchmark(PROFILE.id, {
-      benchmarkId: probe.benchmarkId, playbackLatencyMs: 10,
+      benchmarkId: probe.benchmarkId, renderRequestLatencyMs: 10, playbackStartupMs: 0,
     })).rejects.toMatchObject({ code: 'VOICE_BENCHMARK_RECEIPT_INVALID' });
     const timely = await benchmarkProfileInteractive(PROFILE.id);
-    await completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: timely.benchmarkId, playbackLatencyMs: 50 });
+    await completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: timely.benchmarkId, renderRequestLatencyMs: 50, playbackStartupMs: 0 });
     expect(saveProfileBenchmark).toHaveBeenLastCalledWith(PROFILE, expect.objectContaining({ interactiveLatencyMs: 50 }), {
       interactive: { enabled: true, maxFirstAudioMs: 900 },
     });
@@ -93,17 +93,17 @@ describe('interactive qualification', () => {
     synthesize.mockResolvedValue({ wav: pcmToWavBuffer(new Float32Array(240), { sampleRate: 24000 }) });
     const clock = vi.spyOn(performance, 'now').mockReturnValue(100);
     const first = await benchmarkProfileInteractive(PROFILE.id);
-    await expect(completeProfileInteractiveBenchmark('another-profile', { benchmarkId: first.benchmarkId, playbackLatencyMs: 50 }))
+    await expect(completeProfileInteractiveBenchmark('another-profile', { benchmarkId: first.benchmarkId, renderRequestLatencyMs: 50, playbackStartupMs: 0 }))
       .rejects.toMatchObject({ code: 'VOICE_BENCHMARK_RECEIPT_INVALID' });
     const second = await benchmarkProfileInteractive(PROFILE.id);
-    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: first.benchmarkId, playbackLatencyMs: 50 }))
+    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: first.benchmarkId, renderRequestLatencyMs: 50, playbackStartupMs: 0 }))
       .rejects.toMatchObject({ code: 'VOICE_BENCHMARK_RECEIPT_INVALID' });
     clock.mockReturnValue(120101);
-    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: second.benchmarkId, playbackLatencyMs: 50 }))
+    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: second.benchmarkId, renderRequestLatencyMs: 50, playbackStartupMs: 0 }))
       .rejects.toMatchObject({ code: 'VOICE_BENCHMARK_RECEIPT_INVALID' });
     clock.mockReturnValueOnce(100).mockReturnValueOnce(200).mockReturnValue(200);
     const third = await benchmarkProfileInteractive(PROFILE.id);
-    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: third.benchmarkId, playbackLatencyMs: 50 }))
+    await expect(completeProfileInteractiveBenchmark(PROFILE.id, { benchmarkId: third.benchmarkId, renderRequestLatencyMs: 50, playbackStartupMs: 0 }))
       .rejects.toMatchObject({ code: 'VOICE_BENCHMARK_TIMING_INVALID' });
     expect(saveProfileBenchmark).not.toHaveBeenCalled();
     clock.mockRestore();

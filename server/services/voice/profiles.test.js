@@ -261,7 +261,7 @@ describe('voice profile contract', () => {
     const benchmark = {
       renderedAt: '2026-09-01T00:00:00.000Z', profileRevision: PROFILE.version,
       interactiveLatencyMs: 120, similarityScore: null,
-      interactiveMeasurement: { boundary: 'browser-playing', synthesisLatencyMs: 90, modelRevision: PROFILE.modelRevision },
+      interactiveMeasurement: { boundary: 'browser-playing-segmented', synthesisLatencyMs: 90, renderRequestLatencyMs: 100, playbackStartupMs: 20, modelRevision: PROFILE.modelRevision },
     };
     const interactive = { enabled: true, maxFirstAudioMs: 900 };
     queryMock.mockResolvedValueOnce({ rows: [{ data: { ...PROFILE, benchmark, routes: { ...PROFILE.routes, interactive } } }] });

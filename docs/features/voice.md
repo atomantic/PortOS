@@ -62,9 +62,12 @@ reference is generated, so no personal recording or consent is needed for this
 smoke. A successful command or non-silent WAV alone does not establish quality.
 
 Interactive profile qualification plays a fresh buffered WAV in the browser.
-Timing starts before the render request and stops at the browser's `playing`
-event, so it includes rendering, response transfer, decoding and playback startup.
-It is a request-to-playback benchmark, not first-chunk streaming latency. Rendering
+The first click renders and transfers the probe. A second explicit playback
+click preserves browser autoplay permission. The latency gate sums measured
+render-request time and click-to-`playing` startup time, including response
+transfer and decoding, while excluding the operator's wait between clicks.
+It is a render-plus-playback-start benchmark, not continuous request-to-playback
+or first-chunk streaming latency. Rendering
 alone never enables the route. A one-use receipt expires after two minutes, binds
 the measurement to the rendered profile revision, and saves its boundary, model
 revision and route decision together. Restarting the server or changing the

@@ -99,7 +99,7 @@ export async function benchmarkProfileInteractive(profileId, { maxFirstAudioMs =
 }
 
 /** Save only a receipt for the probe actually played by the browser. */
-export async function completeProfileInteractiveBenchmark(profileId, { benchmarkId, playbackLatencyMs }) {
+export async function completeProfileInteractiveBenchmark(profileId, { benchmarkId, renderRequestLatencyMs, playbackStartupMs }) {
   const pending = playbackBenchmarks.get(benchmarkId);
   if (!pending || pending.profile.id !== profileId || pending.expiresAt <= performance.now()) {
     throw new ServerError('Playback benchmark expired or does not match this profile; run it again', {
@@ -107,19 +107,21 @@ export async function completeProfileInteractiveBenchmark(profileId, { benchmark
     });
   }
   playbackBenchmarks.delete(benchmarkId);
-  if (!Number.isFinite(playbackLatencyMs) || playbackLatencyMs < pending.synthesisLatencyMs || playbackLatencyMs > PLAYBACK_TTL_MS) {
+  if (!Number.isFinite(renderRequestLatencyMs) || renderRequestLatencyMs < pending.synthesisLatencyMs ||
+      !Number.isFinite(playbackStartupMs) || playbackStartupMs < 0 || playbackStartupMs > 30000) {
     throw new ServerError('Playback timing does not include the rendered probe; run it again', {
       status: 400, code: 'VOICE_BENCHMARK_TIMING_INVALID',
     });
   }
-  const latencyMs = Math.ceil(playbackLatencyMs);
+  const latencyMs = Math.ceil(renderRequestLatencyMs + playbackStartupMs);
   return saveProfileBenchmark(pending.profile, {
     profileRevision: pending.profile.version,
     renderedAt: new Date().toISOString(),
     interactiveLatencyMs: latencyMs,
     similarityScore: null,
     interactiveMeasurement: {
-      boundary: 'browser-playing', synthesisLatencyMs: pending.synthesisLatencyMs,
+      boundary: 'browser-playing-segmented', synthesisLatencyMs: pending.synthesisLatencyMs,
+      renderRequestLatencyMs: Math.ceil(renderRequestLatencyMs), playbackStartupMs: Math.ceil(playbackStartupMs),
       modelRevision: pending.modelRevision,
     },
   }, { interactive: { enabled: latencyMs <= pending.maxFirstAudioMs, maxFirstAudioMs: pending.maxFirstAudioMs } });

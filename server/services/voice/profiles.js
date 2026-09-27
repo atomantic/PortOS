@@ -103,9 +103,12 @@ const sanitizeBenchmark = (raw) => {
     lines,
     mastering: sanitizeMastering(raw.mastering),
     interactiveLatencyMs: Number.isFinite(raw.interactiveLatencyMs) ? Math.round(raw.interactiveLatencyMs) : null,
-    interactiveMeasurement: raw.interactiveMeasurement?.boundary === 'browser-playing' &&
-      Number.isFinite(raw.interactiveMeasurement.synthesisLatencyMs) ? {
-        boundary: 'browser-playing',
+    interactiveMeasurement: raw.interactiveMeasurement?.boundary === 'browser-playing-segmented' &&
+      ['synthesisLatencyMs', 'renderRequestLatencyMs', 'playbackStartupMs']
+        .every((key) => Number.isFinite(raw.interactiveMeasurement[key]) && raw.interactiveMeasurement[key] >= 0) ? {
+        boundary: 'browser-playing-segmented',
+        renderRequestLatencyMs: Math.round(raw.interactiveMeasurement.renderRequestLatencyMs),
+        playbackStartupMs: Math.round(raw.interactiveMeasurement.playbackStartupMs),
         synthesisLatencyMs: Math.max(0, Math.round(raw.interactiveMeasurement.synthesisLatencyMs)),
         modelRevision: trimTo(raw.interactiveMeasurement.modelRevision, MAX_REVISION) || null,
       } : null,
