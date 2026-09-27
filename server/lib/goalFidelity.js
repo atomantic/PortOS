@@ -303,3 +303,44 @@ export function mergeOutcomeReview({ number, prState }) {
     source: GOAL_FIDELITY_SOURCE_FORGE,
   };
 }
+
+/**
+ * Production witnesses for a removal that may be incomplete. This is evidence,
+ * never a verdict: compatibility paths, moves and comments can legitimately
+ * retain a name. Match objective tokens exactly, and keep file/hunk provenance
+ * so a deletion in one location cannot hide a surviving use in another.
+ * Only unified-diff hunk lines count; tests remain in the primary review.
+ */
+export function retainedProductionUses(objective, diff) {
+  const tokens = text => text.match(/[A-Za-z_$][\w$]*(?:[.-][\w$]+)*/g) || [];
+  const names = new Set(tokens(objective));
+  const removed = new Set();
+  const survivors = [];
+  let file = null;
+  let hunk = null;
+  let testFile = false;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      file = line;
+      hunk = null;
+      testFile = false;
+    } else if (!hunk && line.startsWith('+++ ')) {
+      file = line.slice(4).replace(/^b\//, '');
+      testFile = /(?:\.(?:test|spec)\.[^/]+$|(?:^|\/)(?:tests?|__tests__)\/)/.test(file);
+    } else if (/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line)) {
+      hunk = line;
+    } else if (file && hunk && !testFile && /^[ +-]/.test(line)) {
+      const content = line.slice(1);
+      const matches = [...new Set(tokens(content))].filter(name => names.has(name));
+      if (line.startsWith('-')) {
+        for (const name of matches) removed.add(name);
+      } else if (matches.length) {
+        survivors.push({ file, hunk, line: content, identifiers: matches });
+      }
+    }
+  }
+  return survivors.flatMap(row => {
+    const identifiers = row.identifiers.filter(name => removed.has(name));
+    return identifiers.length ? [{ ...row, identifiers }] : [];
+  });
+}

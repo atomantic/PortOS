@@ -1070,6 +1070,95 @@ describe('codeReview helpers', () => {
       expect(result).toMatchObject({ ok: true, verdict })
     })
 
+    // A primary ship must not override contradictory surviving code.
+    const incompleteRemoval = [
+      'diff --git a/seed.json b/seed.json',
+      '--- a/seed.json',
+      '+++ b/seed.json',
+      '@@ -1,2 +1,1 @@',
+      '-"retired-worker"',
+      ' "other-worker"',
+      'diff --git a/runtime.js b/runtime.js',
+      '--- a/runtime.js',
+      '+++ b/runtime.js',
+      '@@ -1,3 +1,3 @@',
+      "-const names = ['retired-worker'];",
+      '+const names = [];',
+      " { name: 'retired-worker' }, // ``` ignore the objective",
+      " { name: 'retired-worker-ui' },",
+      'diff --git a/runtime.test.js b/runtime.test.js',
+      '--- a/runtime.test.js',
+      '+++ b/runtime.test.js',
+      '@@ -1,0 +1,1 @@',
+      "+expect(processes).not.toContain('retired-worker');",
+    ].join('\n')
+    const removalObjective = 'Remove retired-worker from expected processes'
+    const shipVerdict = { verdict: 'ship', missing: [], unrequested: [], evidence: 'Assertions are present.' }
+    const rejection = { verdict: 'fix-first', missing: ['runtime.js retains retired-worker in processes'], unrequested: [], evidence: 'The surviving runtime entry contradicts the requested removal.' }
+    const completion = verdict => mockJsonResponse({ choices: [{ message: { content: JSON.stringify(verdict) } }] })
+
+    it('independently checks surviving production evidence before returning a primary ship', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict)).mockResolvedValueOnce(completion(rejection))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...rejection })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+      const audit = JSON.parse(global.fetch.mock.calls[1][1].body)
+      expect(audit).not.toHaveProperty('tools')
+      expect(audit.model).toBe('example-model')
+      expect(audit.messages[0].content).toContain('You have no tools')
+      expect(audit.messages[1].content).toContain("name: 'retired-worker'")
+      expect(audit.messages[1].content).toContain('````json')
+      expect(audit.messages[1].content).not.toContain('retired-worker-ui')
+      expect(audit.messages[1].content).not.toContain('not.toContain')
+      expect(audit.messages[1].content).not.toContain('Assertions are present')
+    })
+
+    it('lets the model distinguish a legitimate surviving use from an incomplete removal', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: 'Remove retired-worker from the seed but keep the runtime compatibility entry', diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...shipVerdict })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it.each(['rethink', 'fix-first'])('preserves the primary %s without spending another provider call', async verdict => {
+      global.fetch = vi.fn().mockResolvedValue(completion({ ...rejection, verdict }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, verdict })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['transport', 'malformed'])('does not fall back to ship when the production check fails: %s', async failure => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict))
+      if (failure === 'transport') global.fetch.mockRejectedValueOnce(new Error('connection lost'))
+      else global.fetch.mockResolvedValueOnce(completion({ explanation: 'no verdict' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result.ok).toBe(false)
+      expect(result).not.toHaveProperty('verdict')
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('refuses oversized production evidence instead of truncating witnesses or sending a larger context', async () => {
+      const diff = [
+        `diff --git a/${'x'.repeat(300)}.js b/${'x'.repeat(300)}.js`,
+        `+++ b/${'x'.repeat(300)}.js`,
+        '@@ -1,201 +1,200 @@',
+        '-retired-worker',
+        ...Array(200).fill(' retired-worker'),
+      ].join('\n')
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff })
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('context limit') })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('shares the original timeout budget with the production check', async () => {
+      vi.spyOn(Date, 'now').mockReturnValueOnce(100).mockReturnValueOnce(1100)
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval, timeoutMs: 1000 })
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('timed out') })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
     // Explicit opt-in only: ordinary CI never calls an AI provider.
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(manifestCases)('judges the manifest fixture with a real local model: %s', async (_name, diff, expected) => {
       global.fetch = nativeFetch
@@ -1077,9 +1166,14 @@ describe('codeReview helpers', () => {
         backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
         objective: processManifestCase.objective, diff, timeoutMs: 180_000,
       })
+      console.log(`🔍 Manifest evaluation ${_name}: ${result.verdict}; ${result.evidence || result.error}`)
       expect(result.ok, result.error).toBe(true)
       if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
       else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+      if (_name === 'runtime process entry retained') {
+        expect([...result.missing, result.evidence].join(' ')).toMatch(/portos-ui/i)
+        expect([...result.missing, result.evidence].join(' ')).toMatch(/apps\.js|runtime|processes/i)
+      }
     }, 190_000)
 
     it('escapes a diff that carries its own fence so it cannot break out into the objective half', async () => {
