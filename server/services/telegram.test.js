@@ -104,21 +104,26 @@ vi.mock('./memoryBackend.js', () => ({
   peekMemory: vi.fn(async () => mem.memory),
 }));
 
-// Mutable disk stand-in. `strictRead` is what `readJSONFileStrict` returns
-// (null = "behave like a normal absent file"); `writes` records every
-// atomicWrite so a test can assert that NOTHING was written. Held in a hoisted
-// holder because loadTelegram() calls vi.resetModules(), which re-evaluates
-// this factory and would otherwise hand each test fresh, unreachable spies.
-const fu = vi.hoisted(() => ({ strictRead: null, writes: [] }));
+// Mutable disk stand-in. `strictRead` is what `readJSONFileStrict` returns when
+// set (null = "fall through to the persisted `store`, or the caller's default
+// when nothing has been written yet"); `writes` records every atomicWrite so a
+// test can assert that NOTHING was written. `store` reflects the latest
+// atomicWrite payload so a second read-modify-write cycle in the SAME test sees
+// the first cycle's persisted state — needed to prove the checkins write queue
+// serializes concurrent responses instead of one clobbering the other. Held in
+// a hoisted holder because loadTelegram() calls vi.resetModules(), which
+// re-evaluates this factory and would otherwise hand each test fresh,
+// unreachable spies.
+const fu = vi.hoisted(() => ({ strictRead: null, writes: [], store: null }));
 
 // Exhaustive factory (no importActual spread) — every export telegram.js
 // imports must be listed here or the access throws "not defined on the mock".
 vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(async () => {}),
   PATHS: { data: '/mock/data' },
-  readJSONFileStrict: vi.fn(async (_path, def) => fu.strictRead ?? { ok: true, value: def }),
+  readJSONFileStrict: vi.fn(async (_path, def) => fu.strictRead ?? { ok: true, value: fu.store ?? def }),
   formatDuration: vi.fn(() => '1m'),
-  atomicWrite: vi.fn(async (path, data) => { fu.writes.push({ path, data }); }),
+  atomicWrite: vi.fn(async (path, data) => { fu.writes.push({ path, data }); fu.store = data; }),
 }));
 
 vi.mock('./agentManagement.js', () => ({ getActiveAgents: vi.fn(() => []) }));
@@ -144,6 +149,7 @@ describe('telegram service', () => {
     fu.strictRead = null;
     mem.memory = null;
     fu.writes = [];
+    fu.store = null;
     active = null;
     h.textHandlers = [];
     h.eventHandlers = {};
@@ -442,6 +448,96 @@ describe('telegram service', () => {
       await msgHandler({ chat: { id: 42 }, text: 'Made good progress' });
 
       expect(fu.writes).toEqual([]);
+    });
+  });
+
+  /**
+   * Guarded handlers (#8907).
+   *
+   * node-telegram-bot-api's EventEmitter never awaits `bot.onText`/`bot.on(...)`
+   * callbacks, so an unhandled rejection inside one used to escape straight to
+   * `process.on('unhandledRejection')` instead of being logged and contained.
+   * These prove every registered handler is wrapped so a downstream failure
+   * (a thrown error or a rejected `bot.sendMessage`) is caught and logged
+   * instead of propagating out of the handler.
+   */
+  describe('guarded handlers (#8907)', () => {
+    it('catches a command handler rejection instead of letting it escape', async () => {
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+
+      const statusEntry = h.textHandlers.find((t) => t.regex.source.includes('status'));
+      h.sendMessage.mockRejectedValueOnce(new Error('Telegram 429: rate limited'));
+
+      // The handler itself must not throw or return a rejected promise — the
+      // caller (node-telegram-bot-api) never awaits it, so a throw here would
+      // otherwise become an unhandled rejection.
+      await expect(statusEntry.fn({ chat: { id: 42 }, text: '/status' })).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('handler error'));
+    });
+
+    it('catches a message-handler rejection (check-in response) instead of letting it escape', async () => {
+      const telegram = await loadTelegramActive();
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
+      await telegram.init(false);
+      await telegram.sendCheckin();
+
+      const msgHandler = h.eventHandlers.message[0];
+      h.sendMessage.mockRejectedValueOnce(new Error('Telegram 403: bot was blocked by the user'));
+
+      await expect(msgHandler({ chat: { id: 42 }, text: 'Made good progress' })).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('handler error'));
+    });
+
+    it('catches a callback_query handler exception instead of letting it escape', async () => {
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+
+      const cbHandler = h.eventHandlers.callback_query[0];
+      // handleCallbackQuery's internal try/catch only guards approveMemory /
+      // rejectMemory; a malformed `data` (not a string, e.g. a corrupt
+      // callback payload) throws synchronously on `.startsWith` before that
+      // try/catch is reached. That escape is exactly what the outer
+      // `safeHandler` wrap exists to contain.
+      await expect(
+        cbHandler({ id: 'cb-1', message: { chat: { id: 42 }, text: 'orig', message_id: 1 }, data: 12345 })
+      ).resolves.toBeUndefined();
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('handler error'));
+    });
+  });
+
+  /**
+   * Checkins write queue (#8907).
+   *
+   * `handleCheckinResponse` is a `loadCheckins → push → atomicWrite` cycle. Two
+   * concurrent invocations racing against the same on-disk state used to
+   * interleave: both read the same pre-write snapshot, so whichever
+   * `atomicWrite` landed last silently discarded the other's entry. The fix
+   * routes the cycle through `createFileWriteQueue` so the second cycle only
+   * starts reading after the first has fully persisted.
+   */
+  describe('checkins write queue (#8907)', () => {
+    it('persists both records when two check-in responses are processed concurrently', async () => {
+      const telegram = await loadTelegramActive();
+      const { getGoals } = await import('./identity.js');
+      getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
+      await telegram.init(false);
+      await telegram.sendCheckin();
+      h.sendMessage.mockClear();
+      fu.writes = [];
+
+      const msgHandler = h.eventHandlers.message[0];
+      // Fire both "responses" without awaiting between them, so both handler
+      // invocations are in flight before either reaches its persisted write —
+      // exactly the race the un-serialized RMW cycle used to lose.
+      const first = msgHandler({ chat: { id: 42 }, text: 'first response' });
+      const second = msgHandler({ chat: { id: 42 }, text: 'second response' });
+      await Promise.all([first, second]);
+
+      expect(fu.writes).toHaveLength(2);
+      const finalCheckins = fu.writes[fu.writes.length - 1].data.checkins;
+      expect(finalCheckins.map((c) => c.response)).toEqual(['first response', 'second response']);
     });
   });
 });
