@@ -122,11 +122,12 @@ A cancelled unowned accepted operation moves to `data/database-maintenance-cance
 ### Calendar daily-review recovery
 
 Daily reviews remain in the existing `data/calendar/daily-reviews/<date>.json`
-file-primary store. An optional `pendingOperation` records the desired confirmation,
+file-primary store. An optional per-event `pendingOperations` map records each desired confirmation,
 its stable date/event `sourceKey`, and prior goal link before goal effects run.
 Only a successful goal-store write publishes the confirmation and clears the intent.
 An explicit daily-review read or confirmation retry replays pending work locally;
-history stays a read-only projection of completed confirmations. No recovery path
+missing goals remain visible as pending confirmations without blocking the day.
+History stays a read-only projection of completed confirmations. No recovery path
 calls an AI or calendar provider.
 
 Goal progress carries the same optional `sourceKey` in the existing identity goal

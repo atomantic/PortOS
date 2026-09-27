@@ -21,7 +21,13 @@ export async function getDailyReview(date) {
   // Recover a durable intent before projecting confirmations or goal progress.
   const existing = await reviewQueue(date, async () => {
     const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
-    await finishPendingReview(date, review);
+    for (const eventId of Object.keys(review.pendingOperations || {})) {
+      await finishPendingReview(date, review, eventId).catch(error => {
+        // A deleted goal needs an operator correction, not a day-wide outage.
+        // Keep its intent durable and visible; every other failure still rejects.
+        if (error.code !== 'GOAL_NOT_FOUND') throw error;
+      });
+    }
     return review;
   });
   // Get all events for this date across all accounts
@@ -91,6 +97,8 @@ export async function getDailyReview(date) {
     date,
     events: enrichedEvents,
     confirmations: existing.confirmations,
+    pendingConfirmations: Object.fromEntries(Object.keys(existing.pendingOperations || {})
+      .map(eventId => [eventId, { code: 'GOAL_NOT_FOUND' }])),
     progressEntries,
     lastSyncAt,
     summary: {
@@ -105,10 +113,10 @@ export async function getDailyReview(date) {
 
 // The intent is saved before goal effects; only completed effects publish a
 // confirmation. Replaying after either write failed uses the same source key.
-async function finishPendingReview(date, review) {
-  const pending = review.pendingOperation;
+async function finishPendingReview(date, review, eventId) {
+  const pending = review.pendingOperations?.[eventId];
   if (!pending) return null;
-  const { eventId, confirmation, sourceKey } = pending;
+  const { confirmation, sourceKey } = pending;
   const progressEntry = await reconcileCalendarProgress(sourceKey, {
     goalId: confirmation.happened ? confirmation.goalId : null,
     date,
@@ -117,7 +125,8 @@ async function finishPendingReview(date, review) {
   });
   review.confirmations[eventId] = confirmation;
   review.updatedAt = confirmation.confirmedAt;
-  delete review.pendingOperation;
+  delete review.pendingOperations[eventId];
+  if (!Object.keys(review.pendingOperations).length) delete review.pendingOperations;
   await saveReview(date, review);
   return progressEntry;
 }
@@ -125,14 +134,14 @@ async function finishPendingReview(date, review) {
 export function confirmEvent(date, { eventId, happened, goalId, durationMinutes, note }) {
   return reviewQueue(date, async () => {
     const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
-    // A new desired state for the SAME event may supersede an interrupted intent
-    // (including a goal that was deleted). Other events must finish theirs first.
-    if (review.pendingOperation?.eventId !== eventId) await finishPendingReview(date, review);
+    // A new desired state supersedes this event's interrupted intent, including
+    // a deleted goal. Independent events retain their own recoverable intents.
+    review.pendingOperations ||= {};
     const sourceKey = `calendar-review:${date}:${eventId}`;
-    review.pendingOperation = {
+    review.pendingOperations[eventId] = {
       eventId,
       sourceKey,
-      priorGoalId: review.pendingOperation?.priorGoalId ?? review.confirmations[eventId]?.goalId ?? null,
+      priorGoalId: review.pendingOperations[eventId]?.priorGoalId ?? review.confirmations[eventId]?.goalId ?? null,
       confirmation: {
         happened,
         goalId: goalId || null,
@@ -143,7 +152,7 @@ export function confirmEvent(date, { eventId, happened, goalId, durationMinutes,
       }
     };
     await saveReview(date, review);
-    const progressEntry = await finishPendingReview(date, review);
+    const progressEntry = await finishPendingReview(date, review, eventId);
     console.log(`📅 Event ${eventId} ${happened ? 'confirmed' : 'skipped'} for ${date}`);
     return { confirmation: review.confirmations[eventId], progressEntry };
   });

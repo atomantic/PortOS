@@ -96,7 +96,7 @@ describe('calendar confirmation persistence workflow', () => {
     if (pending) {
       const interrupted = await read(reviewPath);
       expect(interrupted.confirmations).toEqual({});
-      expect(interrupted.pendingOperation.sourceKey).toBe(`calendar-review:${date}:event-a`);
+      expect(interrupted.pendingOperations['event-a'].sourceKey).toBe(`calendar-review:${date}:event-a`);
     } else {
       await expect(readFile(reviewPath)).rejects.toMatchObject({ code: 'ENOENT' });
     }
@@ -105,7 +105,7 @@ describe('calendar confirmation persistence workflow', () => {
     review = await import('./dailyReview.js');
     await review.confirmEvent(date, input);
     expect((await allProgress()).filter(entry => entry.sourceKey)).toHaveLength(1);
-    expect((await read(reviewPath)).pendingOperation).toBeUndefined();
+    expect((await read(reviewPath)).pendingOperations).toBeUndefined();
   });
 
   it('an explicit read completes an interrupted intent without provider calls', async () => {
@@ -127,8 +127,12 @@ describe('calendar confirmation persistence workflow', () => {
       .rejects.toMatchObject({ status: 404, code: 'GOAL_NOT_FOUND' });
     expect((await read(reviewPath)).confirmations).toEqual({});
     expect(await allProgress()).toEqual([expect.objectContaining({ id: 'manual' })]);
+    const pendingReview = await review.getDailyReview(date);
+    expect(pendingReview.pendingConfirmations['event-a']).toEqual({ code: 'GOAL_NOT_FOUND' });
+    await review.confirmEvent(date, { ...input, eventId: 'event-b' });
+    expect((await read(reviewPath)).pendingOperations['event-a']).toBeDefined();
     await review.confirmEvent(date, { ...input, happened: false });
-    expect((await read(reviewPath)).pendingOperation).toBeUndefined();
+    expect((await read(reviewPath)).pendingOperations).toBeUndefined();
   });
 
   it('preserves legacy confirmation fields and never infers ownership from date or free-form notes', async () => {
