@@ -159,6 +159,22 @@ describe('same-operation coordinator recovery', () => {
     expect(() => journal.assertAdmission()).toThrow();
   });
 
+  it('rejects a reused ancestor token without publishing an ownership cycle', () => {
+    const operation = journal.begin({ source, target });
+    const initial = journal.acquireCoordinator(operation.id);
+    const firstDirectory = journal.reserveCoordinatorWorker(operation.id, initial);
+    writeFileSync(join(firstDirectory, 'exit'), '0');
+    const next = journal.recoverCoordinator(operation.id, initial, randomUUID());
+    const secondDirectory = journal.reserveCoordinatorWorker(operation.id, next);
+    writeFileSync(join(secondDirectory, 'exit'), '0');
+    expect(() => journal.recoverCoordinator(operation.id, next, initial)).toThrow();
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'exited', exitCode: 0 });
+    const final = journal.recoverCoordinator(operation.id, next, randomUUID());
+    expect(final).not.toBe(initial);
+    expect(journal.read()).toEqual(operation);
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
   it('does not let a stale predecessor or later-stage recovery reopen an operation', () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);

@@ -148,7 +148,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // Recovery appends an immutable successor instead of overwriting ownership.
   // Each predecessor admits exactly one successor, even across processes. A
   // missing/partial worker receipt never authorizes reclaiming an owner.
-  const readCoordinator = (id) => {
+  const readCoordinator = (id, rejectedPredecessor = null) => {
     const current = read();
     if (!current || current.id !== id) throw databaseMaintenanceError();
     const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
@@ -170,7 +170,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       }
       if (!lstatSync(nextPath).isFile()) throw databaseMaintenanceError();
       const next = successorSchema.parse(JSON.parse(readFileSync(nextPath, 'utf8')));
-      if (next.id !== id || next.previousToken !== owner.token) throw databaseMaintenanceError();
+      if (next.id !== id || next.previousToken !== owner.token || owner.token === rejectedPredecessor) throw databaseMaintenanceError();
       owner = { id, token: next.token };
     }
   };
@@ -232,7 +232,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     coordinatorSchema.parse({ id, token: recoveryToken });
     coordinatorSchema.parse({ id, token: previousToken });
     if (recoveryToken === previousToken) throw databaseMaintenanceError();
-    const owner = readCoordinator(id);
+    const owner = readCoordinator(id, recoveryToken);
     // The caller persists its recovery token before attempting publication.
     // A crash after link/fsync but before returning must be retryable by that
     // same claimant; another claimant must never learn or reuse its token.
