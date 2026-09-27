@@ -37,8 +37,14 @@ REQUIRED_FILES = (
 )
 
 
-def verify_file(path: Path, metadata: dict) -> None:
-    """Verify bytes again on probe, including same-size local corruption."""
+def file_fingerprint(path: Path) -> list[int]:
+    stat = path.stat()
+    return [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev]
+
+
+def verify_file(path: Path, metadata: dict) -> list[int]:
+    """Verify bytes and reject files changed while hashing."""
+    before = file_fingerprint(path)
     size, algorithm, digest = metadata["size"], metadata["algorithm"], metadata["digest"]
     if not isinstance(size, int) or size <= 0 or path.stat().st_size != size:
         raise ValueError(f"Incomplete model file: {path.name}")
@@ -52,6 +58,9 @@ def verify_file(path: Path, metadata: dict) -> None:
             checksum.update(chunk)
     if checksum.hexdigest() != digest:
         raise ValueError(f"Model file checksum mismatch: {path.name}")
+    if before != file_fingerprint(path):
+        raise ValueError(f"Model file changed during verification: {path.name}")
+    return before
 
 
 def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
@@ -63,7 +72,13 @@ def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
             return None
         snapshot = model_dir / revision
         for filename in REQUIRED_FILES:
-            verify_file(snapshot / filename, manifest["files"][filename])
+            path = snapshot / filename
+            metadata = manifest["files"][filename]
+            # The verified bytes stay valid while their filesystem identity and
+            # change timestamps match. Rehash changed files, including equal-size
+            # replacements, without rereading multi-GB weights on every status.
+            if file_fingerprint(path) != metadata.get("fingerprint"):
+                verify_file(path, metadata)
         return snapshot
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -103,7 +118,7 @@ def download_model(model_id: str, models_dir: Path) -> dict:
         hf_hub_download(repo_id=model_id, filename=filename, revision=revision,
                         local_dir=snapshot, endpoint=HUB_ENDPOINT)
         metadata = {"size": entry.size, "algorithm": algorithm, "digest": digest}
-        verify_file(snapshot / filename, metadata)
+        metadata["fingerprint"] = verify_file(snapshot / filename, metadata)
         verified_files[filename] = metadata
 
     marker = model_dir / "verified.json"
@@ -218,7 +233,8 @@ def main() -> int:
             print(json.dumps(download_model(args.model_id, Path(args.models_dir))))
             return 0
         except Exception as error:
-            print(json.dumps({"ok": False, "code": "QWEN3_DOWNLOAD_FAILED", "error": str(error)}), file=sys.stderr)
+            code = "QWEN3_DOWNLOAD_UNAVAILABLE" if isinstance(error, ImportError) else "QWEN3_DOWNLOAD_FAILED"
+            print(json.dumps({"ok": False, "code": code, "error": str(error)}), file=sys.stderr)
             return 1
 
     if args.probe:

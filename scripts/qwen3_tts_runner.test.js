@@ -9,7 +9,7 @@ const script = fileURLToPath(new URL('./qwen3_tts_runner.py', import.meta.url));
 // Exercise the production download/probe boundary with a tool-free fake Hub;
 // no model, provider, hardware, credentials, or real user directories are used.
 const fixture = String.raw`
-import hashlib, importlib.util, json, sys, tempfile, types
+import hashlib, importlib.util, json, os, sys, tempfile, types
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("qwen_runner", sys.argv[1])
 runner = importlib.util.module_from_spec(spec)
@@ -56,10 +56,17 @@ with tempfile.TemporaryDirectory() as temp:
     result = runner.download_model(model_id, root)
     snapshot = runner.installed_snapshot(model_dir, model_id)
     assert snapshot == Path(result["path"])
+    # Repeated status checks do not rehash unchanged multi-GB weights.
+    verifier = runner.verify_file
+    runner.verify_file = lambda *args: (_ for _ in ()).throw(AssertionError("rehashed unchanged file"))
+    assert runner.installed_snapshot(model_dir, model_id) == snapshot
+    runner.verify_file = verifier
     assert len(calls) == len(runner.REQUIRED_FILES)
     # A metadata-only directory or incomplete codec must never report installed.
     codec = snapshot / "speech_tokenizer/model.safetensors"
-    codec.write_bytes(b"x" * codec.stat().st_size)
+    original = codec.stat()
+    codec.write_bytes(b"x" * original.st_size)
+    os.utime(codec, ns=(original.st_atime_ns, original.st_mtime_ns))
     assert runner.installed_snapshot(model_dir, model_id) is None
     codec.write_bytes(b"truncated")
     assert runner.installed_snapshot(model_dir, model_id) is None

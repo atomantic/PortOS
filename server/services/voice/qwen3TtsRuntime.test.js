@@ -31,7 +31,7 @@ describe('qwen3TtsRuntime', () => {
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       queueMicrotask(() => {
-        child.stdout.emit('data', JSON.stringify(data));
+        (code === 0 ? child.stdout : child.stderr).emit('data', JSON.stringify(data));
         child.emit('close', code);
       });
       return child;
@@ -59,8 +59,10 @@ describe('qwen3TtsRuntime', () => {
 
     runnerResponse({ ok: true, modelId });
     await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ code: 'QWEN3_DOWNLOAD_INVALID_RESULT' });
-    runnerResponse({ error: 'checksum mismatch' }, 1);
-    await expect(downloadQwen3Model(modelId)).rejects.toThrow(/checksum mismatch/);
+    runnerResponse({ code: 'QWEN3_DOWNLOAD_FAILED', error: 'checksum mismatch' }, 1);
+    await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ status: 502, code: 'QWEN3_DOWNLOAD_FAILED' });
+    runnerResponse({ code: 'QWEN3_DOWNLOAD_UNAVAILABLE', error: 'No module named huggingface_hub' }, 1);
+    await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ status: 503, code: 'QWEN3_DOWNLOAD_UNAVAILABLE' });
     await expect(downloadQwen3Model('unknown/invalid-model')).rejects.toMatchObject({ code: 'UNKNOWN_QWEN3_MODEL' });
   });
 });

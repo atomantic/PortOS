@@ -143,8 +143,17 @@ function runRuntime(pythonPath, args, timeout = 10000) {
     child.stdout.on('data', (d) => { stdout = (stdout + d.toString()).slice(-65536); });
     child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-8192); });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Qwen3 runtime failed (code ${code}): ${stderr || stdout}`));
+      if (code === 0) return resolve({ stdout, stderr });
+      // Hub progress may precede the runner's final structured error line.
+      let failure = null;
+      try { failure = JSON.parse(stderr.trim().split(/\r?\n/).at(-1)); } catch { /* Non-JSON process failure. */ }
+      if (['QWEN3_DOWNLOAD_UNAVAILABLE', 'QWEN3_DOWNLOAD_FAILED'].includes(failure?.code)) {
+        return reject(new ServerError(failure.error || 'Qwen3 model download failed', {
+          status: failure.code === 'QWEN3_DOWNLOAD_UNAVAILABLE' ? 503 : 502,
+          code: failure.code,
+        }));
+      }
+      reject(new Error(`Qwen3 runtime failed (code ${code}): ${stderr || stdout}`));
     });
     child.on('error', reject);
   });
