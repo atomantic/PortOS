@@ -665,6 +665,8 @@ def train_checkpoints(snapshot: Path, dataset: dict, args: argparse.Namespace, s
             inputs_embeds=embeddings[:, :-1, :], attention_mask=batch["attention_mask"][:, :-1],
             labels=batch["labels"][:, 1:], output_hidden_states=True,
         )
+        # The talker returns hidden_states as (per-layer states, codec ids);
+        # [0][-1] is the final layer, batch dimension intact.
         hidden = outputs.hidden_states[0][-1][codec_mask[:, :-1]]
         _, sub_talker_loss = model.talker.forward_sub_talker_finetune(codec_ids[codec_mask], hidden)
         return outputs.loss + 0.3 * sub_talker_loss
@@ -769,7 +771,6 @@ def run_fine_tuning(args: argparse.Namespace) -> int:
                 emit({"stage": "checkpoint", "checkpoint": target.name, "step": item["step"],
                       "checkpoint_path": str(target), "sample_wav": str(target / "audition.wav"),
                       "loss": item["loss"], "model_revision": checkpoint_revision(manifest)})
-        shutil.rmtree(staging, ignore_errors=True)
         if not published:
             return training_failed("QWEN3_TRAINING_FAILED", "No fine-tuned checkpoint passed its reload audition")
         emit({"stage": "completed", "checkpoints": published})
@@ -778,6 +779,9 @@ def run_fine_tuning(args: argparse.Namespace) -> int:
         return unavailable("fine-tuning dependencies")
     except Exception:
         return training_failed("QWEN3_TRAINING_FAILED", "Qwen3-TTS fine-tuning failed; unverified checkpoints were not published")
+    finally:
+        # Unpublished snapshots are full model copies; never leave them behind.
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def main() -> int:

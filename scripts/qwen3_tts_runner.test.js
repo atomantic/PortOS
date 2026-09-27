@@ -514,6 +514,15 @@ with tempfile.TemporaryDirectory() as temp:
     torch.cuda.is_available = lambda: True
     attempt(training_args(root, dataset))
     assert trained == [] and not (root / "job").exists()
+    # A run that fails mid-training leaves no staged full-model copies behind.
+    runner.platform.system = lambda: "Linux"
+    runner.platform.machine = lambda: "x86_64"
+    def failing_train(snapshot, dataset, args, staging, emit):
+        fake_train(snapshot, dataset, args, staging, emit)
+        raise RuntimeError("private training failure")
+    runner.train_checkpoints = failing_train
+    attempt(training_args(root, write_dataset(root)))
+    assert not (root / "job" / ".staging").exists()
     print(json.dumps(failures))
 `);
     expect(result).toEqual([
@@ -522,6 +531,7 @@ with tempfile.TemporaryDirectory() as temp:
       'QWEN3_TRAINING_INVALID_DATASET',
       'QWEN3_RUNTIME_UNAVAILABLE',
       'QWEN3_RUNTIME_UNAVAILABLE',
+      'QWEN3_TRAINING_FAILED',
     ]);
   });
 });
