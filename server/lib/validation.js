@@ -1636,6 +1636,12 @@ export const databaseSwitchSchema = z.object({
   migrate: z.boolean().optional()
 });
 
+// POST /api/database/maintenance/preflight — advisory only; never accepts a cutover.
+export const databaseMaintenancePreflightSchema = z.object({
+  source: z.enum(DB_BACKENDS),
+  target: z.enum(DB_BACKENDS)
+}).strict().refine(value => value.source !== value.target, { message: 'Source and target must differ' });
+
 // POST /api/database/{start,stop,destroy} — operate on a named backend.
 export const databaseBackendSchema = z.object({
   backend: z.enum(DB_BACKENDS)

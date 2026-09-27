@@ -10,6 +10,8 @@ import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 
+export { preflightDatabaseMaintenance } from './databasePreflight.js';
+
 const rootDir = PATHS.root;
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
 // Resolve the interpreter explicitly. A bare `bash` on Windows often resolves

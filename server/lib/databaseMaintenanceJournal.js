@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 
-const endpointSchema = z.object({
+export const databaseMaintenanceEndpointSchema = z.object({
   mode: z.enum(['native', 'docker']),
   host: z.string().min(1).max(255),
   port: z.number().int().min(1).max(65535),
@@ -20,8 +20,8 @@ const journalSchema = z.object({
   id: z.string().uuid(),
   stage: z.enum(stages),
   createdAt: z.string().datetime(),
-  source: endpointSchema,
-  target: endpointSchema,
+  source: databaseMaintenanceEndpointSchema,
+  target: databaseMaintenanceEndpointSchema,
 }).strict();
 
 const normalizedHost = host => ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())
@@ -184,7 +184,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     // never be automatically stolen on a timeout or an unverified PID guess.
     const initial = read();
     if (!initial || initial.id !== id) throw new Error('Database maintenance operation does not match.');
-    const parsedSource = endpointSchema.parse(source);
+    const parsedSource = databaseMaintenanceEndpointSchema.parse(source);
     if (JSON.stringify(initial.source) !== JSON.stringify(parsedSource)) {
       throw new Error('Saved database endpoint changed; source-only cancellation refused.');
     }

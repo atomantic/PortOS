@@ -264,6 +264,14 @@ The Settings switch/migration requests and `scripts/db.sh migrate`,
 and strand them on the source; changing `.env` also leaves the running server
 connected to its original pool.
 
+`POST /api/database/maintenance/preflight` accepts explicit `source` and `target`
+backend names through the ordinary instance authentication gate. It checks the
+saved direction against the running pool and requires complete, trusted, idle
+work state. A successful response is `{ source, target, advisory: true, accepted: false }`: it creates no operation, reserves no maintenance window, and does
+not promise that a later request is safe. The future acceptance path must repeat
+these checks under its final admission protocol. Missing/unreadable work state,
+configuration drift, or an existing maintenance fence refuses the check.
+
 Keep the existing backend selected and use backups until the coordinated
 offline cutover is available (tracked in #8797 / #8805). A safe cutover requires
 downtime for **all** PortOS writers, including the CoS runner, and verification
