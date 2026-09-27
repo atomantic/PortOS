@@ -274,6 +274,14 @@ beforeEach(async () => {
   }));
 });
 
+it('the eidoverse.js mock port matches the shared leaf so the mock cannot silently diverge from the real constant', async () => {
+  const [{ EIDOVERSE_PORT: mockedPort }, { EIDOVERSE_PORT: leafPort }] = await Promise.all([
+    import('./eidoverse.js'),
+    import('../lib/eidoversePort.js'),
+  ]);
+  expect(mockedPort).toBe(leafPort);
+});
+
 describe('Eidoverse private-world lifecycle', () => {
   it('reports connection refusal without an unhandled rejection and allows a subsequent retry', async () => {
     mocks.connectionError = new Error('connect ECONNREFUSED');

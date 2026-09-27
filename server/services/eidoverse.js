@@ -9,10 +9,11 @@ import { parseGitHubUrl } from '../lib/repoUrl.js';
 import { cloneRepo } from './repoCloner.js';
 import { createApp, getAllApps, notifyAppsChanged, updateApp } from './apps.js';
 import { getAppStatusStrict } from './pm2.js';
+import { EIDOVERSE_PORT } from '../lib/eidoversePort.js';
 
 export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/atomantic/eidoverse-worlds';
 export const EIDOVERSE_VIDEO_REPO = 'https://github.com/anima-research/eidoverse-video';
-export const EIDOVERSE_PORT = 8940;
+export { EIDOVERSE_PORT };
 export const EIDOVERSE_PROCESS_NAME = 'eidoverse-worlds';
 
 const BUN_INSTALL_URL = 'https://bun.com/install';
