@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { join } from 'node:path';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { PATHS } from '../../lib/fileUtils.js';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
@@ -7,6 +11,8 @@ import { addTask, isRunning } from '../../services/cos.js';
 import { loadHistory } from '../../services/videoGen/history.js';
 import router from './launchVideos.js';
 
+vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-launch-publish-') }));
+afterAll(cleanupTempDataRoots);
 vi.mock('../../services/apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('../../services/cos.js', () => ({ addTask: vi.fn(), isRunning: vi.fn() }));
 vi.mock('../../services/instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance' }));
@@ -88,5 +94,59 @@ describe('user-triggered launch videos', () => {
     expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, caption: 'A clear plan.' });
     loadHistory.mockRejectedValue(new Error('Storage unavailable'));
     expect((await request(app).get('/api/apps/example/launch-videos')).status).toBe(500);
+  });
+});
+
+
+describe('README publication admission', () => {
+  const publish = body => request(app).post('/api/apps/example/launch-videos/publish').send(body);
+  const video = { id: 'take-example', filename: 'composition-example.mp4', launchVideo: { appId: 'example' } };
+  beforeEach(async () => {
+    await mkdir(join(PATHS.data, 'videos'), { recursive: true });
+    await writeFile(join(PATHS.data, 'videos', video.filename), 'synthetic media');
+    loadHistory.mockResolvedValue([video]);
+  });
+
+  it('queues the selected local take in a reviewed, merging worktree and deduplicates per app', async () => {
+    const response = await publish({ videoId: video.id, provider: 'example-provider', model: 'example-model', effort: 'high' });
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ taskId: 'task-example', videoId: video.id });
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'Publish launch video to README', app: 'example', targetInstanceId: 'example-instance',
+      useWorktree: true, openPR: true, prCompletion: 'review-then-merge',
+      provider: 'example-provider', model: 'example-model', effort: 'high',
+      metadata: { analysisType: 'app-launch-video-publish', launchVideoId: video.id },
+    }), 'user');
+    const { prompt } = addTask.mock.calls[0][0];
+    expect(prompt).toContain('composition-example.mp4');
+    expect(prompt).toContain('<!-- portos-launch-video:start -->');
+    expect(prompt).toContain('Replace an existing marked block in place');
+    expect(prompt).toContain('at most 8 MiB');
+    addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
+    expect((await publish({ videoId: video.id })).body.code).toBe('LAUNCH_VIDEO_PUBLISH_ACTIVE');
+  });
+
+  it('rejects invalid selections, other apps, missing files and symlink escapes without dispatch', async () => {
+    expect((await publish({ videoId: '../secret' })).status).toBe(400);
+    expect((await publish({ videoId: 'unknown' })).status).toBe(404);
+    loadHistory.mockResolvedValue([{ ...video, launchVideo: { appId: 'other' } }]);
+    expect((await publish({ videoId: video.id })).status).toBe(404);
+    loadHistory.mockResolvedValue([{ ...video, filename: '../secret.mp4' }]);
+    expect((await publish({ videoId: video.id })).status).toBe(400);
+    loadHistory.mockResolvedValue([{ ...video, filename: 'missing.mp4' }]);
+    expect((await publish({ videoId: video.id })).status).toBe(404);
+    await writeFile(join(PATHS.data, 'outside.mp4'), 'private');
+    await symlink(join(PATHS.data, 'outside.mp4'), join(PATHS.data, 'videos', 'escape.mp4'));
+    loadHistory.mockResolvedValue([{ ...video, filename: 'escape.mp4' }]);
+    expect((await publish({ videoId: video.id })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch when CoS or the repository is unavailable', async () => {
+    isRunning.mockReturnValue(false);
+    expect((await publish({ videoId: video.id })).status).toBe(409);
+    getAppById.mockResolvedValue({ id: 'example' });
+    expect((await publish({ videoId: video.id })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
   });
 });

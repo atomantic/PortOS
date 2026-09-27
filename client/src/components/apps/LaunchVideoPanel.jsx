@@ -8,7 +8,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
 import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
-import { createAppLaunchVideo, getAppLaunchVideos } from '../../services/apiApps';
+import { createAppLaunchVideo, getAppLaunchVideos, publishAppLaunchVideo } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
@@ -90,6 +90,27 @@ function LaunchVideoForm({ appId, onQueued }) {
   </form>;
 }
 
+function PublishLaunchVideo({ appId, videoId }) {
+  const picker = useRunWithPicker();
+  const submitting = useRef(false);
+  const [taskId, setTaskId] = useState(null);
+  const [publish, running] = useAsyncAction(async () => {
+    if (submitting.current) return;
+    submitting.current = true;
+    await publishAppLaunchVideo(appId, { videoId, ...picker.pin }, { silent: true })
+      .then(result => setTaskId(result.taskId))
+      .finally(() => { submitting.current = false; });
+  });
+  return <div className="space-y-2 rounded border border-port-border p-3">
+    <h3 className="font-medium">Publish to README</h3>
+    <p className="text-sm text-port-text-muted">Create a silent, looping GIF of this take for GitHub and GitHub Pages. The agent replaces any existing launch-video embed near the top of README.md, commits the GIF, opens a PR and merges after review and checks pass. This publishes the selected video to the app repository.</p>
+    {taskId ? <p role="status">README publication queued. <Link className="text-port-accent" to="/cos/agents">Follow the render and PR in CoS agents</Link></p> : <>
+      <ProviderModelSelector {...picker.selectorProps} />
+      <button type="button" className={buttonClass} disabled={running} onClick={publish}>{running ? 'Queuing publication…' : 'Publish GIF to README and merge PR'}</button>
+    </>}
+  </div>;
+}
+
 export default function LaunchVideoPanel({ app }) {
   const [search, updateParams] = useUrlParams();
   const open = search.get('launchVideo') === 'true';
@@ -122,7 +143,7 @@ export default function LaunchVideoPanel({ app }) {
         {videos.length ? 'Make another launch video' : 'Make launch video'}
       </button>
     </div>
-    <p className="text-sm text-port-text-muted">Plan a short video using recreated screens and fictional content. Nothing is uploaded or posted.</p>
+    <p className="text-sm text-port-text-muted">Plan a short video using recreated screens and fictional content. Generating a video keeps it local until you choose to publish.</p>
     {error && <p role="alert" className="text-port-error">{error}</p>}
     {!videos.length && !error && <p className="text-sm text-port-text-muted">No launch videos yet.</p>}
     {selected && <div className="space-y-2">
@@ -134,6 +155,7 @@ export default function LaunchVideoPanel({ app }) {
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
       <p className="whitespace-pre-wrap">{selected.caption}</p>
+      <PublishLaunchVideo key={`${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
     </div>}
     {videos.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
       {videos.map(video => <li key={video.id}>
