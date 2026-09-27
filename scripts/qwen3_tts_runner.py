@@ -744,6 +744,7 @@ def run_fine_tuning(args: argparse.Namespace) -> int:
             published = 0
             for item in staged:
                 sample = item["path"] / "audition.wav"
+                torch = model = None
                 try:
                     # Seal first, then pass the same gate and loader synthesis
                     # uses: only sealed bytes that reload and speak are promotable.
@@ -759,12 +760,16 @@ def run_fine_tuning(args: argparse.Namespace) -> int:
                             text=AUDITION_TEXT, speaker=manifest["speaker"], language="Auto",
                         )
                     write_model_audio(wavs, sample_rate, sample)
-                    del model
-                    torch.cuda.empty_cache()
                 except Exception:
                     print(f"❌ Checkpoint at step {item['step']} failed its reload audition", file=sys.stderr)
                     shutil.rmtree(item["path"], ignore_errors=True)
                     continue
+                finally:
+                    # Release each audition model, passed or failed, before the
+                    # next checkpoint loads onto the same device.
+                    model = None
+                    if torch is not None:
+                        torch.cuda.empty_cache()
                 target = output_dir / f"checkpoint-step-{item['step']}"
                 os.replace(item["path"], target)
                 published += 1
