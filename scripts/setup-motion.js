@@ -104,8 +104,7 @@ async function ensureFfmpeg({ yes }) {
     return false;
   }
   console.log(`📦 ${printable}`);
-  // Re-probe from PATH: findFfmpeg caches its earlier miss for the process.
-  if (!run(command) || !hasCommand('ffmpeg')) {
+  if (!run(command) || !await hasFfmpeg()) {
     console.error('❌ ffmpeg install failed');
     return false;
   }
@@ -141,8 +140,7 @@ async function main() {
   console.log('🎬 Motion studio setup');
   const ffmpegReady = await ensureFfmpeg(options);
   const skillsReady = options.skills.length ? installSkills(options.skills) : true;
-  // ffmpegReady reflects a fresh install that findFfmpeg's cached miss would not.
-  printStatus({ ...(await status()), ffmpeg: ffmpegReady });
+  printStatus(await status());
   if (!options.skills.length) console.log('💡 Optional: npm run setup:motion -- --skills installs HyperFrames, Remotion and Claude Animation technique skills for launch-video agents.');
   if (!ffmpegReady || !skillsReady) process.exitCode = 1;
 }

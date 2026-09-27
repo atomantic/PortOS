@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile, readdir, realpath, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -149,9 +149,9 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     await expect(renderComposition({ ...input, launchVideo, synthesizeMusic: true, proof: { everySec: 1 } })).rejects
       .toMatchObject({ context: { details: [expect.objectContaining({ message: expect.stringContaining('A proof is silent') })] } });
     const proof = await renderComposition({ ...input, launchVideo, proof: { everySec: 1 } });
-    expect(proof.proof).toMatchObject({ path: join(await realpath(runRoot), 'proofs', `contact-${input.jobId}.png`), columns: 6, width: 1280, height: 720 });
+    expect(proof.proof).toMatchObject({ file: `launch-videos/example/${runId}/proofs/contact-${input.jobId}.png`, url: `/data/launch-videos/example/${runId}/proofs/contact-${input.jobId}.png`, columns: 6, width: 1280, height: 720 });
     expect(proof.proof.times).toEqual(Array.from({ length: 15 }, (_, n) => n));
-    const png = await readFile(proof.proof.path);
+    const png = await readFile(join(PATHS.data, proof.proof.file));
     // IHDR: six phone-width (360px) tiles with 4px gutters, three rows of ~16:9 tiles.
     expect(png.readUInt32BE(16)).toBe(6 * 360 + 5 * 4);
     expect((png.readUInt32BE(20) - 2 * 4) / 3).toBeCloseTo(360 * 9 / 16, -1);

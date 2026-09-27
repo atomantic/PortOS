@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
@@ -74,9 +74,12 @@ export async function renderComposition({ jobId, ...input }) {
     if (proof) {
       // Launch runs keep their proofs beside the run so the iteration history
       // stays with the take; other compositions share one proofs directory.
-      const proofDir = deliveryRoot ? join(deliveryRoot, 'proofs') : join(PATHS.data, 'composition-proofs');
-      await ensureDir(proofDir);
-      proofPath = join(proofDir, `contact-${jobId}.png`);
+      // The result names the sheet relative to the data directory, never an
+      // absolute host path: job results are visible to API and SSE clients.
+      const proofName = `contact-${jobId}.png`;
+      const proofFile = deliveryRoot ? `launch-videos/${launchVideo.appId}/${launchVideo.runId}/proofs/${proofName}` : `composition-proofs/${proofName}`;
+      proofPath = deliveryRoot ? join(deliveryRoot, 'proofs', proofName) : join(PATHS.data, proofFile);
+      await ensureDir(dirname(proofPath));
       const times = proofTimes(contract.durationSec, proof.everySec);
       const { columns } = await encodeContactSheet(page, contract, proofPath, { times, signal });
       page.check();
@@ -84,7 +87,7 @@ export async function renderComposition({ jobId, ...input }) {
       page = null;
       signal.throwIfAborted();
       success = true;
-      result = { generationId: jobId, id: jobId, proof: { path: proofPath, times, columns, ...contract } };
+      result = { generationId: jobId, id: jobId, proof: { file: proofFile, url: `/data/${proofFile}`, times, columns, ...contract } };
     } else {
       if (synthesizeMusic) {
         const wav = await synthesizeCompositionMusic(page, contract.durationSec);

@@ -81,7 +81,9 @@ them six across at phone size (360px wide, 240px for vertical) into one PNG.
 A proof is silent, so the request must omit `musicTrack` and
 `synthesizeMusic`. Nothing is registered in Media History and no
 launch-video artifacts are delivered. The completed job's result carries
-`proof: { path, times, columns, width, height }`; tile *n* shows `times[n]`.
+`proof: { file, url, times, columns, width, height }`, where `file` is
+relative to the data directory (never an absolute host path) and `url` serves
+it under `/data/`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other
 compositions write `data/composition-proofs/`. Both are excluded from backups.
 
