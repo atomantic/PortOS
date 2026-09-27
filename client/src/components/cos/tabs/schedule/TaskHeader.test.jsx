@@ -31,4 +31,15 @@ describe('TaskHeader advisory run order', () => {
     expect(screen.getByText('Remeasures the functions that survived the ladder.')).toBeInTheDocument();
     expect(screen.getByText('Run first:')).toBeInTheDocument();
   });
+
+  it('renders display name with flex-wrap header container to prevent truncation on mobile', () => {
+    renderHeader({ displayName: 'Branch Reconciler' }, undefined, 'branch-reconcile');
+    const titleEl = screen.getByText('Branch Reconciler');
+    expect(titleEl).toBeInTheDocument();
+    expect(titleEl).toHaveAttribute('title', 'Branch Reconciler');
+    // Check header container flex-wrap class
+    const titleContainer = titleEl.closest('.flex-1');
+    expect(titleContainer).toHaveClass('min-w-fit');
+    expect(titleContainer?.parentElement).toHaveClass('flex-wrap');
+  });
 });
