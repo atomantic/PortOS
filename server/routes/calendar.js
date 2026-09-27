@@ -92,7 +92,7 @@ const pushSyncSchema = z.object({
       email: z.string().optional(),
       self: z.boolean().optional(),
       responseStatus: z.string().optional()
-    })).optional(),
+    })).nullable().optional(),
     // Conference metadata feeds the cached `meetingUrl` join link (#6289).
     // OPTIONAL with no default, and nullable: `selectMeetingUrl` distinguishes
     // a producer that omitted them (preserve the cached link) from one that

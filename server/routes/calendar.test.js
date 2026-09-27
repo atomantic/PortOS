@@ -320,13 +320,14 @@ describe('Calendar Routes — push sync carries Google conference metadata (#628
       ...baseEvent,
       organizer: { email: 'alice@example.com', displayName: 'Example Organizer', self: true, privateNote: 'discard' },
       attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined', privateNote: 'discard' }],
-    }, { ...baseEvent, id: 'clear', organizer: null, attendees: [] }, baseEvent]);
+    }, { ...baseEvent, id: 'clear', organizer: null, attendees: [] }, baseEvent, { ...baseEvent, id: 'null-attendees', attendees: null }]);
     expect(response.status).toBe(200);
     expect(pushedEvents()[0].organizer).toEqual({ email: 'alice@example.com', displayName: 'Example Organizer', self: true });
     expect(pushedEvents()[0].attendees).toEqual([{ email: 'alice@example.com', self: true, responseStatus: 'declined' }]);
     expect(pushedEvents()[1]).toMatchObject({ organizer: null, attendees: [] });
     expect(pushedEvents()[2]).not.toHaveProperty('organizer');
     expect(pushedEvents()[2]).not.toHaveProperty('attendees');
+    expect(pushedEvents()[3].attendees).toBeNull();
   });
 
   it.each([{ organizer: 'invalid' }, { attendees: [{ self: 'yes' }] }])('rejects malformed participant types: %j', async fields => {
