@@ -134,8 +134,18 @@ describe('README publication admission', () => {
     expect(prompt).toContain('<!-- portos-launch-video:start -->');
     expect(prompt).toContain('Replace an existing marked block in place');
     expect(prompt).toContain('at most 8 MiB');
+    expect(prompt).toContain('"format":"gif"');
     addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
     expect((await publish({ videoId: video.id })).body.code).toBe('LAUNCH_VIDEO_PUBLISH_ACTIVE');
+  });
+
+  it('passes the audio-preserving format and rejects unsupported publishing modes', async () => {
+    expect((await publish({ videoId: video.id, format: 'mp4' })).status).toBe(202);
+    expect(addTask.mock.calls[0][0].prompt).toContain('"format":"mp4"');
+    expect(addTask.mock.calls[0][0].prompt).toContain('AAC audio when the source has audio');
+    addTask.mockClear();
+    expect((await publish({ videoId: video.id, format: 'youtube' })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('rejects invalid selections, other apps, missing files and symlink escapes without dispatch', async () => {

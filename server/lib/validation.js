@@ -2445,6 +2445,7 @@ export const mindBundleApplySchema = z.object({
 }).strict();
 
 export const appLaunchVideoPublishSchema = z.object({
+  format: z.enum(['mp4', 'gif']).default('gif'),
   videoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),
 }).strict();
 
