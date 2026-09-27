@@ -11,12 +11,19 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await bt709TagFilter();
   signal?.throwIfAborted();
-  const { fps, durationSec, width, height } = contract;
+  const { fps, durationSec, width, height, motionBlur } = contract;
   const numFrames = Math.round(durationSec * fps);
+  // motionBlur (1-4) captures that many subframes per output frame and lets
+  // ffmpeg's tmix filter blend them; 1 (default) captures/encodes exactly as
+  // before, byte for byte.
+  const sub = motionBlur ?? 1;
+  const motionBlurFilter = sub > 1
+    ? `tmix=frames=${sub},select='eq(mod(n\\,${sub})\\,${sub - 1})',setpts=N/${fps}/TB`
+    : null;
   await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  const args = ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-vcodec', 'png', '-i', 'pipe:0'];
+  const args = ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps * sub), '-vcodec', 'png', '-i', 'pipe:0'];
   if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
-  args.push('-map', '0:v', '-vf', ['scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
+  args.push('-map', '0:v', '-vf', [motionBlurFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
   const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
@@ -40,16 +47,18 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   signal?.addEventListener('abort', stop, { once: true });
   try {
     for (let n = 0; n < numFrames; n++) {
-      page.check();
-      // awaitPromise in evaluate is essential: each seek owns its paint.
-      await page.evaluate(`globalThis.portosComposition.seek(${n / fps})`);
-      page.check();
-      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
-      page.check();
-      await Promise.race([
-        new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
-        finished.then(() => { throw new Error('ffmpeg exited before capture completed'); }),
-      ]);
+      for (let k = 0; k < sub; k++) {
+        page.check();
+        // awaitPromise in evaluate is essential: each seek owns its paint.
+        await page.evaluate(`globalThis.portosComposition.seek(${n / fps + k / (fps * sub)})`);
+        page.check();
+        const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+        page.check();
+        await Promise.race([
+          new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
+          finished.then(() => { throw new Error('ffmpeg exited before capture completed'); }),
+        ]);
+      }
       onProgress?.((n + 1) / numFrames);
     }
     proc.stdin.end();

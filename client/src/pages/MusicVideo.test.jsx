@@ -51,6 +51,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   updateMusicVideoScene: vi.fn(),
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
+  importMusicVideoLyrics: vi.fn(),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -132,6 +133,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
+  importMusicVideoLyrics, updateMusicVideoScene,
 } from '../services/apiMusicVideo.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 import { generateVideo, getVideoGenStatus } from '../services/apiImageVideo.js';
@@ -611,6 +613,63 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
 
     fireEvent.click(planBtn);
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }, { silent: true }));
+  });
+});
+
+describe('MusicVideo lyrics and shot coverage (#8964)', () => {
+  it('imports pasted lyrics, shows the cues, and persists an edited line on blur', async () => {
+    const cues = [
+      { id: 'lc-1', text: 'first line', startSec: 1, endSec: 3 },
+      { id: 'lc-2', text: 'second line', startSec: 3, endSec: null },
+    ];
+    importMusicVideoLyrics.mockResolvedValue({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, imported: 2, format: 'lrc' });
+    await openProject(PROJECT_ANALYZED);
+
+    fireEvent.change(screen.getByLabelText('Lyrics to import'), { target: { value: '[00:01.00]first line\n[00:03.00]second line' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Import lyrics$/ }));
+    await waitFor(() => expect(importMusicVideoLyrics).toHaveBeenCalledWith(
+      'mv-3',
+      { text: '[00:01.00]first line\n[00:03.00]second line', format: 'auto', mode: 'replace' },
+      { silent: true },
+    ));
+    const line = await screen.findByLabelText('Line 2 text');
+    expect(line).toHaveValue('second line');
+    expect(screen.getByLabelText('Lyrics to import')).toHaveValue('');
+
+    fireEvent.change(line, { target: { value: 'second line, retold' } });
+    fireEvent.blur(line);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-3',
+      { lyricCues: [cues[0], { ...cues[1], text: 'second line, retold' }] },
+      { silent: true },
+    ));
+  });
+
+  it('flags a non-looping shot longer than its clip and trims it; a legacy scene is left alone', async () => {
+    const project = {
+      ...PROJECT_WITH_CLIP,
+      scenes: [
+        { sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img1', videoHistoryId: 'h1', beatAligned: true, startSec: 2, endSec: 12, loop: false, lyricText: 'first line' },
+        { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: 'img1', videoHistoryId: 'h2', beatAligned: true, startSec: 12, endSec: 30 },
+      ],
+    };
+    updateMusicVideoScene.mockResolvedValue({});
+    await openProject(project);
+    expect(screen.getByText(/first line/)).toBeTruthy();
+
+    const players = document.body.querySelectorAll('video[src^="/data/videos/h"]');
+    expect(players).toHaveLength(2);
+    for (const player of players) {
+      Object.defineProperty(player, 'duration', { configurable: true, value: 5 });
+      fireEvent.loadedMetadata(player);
+    }
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts).toHaveLength(1); // the legacy s2 keeps looping to fill its span
+    expect(alerts[0].textContent).toContain('Shot runs 10.0s but its clip is 5.0s');
+
+    fireEvent.click(within(alerts[0]).getByRole('button', { name: 'Trim to clip' }));
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's1', { endSec: 7 }, { silent: true }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   });
 });
 

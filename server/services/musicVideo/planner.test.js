@@ -14,10 +14,10 @@ import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunn
 import { getProject, addProjectScenes } from './projects.js';
 import {
   validSections,
-  planScenesFromSections,
   buildScenePlanPrompt,
   planProject,
 } from './planner.js';
+import { planShots } from './shotPlan.js';
 
 const SECTIONS = [
   { label: 'Intro', startSec: 0, endSec: 10, energy: 0.2 },
@@ -66,84 +66,175 @@ describe('validSections', () => {
   });
 });
 
-describe('planScenesFromSections', () => {
+// Contiguous, gap-free tiling of [from, to] — the "complete timeline coverage"
+// half of the plan contract.
+function expectTiles(shots, from, to) {
+  expect(shots[0].startSec).toBe(from);
+  expect(shots.at(-1).endSec).toBe(to);
+  for (let i = 1; i < shots.length; i++) expect(shots[i].startSec).toBe(shots[i - 1].endSec);
+}
+
+describe('planShots', () => {
   const GRID = { beats: BEATS, downbeats: DOWNBEATS };
+  const VERSE = [{ label: 'Verse', startSec: 0, endSec: 24, energy: 0.5 }];
 
-  it('builds one scene-create input per section, in order', () => {
-    const inputs = planScenesFromSections(SECTIONS, GRID);
-    expect(inputs).toHaveLength(3);
-    expect(inputs[0]).toEqual({
-      label: 'Intro', sectionLabel: 'Intro', startSec: 0, endSec: 10, beatAligned: true,
-    });
-    expect(inputs[1]).toMatchObject({ label: 'Drop', startSec: 10, endSec: 18 });
-    expect(inputs[2]).toMatchObject({ label: 'Outro', startSec: 18, endSec: 30 });
-  });
-
-  it('each scene duration is its (snapped) section span — energy-aware via segmentation', () => {
-    const inputs = planScenesFromSections(SECTIONS, GRID);
-    for (let i = 0; i < SECTIONS.length; i++) {
-      expect(inputs[i].endSec - inputs[i].startSec).toBe(SECTIONS[i].endSec - SECTIONS[i].startSec);
+  it('splits a verse longer than the clip capacity into bounded, beat-cut shots covering it exactly', () => {
+    const { shots, pacing } = planShots(VERSE, { ...GRID, clipCapacitySec: 5 });
+    expect(pacing).toEqual({ minShotSec: 2, maxShotSec: 5, hookSec: 3 });
+    expect(shots.length).toBeGreaterThanOrEqual(5);
+    expectTiles(shots, 0, 24);
+    for (const shot of shots) {
+      const len = shot.endSec - shot.startSec;
+      expect(len).toBeLessThanOrEqual(5);
+      expect(len).toBeGreaterThanOrEqual(2);
+      expect(shot.beatAligned).toBe(true);
+      expect(DOWNBEATS.concat(BEATS)).toContain(shot.startSec);
     }
+    // The opening hook is capped separately from the section pacing.
+    expect(shots[0].hook).toBe(true);
+    expect(shots[0].endSec - shots[0].startSec).toBeLessThanOrEqual(3);
+    expect(shots.slice(1).every((s) => !s.hook)).toBe(true);
+    // Section identity survives the split.
+    expect(shots.every((s) => s.sectionIndex === 0 && s.sectionLabel === 'Verse' && s.shotCount === shots.length)).toBe(true);
+    expect(shots.map((s) => s.shotIndex)).toEqual(shots.map((_, i) => i));
+    // Deterministic: the same inputs plan the same shots.
+    expect(planShots(VERSE, { ...GRID, clipCapacitySec: 5 }).shots).toEqual(shots);
   });
 
-  it('snaps off-grid section boundaries onto the beat grid, keeping the timeline contiguous', () => {
-    // Energy-novelty segmentation cuts on 0.5s window edges, so a real analysis
-    // routinely lands a boundary off the beat — 10.3s here snaps to the 10.5s
-    // beat (the 10.0s downbeat is outside the tempo-derived tolerance).
-    const inputs = planScenesFromSections([
-      { label: 'A', startSec: 0, endSec: 10.3 },
-      { label: 'B', startSec: 10.3, endSec: 18.2 },
-      { label: 'C', startSec: 18.2, endSec: 30 },
-    ], GRID);
-    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.5], [10.5, 18], [18, 30]]);
-    expect(inputs.every((i) => i.beatAligned)).toBe(true);
+  it('uses a Grok clip capacity and a project pacing ceiling when given', () => {
+    const grok = planShots(VERSE, { ...GRID, clipCapacitySec: 10 }).shots;
+    expect(grok.every((s) => s.endSec - s.startSec <= 10)).toBe(true);
+    expect(grok.length).toBeLessThan(planShots(VERSE, { ...GRID, clipCapacitySec: 5 }).shots.length);
+    const paced = planShots(VERSE, { ...GRID, clipCapacitySec: 10, pacing: { maxShotSec: 4 } }).shots;
+    expect(paced.every((s) => s.endSec - s.startSec <= 4)).toBe(true);
+    expectTiles(paced, 0, 24);
+    // A ceiling above the clip capacity cannot plan shots no clip can cover.
+    const over = planShots(VERSE, { ...GRID, clipCapacitySec: 5, pacing: { maxShotSec: 12 } });
+    expect(over.pacing.maxShotSec).toBe(5);
+    expect(over.shots.every((s) => s.endSec - s.startSec <= 5)).toBe(true);
   });
 
-  it('reports beatAligned:false on a scene whose edge could not snap', () => {
-    // Nothing snapped, so the flag must not claim otherwise — render.js's
-    // beatSnapClips then does its own live snapping instead of freezing the span.
-    const inputs = planScenesFromSections([
-      { label: 'A', startSec: 0, endSec: 10.3 },
-      { label: 'B', startSec: 10.3, endSec: 30 },
-    ], { ...GRID, toleranceSec: 0.05 });
-    expect(inputs.every((i) => i.beatAligned === false)).toBe(true);
-    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.3], [10.3, 30]]);
+  it('holds the pacing floor at half the ceiling so any span can still be tiled', () => {
+    const { shots, pacing } = planShots([{ label: 'Long', startSec: 0, endSec: 25 }], {
+      ...GRID, clipCapacitySec: 10, pacing: { minShotSec: 8, maxShotSec: 10 },
+    });
+    expect(pacing.minShotSec).toBe(5);
+    expectTiles(shots, 0, 25);
+    expect(shots.every((s) => s.endSec - s.startSec >= 5 && s.endSec - s.startSec <= 10)).toBe(true);
   });
 
-  it('keeps the planned spans honored when the track has no usable tempo', () => {
-    // No grid means no live snap to hand the span back to, so dropping the flag
-    // would leave the render at each clip's raw source duration instead of the
-    // planned section span — the plan would be silently discarded.
-    const inputs = planScenesFromSections(SECTIONS, { beats: [], downbeats: [] });
-    expect(inputs.every((i) => i.beatAligned === true)).toBe(true);
-    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10], [10, 18], [18, 30]]);
+  it('cuts on timed lyric lines (snapped to the beat) and attaches the lines each shot spans', () => {
+    const lyricCues = [
+      { text: 'line one', startSec: 4.1, endSec: 7.8 },
+      { text: 'line two', startSec: 9.9, endSec: 13.5 },
+      { text: 'line three', startSec: 14.05, endSec: 17 },
+      { text: 'untimed line', startSec: null, endSec: null },
+    ];
+    const sections = [
+      { label: 'Verse', startSec: 0, endSec: 20, energy: 0.5 },
+      { label: 'Solo', startSec: 20, endSec: 30, energy: 0.8 },
+    ];
+    const { shots } = planShots(sections, { ...GRID, lyricCues, clipCapacitySec: 5 });
+    expectTiles(shots, 0, 30);
+    const cuts = shots.map((s) => s.startSec);
+    // 4.1 / 9.9 / 14.05 are sung slightly off the beat; the cuts land on it.
+    expect(cuts).toEqual(expect.arrayContaining([4, 10, 14]));
+    const at = (t) => shots.find((s) => s.startSec === t);
+    expect(at(4).lyricText).toBe('line one');
+    expect(at(10).lyricText).toBe('line two');
+    expect(at(14).lyricText).toBe('line three');
+    // An untimed line is never placed, and the instrumental section invents nothing.
+    expect(shots.some((s) => s.lyricText?.includes('untimed'))).toBe(false);
+    const solo = shots.filter((s) => s.sectionLabel === 'Solo');
+    expect(solo.length).toBeGreaterThan(1);
+    expect(solo.every((s) => s.lyricText === null && s.sectionIndex === 1)).toBe(true);
   });
 
-  it('refuses a snap that would push a scene below the minimum scene length', () => {
-    const inputs = planScenesFromSections([
-      { label: 'A', startSec: 0, endSec: 10.3 },
-      { label: 'B', startSec: 10.3, endSec: 30 },
-    ], { ...GRID, minSceneSec: 25 });
-    expect(inputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.3], [10.3, 30]]);
-    expect(inputs.every((i) => i.beatAligned === false)).toBe(true);
+  // The render honors a planned span only for a beatAligned shot; an off-grid
+  // cut would hand both neighbours back to their raw clip length and break the
+  // planned timeline. A line sung between beats still cuts on the grid.
+  it('keeps every planned span honored when lyric lines and the hook fall between beats', async () => {
+    const slowBeats = Array.from({ length: 31 }, (_, i) => i * 1.25); // 48 BPM
+    const { shots } = planShots([{ label: 'Verse', startSec: 0, endSec: 30 }], {
+      beats: slowBeats,
+      downbeats: slowBeats.filter((_, i) => i % 4 === 0),
+      lyricCues: [{ text: 'between beats', startSec: 8.1, endSec: 11 }],
+      pacing: { minShotSec: 2.1, hookSec: 2.4 },
+      clipCapacitySec: 5,
+    });
+    expectTiles(shots, 0, 30);
+    expect(shots.every((s) => s.beatAligned)).toBe(true);
+    expect(shots.every((s) => slowBeats.includes(s.startSec))).toBe(true);
+    expect(shots.map((s) => s.startSec)).toContain(7.5);
   });
 
-  it('falls back to an empty/null label when a section has no label', () => {
-    const [input] = planScenesFromSections([{ startSec: 0, endSec: 5 }], GRID);
-    expect(input.label).toBe('');
-    expect(input.sectionLabel).toBeNull();
+  it('carries phrase-level visual intent onto the shots it covers', () => {
+    const phrases = [{ label: 'Lift', startSec: 20, endSec: 30, intent: 'slow push toward the sun' }];
+    const { shots } = planShots(SECTIONS, { ...GRID, phrases, clipCapacitySec: 5 });
+    const outro = shots.filter((s) => s.startSec >= 20);
+    expect(outro.length).toBeGreaterThan(0);
+    expect(outro.every((s) => s.visualIntent === 'slow push toward the sun' && s.phraseLabel === 'Lift')).toBe(true);
+    expect(shots.filter((s) => s.endSec <= 18).every((s) => s.visualIntent === null)).toBe(true);
+  });
+
+  // Section edges still come from snapSectionsToGrid (#4664). A ceiling wider
+  // than every section keeps one shot per section so the edges are observable.
+  describe('section edges', () => {
+    const WIDE = { clipCapacitySec: 60, pacing: { hookSec: 60 } };
+
+    it('snaps off-grid section boundaries onto the beat grid, keeping the timeline contiguous', () => {
+      const { shots } = planShots([
+        { label: 'A', startSec: 0, endSec: 10.3 },
+        { label: 'B', startSec: 10.3, endSec: 18.2 },
+        { label: 'C', startSec: 18.2, endSec: 30 },
+      ], { ...GRID, ...WIDE });
+      expect(shots.map((s) => [s.startSec, s.endSec])).toEqual([[0, 10.5], [10.5, 18], [18, 30]]);
+      expect(shots.every((s) => s.beatAligned)).toBe(true);
+    });
+
+    it('reports beatAligned:false on a shot whose section edge could not snap', () => {
+      const { shots } = planShots([
+        { label: 'A', startSec: 0, endSec: 10.3 },
+        { label: 'B', startSec: 10.3, endSec: 30 },
+      ], { ...GRID, ...WIDE, toleranceSec: 0.05 });
+      expect(shots.every((s) => s.beatAligned === false)).toBe(true);
+      expect(shots.map((s) => [s.startSec, s.endSec])).toEqual([[0, 10.3], [10.3, 30]]);
+    });
+
+    it('keeps planned spans honored when the track has no usable tempo', () => {
+      const { shots } = planShots(SECTIONS, { beats: [], downbeats: [], clipCapacitySec: 5 });
+      expectTiles(shots, 0, 30);
+      expect(shots.every((s) => s.beatAligned === true && s.endSec - s.startSec <= 5)).toBe(true);
+    });
   });
 });
 
 describe('buildScenePlanPrompt', () => {
-  it('includes the project concept, style, and per-section index/label/duration/energy', () => {
-    const prompt = buildScenePlanPrompt(makeProject(), SECTIONS);
+  it('includes the concept, style, and per-shot section/duration/energy/lyrics/intent', () => {
+    const { shots } = planShots(SECTIONS, {
+      beats: BEATS,
+      downbeats: DOWNBEATS,
+      clipCapacitySec: 10,
+      lyricCues: [{ text: 'we run the night', startSec: 10, endSec: 14 }],
+      phrases: [{ label: 'Lift', startSec: 18, endSec: 30, intent: 'the city falls away' }],
+    });
+    const prompt = buildScenePlanPrompt(makeProject(), shots);
     expect(prompt).toContain('Neon Nights');
     expect(prompt).toContain('cyberpunk chase');
     expect(prompt).toContain('neon, rain-slicked streets');
-    expect(prompt).toContain('0. "Intro" — 10.0s, normalized energy 0.20');
-    expect(prompt).toContain('1. "Drop" — 8.0s, normalized energy 0.95');
+    expect(prompt).toMatch(/0\. "Intro" shot 1\/\d+ — \d+\.\ds, energy 0\.20; instrumental; OPENING HOOK/);
+    expect(prompt).toContain('"Drop" shot 1/');
+    expect(prompt).toContain('lyrics: "we run the night"');
+    expect(prompt).toContain('intent: the city falls away');
+    expect(prompt).toContain('Never render the lyrics as on-screen text');
     expect(prompt).toContain('JSON array');
+  });
+
+  it('omits the lyric guidance for a track with no lyrics', () => {
+    const { shots } = planShots(SECTIONS, { beats: BEATS, downbeats: DOWNBEATS });
+    const prompt = buildScenePlanPrompt(makeProject(), shots);
+    expect(prompt).not.toContain('lyrics:');
+    expect(prompt).not.toContain('on-screen text');
   });
 });
 
@@ -176,7 +267,7 @@ describe('planProject', () => {
     return { project: { ...makeProject(), renderHistoryId: 'rh-fresh', scenes: FRESH_SCENES, ...overrides }, scenes: FRESH_SCENES };
   }
 
-  it('seeds one scene per section, calls getProject exactly once, and returns the freshly-persisted project from addProjectScenes', async () => {
+  it('seeds several non-looping shots per section, calls getProject exactly once, and returns the freshly-persisted project from addProjectScenes', async () => {
     const project = makeProject();
     getProject.mockResolvedValue(project);
     addProjectScenes.mockResolvedValue(freshProjectResult());
@@ -185,10 +276,14 @@ describe('planProject', () => {
     const result = await planProject('mv-1');
 
     expect(getProject).toHaveBeenCalledTimes(1);
-    expect(addProjectScenes).toHaveBeenCalledWith('mv-1', expect.arrayContaining([
-      expect.objectContaining({ label: 'Intro', startSec: 0, endSec: 10 }),
-    ]));
-    expect(addProjectScenes.mock.calls[0][1]).toHaveLength(3);
+    // Local renderer (5s clips): 30s of sections → more shots than sections,
+    // each labeled within its section and never looping by default.
+    const seeded = addProjectScenes.mock.calls[0][1];
+    expect(seeded.length).toBeGreaterThan(3);
+    expect(seeded[0]).toMatchObject({ label: expect.stringMatching(/^Intro · 1\/\d+$/), sectionLabel: 'Intro', sectionIndex: 0, startSec: 0, loop: false });
+    expect(seeded.every((scene) => scene.loop === false && scene.endSec - scene.startSec <= 5)).toBe(true);
+    expect(seeded.at(-1)).toMatchObject({ sectionLabel: 'Outro', sectionIndex: 2, endSec: 30 });
+    expect(result.pacing).toEqual({ minShotSec: 2, maxShotSec: 5, hookSec: 3 });
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
     expect(result.project.renderHistoryId).toBe('rh-fresh');
     expect(result.scenesAdded).toBe(3);
@@ -318,7 +413,7 @@ Here is my answer:
     warnSpy.mockRestore();
   });
 
-  it('threads the cached beat grid into the snap, so seeded spans cut on the music', async () => {
+  it('threads the cached beat grid, lyrics, and pacing into the plan', async () => {
     getProject.mockResolvedValue(makeProject({
       audioAnalysis: {
         bpm: 120,
@@ -330,14 +425,23 @@ Here is my answer:
           { label: 'B', startSec: 10.3, endSec: 30, energy: 0.9 },
         ],
       },
+      videoSettings: { backend: 'grok', grokDuration: 10 },
+      pacing: { maxShotSec: 8 },
+      lyricCues: [{ id: 'lc-1', text: 'hold on', startSec: 12.1, endSec: 15 }],
     }));
     addProjectScenes.mockResolvedValue(freshProjectResult());
 
     await planProject('mv-1', { seedPrompts: false });
 
     const seededInputs = addProjectScenes.mock.calls[0][1];
-    expect(seededInputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10.5], [10.5, 30]]);
-    expect(seededInputs.every((i) => i.beatAligned)).toBe(true);
+    // Section B starts on the snapped 10.5s beat; the project ceiling (8s)
+    // wins over the Grok clip length (10s).
+    expect(seededInputs.find((i) => i.sectionIndex === 1).startSec).toBe(10.5);
+    expect(seededInputs.every((i) => i.beatAligned && i.endSec - i.startSec <= 8)).toBe(true);
+    const lyricShots = seededInputs.filter((i) => i.lyricText === 'hold on');
+    expect(lyricShots).toHaveLength(1);
+    expect(lyricShots[0].startSec).toBeLessThanOrEqual(12.1);
+    expect(lyricShots[0].endSec).toBeGreaterThanOrEqual(15);
   });
 
   it('still honors the planned spans when the cached analysis has no beat grid', async () => {
@@ -350,6 +454,8 @@ Here is my answer:
 
     const seededInputs = addProjectScenes.mock.calls[0][1];
     expect(seededInputs.every((i) => i.beatAligned === true)).toBe(true);
-    expect(seededInputs.map((i) => [i.startSec, i.endSec])).toEqual([[0, 10], [10, 18], [18, 30]]);
+    expect(seededInputs[0].startSec).toBe(0);
+    expect(seededInputs.at(-1).endSec).toBe(30);
+    for (let i = 1; i < seededInputs.length; i++) expect(seededInputs[i].startSec).toBe(seededInputs[i - 1].endSec);
   });
 });

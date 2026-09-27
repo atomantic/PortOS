@@ -60,6 +60,37 @@ const appendToVideoHistory = (meta) =>
 
 export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
+// #8964 loop semantics. A scene saved before shot planning existed has no
+// `loop` key and keeps the legacy behavior — its clip repeats to fill the
+// authored span — so existing projects render exactly as they did. A scene
+// created since carries an explicit boolean, and only `loop: true` repeats.
+const sceneLoops = (scene) => scene?.loop !== false;
+
+// A non-looping shot may run this much past its source clip; the gap holds the
+// final frame (tpad) rather than repeating footage. Longer shortfalls block the
+// render until the director resolves them.
+const COVERAGE_TOLERANCE_SEC = 0.25;
+const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop']);
+
+/**
+ * Pure: the snapped clips whose authored span needs more footage than their
+ * non-looping source clip provides. Returns
+ * `[{ sceneId, spanSec, clipSec, shortBySec }]` (empty when every shot is covered).
+ */
+function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
+  const out = [];
+  for (const clip of Array.isArray(clips) ? clips : []) {
+    if (clip.loop !== false) continue;
+    const spanSec = clip.outSec - clip.inSec;
+    const clipSec = clip.sourceSec ?? clip.duration;
+    if (spanSec - clipSec > toleranceSec) {
+      const round = (n) => Math.round(n * 100) / 100;
+      out.push({ sceneId: clip.sceneId, spanSec: round(spanSec), clipSec: round(clipSec), shortBySec: round(spanSec - clipSec) });
+    }
+  }
+  return out;
+}
+
 export function getRenderJobStatus(jobId) {
   const job = jobs.get(jobId);
   if (!job) return null;
@@ -130,6 +161,10 @@ export async function resolveSceneClips(project) {
       height: entry.height,
       fps: entry.fps || 24,
       duration,
+      // The native source length survives the snap below (which rewrites
+      // `duration` to the rendered span) so coverage can be judged against it.
+      sourceSec: duration,
+      loop: sceneLoops(scene),
       inSec: 0,
       outSec: duration,
     });
@@ -146,7 +181,8 @@ export async function resolveSceneClips(project) {
 // analyzed beat, when one is within `toleranceSec` and the trim keeps the clip
 // at least `minClipSec` long. This derived, non-authored snap only SHORTENS a
 // source clip. A director-authored beatAligned span is handled separately
-// below and may exceed the native clip because the ffmpeg builder loops it.
+// below and may exceed the native clip: a looping scene fills it by repeating
+// the clip, a non-looping one is caught by findCoverageShortfalls (#8964).
 // Returns a NEW clips array with adjusted `outSec`/`duration`.
 // With no beats (no analysis) and no persisted scene arrangement, clips are
 // returned unchanged.
@@ -171,10 +207,11 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     if (scene?.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec) {
       // inSec stays 0 here deliberately: this only ever trims how much of the
       // clip plays, never which frames — there is no in-point/out-point
-      // distinction. A planned music-video scene commonly spans much longer
-      // than one generated 6–10s source clip; buildMusicVideoFfmpegArgs loops
-      // that input, so the authored timeline duration is allowed to exceed the
-      // source duration instead of silently truncating the final song.
+      // distinction. A legacy planned scene commonly spans much longer than
+      // one generated 6–10s source clip; buildMusicVideoFfmpegArgs loops a
+      // looping input, so the authored timeline duration is allowed to exceed
+      // the source duration instead of silently truncating the final song. A
+      // non-looping shot that does so is refused before render (#8964).
       const outSec = Math.max(minClipSec, scene.endSec - scene.startSec);
       running += outSec;
       return { ...clip, inSec: 0, outSec, duration: outSec };
@@ -215,10 +252,15 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
 
   const inputs = [];
   // A generated scene clip is a reusable shot source, while the director's
-  // timeline owns how long that shot appears in the music video. Loop each
-  // finite clip input so a 6–10s Grok/local result can fill a longer verse or
-  // chorus span; the per-input trim below still makes every loop finite.
-  for (const c of clips) inputs.push('-stream_loop', '-1', '-i', c.videoPath);
+  // timeline owns how long that shot appears in the music video. A LOOPING
+  // clip input repeats so a 6–10s Grok/local result can fill a longer verse or
+  // chorus span; the per-input trim below still makes every loop finite. A
+  // non-looping clip (#8964, `loop: false`) is read once — the render preflight
+  // guarantees its span fits, within COVERAGE_TOLERANCE_SEC.
+  for (const c of clips) {
+    if (c.loop !== false) inputs.push('-stream_loop', '-1');
+    inputs.push('-i', c.videoPath);
+  }
   const audioIdx = clips.length; // master audio is the last input
   inputs.push('-i', audioPath);
 
@@ -226,10 +268,14 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const vStreams = [];
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
+    // A non-looping shot a hair longer than its source holds the last frame for
+    // the remainder instead of ending early and drifting every later cut.
+    const holdSec = c.loop === false ? (c.outSec - c.inSec) - (c.sourceSec ?? c.duration) : 0;
+    const hold = holdSec > 0 ? `tpad=stop_mode=clone:stop_duration=${Math.round(holdSec * 1000) / 1000},` : '';
     filters.push(
       `[${i}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,`
       + `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},`
-      + `trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`,
+      + `${hold}trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`,
     );
     vStreams.push(`[v${i}]`);
   }
@@ -283,6 +329,16 @@ export async function renderMusicVideo(projectId) {
     const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
     const beats = project.audioAnalysis?.beats;
     const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
+    // #8964: a new (non-looping) shot must never silently repeat footage to
+    // fill its span. Refuse the render and name the shots that need a trim,
+    // a continuation, a replacement clip, or an explicit loop.
+    const shortfalls = findCoverageShortfalls(clips);
+    if (shortfalls.length > 0) {
+      throw new ServerError(
+        `${shortfalls.length} shot${shortfalls.length === 1 ? ' is' : 's are'} longer than ${shortfalls.length === 1 ? 'its' : 'their'} source clip — trim, continue, replace, or loop ${shortfalls.length === 1 ? 'it' : 'them'} before rendering`,
+        { status: 422, code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls, resolutions: COVERAGE_RESOLUTIONS } },
+      );
+    }
     await ensureDir(PATHS.videos);
     await ensureDir(PATHS.videoThumbnails);
 

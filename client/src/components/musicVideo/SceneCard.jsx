@@ -1,9 +1,12 @@
-import { useRef } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2 } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
+// Mirrors render.js COVERAGE_TOLERANCE_SEC: a non-looping shot may run this far
+// past its clip (the last frame holds); beyond it the render refuses (#8964).
+const COVERAGE_TOLERANCE_SEC = 0.25;
 
 /**
  * One scene on the board: ordering/delete, the shot + reference-frame prompts
@@ -26,6 +29,18 @@ export default function SceneCard({
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
   // native controls let the user unmute it first (muted is only initial).
   const clipPlayerRef = useRef(null);
+  // Source-clip length, read from the inline player's metadata and keyed to
+  // the clip it was measured from so a regenerated clip is re-measured.
+  const [clipMeta, setClipMeta] = useState(null);
+  const clipSec = clipMeta?.id === scene.videoHistoryId ? clipMeta.sec : null;
+  // Pre-#8964 scenes have no `loop` key and keep the legacy loop-to-fill render.
+  const loops = scene.loop !== false;
+  const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
+    ? scene.endSec - scene.startSec
+    : null;
+  const shortBySec = !loops && spanSec != null && clipSec != null ? spanSec - clipSec : 0;
+  const underCovered = shortBySec > COVERAGE_TOLERANCE_SEC;
+  const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -40,6 +55,7 @@ export default function SceneCard({
               : ''}
             {scene.referenceImageId ? ' · frame ready' : ''}
             {scene.videoHistoryId ? ' · video ready' : ''}
+            {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -56,6 +72,12 @@ export default function SceneCard({
         placeholder="Shot prompt — what this scene's video should show"
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
+      {(scene.lyricText || scene.visualIntent) && (
+        <div className="text-[11px] text-port-text-muted space-y-0.5">
+          {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
+          {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2 items-center text-xs">
         {SCENE_TIME_FIELDS.map(([labelText, key]) => {
           const toValue = (v) => (v === '' ? null : Number(v));
@@ -72,7 +94,24 @@ export default function SceneCard({
             onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
           Beat-aligned
         </label>
+        <label className="flex items-center gap-1" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+          <input type="checkbox" checked={loops} onChange={(e) => applyPatch({ loop: e.target.checked })} />
+          Loop clip
+        </label>
       </div>
+      {underCovered && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+          <AlertTriangle size={13} className="shrink-0" />
+          <span className="min-w-0 flex-1 basis-48">
+            Shot runs {spanSec.toFixed(1)}s but its clip is {clipSec.toFixed(1)}s — the render won&apos;t repeat it.
+            Trim the shot, continue or regenerate a longer clip, or loop it on purpose.
+          </span>
+          <button type="button" onClick={() => applyPatch({ endSec: Math.round((scene.startSec + clipSec) * 1000) / 1000 })}
+            className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
+          <button type="button" onClick={() => applyPatch({ loop: true })}
+            className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+        </div>
+      )}
       {/* Reference frame — the still image that seeds this shot (Phase 1b) */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
         <textarea
@@ -119,6 +158,10 @@ export default function SceneCard({
               playsInline
               preload="metadata"
               controls
+              onLoadedMetadata={(e) => {
+                const sec = e.currentTarget.duration;
+                if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec });
+              }}
             />
             {/* Corner expand — do not put the open handler on <video> itself;
                 that would fight native play/pause controls. Shape matches

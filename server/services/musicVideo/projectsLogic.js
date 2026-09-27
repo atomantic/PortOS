@@ -28,6 +28,7 @@ import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
+import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -92,6 +93,11 @@ export function buildProjectRecord(input, { id, now }) {
     ...persistedRenderPinFields(input),
     audioAnalysis: null,
     midiTranscription: null,
+    // #8964 — editable timed lyric cues + phrase annotations (timed against
+    // the current audio source) and the shot planner's pacing range.
+    lyricCues: [],
+    phrases: [],
+    pacing: null,
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -153,9 +159,16 @@ export function applyProjectPatch(project, patch) {
   // below, so a caller sending only the sub-field it edited (e.g. { style: '…' })
   // can't clobber a sibling sub-field (e.g. prompt) set concurrently by another
   // sync peer (#3168). An explicit `concept: null` still clears it outright.
-  const conceptMergedPatch = ('concept' in patch && patch.concept && project.concept)
-    ? { ...patch, concept: { ...project.concept, ...patch.concept } }
-    : patch;
+  // Edited cue/phrase lists replace the stored list whole, normalized so every
+  // entry persists a stable id and a forward time range (timedText.js).
+  const timedPatch = {
+    ...patch,
+    ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
+    ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
+  };
+  const conceptMergedPatch = ('concept' in timedPatch && timedPatch.concept && project.concept)
+    ? { ...timedPatch, concept: { ...project.concept, ...timedPatch.concept } }
+    : timedPatch;
   // Renderer settings are edited independently in the UI. Merge a partial
   // change so picking a model cannot discard the provider or Grok duration.
   const mergedPatch = ('videoSettings' in conceptMergedPatch && conceptMergedPatch.videoSettings)
@@ -198,7 +211,17 @@ export function applyProjectPatch(project, patch) {
   const statusPatch = regressStatus ? { status: 'draft' } : {};
   // The MIDI transcription was produced from the OLD audio too — clear it with
   // the analysis so a stale .mid can't masquerade as the new track's score.
-  return touch(project, { ...mergedPatch, ...statusPatch, audioAnalysis: null, midiTranscription: null, scenes });
+  // Lyric-cue and phrase timings were aligned to the OLD audio as well: keep the
+  // director's text but clear the times (#8964), unless this same patch supplied
+  // fresh lists of its own.
+  return touch(project, {
+    ...invalidateTimedText(project),
+    ...mergedPatch,
+    ...statusPatch,
+    audioAnalysis: null,
+    midiTranscription: null,
+    scenes,
+  });
 }
 
 /**
@@ -236,6 +259,13 @@ function buildScene(input, { order }) {
     beatAligned: input.beatAligned ?? false,
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
+    // #8964: a new shot never silently repeats its clip to fill a span — looping
+    // is an explicit choice. (Pre-#8964 scenes carry no `loop` key and keep the
+    // legacy loop-to-fill render; see render.js#sceneLoops.)
+    loop: input.loop ?? false,
+    sectionIndex: input.sectionIndex ?? null,
+    lyricText: input.lyricText ?? null,
+    visualIntent: input.visualIntent ?? null,
     referenceImageId: null,
     videoHistoryId: null,
   };
