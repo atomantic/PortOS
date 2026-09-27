@@ -150,6 +150,36 @@ const recover = id => new Promise((resolve, reject) => {
 });
 const importsStarted = () => stubs.events().filter(line => line === 'import-start').length;
 
+// Bounded, synthetic-only failure evidence, read BEFORE afterEach removes the
+// disposable root (#8904): every fixture event, the operator's bounded stage
+// and coordinator state, and the stderr tail of each owned worker (active or
+// archived) and each surrogate server.
+const tail = path => (existsSync(path) ? readFileSync(path, 'utf8').slice(-1_500) : '');
+function evidence() {
+  const operator = spawnSync(process.execPath, [fileURLToPath(new URL('../../scripts/database-maintenance.mjs', import.meta.url)), 'status'],
+    { env, encoding: 'utf8', timeout: 10_000 });
+  const completed = join(root, 'data', 'database-maintenance-completed');
+  const controlParents = [join(root, 'data', 'database-maintenance'),
+    ...(existsSync(completed) ? readdirSync(completed).map(id => join(completed, id)) : [])];
+  const workers = controlParents.flatMap(parent => (existsSync(parent) ? readdirSync(parent) : [])
+    .filter(name => name.startsWith('worker-')).map(name => join(parent, name, 'stderr.log')));
+  return [
+    `events: ${JSON.stringify(stubs.events())}`,
+    `status (exit ${operator.status}): ${(operator.stdout || operator.stderr).trim().slice(0, 1_500)}`,
+    ...workers.map((path, index) => `worker ${index} stderr: ${tail(path)}`),
+    `surrogate stderr: ${tail(join(stubs.dir, 'surrogate-stderr.log'))}`,
+  ].join('\n');
+}
+// vi.waitFor that appends the evidence above when its deadline expires.
+async function waitWithEvidence(assertion, timeout) {
+  try {
+    await vi.waitFor(assertion, { timeout, interval: 50 });
+  } catch (err) {
+    err.message += `\n--- maintenance evidence ---\n${evidence()}`;
+    throw err;
+  }
+}
+
 describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => {
   it.each([[source, target], [target, source]])('cuts over the recorded operation once and releases only after the restarted server proves the target (%#)', async (from, to) => {
     writeFileSync(join(root, '.env'), `PGMODE=${from.mode}\n`);
@@ -161,7 +191,7 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
     expect(outcomes.filter(value => value.status === 1)).toHaveLength(1);
     expect(releasedResult(released[0])).toEqual({ id: operation.id, stage: 'released', source: from.mode, target: to.mode,
       importCommitted: true, sourceRetained: true, restartVerified: true, cosRestarted: true });
-    await vi.waitFor(() => expect(stubs.events()).toContain(`server booted ${to.port}`), { timeout: 15_000, interval: 50 });
+    await waitWithEvidence(() => expect(stubs.events()).toContain(`server booted ${to.port}`), 15_000);
     expect(stubs.events().slice(0, 6)).toEqual(['stop portos-cos', 'stop portos-server', 'dump writer=none',
       'import-start', 'import-commit', 'restart portos-server']);
     expect(stubs.events()).toContain('restart portos-cos');
@@ -189,8 +219,8 @@ describe.skipIf(process.platform === 'win32')('owned maintenance worker', () => 
     const outcomes = await Promise.all([recover(operation.id), recover(operation.id)]);
     expect(outcomes.map(value => value.status), outcomes.map(value => value.stderr).join('\n')).toEqual([0, 0]);
     expect(outcomes.map(value => JSON.parse(value.stdout).recovery).sort()).toEqual(['launched', 'running']);
-    await vi.waitFor(() => expect(stubs.events()).toContain(`server booted ${target.port}`), { timeout: 30_000, interval: 50 });
-    await vi.waitFor(() => expect(journal.read()).toBeNull(), { timeout: 10_000, interval: 50 });
+    await waitWithEvidence(() => expect(stubs.events()).toContain(`server booted ${target.port}`), 30_000);
+    await waitWithEvidence(() => expect(journal.read()).toBeNull(), 10_000);
     // One recovered worker: one export retry, one import, one server restart.
     expect(stubs.invocations('pg_dump')).toHaveLength(2);
     expect(importsStarted()).toBe(1);

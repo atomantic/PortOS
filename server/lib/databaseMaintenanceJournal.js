@@ -154,6 +154,11 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       }
       return current;
     } catch {
+      // The fence check and the record reads are separate syscalls. A release
+      // or cancellation that renames the fence between them is not damage:
+      // once the directory itself is gone, no operation is active. Anything
+      // still fenced (partial publication, damaged record) fails closed.
+      if (!isFenced()) return null;
       throw databaseMaintenanceError();
     }
   };
@@ -443,7 +448,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
         || new Set(snapshot.producers.map(p => p.pmId)).size !== 2) throw databaseMaintenanceError();
       return snapshot.producers;
     } catch (err) {
-      if (err.code === 'ENOENT' && read().stage === 'accepted') return null;
+      if (err.code === 'ENOENT' && read()?.stage === 'accepted') return null;
       throw databaseMaintenanceError();
     }
   };
@@ -451,7 +456,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const recordProducerSnapshot = (id, token, producers) => {
     assertNotRealDataWrite(activeDir, 'database maintenance producer inventory');
     assertCoordinatorWorker(id, token);
-    if (read().stage !== 'accepted' || readProducerSnapshot(id, token)) throw databaseMaintenanceError();
+    if (read()?.stage !== 'accepted' || readProducerSnapshot(id, token)) throw databaseMaintenanceError();
     const snapshot = producerSnapshotSchema.parse({ id, producers });
     writeDurableExclusive(join(activeDir, 'producers.json'), snapshot);
     syncDirectory(activeDir);
@@ -508,13 +513,13 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     // or a committed mode back to the source.
     while (true) {
       const current = read();
-      if (!stages.includes(current.stage)) throw databaseMaintenanceError();
+      if (!stages.includes(current?.stage)) throw databaseMaintenanceError();
       const decision = decide(id, previousToken, current.stage, { kind: 'recovery', recoveryToken });
       if (decision.kind === 'recovery') {
         if (decision.recoveryToken !== recoveryToken) throw databaseMaintenanceError();
         break;
       }
-      if (read().stage === current.stage) transition(id, previousToken, current.stage, decision.nextStage);
+      if (read()?.stage === current.stage) transition(id, previousToken, current.stage, decision.nextStage);
     }
     const directory = workerDirectory(previousToken);
     const fd = openSync(join(directory, 'exit'), 'r+');
@@ -588,7 +593,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     }
     writeDurableExclusive(join(activeDir, 'cancel-' + id + '.claim'), { id });
     const current = read();
-    if (current.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
+    if (current?.id !== id || current.stage !== 'accepted') throw databaseMaintenanceError();
     const archiveDir = join(dataDir, 'database-maintenance-cancelled');
     mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
     // Archive before reopening admission; retain the operation's direction as
