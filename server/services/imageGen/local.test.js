@@ -11,6 +11,11 @@ vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalM
 vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
+// Lets a test force the post-render degenerate-frame check to throw, without
+// touching the real frame-guard implementation the other suites exercise.
+const mockRejectDegenerateFrame = vi.fn(async () => null);
+vi.mock('./frameGuard.js', () => ({ rejectDegenerateFrame: (...args) => mockRejectDegenerateFrame(...args) }));
+
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
 const mockResolveFlux2Python = vi.fn();
@@ -1046,5 +1051,58 @@ describe('local render failure delivery', () => {
     expect(attachSseClient(jobId, response)).toBe(true);
     expect(response.write.mock.calls[0][0]).toContain(expected);
     response.req.emit('close');
+  });
+});
+
+// Regression (#8905): proc.on('close', async …) had no outer try/catch, so a
+// throw from the post-render work (rejectDegenerateFrame, autoCleanGeneratedImage,
+// …) escaped as an unhandled rejection instead of settling the job — leaving it
+// stuck 'running' forever with no terminal SSE frame and no scheduled cleanup.
+describe('local render failure delivery — post-render throw safety net', () => {
+  beforeEach(() => {
+    mockRejectDegenerateFrame.mockReset();
+    mockRejectDegenerateFrame.mockResolvedValue(null);
+  });
+
+  it('settles the job to error, emits failed, and schedules cleanup when a post-render hook rejects', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    // Simulate a post-exit hook throwing on an otherwise-successful render
+    // (code 0) — the exact hazard window the shipped runtime never covered.
+    mockRejectDegenerateFrame.mockRejectedValueOnce(new Error('disk read failed mid-decode'));
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { SSE_CLEANUP_DELAY_MS } = await import('../../lib/sseUtils.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    vi.useFakeTimers();
+    try {
+      child.emit('close', 0);
+      const failure = await failed;
+      expect(failure.error).toContain('disk read failed mid-decode');
+
+      // Still delivers a terminal SSE frame instead of leaving a connected
+      // client hanging — replay proves the job settled to 'error', not stuck
+      // 'running'.
+      const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+      expect(attachSseClient(jobId, response)).toBe(true);
+      expect(response.write.mock.calls[0][0]).toContain('disk read failed mid-decode');
+      response.req.emit('close');
+
+      // closeJobAfterDelay was scheduled from the outer catch/finally — the
+      // job is still present immediately after, then gone once the grace
+      // window elapses, proving cleanup was scheduled exactly once (not
+      // skipped by the throw).
+      vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+      const late = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+      expect(attachSseClient(jobId, late)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
