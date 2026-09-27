@@ -148,6 +148,20 @@ a temporary browser profile and data root, never the live managed browser.
 Set `CHROME_PATH` when Chrome is not in a standard location. The suite skips
 explicitly when either binary is unavailable; route and queue tests still run.
 
+## Music-video typography overlays
+
+A Music Video project whose composition manifest is in `composed` mode
+(#8984) renders its timed text cues through this same sandbox. PortOS writes a
+generated overlay page (`server/services/musicVideo/composition.js`) to
+`data/music-video-compositions/<jobId>/`, opens it with the composition
+browser on a transparent background, and captures only the time ranges where
+text is on screen into alpha overlay clips. The music-video renderer then lays
+them over the cut footage in its single ffmpeg pass, so the song remains the
+only audio. A cue's state at a time is a pure function of that time
+(`cueStateAt`), and text is kept inside a 10% title-safe inset at any aspect.
+The scratch directory is removed when the render ends, swept at boot, and
+excluded from backups.
+
 ## Launch-video admission (API foundation)
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
