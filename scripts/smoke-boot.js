@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Server boot smoke test — imports server/index.js in a child process and
+// Server boot smoke test — imports server/start.js in a child process and
 // waits for readiness, verifies it stays alive for SMOKE_WINDOW_MS, and
 // requires a clean shutdown. Catches the
 // class of bug where top-level initialization code throws (e.g. chaining
@@ -37,7 +37,7 @@ import { rewriteAppsPortosRoot } from './lib/rewriteAppsPortosRoot.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CODE_ROOT = join(__dirname, '..');
-const SERVER_ENTRY = join(CODE_ROOT, 'server', 'index.js');
+const SERVER_ENTRY = join(CODE_ROOT, 'server', 'start.js');
 
 /** Ends in `_test`, so `server/lib/db.js` treats it as a test database. */
 export const SMOKE_DATABASE = 'portos_smoke_test';

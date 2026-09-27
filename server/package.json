@@ -8,8 +8,8 @@
     "npm": ">=11.11.0"
   },
   "scripts": {
-    "dev": "node --watch index.js",
-    "start": "node index.js",
+    "dev": "node --watch start.js",
+    "start": "node start.js",
     "test": "vitest run",
     "test:fast": "vitest run",
     "test:watch": "vitest",

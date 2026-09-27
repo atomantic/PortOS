@@ -261,3 +261,36 @@ Cancellation supports only the initial accepted stage, preserves the journal in 
 An incomplete publication or interrupted cancellation remains fenced. Do not remove the active directory, steal its cancellation claim, or guess a backend from `.env`: retain the journal for recovery. This first boundary deliberately supplies no transfer-stage resume/rollback command; the detached coordinator and verified restart protocol are tracked in #8810, and Settings recovery feedback in #8811. Normal startup and migration must not be re-enabled by treating this preparatory operation as a completed cutover.
 
 Coordinator stage publication uses immutable, atomically linked records. A same-operation retry with the existing owner token can confirm its last transition after a lost response; abandoned temporary files do not advance the stage, and a delayed retry cannot overwrite later progress. Interrupted claims from the older publication protocol still fail closed. This does not permit replacing a coordinator, reopening admission, or retrying SQL import: those require the offline recovery protocol.
+
+### Verification-only server startup
+
+The managed server entrypoint is `server/start.js`. Normal startup checks the
+persistent fence before importing the application graph, so routes, migrations,
+schedulers, and writer modules cannot initialize while maintenance is active.
+The CoS runner retains its separate boot fence.
+
+For an operation already at `verifying` or `verified`, a recovery operator can
+run a read-only target diagnostic from the intended target launch environment:
+
+```sh
+node server/start.js --verify-database <operation-id>
+```
+
+Supply the recorded target's `PGHOST`, `PGPORT`, `PGUSER`, and `PGDATABASE` through
+that environment, and credentials through `PGPASSWORD`. This direct Node command
+does not load `.env`; use the same resolved values the PM2 ecosystem would pass
+to the server. It checks the actual pool's captured connection settings against
+the recorded target before checkout, then checks database/user identity and the
+required memory/catalog schema in one read-only transaction. A stale source
+port, wrong operation, earlier stage, unavailable database, incomplete schema,
+or changed/damaged journal refuses the diagnostic. Raw connection errors and
+credentials are omitted from its response.
+
+Success returns `targetHealthy: true` and `fenced: true`, then closes the pool
+and exits. Repeating the command repeats the probe without changing any journal
+stage. It never imports the application, clears the fence, rewrites saved mode,
+or resumes writers. This is **not completed cutover or proof of a later ordinary
+restart**. The offline coordinator still must own shutdown/drain, transfer,
+interruption recovery, and a verified admission-release handshake (#8816).
+Do not advance journal stages manually to make this diagnostic run; unsupported
+or damaged operations must stay fenced with both database copies preserved.
