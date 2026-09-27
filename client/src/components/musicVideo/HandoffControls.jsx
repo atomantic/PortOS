@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, Upload, Activity, LayoutGrid } from 'lucide-react';
+import { Download, FileArchive, Upload, Activity, LayoutGrid } from 'lucide-react';
 import FilePickerButton from '../ui/FilePickerButton';
 
 const PROVIDERS = [['midjourney', 'Midjourney'], ['external', 'Other tool']];
@@ -12,7 +12,7 @@ const HANDOFF_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,vide
  * scene's tag (e.g. `S03-1a2b3c4d`) land on that exact scene as imported takes
  * with the chosen provider recorded. PortOS never contacts the external tool.
  */
-export default function HandoffControls({ projectId, busy, onExport, onImport, onOpenContactSheet }) {
+export default function HandoffControls({ projectId, busy, onExport, onExportBundle, onImport, onOpenContactSheet }) {
   const [provider, setProvider] = useState('midjourney');
   const selectId = `mv-handoff-provider-${projectId}`;
   return (
@@ -28,6 +28,13 @@ export default function HandoffControls({ projectId, busy, onExport, onImport, o
         title="Download per-scene prompts, file tags and reference files as JSON">
         <Download size={13} /> Export prompts
       </button>
+      {onExportBundle && (
+        <button type="button" onClick={onExportBundle} disabled={busy}
+          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 min-h-[44px] sm:min-h-0"
+          title="Download the manifest plus every reference image and selected frame as one zip">
+          <FileArchive size={13} /> Export bundle
+        </button>
+      )}
       <FilePickerButton multiple accept={HANDOFF_ACCEPT} disabled={busy}
         onChange={(e) => onImport(Array.from(e.target.files || []), provider)}
         ariaLabel="Import generated files"

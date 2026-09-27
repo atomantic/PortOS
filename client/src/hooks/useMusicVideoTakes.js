@@ -5,6 +5,7 @@ import {
   selectMusicVideoSceneTake,
   reviewMusicVideoSceneTake,
   getMusicVideoHandoff,
+  getMusicVideoHandoffBundle,
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
@@ -29,7 +30,9 @@ function handoffFileProblem(file, isVideo) {
 }
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const handoffFilename = (name) => `${String(name || 'music-video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'music-video'}-handoff.json`;
+const handoffSlug = (name) => String(name || 'music-video').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'music-video';
+const handoffFilename = (name) => `${handoffSlug(name)}-handoff.json`;
+const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
 
 /**
  * Scene-take review + external-asset handoff actions for the Music Video board
@@ -80,12 +83,32 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     'Failed to import take',
   );
 
+  // A clip picked from the video-history gallery for one scene (#8978). Same
+  // append-only contract as importTake: it fills the scene's video slot only
+  // while empty (appendSceneTakes), never replacing an existing selection.
+  const importClipTake = (scene, item) => runTakeOp(
+    (projectId) => addMusicVideoSceneTake(projectId, scene.sceneId, {
+      kind: 'video', assetId: item.id, source: 'imported',
+    }, { silent: true }).then((res) => res.scene),
+    'Failed to import clip take',
+  );
+
   const exportHandoff = () => getMusicVideoHandoff(project.id, { silent: true })
     .then((manifest) => {
       downloadBlob(JSON.stringify(manifest, null, 2), handoffFilename(project.name), 'application/json');
       toast.success(`Exported prompts for ${plural(manifest.scenes.length, 'scene')}`);
     })
     .catch((err) => toast.error(err?.message || 'Handoff export failed'));
+
+  // Downloadable ZIP counterpart (#8978): manifest.json plus every reference
+  // image and each scene's selected frame, so nothing has to be saved out of
+  // the gallery by hand before attaching it in the external tool.
+  const exportHandoffBundle = () => getMusicVideoHandoffBundle(project.id, { silent: true })
+    .then((buffer) => {
+      downloadBlob(buffer, handoffBundleFilename(project.name), 'application/zip');
+      toast.success('Exported handoff bundle');
+    })
+    .catch((err) => toast.error(err?.message || 'Handoff bundle export failed'));
 
   const importHandoffFiles = async (files, provider) => {
     if (!files.length) return;
@@ -127,5 +150,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, reviewTake, importTake, exportHandoff, importHandoffFiles };
+  return { busy, selectTake, reviewTake, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

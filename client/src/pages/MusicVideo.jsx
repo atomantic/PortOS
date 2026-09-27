@@ -45,6 +45,7 @@ import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
 import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker.jsx';
+import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
@@ -409,6 +410,13 @@ export default function MusicVideo() {
     const scene = (selected.scenes || []).find((s) => s.sceneId === pickerTarget.sceneId);
     if (scene) takes.importTake(scene, item);
   };
+  // Per-scene "Import clip take" (#8978) — pick an existing video-history
+  // clip and add it as a take, mirroring handlePickerSelect's image path.
+  const handleClipPickerSelect = (item) => {
+    if (!item?.id || !pickerTarget || pickerTarget.type !== 'clip' || !selected) return;
+    const scene = (selected.scenes || []).find((s) => s.sceneId === pickerTarget.sceneId);
+    if (scene) takes.importClipTake(scene, item);
+  };
 
   const handleDeleteScene = (sceneId) => {
     deleteMusicVideoScene(selected.id, sceneId, { silent: true })
@@ -497,12 +505,19 @@ export default function MusicVideo() {
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
-      {pickerTarget && (
+      {pickerTarget && pickerTarget.type !== 'clip' && (
         <GalleryImagePicker
           open
           allowUpload
           onClose={() => setPickerTarget(null)}
           onSelect={handlePickerSelect}
+        />
+      )}
+      {pickerTarget && pickerTarget.type === 'clip' && (
+        <GalleryVideoPicker
+          open
+          onClose={() => setPickerTarget(null)}
+          onSelect={handleClipPickerSelect}
         />
       )}
       {selected && (
@@ -638,6 +653,7 @@ export default function MusicVideo() {
                 projectId={selected.id}
                 busy={takes.busy}
                 onExport={takes.exportHandoff}
+                onExportBundle={takes.exportHandoffBundle}
                 onImport={takes.importHandoffFiles}
                 onOpenContactSheet={() => setContactSheetOpen(true)}
               />
@@ -708,6 +724,7 @@ export default function MusicVideo() {
                   onSelectTake={takes.selectTake}
                   onReviewTake={takes.reviewTake}
                   onImportTake={(target) => setPickerTarget({ type: 'take', sceneId: target.sceneId })}
+                  onImportClipTake={(target) => setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
                 />
               ))}
             </div>

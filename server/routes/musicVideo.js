@@ -50,7 +50,7 @@ import {
   selectSceneTake,
   reviewSceneTake,
 } from '../services/musicVideo/projects.js';
-import { buildHandoffManifest, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
+import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
 import {
   startMidiTranscription,
@@ -348,6 +348,18 @@ router.get('/:id/handoff', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   res.json(buildHandoffManifest(project));
+}));
+
+// Downloadable ZIP counterpart (#8978): the manifest plus every reference
+// image and each scene's selected frame, so nothing has to be saved out of
+// the gallery by hand before attaching it in the external tool.
+router.get('/:id/handoff/bundle', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { zip } = await buildHandoffBundle(project);
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="music-video-${project.id}-handoff.zip"`);
+  res.send(zip);
 }));
 
 // Associate already-uploaded assets with scenes. An item names its scene

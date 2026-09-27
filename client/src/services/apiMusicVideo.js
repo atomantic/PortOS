@@ -88,6 +88,12 @@ export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options =
 // asset was already stored through the gallery upload routes; resolves to
 // { project, imported, skipped }.
 export const getMusicVideoHandoff = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/handoff`, options);
+// The downloadable ZIP counterpart (#8978) — manifest.json plus reference
+// images and each scene's selected frame. Resolves to an ArrayBuffer; wrap it
+// in downloadBlob(..., 'application/zip') to trigger the save.
+export const getMusicVideoHandoffBundle = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/handoff/bundle`, {
+  responseType: 'arraybuffer', ...options,
+});
 export const importMusicVideoHandoff = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/handoff/import`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

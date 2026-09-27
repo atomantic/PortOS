@@ -1,8 +1,11 @@
 import { useState } from 'react';
-import { ImagePlus, Trash2, Plus, Palette } from 'lucide-react';
+import { ImagePlus, Trash2, Plus, Palette, Sparkles } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
+import toast from '../ui/Toast';
 
 const ROLES = [
   ['mood', 'Mood'], ['character', 'Character'], ['wardrobe', 'Wardrobe'],
@@ -27,6 +30,7 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
   const references = spec.references || [];
   const palette = spec.palette || [];
   const [color, setColor] = useState('#336699');
+  const [pulling, setPulling] = useState(false);
   const typography = useFieldDraft(spec.typography, (v) => onSave({ typography: v }));
   const cameraRules = useFieldDraft(spec.cameraRules, (v) => onSave({ cameraRules: v }));
   const idFor = (suffix) => `mv-spec-${project.id}-${suffix}`;
@@ -34,6 +38,28 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
   const saveReferences = (next) => onSave({ references: next });
   const updateRef = (id, patch) => saveReferences(references.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const flagged = references.filter((r) => r.condition).length;
+
+  // "Pull from universe" (#8978) — reuse the linked universe's canon
+  // characters/places/objects as references instead of re-picking every one
+  // by hand through Add reference. Idempotent: images already present are
+  // skipped, so a second click adds nothing new.
+  const universeId = project.concept?.universeId || null;
+  const handlePullFromUniverse = () => {
+    if (!universeId || pulling) return;
+    setPulling(true);
+    getUniverse(universeId, { silent: true })
+      .then((universe) => {
+        const { next, added, skipped } = pullUniverseCanonReferences(universe, references);
+        if (added > 0) saveReferences(next);
+        if (added > 0) {
+          toast.success(`Pulled ${added} reference${added === 1 ? '' : 's'} from the universe${skipped ? ` (${skipped} skipped)` : ''}`);
+        } else {
+          toast.error(skipped ? 'Every canon image is already a reference' : 'This universe has no canon images to pull yet');
+        }
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to load the universe'))
+      .finally(() => setPulling(false));
+  };
 
   return (
     <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2 group">
@@ -52,10 +78,19 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-port-text-muted">References</span>
-            <button type="button" onClick={onAddReference} disabled={references.length >= MAX_REFERENCES}
-              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
-              <ImagePlus size={13} /> Add reference
-            </button>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {universeId && (
+                <button type="button" onClick={handlePullFromUniverse} disabled={pulling || references.length >= MAX_REFERENCES}
+                  className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+                  title="Add this project's linked universe's canon character/place/object images as references">
+                  <Sparkles size={13} /> {pulling ? 'Pulling…' : 'Pull from universe'}
+                </button>
+              )}
+              <button type="button" onClick={onAddReference} disabled={references.length >= MAX_REFERENCES}
+                className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+                <ImagePlus size={13} /> Add reference
+              </button>
+            </div>
           </div>
           {references.length === 0 && (
             <p className="text-[11px] text-port-text-muted">

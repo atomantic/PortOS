@@ -2,7 +2,7 @@
  * Focused tests for the music-video Render control (#1760 Phase 2): the button
  * gates on a scene having a generated clip, and clicking it kicks off the render.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
@@ -62,8 +62,11 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   selectMusicVideoSceneTake: vi.fn(),
   reviewMusicVideoSceneTake: vi.fn(),
   getMusicVideoHandoff: vi.fn(),
+  getMusicVideoHandoffBundle: vi.fn(),
   importMusicVideoHandoff: vi.fn(),
 }));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
+vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
@@ -141,10 +144,13 @@ import {
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
   importMusicVideoLyrics, updateMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
+  addMusicVideoSceneTake, getMusicVideoHandoffBundle,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
-import { generateVideo, getVideoGenStatus } from '../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem } from '../services/apiImageVideo.js';
+import { getUniverse } from '../services/apiUniverseBuilder.js';
+import { downloadBlob } from '../lib/downloadBlob.js';
 
 const PROJECT_ANALYZED = {
   ...PROJECT_NO_CLIP,
@@ -1133,5 +1139,99 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported 1 take from midjourney'));
     // The imported take filled the empty slot on the board.
     expect(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' })).toBeTruthy();
+  });
+
+  it('downloads the ZIP handoff bundle from Export bundle (#8978)', async () => {
+    getMusicVideoHandoffBundle.mockResolvedValueOnce(new ArrayBuffer(8));
+    await openProject(SPEC_PROJECT);
+    fireEvent.click(await screen.findByRole('button', { name: /^Export bundle$/ }));
+    await waitFor(() => expect(getMusicVideoHandoffBundle).toHaveBeenCalledWith('mv-spec', { silent: true }));
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(
+      expect.any(ArrayBuffer), 'spec-project-handoff.zip', 'application/zip',
+    ));
+  });
+});
+
+describe('MusicVideo pull references from universe (#8978)', () => {
+  const UNIVERSE_PROJECT = {
+    ...PROJECT_NO_CLIP,
+    id: 'mv-universe',
+    name: 'Universe Project',
+    concept: { universeId: 'u1' },
+    visualSpec: { references: [{ id: 'r0', imageId: 'harbor.png', role: 'mood', condition: false }] },
+  };
+
+  it('adds the universe\'s canon images as new references, skipping ones already present', async () => {
+    getUniverse.mockResolvedValueOnce({
+      characters: [{ id: 'c1', name: 'Nyra', primaryImageRef: 'nyra.png' }],
+      places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], // already a reference
+      objects: [],
+    });
+    await openProject(UNIVERSE_PROJECT);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
+    await waitFor(() => expect(getUniverse).toHaveBeenCalledWith('u1', { silent: true }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-universe',
+      { visualSpec: { references: [
+        { id: 'r0', imageId: 'harbor.png', role: 'mood', condition: false },
+        { imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
+      ] } },
+      { silent: true },
+    ));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Pulled 1 reference/)));
+  });
+
+  it('is idempotent — a second pull adds nothing once every canon image is already a reference', async () => {
+    getUniverse.mockResolvedValue({
+      characters: [], places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], objects: [],
+    });
+    await openProject(UNIVERSE_PROJECT);
+    fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
+    await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Every canon image is already a reference'));
+  });
+
+  it('does not offer Pull from universe when the project has no linked universe', async () => {
+    await openProject(PROJECT_NO_CLIP);
+    expect(screen.queryByRole('button', { name: /Pull from universe/i })).toBeNull();
+  });
+});
+
+describe('MusicVideo per-scene clip import (#8978)', () => {
+  it('imports a picked video-history clip as a candidate take for the scene, filling the empty slot', async () => {
+    addMusicVideoSceneTake.mockResolvedValueOnce({
+      scene: { ...PROJECT_NO_CLIP.scenes[0], videoHistoryId: 'rh-9', takes: [{ takeId: 't1', kind: 'video', assetId: 'rh-9', status: 'candidate' }] },
+    });
+    await openProject(PROJECT_NO_CLIP);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Import clip take$/ }));
+    const dialog = await screen.findByRole('dialog', { name: /Pick a video from your gallery/i });
+    fireEvent.click(within(dialog).getByText('(no prompt)').closest('.bg-port-card').querySelector('button'));
+
+    await waitFor(() => expect(addMusicVideoSceneTake).toHaveBeenCalledWith(
+      'mv-2', 's1', { kind: 'video', assetId: 'rh-9', source: 'imported' }, { silent: true },
+    ));
+  });
+});
+
+describe('MusicVideo scene clip non-MP4 playback (#8978)', () => {
+  afterEach(() => {
+    // Restore the file-level default so later tests keep seeing the 404
+    // (reconstruction-fallback) behavior for 'h1'/'h2'.
+    getVideoHistoryItem.mockImplementation((id) => (id === 'rh-9'
+      ? Promise.resolve({ id: 'rh-9', filename: 'final.mp4' })
+      : Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))));
+  });
+
+  it('resolves the clip\'s real stored filename for inline playback instead of assuming .mp4', async () => {
+    getVideoHistoryItem.mockImplementation((id) => (id === 'h1'
+      ? Promise.resolve({ id: 'h1', filename: 'h1.mov' })
+      : Promise.reject(Object.assign(new Error('Not found'), { status: 404 }))));
+    await openProject(PROJECT_WITH_CLIP);
+
+    await waitFor(() => expect(document.querySelector('video[src="/data/videos/h1.mov"]')).toBeTruthy());
+    expect(document.querySelector('video[src="/data/videos/h1.mp4"]')).toBeNull();
   });
 });

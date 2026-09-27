@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
@@ -22,19 +23,29 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * Each slot's takes (#8965) render as a review strip under it: a regenerate
  * adds a candidate rather than replacing the selection, and the director picks,
  * rejects, or notes takes there. `onImportTake` adds an externally generated
- * frame (gallery pick or upload) as a take.
+ * frame (gallery pick or upload) as a take; `onImportClipTake` (#8978) does the
+ * same for an existing gallery clip.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
-  onOpenPreview, onSelectTake, onReviewTake, onImportTake, takeBusy = false,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
   // native controls let the user unmute it first (muted is only initial).
   const clipPlayerRef = useRef(null);
+  // Resolve the clip's real stored filename rather than assuming `<id>.mp4` —
+  // an imported .mov/.webm keeps its own container (videoUpload.js), so the
+  // reconstructed path 404s for it (#8978). Falls back to the historical
+  // reconstruction while the lookup is in flight or if it fails, same as
+  // useVideoFileSrc's other ScenePreview-style callers.
+  const clipFile = useVideoFileSrc(scene.videoHistoryId, { enabled: !!scene.videoHistoryId });
+  const clipSrc = scene.videoHistoryId
+    ? (clipFile.src || `/data/videos/${scene.videoHistoryId}.mp4`)
+    : null;
   // Source-clip length, read from the inline player's metadata and keyed to
   // the clip it was measured from so a regenerated clip is re-measured.
   const [clipMeta, setClipMeta] = useState(null);
@@ -173,7 +184,7 @@ export default function SceneCard({
           <div className="relative w-40 shrink-0">
             <video
               ref={clipPlayerRef}
-              src={`/data/videos/${scene.videoHistoryId}.mp4`}
+              src={clipSrc}
               className="w-full aspect-video object-cover rounded border border-port-border bg-black"
               muted
               playsInline
@@ -218,6 +229,13 @@ export default function SceneCard({
             title="Native-extend this clip from its final latent frames and attach the longer result to this scene"
           >
             <Video size={14} /> Continue shot
+          </button>
+        )}
+        {onImportClipTake && (
+          <button type="button" onClick={() => onImportClipTake(scene)} disabled={takeBusy}
+            className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+            title="Pick an existing clip from the gallery (e.g. made in an external tool) as a take">
+            <Clapperboard size={14} /> Import clip take
           </button>
         )}
       </div>
