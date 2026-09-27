@@ -355,7 +355,9 @@ const compileSegment = (segment) => {
 const compileRoute = (route) => {
   const [method, path] = route.split(' ');
   const body = path.split('/').slice(1).map(compileSegment).join('/');
-  return { route, method, pattern: new RegExp(`^/${body}/?$`, 'i') };
+  // A mount can consume one slash before its root handler accepts another.
+  // Match trailing runs conservatively without rewriting request identifiers.
+  return { route, method, pattern: new RegExp(`^/${body}/*$`, 'i') };
 };
 
 const COMPILED_ROUTES = HOST_CONTROL_ROUTES.map(compileRoute);
