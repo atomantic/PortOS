@@ -18,6 +18,11 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
   setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
+  // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
+  appendSceneTakes: vi.fn(),
+  appendTakesAcrossScenes: vi.fn(),
+  selectSceneTake: vi.fn(),
+  reviewSceneTake: vi.fn(),
 }));
 
 // Keeps the real `buildManualAnalysisFromCached` (pure arithmetic, worth

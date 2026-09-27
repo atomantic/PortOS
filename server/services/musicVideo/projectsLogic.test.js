@@ -110,6 +110,12 @@ describe('cloneProjectRecord', () => {
     });
     expect(clone.scenes[0].sceneId).not.toBe('scene-old');
     expect(source.scenes[0].sceneId).toBe('scene-old');
+    // A pre-#8965 scene's selections become takes on the clone, so the new
+    // version's candidate list is never missing what it already shows.
+    expect(clone.scenes[0].takes.map((t) => [t.kind, t.assetId, t.source])).toEqual([
+      ['image', 'frame.png', 'legacy'],
+      ['video', 'clip-1', 'legacy'],
+    ]);
   });
 
   it('can fork the board without carrying generated media', () => {
@@ -131,7 +137,7 @@ describe('cloneProjectRecord', () => {
       rootProjectId: 'mv-root',
       name: 'Test MV v3',
     });
-    expect(clone.scenes[0]).toMatchObject({ referenceImageId: null, videoHistoryId: null });
+    expect(clone.scenes[0]).toMatchObject({ referenceImageId: null, videoHistoryId: null, takes: [] });
   });
 });
 
@@ -258,6 +264,20 @@ describe('applyProjectPatch', () => {
     const withConcept = { ...baseProject(), concept: { prompt: 'A road trip', style: 'Cyberpunk anime' } };
     const next = applyProjectPatch(withConcept, { concept: null });
     expect(next.concept).toBeNull();
+  });
+
+  it('merges a visualSpec patch per sub-field and gives every reference a stable id (#8965)', () => {
+    const first = applyProjectPatch(baseProject(), {
+      visualSpec: { palette: ['#AABBCC'], references: [{ imageId: 'mood.png', condition: true }] },
+    });
+    const [ref] = first.visualSpec.references;
+    expect(ref).toMatchObject({ imageId: 'mood.png', role: 'mood', condition: true, label: '' });
+    expect(ref.id).toMatch(/^mvr-/);
+    expect(first.visualSpec.palette).toEqual(['#aabbcc']);
+    // A later edit of one sub-field keeps the others (and the minted id).
+    const second = applyProjectPatch(first, { visualSpec: { cameraRules: 'handheld only' } });
+    expect(second.visualSpec).toMatchObject({ palette: ['#aabbcc'], cameraRules: 'handheld only' });
+    expect(second.visualSpec.references[0].id).toBe(ref.id);
   });
 
   it('persists explicit renderer settings and merges later partial changes', () => {

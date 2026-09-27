@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
@@ -25,6 +25,7 @@ import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
+import useMusicVideoTakes from '../hooks/useMusicVideoTakes.js';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
@@ -40,9 +41,14 @@ import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
+import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
+import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
+import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
+import GalleryImagePicker from '../components/imageGen/GalleryImagePicker.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
+import { sceneTakeList } from '../lib/musicVideoTakes.js';
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -111,6 +117,21 @@ export default function MusicVideo() {
     project: selected,
     videoSettings,
     applyScenePatch: patchScene,
+  });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene });
+  // The one gallery picker on the page, aimed at either the visual spec's
+  // references or one scene's frame takes. Cleared on a project switch so a
+  // picker opened for one project can never write into another.
+  const [pickerTarget, setPickerTarget] = useState(null);
+  useEffect(() => { setPickerTarget(null); }, [selectedId]);
+  // Contact sheet open state lives in the URL (?sheet=contact) so it survives a
+  // reload and Back closes it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const contactSheetOpen = searchParams.get('sheet') === 'contact';
+  const setContactSheetOpen = (open) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('sheet', 'contact'); else next.delete('sheet');
+    return next;
   });
 
   // Preparation is already resolving the project's audio at kickoff;
@@ -366,6 +387,29 @@ export default function MusicVideo() {
     saveScene(sceneId, patch);
   };
 
+  // Visual spec (#8965) — optimistic local merge, then a chained PATCH whose
+  // response carries server-minted reference ids back onto the board.
+  const visualSpecSaveChain = useRef(Promise.resolve());
+  const saveVisualSpec = (patch) => {
+    const projectId = selected.id;
+    patchProject(projectId, (p) => ({ visualSpec: { ...(p.visualSpec || {}), ...patch } }));
+    visualSpecSaveChain.current = visualSpecSaveChain.current
+      .then(() => updateMusicVideoProject(projectId, { visualSpec: patch }, { silent: true }))
+      .then((proj) => { if (proj?.visualSpec) patchProject(projectId, { visualSpec: proj.visualSpec }); })
+      .catch((err) => toast.error(err?.message || 'Failed to save visual spec'));
+  };
+  const handlePickerSelect = (item) => {
+    if (!item?.filename || !pickerTarget || !selected) return;
+    if (pickerTarget.type === 'reference') {
+      const references = selected.visualSpec?.references || [];
+      if (references.some((ref) => ref.imageId === item.filename)) return;
+      saveVisualSpec({ references: [...references, { imageId: item.filename, role: 'mood', condition: false }] });
+      return;
+    }
+    const scene = (selected.scenes || []).find((s) => s.sceneId === pickerTarget.sceneId);
+    if (scene) takes.importTake(scene, item);
+  };
+
   const handleDeleteScene = (sceneId) => {
     deleteMusicVideoScene(selected.id, sceneId, { silent: true })
       .then((proj) => replaceProject(proj))
@@ -421,15 +465,18 @@ export default function MusicVideo() {
         `Music Video: ${selected.name}`,
       ));
     }
+    // Every take (#8965), selected first, so the take strips and contact sheet
+    // can open any candidate in the shared lightbox.
     for (const scene of selected.scenes || []) {
-      if (scene.referenceImageId) {
-        items.push(normalizeImage({
-          filename: scene.referenceImageId,
-          prompt: scene.framePrompt || scene.prompt || '',
-        }));
+      const frames = sceneTakeList(scene, 'image')
+        .sort((a, b) => (b.assetId === scene.referenceImageId) - (a.assetId === scene.referenceImageId));
+      for (const take of frames) {
+        items.push(normalizeImage({ filename: take.assetId, prompt: take.prompt || scene.framePrompt || scene.prompt || '' }));
       }
-      if (scene.videoHistoryId) {
-        items.push(videoItem(scene.videoHistoryId, `${scene.videoHistoryId}.mp4`, scene.prompt || ''));
+      const clips = sceneTakeList(scene, 'video')
+        .sort((a, b) => (b.assetId === scene.videoHistoryId) - (a.assetId === scene.videoHistoryId));
+      for (const take of clips) {
+        items.push(videoItem(take.assetId, `${take.assetId}.mp4`, take.prompt || scene.prompt || ''));
       }
     }
     // Scenes can reuse the same frame/clip (ProjectToolbar surfaces a
@@ -450,6 +497,25 @@ export default function MusicVideo() {
       <MidiInstallModal {...midi.installGate} />
       <MidiGatedModal {...midi.gatedGate} />
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
+      {pickerTarget && (
+        <GalleryImagePicker
+          open
+          allowUpload
+          onClose={() => setPickerTarget(null)}
+          onSelect={handlePickerSelect}
+        />
+      )}
+      {selected && (
+        <ContactSheetDrawer
+          open={contactSheetOpen}
+          onClose={() => setContactSheetOpen(false)}
+          project={selected}
+          busy={takes.busy}
+          onSelectTake={takes.selectTake}
+          onReviewTake={takes.reviewTake}
+          onOpenPreview={openPreview}
+        />
+      )}
       <PageHeader icon={Film} title="Music Video" subtitle="Director-controlled, beat-aware music videos" />
 
       <CreateProjectDrawer
@@ -562,6 +628,19 @@ export default function MusicVideo() {
                   />
                 </div>
               </div>
+              <VisualSpecPanel
+                key={selected.id}
+                project={selected}
+                onSave={saveVisualSpec}
+                onAddReference={() => setPickerTarget({ type: 'reference' })}
+              />
+              <HandoffControls
+                projectId={selected.id}
+                busy={takes.busy}
+                onExport={takes.exportHandoff}
+                onImport={takes.importHandoffFiles}
+                onOpenContactSheet={() => setContactSheetOpen(true)}
+              />
               <TrackPanel
                 project={selected}
                 tracks={tracks}
@@ -625,6 +704,10 @@ export default function MusicVideo() {
                   onGenerateVideo={sceneMedia.generateSceneVideo}
                   onContinueVideo={sceneMedia.continueSceneVideo}
                   onOpenPreview={openPreview}
+                  takeBusy={takes.busy}
+                  onSelectTake={takes.selectTake}
+                  onReviewTake={takes.reviewTake}
+                  onImportTake={(target) => setPickerTarget({ type: 'take', sceneId: target.sceneId })}
                 />
               ))}
             </div>

@@ -2,8 +2,10 @@
  * Music Video scene reference-frame attach hook (issue #1760, Phase 1b).
  *
  * Subscribes to mediaJobEvents and, for each completed image job that carries
- * `params.musicVideo`, files the rendered filename onto that project scene's
- * `referenceImageId` — server-side, independent of any mounted client. This is
+ * `params.musicVideo`, appends the rendered filename to that project scene's
+ * immutable takes (#8965) — server-side, independent of any mounted client. The
+ * take becomes the scene's `referenceImageId` only while that slot is still
+ * unselected; it never replaces a frame the director already selected. This is
  * the durable counterpart to the director board's optimistic generate-then-
  * attach: a long-running local/Codex render that completes after the user
  * navigated away, refreshed, or moved their cursor still lands on the scene
@@ -21,14 +23,13 @@
  * client so the board updates reactively.
  *
  * The shared completion-hook scaffold (tag-decode, per-project serialization,
- * the newest-render-wins guard, best-effort error handling, idempotent init/
- * reset) lives in `createMediaJobImageHook` (#1791) — this file is just the
+ * best-effort error handling, idempotent init/reset) lives in `createMediaJobImageHook` (#1791) — this file is just the
  * music-video-specific config. Mounted once at server boot from server/index.js
  * (after the media job queue is running).
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { updateScene } from './musicVideo/projects.js';
+import { appendSceneTakes } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 
 const hook = createMediaJobImageHook({
@@ -44,16 +45,28 @@ const hook = createMediaJobImageHook({
   // (file backend) and the later write would clobber the earlier scene's
   // `referenceImageId`. Different projects still attach concurrently.
   serializeKey: ({ projectId }) => projectId,
-  // Newest-render-wins per scene: the GPU lane is FIFO, but the Codex lane and
-  // renders kicked off from another client can complete out of order — drop an
-  // older render so it can't overwrite a newer reference frame.
-  sceneKey: ({ projectId, sceneId }) => `${projectId}:${sceneId}`,
+  // No newest-render-wins guard (#8965): renders that complete out of order
+  // are all kept as takes, and none of them can displace a selection, so an
+  // older render is a candidate rather than something to drop.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
-  attach: ({ projectId, sceneId, filename }) =>
-    updateScene(projectId, sceneId, { referenceImageId: filename }),
-  onAttached: ({ projectId, sceneId, filename }) => {
-    musicVideoEvents.emit('scene-image', { projectId, sceneId, referenceImageId: filename });
-    console.log(`🎞️ music-video scene image ${projectId.slice(0, 8)}/${sceneId} ← ${filename}`);
+  // A deleted project/scene 404s here, so a late completion can't resurrect it.
+  attach: ({ projectId, sceneId, filename, job }) => appendSceneTakes(projectId, sceneId, [{
+    kind: 'image',
+    assetId: filename,
+    source: 'generated',
+    provider: 'portos',
+    jobId: typeof job.id === 'string' ? job.id : null,
+    prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null,
+  }]),
+  onAttached: ({ projectId, sceneId, filename }, { scene, appended }) => {
+    musicVideoEvents.emit('scene-image', {
+      projectId,
+      sceneId,
+      referenceImageId: scene.referenceImageId ?? null,
+      takes: scene.takes,
+      takeId: appended[0]?.takeId ?? null,
+    });
+    console.log(`🎞️ music-video scene image take ${projectId.slice(0, 8)}/${sceneId} ← ${filename}`);
   },
 });
 

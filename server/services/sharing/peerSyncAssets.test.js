@@ -161,6 +161,43 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
   });
 });
 
+describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-mv-takes-assets-'));
+    vi.mocked(getTrack).mockReset().mockResolvedValue(null);
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('ships every take and moodboard reference a peer may select, not only the selected slot', async () => {
+    for (const name of ['selected.png', 'candidate.png', 'mood.png']) writeImage(name, Buffer.from(name));
+    writeVideo('clip-a.mp4', Buffer.from('a'));
+    writeVideo('clip-b.mp4', Buffer.from('b'));
+    const manifest = await buildMusicVideoAssetManifest({
+      trackId: null,
+      uploadedAudioFilename: null,
+      visualSpec: { references: [{ id: 'r1', imageId: 'mood.png' }, { id: 'r2', imageId: '../escape.png' }] },
+      scenes: [{
+        sceneId: 's1',
+        referenceImageId: 'selected.png',
+        videoHistoryId: 'clip-a',
+        takes: [
+          { kind: 'image', assetId: 'selected.png' },
+          { kind: 'image', assetId: 'candidate.png', status: 'rejected' },
+          { kind: 'video', assetId: 'clip-b' },
+          { kind: 'bogus', assetId: 'clip-a.mp4' },
+        ],
+      }],
+    });
+    const keys = manifest.map((m) => `${m.kind}:${m.filename}`).sort();
+    expect(keys).toEqual([
+      'image:candidate.png', 'image:mood.png', 'image:selected.png',
+      'video:clip-a.mp4', 'video:clip-b.mp4',
+    ]);
+  });
+});
+
 describe('buildProjectAssetManifest — first-pass music bed (#1928)', () => {
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'portos-cd-assets-'));

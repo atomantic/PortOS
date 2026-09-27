@@ -74,6 +74,91 @@ export const musicVideoPacingSchema = z.object({
 const lyricCueList = z.array(musicVideoLyricCueSchema).max(2000);
 const phraseList = z.array(musicVideoPhraseSchema).max(500);
 
+// ---- Visual specification + scene takes (#8965) ----------------------------
+
+// A gallery image basename (under data/images). Every generated, uploaded, or
+// imported still lands there, so this is the one reference vocabulary the image
+// route's `referenceImageFiles` and the peer-sync `image` asset kind share.
+const galleryImageName = z.string().min(1).max(256)
+  .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'must be a gallery image basename (png/jpg/jpeg/webp)');
+// A video-history id (the scene clip vocabulary `videoHistoryId` already uses).
+const videoHistoryIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id');
+
+export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'set', 'prop', 'style'];
+// The image backends accept at most four reference images for most models
+// (imageGen/prepareParams.js referenceCap), so a project conditions each
+// reference frame on at most this many of its flagged references.
+export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
+
+// One moodboard/reference asset. `condition: true` sends the image to frame
+// generation as a real conditioning input (`referenceImageFiles`) rather than
+// only describing it in prose.
+export const musicVideoVisualReferenceSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  imageId: galleryImageName,
+  role: z.enum(MUSIC_VIDEO_REFERENCE_ROLES).optional(),
+  label: z.string().max(120).optional(),
+  note: z.string().max(1000).optional(),
+  condition: z.boolean().optional(),
+}).strict();
+
+// The project's reusable visual specification. A patch merges per sub-field
+// (like `concept`), and `references` / `palette` replace their list whole.
+export const musicVideoVisualSpecSchema = z.object({
+  references: z.array(musicVideoVisualReferenceSchema).max(24).optional(),
+  palette: z.array(z.string().regex(/^#[0-9a-f]{6}$/i, 'palette colors are #rrggbb')).max(12).optional(),
+  typography: z.string().max(1000).optional(),
+  cameraRules: z.string().max(2000).optional(),
+  // An existing Mood Board this project draws inspiration from (display link).
+  moodBoardId: z.string().max(64).nullable().optional(),
+}).strict().refine(
+  (spec) => (spec.references || []).filter((ref) => ref.condition).length <= MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES,
+  { message: `at most ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references can condition frames`, path: ['references'] },
+);
+
+export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video'];
+export const MUSIC_VIDEO_TAKE_STATUSES = ['candidate', 'rejected'];
+
+// Provider label for provenance — free text so a new external tool needs no
+// schema change, but bounded to a slug so it can't smuggle a URL or a secret.
+const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 'provider must be a short slug');
+
+// A candidate asset offered for a scene slot outside the media-job hooks: an
+// external-tool import, or a synchronous-lane render the client already holds.
+// `assetId` is validated against its kind (gallery basename / history id) and
+// then existence-checked by the route before it can reach the record.
+export const musicVideoTakeInputSchema = z.object({
+  kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
+  assetId: z.string().min(1).max(256),
+  source: z.enum(['generated', 'imported']).optional(),
+  provider: providerSlug.optional(),
+  originalName: z.string().max(255).optional(),
+}).strict().superRefine((take, ctx) => {
+  const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
+  const parsed = check.safeParse(take.assetId);
+  if (!parsed.success) ctx.addIssue({ code: 'custom', path: ['assetId'], message: parsed.error.issues[0].message });
+});
+
+// Review a take: reject/restore it and/or leave a note for regeneration.
+export const musicVideoTakeReviewSchema = z.object({
+  status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
+  note: z.string().max(1000).nullable().optional(),
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined, { message: 'status or note is required' });
+
+// Import externally generated assets (e.g. a Midjourney handoff). Each item is
+// an asset the client already stored through the existing gallery upload
+// routes; `sceneId` is optional when `originalName` carries the scene file tag
+// from the exported handoff manifest.
+export const musicVideoHandoffImportSchema = z.object({
+  provider: providerSlug,
+  items: z.array(z.object({
+    kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
+    assetId: z.string().min(1).max(256),
+    sceneId: z.string().min(1).max(64).optional(),
+    originalName: z.string().max(255).optional(),
+  }).strict()).min(1).max(200),
+}).strict();
+
 // Import lyric cues from pasted text: LRC (`[mm:ss.xx] line`), SRT/WebVTT
 // cue blocks, or plain lines (untimed). `auto` sniffs the format.
 export const musicVideoLyricsImportSchema = z.object({
@@ -91,6 +176,7 @@ export const musicVideoProjectCreateSchema = z.object({
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
+  visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
 }).strict();
 
@@ -101,6 +187,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   trackId: z.string().max(64).nullable().optional(),
   uploadedAudioFilename: z.string().max(256).nullable().optional(),
   concept: musicVideoConceptSchema.nullable().optional(),
+  visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
   lyricCues: lyricCueList.optional(),
