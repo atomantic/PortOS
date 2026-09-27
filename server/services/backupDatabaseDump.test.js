@@ -51,6 +51,22 @@ describe('inspectDatabaseDump', () => {
     expect((await inspectDatabaseDump(write('tail.sql', sql))).complete).toBe(complete);
   });
 
+  it.each([
+    ['COPY data', 'COPY public.notes (body) FROM stdin;\nCREATE TABLE public.memory_links (\n\\.\n'],
+    ['dollar-quoted function', 'CREATE FUNCTION public.example() RETURNS text AS $body$\nCREATE TABLE public.memory_links (\n$body$ LANGUAGE sql;\n'],
+    ['multiline string', "COMMENT ON TABLE public.memories IS '\nCREATE TABLE public.memory_links (\n';\n"],
+    ['block comment', '/*\nCREATE TABLE public.memory_links (\n*/\n'],
+  ])('does not admit a missing table from DDL embedded in %s', async (_case, embedded) => {
+    const sql = `CREATE TABLE public.memories (\n);\n${embedded}${TRAILER}`;
+    const result = await inspectDatabaseDump(write('embedded.sql', sql));
+    expect(result).toMatchObject({ tableCount: 1, complete: true, missingTables: ['memory_links'] });
+  });
+
+  it('rejects a trailer embedded in an unterminated SQL value', async () => {
+    const sql = `CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\nSELECT $body$${TRAILER}`;
+    expect((await inspectDatabaseDump(write('unterminated.sql', sql))).complete).toBe(false);
+  });
+
   it('rejects a read failure rather than reporting an empty dump', async () => {
     await expect(inspectDatabaseDump(join(dir, 'missing.sql'))).rejects.toMatchObject({ code: 'ENOENT' });
   });

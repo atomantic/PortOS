@@ -19,10 +19,10 @@ export const REQUIRED_DUMP_TABLES = ['memories', 'memory_links'];
 // pg_dump writes this comment block last. Newer pg_dump (17.6/16.10/15.14+)
 // follows it with `\unrestrict <key>`; nothing else may come after it.
 const COMPLETE_TRAILER = /\n--\r?\n-- PostgreSQL database dump complete\r?\n--\r?\n(?:\s*\\unrestrict [^\r\n]*)?\s*$/;
-const CREATE_TABLE_LINE = /^CREATE TABLE (?:public\.)?"?([A-Za-z_][A-Za-z0-9_]*)"? \(/gm;
+const CREATE_TABLE_STATEMENT = /^CREATE TABLE (?:public\.)?"?([A-Za-z_][A-Za-z0-9_]*)"? \(/;
 const TAIL_BYTES = 4096;
-// A CREATE TABLE header is short. Past this, a line is data (a COPY row, or a
-// file that is not SQL at all) and is skipped rather than buffered whole.
+// Bound the buffered line and statement prefix; oversized COPY rows are skipped.
+// Oversized SQL lines fail admission rather than losing lexical context.
 const MAX_SCANNED_LINE = 64 * 1024;
 
 /**
@@ -44,11 +44,75 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
     let tail = Buffer.alloc(0);
     let carry = '';
     let skippingLine = false;
-    const scan = (text) => {
-      for (const [, name] of text.matchAll(CREATE_TABLE_LINE)) {
-        tableCount += 1;
-        tables.add(name);
+    let copyData = false;
+    let quote = null;
+    let dollarQuote = null;
+    let blockDepth = 0;
+    let statement = '';
+    let unscannable = false;
+    // Keep only the statement prefix: COPY rows and SQL values may be huge.
+    // Count completed top-level statements, never SQL-looking stored content.
+    const scanLine = (line) => {
+      if (copyData) {
+        if (line.replace(/\r?\n$/, '') === '\\.') copyData = false;
+        return;
       }
+      if (!statement && !quote && !dollarQuote && !blockDepth && line.startsWith('\\')) return;
+      for (let i = 0; i < line.length; i += 1) {
+        const c = line[i];
+        const next = line[i + 1];
+        if (dollarQuote) {
+          if (line.startsWith(dollarQuote, i)) {
+            i += dollarQuote.length - 1;
+            dollarQuote = null;
+          }
+          continue;
+        }
+        if (quote) {
+          if (c === quote.character) {
+            if (next === c) i += 1;
+            else quote = null;
+          } else if (c === '\\' && quote.escapes) i += 1;
+          continue;
+        }
+        if (blockDepth) {
+          if (c === '/' && next === '*') { blockDepth += 1; i += 1; }
+          else if (c === '*' && next === '/') { blockDepth -= 1; i += 1; }
+          continue;
+        }
+        if (c === '-' && next === '-') break;
+        if (c === '/' && next === '*') { blockDepth = 1; i += 1; continue; }
+        if (c === ';') {
+          const match = statement.match(CREATE_TABLE_STATEMENT);
+          if (match) { tableCount += 1; tables.add(match[1]); }
+          copyData = /^COPY\s/.test(statement) && / FROM stdin$/.test(statement);
+          statement = '';
+          if (copyData) break;
+          continue;
+        }
+        if (c === '$') {
+          const delimiter = line.slice(i).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/)?.[0];
+          if (delimiter) { dollarQuote = delimiter; i += delimiter.length - 1; }
+        }
+        if (c === "'" || c === '"') {
+          quote = { character: c, escapes: c === "'" && /(?:^|[^A-Za-z0-9_])E$/i.test(statement) };
+        }
+        // Double-quoted identifiers in a CREATE header still belong to its
+        // prefix. Preserve them separately from SQL string contents below.
+        if (c === '"') {
+          const identifier = line.slice(i).match(/^"(?:[^"]|"")*"/);
+          if (identifier) {
+            if (statement.length < MAX_SCANNED_LINE) statement += identifier[0];
+            i += identifier[0].length - 1;
+            quote = null;
+            continue;
+          }
+        }
+        if (statement.length < MAX_SCANNED_LINE && (statement || !/\s/.test(c))) statement += c;
+      }
+    };
+    const scan = (text) => {
+      for (const line of text.match(/[^\n]*\n|[^\n]+$/g) || []) scanLine(line);
     };
 
     const stream = createReadStream(path);
@@ -87,7 +151,9 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
       scan(text.slice(0, lineEnd));
       carry = text.slice(lineEnd);
       if (carry.length > MAX_SCANNED_LINE) {
-        scan(carry);
+        // An oversized SQL line cannot be safely skipped while retaining its
+        // lexical state. pg_dump data uses COPY, whose rows are safe to skip.
+        if (!copyData) unscannable = true;
         carry = '';
         skippingLine = true;
       }
@@ -98,7 +164,8 @@ export function inspectDatabaseDump(path, { spoolTo } = {}) {
         sizeBytes,
         sha256: hash.digest('hex'),
         tableCount,
-        complete: COMPLETE_TRAILER.test(tail.toString('latin1')),
+        complete: !unscannable && !copyData && !quote && !dollarQuote && !blockDepth
+          && !statement.trim() && COMPLETE_TRAILER.test(tail.toString('latin1')),
         missingTables: REQUIRED_DUMP_TABLES.filter(name => !tables.has(name)),
       };
       spooled.then(() => { if (!failed) resolvePromise(result); });
