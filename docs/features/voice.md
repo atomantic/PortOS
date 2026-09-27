@@ -10,10 +10,26 @@ PortOS includes an optional voice assistant with support for fully local operati
 |-------|----------------|--------------|--------|
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
-| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS | ✅ |
+| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (currently unavailable) | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
+
+**Qwen3-TTS status:** the bundled adapter currently refuses synthesis, design,
+cloning, training, and model acquisition with an explicit unavailable error.
+Earlier versions produced test tones, placeholder checkpoints and download
+metadata; those artifacts are not evidence of model readiness. Runtime probes
+therefore report unavailable and do not treat existing model folders as verified
+installations. Use Piper for working local speech until #8857 delivers a real
+adapter and an intelligibility smoke run. No model download runs automatically.
+
+Interactive profile benchmarks measure elapsed time until the buffered WAV is
+available at the synthesis service boundary. This includes model startup and
+rendering, but excludes browser/network playback latency. They record no
+similarity score without an actual similarity evaluator. Passing this latency
+gate does not establish intelligibility, speaker identity, or non-silent speech.
+Qualification and its
+route decision are saved together only for the profile revision rendered.
 
 ### FaceTime Audio control plane
 

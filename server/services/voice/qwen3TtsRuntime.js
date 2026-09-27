@@ -8,7 +8,6 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
@@ -67,8 +66,8 @@ export async function resolveQwen3Python() {
  * Check if the isolated runtime venv or compatible Python interpreter is installed.
  */
 export async function isQwen3RuntimeInstalled() {
-  const python = await resolveQwen3Python();
-  return Boolean(python);
+  const status = await getQwen3RuntimeStatus();
+  return status.ok;
 }
 
 /**
@@ -107,8 +106,9 @@ export async function getQwen3RuntimeStatus() {
     }
 
     return {
-      ok: true,
-      installed: true,
+      ok: data.ok === true,
+      installed: data.ok === true,
+      message: data.error || null,
       venvPresent,
       pythonPath: python,
       hardware: {
@@ -124,7 +124,7 @@ export async function getQwen3RuntimeStatus() {
   } catch (err) {
     return {
       ok: false,
-      installed: true,
+      installed: false,
       venvPresent,
       pythonPath: python,
       hardware: { device: 'cpu', cuda: false, mps: false, vramGb: null },
@@ -153,7 +153,7 @@ function spawnProbe(pythonPath, args) {
 /**
  * Explicit user-triggered model download.
  */
-export async function downloadQwen3Model(modelId, { signal } = {}) {
+export async function downloadQwen3Model(modelId) {
   const modelSpec = SUPPORTED_QWEN3_MODELS.find((m) => m.id === modelId);
   if (!modelSpec) {
     throw new ServerError(`Unsupported Qwen3-TTS model: ${modelId}`, {
@@ -162,25 +162,8 @@ export async function downloadQwen3Model(modelId, { signal } = {}) {
     });
   }
 
-  await mkdir(QWEN3_TTS_MODELS_DIR, { recursive: true });
-  const safeName = modelId.replace('/', '--');
-  const targetDir = join(QWEN3_TTS_MODELS_DIR, safeName);
-  await mkdir(targetDir, { recursive: true });
-
-  // In test/mock or real runtime, mark directory with metadata snapshot
-  await writeFile(
-    join(targetDir, 'model_meta.json'),
-    JSON.stringify({
-      modelId,
-      downloadedAt: new Date().toISOString(),
-      sizeGb: modelSpec.sizeGb,
-    }, null, 2),
-  );
-
-  return {
-    ok: true,
-    modelId,
-    path: targetDir,
-    label: modelSpec.label,
-  };
+  throw new ServerError('Qwen3-TTS model acquisition is unavailable: no verified download adapter is implemented', {
+    status: 503,
+    code: 'QWEN3_DOWNLOAD_UNAVAILABLE',
+  });
 }

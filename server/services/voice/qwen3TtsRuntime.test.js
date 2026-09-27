@@ -1,9 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   SUPPORTED_QWEN3_MODELS,
   downloadQwen3Model,
   getQwen3RuntimeStatus,
-  resolveQwen3Python,
 } from './qwen3TtsRuntime.js';
 
 describe('qwen3TtsRuntime', () => {
@@ -20,7 +19,8 @@ describe('qwen3TtsRuntime', () => {
 
   it('probes runtime health without throwing when python is available', async () => {
     const status = await getQwen3RuntimeStatus();
-    expect(status).toHaveProperty('ok');
+    expect(status.ok).toBe(false);
+    expect(status.installed).toBe(false);
     expect(status).toHaveProperty('installed');
     expect(status).toHaveProperty('supportedModels');
   });
@@ -28,10 +28,9 @@ describe('qwen3TtsRuntime', () => {
   it('downloads model explicitly on user request and rejects unknown models', async () => {
     await expect(downloadQwen3Model('unknown/invalid-model')).rejects.toThrow(/unsupported qwen3/i);
 
-    const result = await downloadQwen3Model('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign');
-    expect(result).toMatchObject({
-      ok: true,
-      modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    await expect(downloadQwen3Model('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign')).rejects.toMatchObject({
+      status: 503,
+      code: 'QWEN3_DOWNLOAD_UNAVAILABLE',
     });
   });
 });

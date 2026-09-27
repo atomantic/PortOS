@@ -94,7 +94,7 @@ const sanitizeBenchmark = (raw) => {
       },
     };
   }).filter(Boolean).slice(0, MAX_BENCHMARK_LINES) : [];
-  if (!renderedAt || lines.length === 0) return null;
+  if (!renderedAt || (lines.length === 0 && !Number.isFinite(raw.interactiveLatencyMs))) return null;
   return {
     profileRevision: positiveInteger(raw.profileRevision),
     renderedAt,
@@ -529,14 +529,29 @@ export async function promotePresetProfile({
   return persist(next);
 }
 
-export async function saveProfileBenchmark(profile, benchmark) {
-  const current = await getVoiceProfileRequired(profile?.id);
-  const next = sanitizeVoiceProfile({
-    ...current,
-    benchmark,
-    updatedAt: timestamp(),
-  });
-  return persist(next);
+export async function saveProfileBenchmark(profile, benchmark, { interactive } = {}) {
+  const cleanBenchmark = sanitizeBenchmark(benchmark);
+  // Patch only the measured fields in one DB statement. A concurrent profile
+  // revision change invalidates the evidence instead of qualifying new audio
+  // against an old render or overwriting another writer's profile changes.
+  const patch = { benchmark: cleanBenchmark, updatedAt: timestamp() };
+  const route = interactive ? sanitizeRoutes({ interactive }).interactive : null;
+  const { rows } = await query(
+    `UPDATE voice_profiles SET
+       data = CASE WHEN $4::jsonb IS NULL THEN data || $2::jsonb
+         ELSE jsonb_set(data || $2::jsonb, '{routes}',
+           COALESCE(data->'routes', '{}'::jsonb) || jsonb_build_object('interactive', $4::jsonb)) END,
+       updated_at = $5
+     WHERE id = $1 AND (data->>'version')::int = $3
+     RETURNING data`,
+    [profile.id, JSON.stringify(patch), profile.version, route ? JSON.stringify(route) : null, patch.updatedAt],
+  );
+  if (!rows.length) {
+    throw new ServerError('Voice profile changed during benchmarking; run the benchmark again', {
+      status: 409, code: 'VOICE_PROFILE_BENCHMARK_STALE',
+    });
+  }
+  return sanitizeVoiceProfile(rows[0].data);
 }
 
 /**

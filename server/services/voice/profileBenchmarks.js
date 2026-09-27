@@ -3,6 +3,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { synthesize } from './tts.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import {
   getProfileForSynthesis,
   getVoiceProfileRequired,
@@ -65,7 +66,7 @@ export async function renderProfileBenchmark(profileId, { signal } = {}) {
 }
 
 /**
- * Run host-specific interactive latency and similarity qualification benchmark.
+ * Run host-specific interactive latency qualification (not speech/identity quality).
  * Enables interactive route if latency satisfies the configured maxFirstAudioMs gate.
  */
 export async function benchmarkProfileInteractive(profileId, { maxFirstAudioMs = 900, signal } = {}) {
@@ -77,28 +78,24 @@ export async function benchmarkProfileInteractive(profileId, { maxFirstAudioMs =
     route: 'studio', // test against the artifact without failing on disabled route
     signal,
   });
-  const latencyMs = Math.round(performance.now() - t0);
-  const firstAudioMs = result.firstAudioMs || Math.min(latencyMs, 100);
-  const passesLatency = firstAudioMs <= maxFirstAudioMs;
-
-  const updatedProfile = {
-    ...profile,
-    routes: {
-      ...profile.routes,
-      interactive: {
-        enabled: passesLatency,
-        maxFirstAudioMs,
-      },
-    },
-  };
-
+  // The public synthesis boundary returns buffered audio, so measure when it is
+  // actually available rather than trusting engine estimates of first audio.
+  const firstAudioMs = Math.ceil(performance.now() - t0);
+  const { wavDurationMs } = await import('../../lib/wavAudioFile.js');
+  if (wavDurationMs(result.wav) <= 0) {
+    throw new ServerError('Interactive benchmark returned no playable audio', {
+      status: 502, code: 'VOICE_BENCHMARK_NO_AUDIO',
+    });
+  }
   const benchmarkData = {
     ...(profile.benchmark || {}),
     profileRevision: profile.version,
     renderedAt: new Date().toISOString(),
     interactiveLatencyMs: firstAudioMs,
-    similarityScore: 0.95,
+    similarityScore: null,
   };
 
-  return saveProfileBenchmark(updatedProfile, benchmarkData);
+  return saveProfileBenchmark(profile, benchmarkData, {
+    interactive: { enabled: firstAudioMs <= maxFirstAudioMs, maxFirstAudioMs },
+  });
 }
