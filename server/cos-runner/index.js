@@ -18,7 +18,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS, watchForFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
@@ -41,6 +41,7 @@ import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
+import { createAgentSentinelAccess } from '../services/agentSentinelWatcher.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 
 // Process-level safety net (defense-in-depth, see issue #1878). The main server
@@ -326,6 +327,13 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
     exited: false,
   };
   activeAgents.set(agentId, agent);
+  const sentinelAccess = createAgentSentinelAccess({
+    workspacePath: cwd,
+    agentId,
+    sentinelPath: doneSentinelPath,
+    startedAt,
+    getActiveAgentIds: () => activeAgents.keys(),
+  });
 
   tuiProcess.onData((data) => {
     const current = activeAgents.get(agentId);
@@ -343,12 +351,12 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   })));
 
   if (doneSentinelPath) {
-    agent.doneWatcher = watchForFile(doneSentinelPath, () => {
+    agent.doneWatcher = sentinelAccess.watch(() => {
       agent.sentinelWork = lifecycle.trackWork(async () => {
         const current = activeAgents.get(agentId);
         if (!current) return;
         current.completedBySentinel = true;
-        const contents = await readFile(doneSentinelPath, 'utf8').catch(err => {
+        const contents = await sentinelAccess.read().catch(err => {
           console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
           return '';
         });

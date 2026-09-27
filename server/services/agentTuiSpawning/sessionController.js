@@ -699,6 +699,16 @@ export function createTuiSessionController({
       console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
       return '';
     });
+    // A terminal-copy recovery name is accepted only by the run-scoped
+    // sentinel access. Promote its contents to the canonical name before the
+    // shared finalization/output-hook path reads the sentinel again, so a
+    // structured completion has the same behavior as an exact write.
+    const sentinelSourcePath = sentinel.resolvedPath?.();
+    if (sentinel.promote && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
+      await sentinel.promote(contents).catch(err => {
+        console.error(`❌ ingestDoneSentinel canonical promotion failed: ${err.message}`);
+      });
+    }
     // A programmatic-I/O task type writes a JSON `{ summary, payload }` sentinel;
     // append only the human `summary` to the agent output (the structured
     // `payload` is consumed separately by the task type's processTaskOutput hook,
@@ -817,6 +827,9 @@ export function createTuiSessionController({
       noChangesToShip,
       outputBuffer: getOutputBuffer(),
     }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+    if (sentinel.cleanup) {
+      await sentinel.cleanup().catch(err => emitLog('warn', `TUI recovery sentinel cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+    }
 
     persistence.releaseRunRecord(agentData?.pid ?? null);
     if (sessionId && session.isAlive(sessionId)) session.kill(sessionId);
