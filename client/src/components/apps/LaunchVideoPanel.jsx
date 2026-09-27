@@ -31,6 +31,11 @@ const FORMATS = [
   ['square', 'Square 1:1'],
 ];
 const formatLabel = format => FORMATS.find(([value]) => value === format)?.[1] ?? format;
+// A style-reference upload is capped server-side to what `detectImageFormat`
+// recognizes (PNG/JPEG/WEBP/GIF) or a video ffmpeg can decode — matching the
+// picker's `accept` to that keeps the OS file dialog from offering a format
+// (SVG, HEIC) that would upload fine and then 400 when the run is queued.
+const REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov,.m4v';
 const MOTION_STYLES = [
   ['walkthrough', 'Product walkthrough', 'A paced tour of the key flow, a cursor driving real actions on springs.'],
   ['showreel', 'Motion-graphics showreel', 'Beat-cut kinetic type, color-field swaps and generative shapes around the key flow.'],
@@ -82,8 +87,15 @@ function LaunchVideoForm({ appId, onQueued }) {
   const handleReferenceUpload = async event => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const kind = file.type.startsWith('video/') ? 'video' : 'image';
-    if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) { toast.error('Choose an image or video file'); return; }
+    // Matches REFERENCE_ACCEPT: PNG/JPEG/WEBP/GIF for an image (what the
+    // server's magic-byte sniff recognizes) or an MP4/WebM/QuickTime/M4V
+    // container for a video. `accept` only filters the OS picker, not a
+    // drag-drop, so this is the real gate against a format that would
+    // otherwise upload fine and then 400 when the run is queued.
+    const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+    const kind = VIDEO_TYPES.includes(file.type) ? 'video' : IMAGE_TYPES.includes(file.type) ? 'image' : null;
+    if (!kind) { toast.error('Choose a PNG, JPEG, WEBP, GIF, MP4, WebM, MOV or M4V file'); return; }
     if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) { toast.error(`File is too large (${formatBytes(file.size)}). Max ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)}.`); return; }
     setReferenceUploading(true);
     const base64 = await readFileAsBase64(file).catch(() => null);
@@ -130,7 +142,7 @@ function LaunchVideoForm({ appId, onQueued }) {
         <div className="flex flex-wrap gap-2">
           <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setImagePickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick an image…</button>
           <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setVideoPickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick a video…</button>
-          <FilePickerButton accept="image/*,video/*" onChange={handleReferenceUpload} disabled={referenceUploading} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent">
+          <FilePickerButton accept={REFERENCE_ACCEPT} onChange={handleReferenceUpload} disabled={referenceUploading} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent">
             <Upload size={14} aria-hidden="true" /> {referenceUploading ? 'Uploading…' : 'Upload a reference…'}
           </FilePickerButton>
         </div>
