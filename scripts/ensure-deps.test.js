@@ -17,7 +17,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, copyFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
@@ -82,5 +83,100 @@ describe('clean reinstall keeps the committed lockfile (#5691)', () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+});
+
+// Exercise the startup CLI against a disposable checkout. Only the npm process
+// and native rebuild boundary are replaced; selection, cleanup and receipts use
+// the real filesystem. No package manager touches this checkout's dependencies.
+describe('startup dependency reconciliation', () => {
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'portos-deps-startup-'));
+    mkdirSync(join(root, 'scripts', 'lib'), { recursive: true });
+    mkdirSync(join(root, 'server', 'lib'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}');
+    copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(root, 'scripts', 'ensure-deps.js'));
+    copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'directInvocation.js'), join(root, 'scripts', 'lib', 'directInvocation.js'));
+    writeFileSync(join(root, 'scripts', 'trusted-rebuilds.js'), 'export const rebuildTrusted = () => true;');
+    writeFileSync(join(root, 'server', 'lib', 'bufferedSpawn.js'), `
+      import { fileURLToPath } from 'url';
+      export const prepareCliSpawn = (command, args) => ({
+        command: process.execPath,
+        args: [fileURLToPath(new URL('../../fake-npm.js', import.meta.url)), ...args]
+      });
+    `);
+    writeFileSync(join(root, 'fake-npm.js'), `
+      import { mkdirSync, writeFileSync, readFileSync } from 'fs';
+      import { join } from 'path';
+      const dir = process.cwd();
+      for (const file of ['pm2/package.json', 'vite/bin/vite.js', 'express/package.json', 'pg/package.json']) {
+        mkdirSync(join(dir, 'node_modules', file, '..'), { recursive: true });
+        writeFileSync(join(dir, 'node_modules', file), '{}');
+      }
+      writeFileSync(join(dir, 'node_modules', 'installed-lock.json'), readFileSync(join(dir, 'package-lock.json')));
+      writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}');
+    `);
+    for (const label of ['root', 'client', 'server', 'autofixer']) {
+      const dir = label === 'root' ? root : join(root, label);
+      mkdirSync(dir, { recursive: true });
+      if (label !== 'root') writeFileSync(join(dir, 'package.json'), label === 'server' ? '{"type":"module"}' : '{}');
+      writeFileSync(join(dir, 'package-lock.json'), '{"version":"old"}');
+    }
+    return {
+      root,
+      run: () => execFileSync(process.execPath, [join(root, 'scripts', 'ensure-deps.js')], { cwd: root, encoding: 'utf8' }),
+      client: join(root, 'client'),
+      receipt: join(root, 'data', 'deps-hashes.json'),
+    };
+  }
+
+  it('installs a lockfile-only update once and preserves the committed inputs', () => {
+    const f = fixture();
+    try {
+      f.run();
+      const updated = '{"version":"new"}';
+      writeFileSync(join(f.client, 'package-lock.json'), updated);
+      writeFileSync(join(f.client, 'node_modules', 'stale'), 'old tree');
+      f.run();
+      expect(readFileSync(join(f.client, 'node_modules', 'installed-lock.json'), 'utf8')).toBe(updated);
+      expect(existsSync(join(f.client, 'node_modules', 'stale'))).toBe(false);
+      expect(readFileSync(join(f.client, 'package-lock.json'), 'utf8')).toBe(updated);
+      expect(readFileSync(join(f.client, 'package.json'), 'utf8')).toBe('{}');
+      writeFileSync(join(f.client, 'node_modules', 'keep'), 'unchanged tree');
+      expect(f.run()).not.toContain('reinstall');
+      expect(existsSync(join(f.client, 'node_modules', 'keep'))).toBe(true);
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it('detects a newer lockfile without a receipt and upgrades legacy manifest-only receipts', () => {
+    const f = fixture();
+    try {
+      f.run();
+      rmSync(f.receipt);
+      const updated = '{"version":"new"}';
+      writeFileSync(join(f.client, 'package-lock.json'), updated);
+      const oldTime = new Date('2020-01-01T00:00:00Z');
+      const installTime = new Date('2020-01-02T00:00:00Z');
+      const updateTime = new Date('2020-01-03T00:00:00Z');
+      utimesSync(join(f.client, 'package.json'), oldTime, oldTime);
+      utimesSync(join(f.client, 'node_modules', '.package-lock.json'), installTime, installTime);
+      utimesSync(join(f.client, 'package-lock.json'), updateTime, updateTime);
+      f.run();
+      expect(readFileSync(join(f.client, 'node_modules', 'installed-lock.json'), 'utf8')).toBe(updated);
+
+      // Old installs persist a bare SHA-256 of package.json. They cannot prove
+      // which lockfile was installed, so reconcile once before trusting v2.
+      const hashes = JSON.parse(readFileSync(f.receipt, 'utf8'));
+      hashes.client = createHash('sha256').update('{}').digest('hex');
+      writeFileSync(f.receipt, JSON.stringify(hashes));
+      writeFileSync(join(f.client, 'node_modules', 'stale'), 'legacy tree');
+      f.run();
+      expect(existsSync(join(f.client, 'node_modules', 'stale'))).toBe(false);
+      expect(f.run()).not.toContain('reinstall');
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
   });
 });
