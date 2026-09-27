@@ -3,6 +3,7 @@ import toast from '../ui/Toast';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
+import { trackSourceLabel } from '../../lib/trackProvenance.js';
 
 /**
  * The project's audio: pick an existing library track or import fresh audio from
@@ -21,11 +22,18 @@ export default function TrackPanel({
       ? 'Wait for the MIDI transcription to finish before changing the track'
       : null;
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
+  // Where the linked track's audio came from (e.g. a Suno export, #8967).
+  const sourceLabel = trackSourceLabel(tracks.find((t) => t.id === project.trackId));
   const midiFile = project.midiTranscription?.filename;
   return (
     <>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(project.trackId)}</span>
+        {sourceLabel && (
+          <span className="px-1.5 py-0.5 rounded bg-port-border text-port-text-muted text-[10px]" title={`Audio imported from ${sourceLabel}`}>
+            {sourceLabel}
+          </span>
+        )}
         <select value={project.trackId || ''} aria-label="Change track"
           onChange={(e) => e.target.value && onChangeTrack(e.target.value)}
           disabled={youtube.editJob.active || renderBound || midiBound}

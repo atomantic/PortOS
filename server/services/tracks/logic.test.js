@@ -122,6 +122,13 @@ describe('tracks logic', () => {
       const legacy = sanitizeRender({ audioFilename: 'a.wav' });
       expect(legacy.id).toMatch(/^r-/); // deterministic fallback id
       expect(legacy.instrumentalOnly).toBeNull();
+      expect(legacy.source).toBe(''); // provenance unrecorded, not guessed
+    });
+
+    it('sanitizeRender keeps a provenance slug and blanks a malformed one', () => {
+      expect(sanitizeRender({ audioFilename: 'a.mp3', source: 'suno' }).source).toBe('suno');
+      expect(sanitizeRender({ audioFilename: 'a.mp3', source: 'Suno API!' }).source).toBe('');
+      expect(sanitizeRender({ audioFilename: 'a.mp3', source: 42 }).source).toBe('');
     });
 
     it('makeRender stamps the caller-supplied id + now', () => {

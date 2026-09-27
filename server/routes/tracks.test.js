@@ -24,6 +24,7 @@ vi.mock('../services/promptRunner.js', async () => ({
 vi.mock('../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn().mockResolvedValue(null),
   runFfmpegProcess: vi.fn(),
+  probeVideoDuration: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../services/tracks/index.js', () => ({
@@ -40,6 +41,7 @@ vi.mock('../services/tracks/index.js', () => ({
   DURATION_MIN_SEC: 1,
   DURATION_MAX_SEC: 3600,
   TRACK_ID_RE: /^track-/,
+  RENDER_SOURCES: { UPLOAD: 'upload', SUNO: 'suno', YOUTUBE: 'youtube' },
   listTracks: vi.fn(async () => [{ id: 'track-1', title: 'Intro' }]),
   getTrack: vi.fn(),
   createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })),
@@ -92,6 +94,7 @@ import { TRACK_IDS_MAX } from '../services/albums/logic.js';
 import * as ytImport from '../services/trackYoutubeImport.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import * as promptRunner from '../services/promptRunner.js';
+import { probeVideoDuration } from '../lib/ffmpeg.js';
 import tracksRoutes from './tracks.js';
 
 function makeApp() {
@@ -368,6 +371,47 @@ describe('tracks routes', () => {
     const r = await request(app).delete('/api/tracks/track-1/renders/missing');
     expect(r.status).toBe(404);
     expect(r.body.code).toBe('TRACK_RENDER_NOT_FOUND');
+  });
+
+  describe('POST /:id/audio/upload (library upload + Suno export import, #8967)', () => {
+    const boundary = '----portosupload';
+    const upload = (fields = {}) => request(app).post('/api/tracks/track-1/audio/upload')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(Buffer.concat([
+        ...Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)),
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="track"; filename="song.mp3"\r\nContent-Type: audio/mpeg\r\n\r\nID3fake\r\n--${boundary}--\r\n`),
+      ]));
+
+    it('lands a Suno export as the active take with its provenance, style prompt, lyrics and duration', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+      probeVideoDuration.mockResolvedValueOnce(187.4);
+      const r = await upload({ source: 'suno', prompt: 'dreamy synth-pop', lyrics: 'la la la' });
+      expect(r.status).toBe(200);
+      expect(musicLibrary.importUploadedTrack).toHaveBeenCalledWith(expect.any(String), 'song.mp3');
+      expect(tracks.updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({
+        audioFilename: 'music-up.mp3', engine: '', modelId: '', durationSec: 187.4,
+        renders: [expect.objectContaining({
+          audioFilename: 'music-up.mp3', source: 'suno', prompt: 'dreamy synth-pop', lyrics: 'la la la', durationSec: 187.4,
+        })],
+      }));
+    });
+
+    it('records a plain upload as source "upload" when no provenance is sent', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+      const r = await upload();
+      expect(r.status).toBe(200);
+      const patch = tracks.updateTrack.mock.calls[0][1];
+      expect(patch.renders[0]).toMatchObject({ source: 'upload', prompt: '', lyrics: '' });
+      expect(patch.durationSec).toBeNull(); // ffprobe unavailable → unknown, not 0
+    });
+
+    it('refuses an unsupported source before importing anything', async () => {
+      tracks.getTrack.mockResolvedValue({ id: 'track-1', renders: [] });
+      const r = await upload({ source: 'suno-api' });
+      expect(r.status).toBe(400);
+      expect(musicLibrary.importUploadedTrack).not.toHaveBeenCalled();
+      expect(tracks.updateTrack).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /:id/code/render (code-engine take, #8375)', () => {

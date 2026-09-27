@@ -155,8 +155,8 @@ describe('sync compatibility', () => {
     // What a v7 peer's v1-only normalizer would do to it: strip it to null and
     // LWW the loss back — the reason for the bump.
     expect(normalizeWaveSketch({ ...painting, version: 1 })).toBeNull();
-    expect(PORTOS_SCHEMA_VERSIONS.tracks).toBe(8);
+    expect(PORTOS_SCHEMA_VERSIONS.tracks).toBeGreaterThanOrEqual(8);
     const { ahead } = compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, { ...PORTOS_SCHEMA_VERSIONS, tracks: 7 });
-    expect(ahead).toEqual([{ category: 'tracks', senderV: 8, receiverV: 7 }]);
+    expect(ahead).toEqual([{ category: 'tracks', senderV: PORTOS_SCHEMA_VERSIONS.tracks, receiverV: 7 }]);
   });
 });

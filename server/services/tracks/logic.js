@@ -26,7 +26,12 @@
  *                     the studio can show each render as a card and re-select an
  *                     earlier one. Each entry is `{ id, audioFilename, prompt,
  *                     authoredPrompt, lyrics, instrumentalOnly, engine,
- *                     modelId, executionProfile, durationSec, createdAt }`. The
+ *                     modelId, executionProfile, source, durationSec,
+ *                     createdAt }`. `source` is the take's provenance when it
+ *                     did not come from a local engine — `'upload'` (a plain
+ *                     file), `'suno'` (audio exported from Suno and imported by
+ *                     hand), `'youtube'` (the YouTube audio import) — or '' when
+ *                     unrecorded (generated takes and pre-provenance renders). The
  *                     top-level `audioFilename`/`engine`/`modelId`/`durationSec`
  *                     point at whichever render is currently ACTIVE (selected).
  *   - chiptuneScore / chiptunePrompt — the LLM-composed looping 8-bit score
@@ -63,6 +68,12 @@ export const MODEL_ID_MAX = 120;
 export const EXECUTION_PROFILE_MAX = 80;
 export const AUDIO_FILENAME_MAX = 256;
 export const RENDER_ID_MAX = 80;
+// Render provenance slug (see `source` above). A lowercase slug rather than a
+// closed enum so a later import source is a value, not a sanitizer change; the
+// routes that WRITE a source validate it against the sources they support.
+export const RENDER_SOURCE_MAX = 40;
+const RENDER_SOURCE_RE = /^[a-z0-9-]{1,40}$/;
+export const RENDER_SOURCES = Object.freeze({ UPLOAD: 'upload', SUNO: 'suno', YOUTUBE: 'youtube' });
 // Cap the render history per track so a runaway generate loop can't grow the
 // record unboundedly. Oldest renders fall off first (slice(-RENDERS_MAX)); the
 // audio bytes stay in the shared library (they may be referenced elsewhere).
@@ -114,6 +125,7 @@ export function sanitizeRender(raw) {
     engine: trimTo(raw.engine, ENGINE_MAX),
     modelId: trimTo(raw.modelId, MODEL_ID_MAX),
     executionProfile: trimTo(raw.executionProfile, EXECUTION_PROFILE_MAX),
+    source: isStr(raw.source) && RENDER_SOURCE_RE.test(raw.source) ? raw.source : '',
     durationSec: sanitizeDuration(raw.durationSec),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
   };
@@ -171,6 +183,7 @@ export function sanitizeTrack(raw) {
       engine,
       modelId,
       executionProfile: '',
+      source: '',
       durationSec,
       createdAt,
     }];

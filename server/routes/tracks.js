@@ -12,7 +12,8 @@
  *   GET    /api/tracks/:id              → Track
  *   PATCH  /api/tracks/:id              → Track
  *   DELETE /api/tracks/:id              → { id }     (soft delete)
- *   POST   /api/tracks/:id/audio/upload → Track      (multipart 'track' file)
+ *   POST   /api/tracks/:id/audio/upload → Track      (multipart 'track' file + optional
+ *                                                   source/prompt/lyrics provenance fields)
  *   POST   /api/tracks/:id/audio/attach → Track      (attach a library filename)
  *   DELETE /api/tracks/:id/audio        → Track      (clear the audio pointer)
  *   POST   /api/tracks/:id/waveform/draw   → { sketch, llm, track } (LLM-drawn sketch, stored on the track)
@@ -28,14 +29,23 @@
  * The YouTube import (#1945) is a library-level action (not per-track) — it
  * lands a new Track in the library, same as an upload, so any project's track
  * picker can attach it afterward without re-downloading.
+ *
+ * Suno (#8967) arrives through the per-track upload: `source=suno` marks audio
+ * the user exported from Suno, and the style prompt + lyrics ride along onto
+ * that take. It is a manual import — no Suno API is called and no credential is
+ * involved — so it works regardless of hosted API access and never claims to be
+ * a hosted integration.
  */
 
 import { Router } from 'express';
 import { readFile, unlink } from 'fs/promises';
+import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { uploadSingle } from '../lib/multipart.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { probeVideoDuration } from '../lib/ffmpeg.js';
 import * as tracks from '../services/tracks/index.js';
 import { createTrackWithAlbum, updateTrackWithAlbum, removeTrackFromAlbum } from '../services/trackAlbumMembership.js';
 import {
@@ -109,6 +119,15 @@ const attachSchema = z.object({
   filename: z.string().trim().min(1).max(tracks.AUDIO_FILENAME_MAX),
 });
 
+// Text fields riding a per-track audio upload. `source` is the take's
+// provenance: a plain file, or a song exported from Suno. prompt/lyrics describe
+// that take on its render card (for Suno: the style prompt and lyrics used there).
+const audioUploadSchema = z.object({
+  source: z.enum([tracks.RENDER_SOURCES.UPLOAD, tracks.RENDER_SOURCES.SUNO]).optional().default(tracks.RENDER_SOURCES.UPLOAD),
+  prompt: promptField.optional().default(''),
+  lyrics: lyricsField.optional().default(''),
+});
+
 const youtubeImportSchema = z.object({
   url: z.string().trim().regex(YOUTUBE_VIDEO_URL_RE, YOUTUBE_URL_INVALID_MESSAGE),
 });
@@ -128,6 +147,15 @@ const musicUpload = uploadSingle('track', {
   },
 });
 
+// Run a multipart route's pre-import checks. A rejection deletes the temp
+// upload first, so a refused request can't strand the file in os.tmpdir().
+function checkBeforeImport(req, check) {
+  return Promise.resolve().then(check).catch(async (err) => {
+    if (req.file?.path) await unlink(req.file.path).catch(() => {});
+    throw err;
+  });
+}
+
 // Load a track or 404 — shared by the audio mutation routes.
 async function requireTrack(id) {
   const track = await tracks.getTrack(id);
@@ -137,8 +165,9 @@ async function requireTrack(id) {
 
 // Make `filename` the active audio AND record it in the render history so an
 // uploaded/attached take shows up as a card alongside generated ones. An
-// uploaded render has no engine/model/duration, so the active gen-metadata is
-// cleared (keeps the read-only badges honest). Re-attaching a file already in
+// uploaded render has no engine/model, so the active gen-metadata is cleared
+// (keeps the read-only badges honest); `take` carries what IS known about it —
+// provenance, the prompt/lyrics it was made from, its probed duration. Re-attaching a file already in
 // the history just re-selects it (no duplicate card).
 //
 // Re-reads the track by id (the caller validated existence earlier) so the
@@ -148,7 +177,7 @@ async function requireTrack(id) {
 // by writing back a stale renders array. (The sub-millisecond getTrack→
 // updateTrack window is a single-user request race we don't lock against per the
 // trust model.)
-async function attachAudioAsRender(trackId, filename) {
+async function attachAudioAsRender(trackId, filename, take = {}) {
   const track = await tracks.getTrack(trackId);
   if (!track) throw new ServerError('Track not found', { status: 404, code: 'NOT_FOUND' });
   const existing = (track.renders || []).find((r) => r.audioFilename === filename);
@@ -156,12 +185,12 @@ async function attachAudioAsRender(trackId, filename) {
     const patch = tracks.selectRenderPatch(track, existing.id) || { audioFilename: filename };
     return tracks.updateTrack(trackId, patch);
   }
-  const { renders } = tracks.buildRenderAppend(track, { audioFilename: filename });
+  const { renders } = tracks.buildRenderAppend(track, { ...take, audioFilename: filename });
   return tracks.updateTrack(trackId, {
     audioFilename: filename,
     engine: '',
     modelId: '',
-    durationSec: null,
+    durationSec: take.durationSec ?? null,
     renders,
   });
 }
@@ -227,11 +256,16 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 }));
 
 // Upload an audio file into the shared library and attach it to this track.
+// `source=suno` records the take as a Suno export (see the header note).
 router.post('/:id/audio/upload', musicUpload, asyncHandler(async (req, res) => {
-  const track = await requireTrack(req.params.id);
+  const { track, take } = await checkBeforeImport(req, async () => ({
+    take: validateRequest(audioUploadSchema, req.body ?? {}),
+    track: await requireTrack(req.params.id),
+  }));
   if (!req.file) throw new ServerError('No audio file uploaded', { status: 400, code: 'TRACK_AUDIO_MISSING_FILE' });
   const { filename, sizeBytes } = await importUploadedTrack(req.file.path, req.file.originalname);
-  const updated = await attachAudioAsRender(track.id, filename);
+  const durationSec = await probeVideoDuration(join(PATHS.music, filename)).catch(() => null);
+  const updated = await attachAudioAsRender(track.id, filename, { ...take, durationSec });
   res.json({ track: updated, filename, sizeBytes });
 }));
 

@@ -50,7 +50,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoProjects: vi.fn() }));
 
 import TracksManager from './TracksManager.jsx';
-import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack } from '../../services/api';
+import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack, uploadTrackAudio } from '../../services/api';
 import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };
@@ -424,5 +424,40 @@ describe('<TracksManager> album picker', () => {
     const select = screen.getByLabelText('Album');
     expect(select.value).toBe('album-1');
     expect(within(select).getAllByRole('option', { name: 'Debut LP' })).toHaveLength(1);
+  });
+});
+
+// #8967: a Suno export is a manual import through the ordinary track upload —
+// the open form is saved first so its style prompt + lyrics persist AND ride
+// onto the imported take as provenance.
+describe('<TracksManager> Suno export import', () => {
+  beforeEach(() => {
+    listTracks.mockResolvedValue([TRACK]);
+    listAlbums.mockResolvedValue([]);
+    listMusicVideoProjects.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('saves the form, then uploads the file tagged as a Suno export with its prompt and lyrics', async () => {
+    updateTrack.mockResolvedValue({ ...TRACK, prompt: 'dreamy synth-pop', lyrics: 'la la la' });
+    uploadTrackAudio.mockResolvedValue({ track: { ...TRACK, audioFilename: 'music-suno.mp3' } });
+    renderAt('track-1');
+    await waitFor(() => expect(screen.getByLabelText('Title').value).toBe('Example Song'));
+    fireEvent.change(screen.getByLabelText(/^Prompt/), { target: { value: 'dreamy synth-pop' } });
+
+    const file = new File(['ID3'], 'suno-song.mp3', { type: 'audio/mpeg' });
+    fireEvent.change(screen.getByLabelText('Import Suno export audio'), { target: { files: [file] } });
+
+    await waitFor(() => expect(uploadTrackAudio).toHaveBeenCalledTimes(1));
+    expect(updateTrack).toHaveBeenCalledWith('track-1', expect.objectContaining({ prompt: 'dreamy synth-pop' }), { silent: true });
+    const [targetId, fd] = uploadTrackAudio.mock.calls[0];
+    expect(targetId).toBe('track-1');
+    expect(fd.get('source')).toBe('suno');
+    expect(fd.get('prompt')).toBe('dreamy synth-pop');
+    expect(fd.get('lyrics')).toBe('la la la');
+    expect(fd.get('track').name).toBe('suno-song.mp3');
   });
 });

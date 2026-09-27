@@ -12,6 +12,7 @@ import { Sparkles, CheckCircle2, Download, Trash2, X, Film } from 'lucide-react'
 import Modal from '../ui/Modal';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
 import { trackAudioUrl } from '../../services/api';
+import { renderSourceLabel } from '../../lib/trackProvenance';
 
 function MetaRow({ label, children }) {
   return (
@@ -26,6 +27,7 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
   if (!render) return null;
   const { prompt, lyrics, engine, modelId, durationSec, audioFilename, createdAt } = render;
   const isUpload = !engine;
+  const sourceLabel = renderSourceLabel(render.source);
 
   return (
     <Modal
@@ -56,6 +58,7 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
         </audio>
 
         <div className="space-y-1.5">
+          {sourceLabel ? <MetaRow label="Source">{`Imported from ${sourceLabel}`}</MetaRow> : null}
           {engine ? <MetaRow label="Engine">{engine}</MetaRow> : null}
           {modelId ? <MetaRow label="Model">{modelId}</MetaRow> : null}
           {durationSec ? <MetaRow label="Duration">{formatTimecode(durationSec)} ({durationSec}s)</MetaRow> : null}
