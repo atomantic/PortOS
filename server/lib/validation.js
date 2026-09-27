@@ -2460,6 +2460,17 @@ const launchVideoFormatSchema = z.enum(LAUNCH_VIDEO_FORMATS);
 const launchVideoFormatListSchema = z.array(launchVideoFormatSchema).min(1).max(LAUNCH_VIDEO_FORMATS.length)
   .refine(list => new Set(list).size === list.length, 'formats must not repeat');
 
+// A style reference (#8961): a frame, a short clip, or a Media History image
+// or video. `source` picks the bucket the filename is resolved against —
+// `gallery` (Media History's own images/videos folders) or `upload` (the
+// generic /api/uploads scratch dir) — so the route can contain the read to
+// exactly one directory per kind, never a client-supplied path.
+export const launchVideoStyleReferenceSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  source: z.enum(['gallery', 'upload']),
+  filename: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'filename must not contain a path separator'),
+}).strict();
+
 export const appLaunchVideoRequestSchema = z.object({
   sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   feedback: z.string().trim().min(1).max(4000).optional(),
@@ -2480,6 +2491,7 @@ export const appLaunchVideoRequestSchema = z.object({
   // Ask the agent to consult installed motion-design skills (npm run setup:motion).
   motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
+  styleReference: launchVideoStyleReferenceSchema.optional(),
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({
