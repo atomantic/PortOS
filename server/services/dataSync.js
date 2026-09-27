@@ -412,37 +412,37 @@ async function getGoalsSnapshot() {
 }
 
 async function applyGoalsRemote(remoteData) {
-  const local = await readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
+  const { editGoals } = await import('./identity/store.js');
+  return editGoals(local => {
+    // Merge goals array by ID with LWW on updatedAt
+    const { merged: mergedGoals, changed: goalsChanged } = mergeArraysByKey(
+      local.goals || [],
+      remoteData.goals || [],
+      'id',
+      'updatedAt'
+    );
 
-  // Merge goals array by ID with LWW on updatedAt
-  const { merged: mergedGoals, changed: goalsChanged } = mergeArraysByKey(
-    local.goals || [],
-    remoteData.goals || [],
-    'id',
-    'updatedAt'
-  );
+    // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
+    // Use the most recent goal's updatedAt as proxy for file freshness
+    const localMaxTs = (local.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
+    const remoteMaxTs = (remoteData.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
+    const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
 
-  // Merge top-level metadata (birthDate, lifeExpectancy, timeHorizons) via LWW
-  // Use the most recent goal's updatedAt as proxy for file freshness
-  const localMaxTs = (local.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-  const remoteMaxTs = (remoteData.goals || []).reduce((max, g) => Math.max(max, new Date(g.updatedAt || 0).getTime()), 0);
-  const metaSource = remoteMaxTs > localMaxTs ? remoteData : local;
+    const merged = {
+      ...local,
+      birthDate: metaSource.birthDate ?? local.birthDate,
+      lifeExpectancy: metaSource.lifeExpectancy ?? local.lifeExpectancy,
+      timeHorizons: metaSource.timeHorizons ?? local.timeHorizons,
+      goals: mergedGoals
+    };
 
-  const merged = {
-    ...local,
-    birthDate: metaSource.birthDate ?? local.birthDate,
-    lifeExpectancy: metaSource.lifeExpectancy ?? local.lifeExpectancy,
-    timeHorizons: metaSource.timeHorizons ?? local.timeHorizons,
-    goals: mergedGoals
-  };
-
-  if (goalsChanged || remoteMaxTs > localMaxTs) {
-    await atomicWrite(GOALS_FILE, merged);
-    dashboardEvents.emit('goals:changed');
-    console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
-    return { applied: true, count: mergedGoals.length };
-  }
-  return { applied: false, count: 0 };
+    if (goalsChanged || remoteMaxTs > localMaxTs) {
+      Object.assign(local, merged);
+      console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
+      return { applied: true, count: mergedGoals.length };
+    }
+    return { applied: false, count: 0 };
+  });
 }
 
 // --- Category: Character ---

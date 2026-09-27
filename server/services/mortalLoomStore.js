@@ -823,21 +823,20 @@ export async function importToPortOS() {
   };
 
   // Goals live in a wrapper object, not a bare array
-  const goalsPath = dataPath('digital-twin', 'goals.json');
-  const localGoals = await readJSONFile(goalsPath, { goals: [] }, { strict: true });
-  const seenGoalIds = new Set((localGoals.goals || []).map(g => g.id));
-  let gAdded = 0, gSkipped = 0;
-  for (const g of (store.goals || [])) {
-    if (seenGoalIds.has(g.id)) { gSkipped++; continue; }
-    localGoals.goals.push(g); gAdded++;
-  }
-  if (gAdded > 0) {
-    await ensureDir(dataPath('digital-twin'));
-    localGoals.updatedAt = new Date().toISOString();
-    await atomicWrite(goalsPath, localGoals);
-    dashboardEvents.emit('goals:changed');
-  }
-  report.added.goals = gAdded; report.skipped.goals = gSkipped;
+  const { editGoals } = await import('./identity/store.js');
+  await editGoals(localGoals => {
+    const seenGoalIds = new Set((localGoals.goals || []).map(g => g.id));
+    let added = 0, skipped = 0;
+    for (const goal of (store.goals || [])) {
+      if (seenGoalIds.has(goal.id)) { skipped++; continue; }
+      localGoals.goals.push(goal);
+      seenGoalIds.add(goal.id);
+      added++;
+    }
+    if (added > 0) localGoals.updatedAt = new Date().toISOString();
+    report.added.goals = added;
+    report.skipped.goals = skipped;
+  }, { localOnly: true });
 
   for (const { mlKey, mlArr, localPath, local } of collections) {
     if (mlArr.length === 0) { report.added[mlKey] = 0; report.skipped[mlKey] = 0; continue; }

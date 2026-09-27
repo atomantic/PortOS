@@ -220,3 +220,22 @@ it('preflights MortalLoom import destinations and preserves repaired records on 
   expect(JSON.parse(await readFile(goalsPath, 'utf8')).goals.map(goal => goal.id)).toEqual(['retained-goal', 'incoming-goal']);
   expect(JSON.parse(await readFile(alcoholPath, 'utf8')).map(drink => drink.id)).toEqual(['retained-drink', 'incoming-drink']);
 });
+
+it('keeps goal edits while importing MortalLoom records and updating the birth-date mirror', async () => {
+  const { mutateGoals } = await import('./identity/store.js');
+  const source = join(PATHS.data, 'mortal-source.json');
+  const goalsPath = join(PATHS.digitalTwin, 'goals.json');
+  await seed(source, JSON.stringify({ goals: [{ id: 'incoming-goal' }] }));
+  await seed(goalsPath, JSON.stringify({ goals: [{ id: 'retained-goal', progress: 0 }] }));
+  await Promise.all([
+    importToPortOS(),
+    updateBirthDate('2000-01-01'),
+    mutateGoals(doc => {
+      doc.goals.find(goal => goal.id === 'retained-goal').progress = 60;
+      return doc;
+    })
+  ]);
+  expect(JSON.parse(await readFile(goalsPath, 'utf8'))).toMatchObject({
+    birthDate: '2000-01-01', goals: [{ id: 'retained-goal', progress: 60 }, { id: 'incoming-goal' }]
+  });
+});
