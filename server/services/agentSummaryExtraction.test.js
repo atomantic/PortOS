@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
 
+describe('sentinel summary precedence', () => {
+  it.each(['Thinking: I will now run /simplify.', 'tokens used\n123\nEarlier assistant reply.'])(
+    'renders the latest completion summary instead of transcript content: %s', (transcript) => {
+      const summary = '## Summary\nFixed the reported bug.\n\n✅ Tests passed';
+      const output = [
+        '✅ Agent signaled completion',
+        'An earlier completion attempt.',
+        transcript,
+        '✅ Agent signaled completion',
+        summary,
+        '💡 Open the Shell tab to view the session',
+      ].join('\n');
+      expect(extractFinalSummary(output)).toBe(summary);
+      expect(extractSimplifySummaries(output)).toEqual({ taskSummary: summary, simplifySummary: null });
+    }
+  );
+});
+
 describe('extractFinalSummary', () => {
   it('returns the last block of non-tool text', () => {
     const output = [

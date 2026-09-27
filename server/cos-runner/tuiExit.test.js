@@ -15,11 +15,12 @@ function setup(extra = {}) {
   const io = { emit: vi.fn() };
   const emitToServer = vi.fn();
   const withState = vi.fn(async fn => fn(state));
+  const persistCompletion = vi.fn().mockResolvedValue();
   const onExit = createTuiExitHandler({
     agentId: 'agent-old', taskId: 'task-1', sessionId: 'session-1',
-    agent, activeAgents, io, emitToServer, withState, persistCompletion: vi.fn().mockResolvedValue(),
+    agent, activeAgents, io, emitToServer, withState, persistCompletion,
   });
-  return { agent, activeAgents, state, io, emitToServer, withState, onExit };
+  return { agent, activeAgents, state, io, emitToServer, withState, onExit, persistCompletion };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -53,6 +54,19 @@ describe('runner TUI exit handoff', () => {
     expect(run.emitToServer).not.toHaveBeenCalled();
     expect(run.withState).not.toHaveBeenCalled();
     expect(run.state.agents['agent-old']).toEqual({ status: 'paused' });
+  });
+
+  it('persists the sentinel received during exit instead of the Gemini thinking transcript', async () => {
+    const run = setup({ outputBuffer: 'Thinking: inspect the code and write the completion file.' });
+    const summary = '✅ Agent signaled completion\n## Summary\nFixed the bug.\n';
+    run.agent.sentinelWork = Promise.resolve().then(() => {
+      run.agent.completedBySentinel = true;
+      run.agent.completionOutput = summary;
+    });
+    await run.onExit({ exitCode: 1, signal: 15 });
+    expect(run.persistCompletion).toHaveBeenCalledWith('agent-old', summary, expect.objectContaining({ success: true }));
+    expect(run.emitToServer).toHaveBeenCalledWith('agent:completed', expect.objectContaining({ outputLength: summary.length }));
+    expect(run.io.emit).toHaveBeenCalledWith('tui:exit', expect.objectContaining({ outputTail: run.agent.outputBuffer }));
   });
 
   it('retains successful sentinel completion and bounds the exit transcript', async () => {

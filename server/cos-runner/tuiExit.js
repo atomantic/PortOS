@@ -32,7 +32,10 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
       const effectiveExitCode = success ? 0 : exitCode;
       const effectiveSignal = success ? 0 : signal;
       const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
-      await persistCompletion(agentId, current.outputBuffer, current.paused ? null : {
+      // The terminal buffer contains TUI thinking/repaints. A validated
+      // sentinel owns the durable user-facing output once it is available.
+      const completionOutput = current.completionOutput ?? current.outputBuffer;
+      await persistCompletion(agentId, completionOutput, current.paused ? null : {
         taskId, completedAt: new Date().toISOString(), exitCode: effectiveExitCode,
         signal: effectiveSignal, success: !!success, duration,
         completionReason: success ? 'agent-signaled-done' : 'tui-exit',
@@ -54,7 +57,7 @@ export function createTuiExitHandler({ agentId, taskId, sessionId, agent, active
         exitCode: effectiveExitCode,
         success,
         duration,
-        outputLength: current.outputBuffer.length,
+        outputLength: completionOutput.length,
         completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
       });
       await withState((state) => {
