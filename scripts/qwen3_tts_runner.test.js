@@ -371,3 +371,157 @@ print(json.dumps({"status": status, "unavailable": unavailable}))
     expect(result.unavailable).toMatchObject({ ok: false });
   });
 });
+
+// The official training recipe needs bf16 CUDA and its Torch/qwen-tts/librosa
+// stack. These doubles stand in for that stack so the adapter's publication
+// contract runs anywhere; the recipe's tensor math is not exercised here.
+const trainingFixture = String.raw`
+torch.cuda = types.SimpleNamespace(is_available=lambda: True, is_bf16_supported=lambda: True,
+                                   empty_cache=lambda: None)
+torch.__version__ = "fixture"
+# Checkpoints rewrite the base config, so the fake Hub serves a JSON one.
+payloads["config.json"] = json.dumps({"tts_model_type": "base", "talker_config": {"hidden_size": 8}}).encode()
+for entry in entries:
+    if entry.rfilename == "config.json":
+        entry.size = len(payloads["config.json"])
+        entry.blob_id = hashlib.sha1(f"blob {entry.size}\0".encode() + payloads["config.json"]).hexdigest()
+for name in ("librosa", "safetensors", "safetensors.torch", "transformers", "qwen_tts.core",
+             "qwen_tts.core.models", "qwen_tts.core.models.modeling_qwen3_tts"):
+    sys.modules[name] = types.ModuleType(name)
+sys.modules["transformers"].__version__ = "fixture"
+sys.modules["safetensors.torch"].save_file = lambda *args: None
+sys.modules["qwen_tts.core.models.modeling_qwen3_tts"].mel_spectrogram = lambda *args, **kwargs: None
+def custom_voice(self, **kwargs):
+    events.append({"custom": kwargs})
+    if "step-1" in events[-2]["path"]:
+        raise RuntimeError("private checkpoint failure")
+    return [[1]], 24000
+Model.generate_custom_voice = custom_voice
+base_model = runner.SUPPORTED_MODELS[1]
+def training_args(root, dataset, **kwargs):
+    return types.SimpleNamespace(model_id=kwargs.get("model_id", base_model), models_dir=str(root),
+        dataset_manifest=str(dataset), output_dir=str(root / "job"), epochs=1, checkpoint_interval=1, seed=7)
+def write_dataset(root):
+    clip = root / "clip.wav"
+    clip.write_bytes(b"explicit test fixture")
+    dataset = root / "dataset.json"
+    dataset.write_text(json.dumps({"speaker": "portos_voice", "reference_audio": str(clip),
+                                   "samples": [{"audio": str(clip), "text": "Invented training words."}]}))
+    return dataset
+trained = []
+def fake_train(snapshot, dataset, args, staging, emit):
+    trained.append(dataset)
+    staged = []
+    for step in (1, 2):
+        emit({"stage": "training", "step": step, "total_steps": 2, "loss": 0.5, "progress": step * 50})
+        target = staging / f"step-{step}"
+        runner.write_checkpoint_files(snapshot, target, dataset["speaker"])
+        (target / runner.CHECKPOINT_WEIGHTS).write_bytes(f"fixture weights {step}".encode())
+        staged.append({"path": target, "step": step, "loss": 0.5})
+    return staged
+runner.train_checkpoints = fake_train
+`;
+
+describe.skipIf(!python)('Qwen3 fine-tuning adapter', () => {
+  it('names the adapter only where the official recipe can run', () => {
+    const result = run(inferenceFixture + trainingFixture + String.raw`
+cuda = runner.probe_runtime()["training_adapter"]
+torch.cuda.is_bf16_supported = lambda: False
+no_bf16 = runner.probe_runtime()["training_adapter"]
+torch.cuda.is_bf16_supported = lambda: True
+sys.modules["librosa"] = None
+missing = runner.probe_runtime()["training_adapter"]
+print(json.dumps([cuda, no_bf16, missing]))
+`);
+    expect(result).toEqual(['qwen-tts-sft-12hz', null, null]);
+  });
+
+  it('publishes only sealed checkpoints that reload and speak, then synthesizes from exactly those bytes', () => {
+    const result = run(inferenceFixture + trainingFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    runner.download_model(base_model, root)
+    output, error = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+        status = runner.run_fine_tuning(training_args(root, write_dataset(root)))
+    assert status == 0, error.getvalue()
+    assert "private checkpoint failure" not in error.getvalue()
+    frames = [json.loads(line) for line in output.getvalue().splitlines()]
+    checkpoints = [frame for frame in frames if frame["stage"] == "checkpoint"]
+    job = root / "job"
+    # The checkpoint whose reload audition failed is discarded, not published.
+    assert [frame["step"] for frame in checkpoints] == [2]
+    assert not (job / "checkpoint-step-1").exists() and not (job / ".staging").exists()
+    checkpoint = Path(checkpoints[0]["checkpoint_path"])
+    assert checkpoint == job / "checkpoint-step-2" and Path(checkpoints[0]["sample_wav"]).is_file()
+    config = json.loads((checkpoint / "config.json").read_text())
+    assert config["tts_model_type"] == "custom_voice"
+    assert config["talker_config"]["spk_id"] == {"portos_voice": 3000}
+    # Auditions load the checkpoint offline through the synthesis loader.
+    loads = [event for event in events if "path" in event]
+    assert all(event["local_files_only"] is True for event in loads)
+    assert events[-1] == {"custom": {"text": runner.AUDITION_TEXT, "speaker": "portos_voice", "language": "Auto"}}
+
+    events.clear()
+    args = args_for(root, mode="fine-tuned")
+    args.checkpoint_path = str(checkpoint)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert runner.run_synthesis(args) == 0
+    synthesis = json.loads(output.getvalue())
+    assert events[1]["path"] == str(checkpoint)
+    assert events[2] == {"custom": {"text": "An invented sentence.", "speaker": "portos_voice", "language": "Auto"}}
+
+    # Modified weights, even at the same size and mtime, and unsealed foreign
+    # directories never load.
+    weights = checkpoint / runner.CHECKPOINT_WEIGHTS
+    stat = weights.stat()
+    weights.write_bytes(b"x" * stat.st_size)
+    os.utime(weights, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    events.clear()
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert runner.run_synthesis(args) == 1
+        args.checkpoint_path = str(root)
+        assert runner.run_synthesis(args) == 1
+    assert events == []
+    print(json.dumps({"checkpoint": checkpoints[0], "synthesis": synthesis}))
+`);
+    const digest = /^Qwen\/Qwen3-TTS-12Hz-1\.7B-Base@a{40}\+sha256\.[0-9a-f]{64}$/;
+    expect(result.checkpoint).toMatchObject({ checkpoint: 'checkpoint-step-2', model_revision: expect.stringMatching(digest) });
+    expect(result.synthesis).toMatchObject({ ok: true, modelRevision: result.checkpoint.model_revision, effectiveControls: { mode: 'fine-tuned', seed: 42 } });
+  });
+
+  it('refuses unsupported hardware, models and datasets before training starts', () => {
+    const result = run(inferenceFixture + trainingFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    dataset = write_dataset(root)
+    failures = []
+    def attempt(args):
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error), contextlib.redirect_stdout(io.StringIO()):
+            assert runner.run_fine_tuning(args) == 1
+        failures.append(json.loads(error.getvalue().splitlines()[-1])["code"])
+    attempt(training_args(root, dataset))  # base weights not downloaded
+    runner.download_model(base_model, root)
+    attempt(training_args(root, dataset, model_id=runner.SUPPORTED_MODELS[0]))
+    (root / "clip.wav").unlink()
+    attempt(training_args(root, dataset))
+    torch.cuda.is_available = lambda: False
+    attempt(training_args(root, write_dataset(root)))
+    runner.platform.system = lambda: "Darwin"
+    runner.platform.machine = lambda: "arm64"
+    torch.cuda.is_available = lambda: True
+    attempt(training_args(root, dataset))
+    assert trained == [] and not (root / "job").exists()
+    print(json.dumps(failures))
+`);
+    expect(result).toEqual([
+      'QWEN3_RUNTIME_UNAVAILABLE',
+      'QWEN3_RUNTIME_UNAVAILABLE',
+      'QWEN3_TRAINING_INVALID_DATASET',
+      'QWEN3_RUNTIME_UNAVAILABLE',
+      'QWEN3_RUNTIME_UNAVAILABLE',
+    ]);
+  });
+});
