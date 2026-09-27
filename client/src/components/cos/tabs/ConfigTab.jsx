@@ -18,6 +18,7 @@ import { useSocketResource } from '../../../hooks/useSocketResource.js';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import ConfigRow from './ConfigRow';
+import MemoryEmbeddingRecommendation from '../MemoryEmbeddingRecommendation';
 import {
   AVATAR_STYLE_LABELS,
   AUTONOMY_DOMAINS,
@@ -522,6 +523,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
               return saveConfigPatch({ embeddingModel: model }, { failureKeys: ['embeddingModel'] });
             }}
             label="Embedding provider"
+          />
+          <MemoryEmbeddingRecommendation
+            disabled={saveStatus === 'saving'}
+            onSelect={(id, model) => {
+              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
+              pendingConfigFieldsRef.current.set('embeddingModel', model);
+              setEmbeddingProviderId(id);
+              setProviderHook(id);
+              setEmbeddingModel(model);
+              setModelHook(model);
+              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: model }, {
+                failureKeys: ['embeddingProviderId', 'embeddingModel'],
+              });
+            }}
           />
         </div>
       </section>
