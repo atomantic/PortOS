@@ -187,16 +187,16 @@ describe('database maintenance status', () => {
     const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
     const accepted = await request(app).get('/api/database/maintenance/status');
     expect(accepted.body).toEqual({
-      id: operation.id, stage: 'accepted', source: 'native', target: 'docker', fenced: true,
+      id: operation.id, stage: 'accepted', coordinator: 'unclaimed', source: 'native', target: 'docker', fenced: true,
     });
     const owner = journal.acquireCoordinator(operation.id);
-    const stages = ['accepted', 'quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified'];
+    const stages = ['accepted', 'quiescing', 'exporting', 'importing'];
     for (let i = 1; i < stages.length; i++) {
       journal.transition(operation.id, owner, stages[i - 1], stages[i]);
     }
-    const verified = await request(app).get('/api/database/maintenance/status');
-    expect(verified.status).toBe(200);
-    expect(verified.body).toEqual({ ...accepted.body, stage: 'verified' });
+    const importing = await request(app).get('/api/database/maintenance/status');
+    expect(importing.status).toBe(200);
+    expect(importing.body).toEqual({ ...accepted.body, stage: 'importing', coordinator: 'unregistered' });
     expect(() => journal.assertAdmission()).toThrow();
     expect(execFile).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();

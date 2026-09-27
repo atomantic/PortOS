@@ -1642,6 +1642,12 @@ export const databaseMaintenancePreflightSchema = z.object({
   target: z.enum(DB_BACKENDS)
 }).strict().refine(value => value.source !== value.target, { message: 'Source and target must differ' });
 
+// POST /api/database/maintenance/cutover — accepts the offline cutover (202).
+export const databaseMaintenanceCutoverSchema = databaseMaintenancePreflightSchema;
+
+// POST /api/database/maintenance/recover — same-operation recovery only.
+export const databaseMaintenanceRecoverSchema = z.object({ id: z.string().uuid() }).strict();
+
 // POST /api/database/{start,stop,destroy} — operate on a named backend.
 export const databaseBackendSchema = z.object({
   backend: z.enum(DB_BACKENDS)

@@ -60,7 +60,7 @@ describe('persistent database maintenance boundary', () => {
     expect(() => journal.transition(operation.id, 'wrong', 'accepted', 'quiescing')).toThrow();
     expect(() => journal.transition(operation.id, token, 'accepted', 'importing')).toThrow();
     let stage = 'accepted';
-    for (const next of ['quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified']) {
+    for (const next of ['quiescing', 'exporting', 'importing']) {
       const result = node(`import {createDatabaseMaintenanceJournal} from ${JSON.stringify(moduleUrl)};
         const j=createDatabaseMaintenanceJournal(${JSON.stringify(data)});
         j.transition(${JSON.stringify(operation.id)}, ${JSON.stringify(token)}, ${JSON.stringify(stage)}, ${JSON.stringify(next)});`);
@@ -70,8 +70,10 @@ describe('persistent database maintenance boundary', () => {
       expect(() => journal.assertAdmission()).toThrow();
       stage = next;
     }
-    // Even verified is evidence, not permission to reopen writers. The future
-    // coordinator must separately prove boot identity before releasing the fence.
+    // Mode commit needs this operation's committed import receipt; the later
+    // stages and release are covered end to end by databaseMaintenanceCutover.
+    expect(() => journal.transition(operation.id, token, 'importing', 'committing')).toThrow();
+    expect(journal.read().stage).toBe('importing');
     expect(() => journal.cancel(operation.id, source)).toThrow();
   });
 

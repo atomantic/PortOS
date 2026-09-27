@@ -5,7 +5,9 @@ import {
   databaseSwitchSchema,
   databaseBackendSchema,
   databaseExportSchema,
-  databaseMaintenancePreflightSchema
+  databaseMaintenancePreflightSchema,
+  databaseMaintenanceCutoverSchema,
+  databaseMaintenanceRecoverSchema
 } from '../lib/validation.js';
 import * as dbAdmin from '../services/dbAdmin.js';
 
@@ -23,6 +25,22 @@ router.post('/maintenance/preflight', asyncHandler(async (req, res) => {
   const direction = validateRequest(databaseMaintenancePreflightSchema, req.body);
   res.set('Cache-Control', 'no-store');
   res.json(await dbAdmin.preflightDatabaseMaintenance(direction));
+}));
+
+// Accept the offline cutover. 202: the detached worker then stops PortOS,
+// transfers, commits mode and restarts; progress is the status route above
+// (and scripts/database-maintenance.mjs status while the server is down).
+router.post('/maintenance/cutover', asyncHandler(async (req, res) => {
+  const direction = validateRequest(databaseMaintenanceCutoverSchema, req.body);
+  res.set('Cache-Control', 'no-store');
+  res.status(202).json(await dbAdmin.acceptDatabaseCutover(direction));
+}));
+
+// Relaunch the worker for the SAME recorded operation after its exit receipt.
+router.post('/maintenance/recover', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(databaseMaintenanceRecoverSchema, req.body);
+  res.set('Cache-Control', 'no-store');
+  res.status(202).json(await dbAdmin.recoverDatabaseCutover(id));
 }));
 
 // GET /api/database/status — current mode, connectivity, row counts, resource stats

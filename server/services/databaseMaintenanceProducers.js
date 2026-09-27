@@ -39,6 +39,27 @@ function sameIdentities(current, saved) {
 }
 
 /**
+ * Fresh readback of the RECORDED producer identities after a restart. The PM2
+ * id, working directory and script must still match; the pid and status are
+ * whatever PM2 reports now (a restart changes the pid; a crash loop may show
+ * `errored`). Returns `{ name, pmId, pid, status }` per producer.
+ */
+export async function readRecordedProducers(saved) {
+  const rows = await listMaintenanceProcesses();
+  if (!Array.isArray(rows)) throw refused();
+  const root = realpathSync(PATHS.installRoot);
+  return names.map(name => {
+    const matches = rows.filter(row => row?.name === name);
+    const original = saved.find(value => value.name === name);
+    if (matches.length !== 1 || !original) throw refused();
+    const [row] = matches;
+    if (row.pmId !== original.pmId || typeof row.cwd !== 'string' || typeof row.script !== 'string'
+      || realpathSync(row.cwd) !== root || realpathSync(resolve(row.cwd, row.script)) !== original.script) throw refused();
+    return { name, pmId: row.pmId, pid: Number.isSafeInteger(row.pid) && row.pid > 0 ? row.pid : 0, status: String(row.status) };
+  });
+}
+
+/**
  * Internal one-use coordinator worker stage. Stops producers only; descendants
  * and pre-fence admitted spawns still require reconciliation before any dump.
  * A recovered worker at `exporting`/`importing` repeats the same readback and

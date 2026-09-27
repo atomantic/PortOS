@@ -9,6 +9,7 @@ import pg from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isTestRunner } from './runtimeEnv.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 
 const { Pool } = pg;
 
@@ -214,8 +215,10 @@ function maintenanceError() {
 }
 
 async function databaseOperation(fn) {
-  // A process-local restore context cannot bypass a durable cutover fence.
+  // A process-local restore context cannot bypass a durable cutover fence,
+  // and a pool still naming a cutover's retired backend never reaches it.
   assertDatabaseAdmission();
+  assertDatabasePoolAuthority(POOL_CONFIG);
   if (maintenanceActive && !databaseContext.getStore()?.active) throw maintenanceError();
   const context = { active: true };
   const pending = databaseContext.run(context, async () => fn());
@@ -231,6 +234,7 @@ async function databaseOperation(fn) {
 /** Drain admitted database work and reject new work until restore completes. */
 export async function withDatabaseMaintenance(fn) {
   assertDatabaseAdmission();
+  assertDatabasePoolAuthority(POOL_CONFIG);
   if (maintenanceActive || databaseContext.getStore()?.active) throw maintenanceError();
   maintenanceActive = true;
   const context = { active: true };

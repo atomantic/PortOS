@@ -22,6 +22,11 @@ vi.mock('../services/updatePreflight.js', () => ({
 vi.mock('../lib/childProcess.js', async importOriginal => ({
   ...await importOriginal(), execFile: vi.fn(), spawn: vi.fn(),
 }));
+// The detached cutover worker is launched only after acceptance; never here.
+vi.mock('../lib/detachedSpawn.js', async importOriginal => ({
+  ...await importOriginal(),
+  spawnDatabaseMaintenanceWorker: vi.fn(async () => ({ on() {} })),
+}));
 
 import databaseRoutes from './database.js';
 import { PATHS } from '../lib/paths.js';
@@ -31,6 +36,8 @@ import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJour
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { getSystemActivity } from '../services/activeProcessing.js';
 import { countActiveCosAgents, getPersistentMindImageWorkGuard } from '../services/updatePreflight.js';
+import { spawnDatabaseMaintenanceWorker } from '../lib/detachedSpawn.js';
+import { hostControlRouteGate } from '../services/authGate.js';
 
 const idle = () => ({
   jobs: [], extras: { imageTo3d: [] }, agents: { trusted: true, active: 0, queued: 0 },
@@ -43,6 +50,7 @@ app.use(express.json());
 app.use('/api/database', databaseRoutes);
 app.use((err, _req, res, _next) => res.status(err.status ?? 500).json({ error: err.message, code: err.code }));
 const preflight = (body = { source: 'native', target: 'docker' }) => request(app).post('/api/database/maintenance/preflight').send(body);
+const accept = (body = { source: 'native', target: 'docker' }) => request(app).post('/api/database/maintenance/cutover').send(body);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -57,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(join(PATHS.data, 'database-maintenance'), { recursive: true, force: true });
+  rmSync(join(PATHS.data, 'database-maintenance-cancelled'), { recursive: true, force: true });
   expect(execFile).not.toHaveBeenCalled();
   expect(spawn).not.toHaveBeenCalled();
   expect(query).not.toHaveBeenCalled();
@@ -184,5 +193,89 @@ describe('database maintenance preflight HTTP contract', () => {
     getSystemActivity.mockClear();
     expect((await preflight()).status).toBe(503);
     expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe('database cutover acceptance HTTP contract', () => {
+  const busy = () => ({ ...idle(), agents: { trusted: true, active: 1, queued: 0 } });
+
+  it.each(['native', 'docker'])('accepts a trusted idle %s source, takes ownership, and launches one worker', async source => {
+    saveMode(source);
+    POOL_CONFIG.port = source === 'native' ? 5432 : 5561;
+    const target = source === 'native' ? 'docker' : 'native';
+    const result = await accept({ source, target });
+    expect(result.status).toBe(202);
+    expect(result.headers['cache-control']).toBe('no-store');
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const operation = journal.read();
+    expect(result.body).toEqual({ id: operation.id, stage: 'accepted', source, target, accepted: true });
+    expect(operation).toMatchObject({ stage: 'accepted', source: { mode: source }, target: { mode: target } });
+    // Owned before launch: cancellation and a second owner are refused.
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
+    expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1);
+    expect(spawnDatabaseMaintenanceWorker.mock.calls[0][0]).toBe(operation.id);
+    expect(() => journal.acquireCoordinator(operation.id)).toThrow();
+    // Acceptance itself never changes the saved mode.
+    expect(readFileSync(join(PATHS.installRoot, '.env'), 'utf8')).toBe(`PGMODE=${source}\n`);
+    expect((await accept({ source, target })).status).toBe(503);
+  });
+
+  it('refuses stale and reversed requests without publishing an operation', async () => {
+    expect((await accept({ source: 'docker', target: 'native' })).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    POOL_CONFIG.port = 6000;
+    expect((await accept()).body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    expect(createDatabaseMaintenanceJournal(PATHS.data).read()).toBeNull();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['work admitted before the fence', () => busy()],
+    ['a saved-mode change', () => { saveMode('docker'); return idle(); }],
+  ])('cancels the unowned operation when the final fenced check sees %s', async (_label, observe) => {
+    getSystemActivity.mockResolvedValueOnce(idle()).mockImplementationOnce(async () => {
+      // This observation runs AFTER publication: admission is already closed.
+      expect(createDatabaseMaintenanceJournal(PATHS.data).isFenced()).toBe(true);
+      return observe();
+    });
+    const result = await accept();
+    expect(result.status).toBe(409);
+    expect(['DATABASE_PREFLIGHT_BUSY', 'DATABASE_PREFLIGHT_STALE']).toContain(result.body.code);
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    expect(journal.read()).toBeNull();
+    expect(() => journal.assertAdmission()).not.toThrow();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+  });
+
+  it('requires host-control authority before accepting or recovering', async () => {
+    const gated = express();
+    gated.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+    gated.use(hostControlRouteGate);
+    gated.use(express.json());
+    gated.use('/api/database', databaseRoutes);
+    for (const path of ['cutover', 'recover']) {
+      const result = await request(gated).post(`/api/database/maintenance/${path}`).send({ source: 'native', target: 'docker' });
+      expect(result.status).toBe(403);
+    }
+    expect(getSystemActivity).not.toHaveBeenCalled();
+    expect(createDatabaseMaintenanceJournal(PATHS.data).read()).toBeNull();
+  });
+
+  it('recovers only the recorded operation after its worker exit receipt', async () => {
+    const recover = id => request(app).post('/api/database/maintenance/recover').send({ id });
+    expect((await recover('not-a-uuid')).status).toBe(400);
+    const accepted = await accept();
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const [id, token] = spawnDatabaseMaintenanceWorker.mock.calls[0];
+    const directory = journal.reserveCoordinatorWorker(id, token);
+    // Still running (no receipt): recovery launches nothing.
+    expect((await recover(id)).body).toEqual({ id, stage: 'accepted', recovery: 'running' });
+    writeFileSync(join(directory, 'exit'), '1\n');
+    expect((await recover('00000000-0000-4000-8000-000000000000')).status).toBe(503);
+    const recovered = await recover(id);
+    expect(recovered.status).toBe(202);
+    expect(recovered.body).toEqual({ id: accepted.body.id, stage: 'accepted', recovery: 'launched' });
+    expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(2);
+    expect(spawnDatabaseMaintenanceWorker.mock.calls[1][0]).toBe(id);
+    expect(spawnDatabaseMaintenanceWorker.mock.calls[1][1]).not.toBe(token);
   });
 });

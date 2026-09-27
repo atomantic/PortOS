@@ -9,6 +9,7 @@ import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
+import { PATHS } from '../lib/paths.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -559,6 +560,20 @@ export async function listMaintenanceProcesses() {
       })));
     });
   }));
+}
+
+/**
+ * Internal maintenance restart of one PortOS producer. Re-evaluates the
+ * install's ecosystem file with --update-env so the app receives the saved
+ * database configuration a cutover just committed, never PM2's cached env.
+ * PM2 success is not proof of the backend: the restarted process must still
+ * prove its own pool (services/databaseCutoverHandshake.js).
+ */
+export async function restartMaintenanceProducer(name) {
+  if (!['portos-server', 'portos-cos'].includes(name)) throw new Error('Unknown maintenance producer.');
+  await execPm2(['restart', join(PATHS.installRoot, 'ecosystem.config.cjs'), '--only', name, '--update-env'],
+    { cwd: PATHS.installRoot });
+  return { success: true };
 }
 
 // Shared shaping for listProcesses / listProcessesStrict so the two never drift.
