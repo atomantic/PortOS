@@ -480,3 +480,75 @@ it('prevents an older expanded-detail read from replacing measured cleanup conte
   expect(screen.queryByText('stale-example.txt')).not.toBeInTheDocument();
   expect(screen.getAllByText('fresh-example.txt')).toHaveLength(2);
 });
+
+describe('DataManager backup deletion (#8922)', () => {
+  const mockBackups = [
+    { name: 'backup-2025-01-01.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' },
+    { name: 'backup-2025-01-02.tar.gz', size: 6000, created: '2025-01-02T10:00:00Z' },
+  ];
+
+  let getDataBackups;
+  let deleteDataBackup;
+
+  beforeEach(async () => {
+    const api = await import('../services/api');
+    getDataBackups = api.getDataBackups;
+    deleteDataBackup = api.deleteDataBackup;
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [] });
+    getDataBackups.mockReset();
+    deleteDataBackup.mockReset();
+  });
+
+  it('keeps a backup row visible when deleteDataBackup is rejected, then allows a retry', async () => {
+    deleteDataBackup.mockRejectedValueOnce(new Error('Network error')).mockResolvedValueOnce({ deleted: 'backup-2025-01-01.tar.gz' });
+    getDataBackups.mockResolvedValue(mockBackups);
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+
+    const deleteButton = screen.getAllByRole('button', { name: 'Delete backup' })[0];
+    fireEvent.click(deleteButton);
+
+    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
+    // The row should still be visible after the failed deletion
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    // The second backup should also remain
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+
+    // Retrying the same row succeeds and removes it.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete backup' })[0]);
+    const retryConfirm = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(retryConfirm);
+    });
+    await waitFor(() => expect(screen.queryByText('backup-2025-01-01.tar.gz')).not.toBeInTheDocument());
+    expect(deleteDataBackup).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes a backup row only after deleteDataBackup succeeds', async () => {
+    deleteDataBackup.mockResolvedValue({ success: true });
+    getDataBackups.mockResolvedValue(mockBackups);
+
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+
+    const deleteButtons = screen.getAllByRole('button', { name: 'Delete backup' });
+    fireEvent.click(deleteButtons[0]);
+
+    const confirmButton = await screen.findByRole('button', { name: 'Delete' });
+    await act(async () => {
+      fireEvent.click(confirmButton);
+    });
+
+    // The deleted backup should be gone
+    await waitFor(() => expect(screen.queryByText('backup-2025-01-01.tar.gz')).not.toBeInTheDocument());
+    // The other backup should still be visible
+    expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
+  });
+});
