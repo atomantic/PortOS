@@ -76,7 +76,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
     .replace('import.meta.url', 'scriptUrl');
   try {
     await runInNewContext(`(async () => {${source}\n})()`, {
-      scriptUrl: 'file:///example/scripts/setup-db.js', dirname, join, fileURLToPath,
+      scriptUrl: new URL('./setup-db.js', import.meta.url).href, dirname, join, fileURLToPath,
       parseNativePort, parseDockerPort,
       parseEnvFile: () => savedEnv,
       upsertEnvKey: (_path, key, value) => { savedEnv[key] = value; },
