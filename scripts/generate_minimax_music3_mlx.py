@@ -7,6 +7,9 @@ import os
 import sys
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import heartbeat  # noqa: E402
+
 
 TARGET_SAMPLE_RATE = 32000
 
@@ -63,24 +66,26 @@ def main():
     from mlx_audio.music import load
 
     print("STAGE:load-model", file=sys.stderr, flush=True)
-    model = load(args.model, revision=args.revision) if args.revision else load(args.model)
+    with heartbeat("load-model"):
+        model = load(args.model, revision=args.revision) if args.revision else load(args.model)
     print("STAGE:generate", file=sys.stderr, flush=True)
     requested_duration = float(max(1, min(300, args.duration)))
     chunks = []
     sample_rate = None
-    for result in model.generate(
-        text=args.text,
-        lyrics=args.lyrics,
-        duration=requested_duration,
-        steps=args.steps,
-        seed=args.seed,
-    ):
-        result_rate = int(result.sample_rate)
-        if sample_rate is None:
-            sample_rate = result_rate
-        elif result_rate != sample_rate:
-            raise RuntimeError("MiniMax Music 3 MLX returned inconsistent sample rates")
-        chunks.append(to_stereo(result.audio, np))
+    with heartbeat("generate"):
+        for result in model.generate(
+            text=args.text,
+            lyrics=args.lyrics,
+            duration=requested_duration,
+            steps=args.steps,
+            seed=args.seed,
+        ):
+            result_rate = int(result.sample_rate)
+            if sample_rate is None:
+                sample_rate = result_rate
+            elif result_rate != sample_rate:
+                raise RuntimeError("MiniMax Music 3 MLX returned inconsistent sample rates")
+            chunks.append(to_stereo(result.audio, np))
 
     if not chunks or sample_rate is None:
         raise RuntimeError("MiniMax Music 3 MLX produced no audio")
