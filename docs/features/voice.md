@@ -27,7 +27,8 @@ metadata; those artifacts are not evidence of model readiness. Runtime probes
 still report inference unavailable. Model download readiness is separate: it
 requires a verified snapshot marker and all required files. Unchanged verified
 files use their size, change timestamps, and filesystem identity; changed files
-are rehashed before they can report ready; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
+are rehashed before they can report ready. Windows probes rehash all files because
+Python does not expose a reliable change timestamp there; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
 adapter and an intelligibility smoke run. No model download runs automatically.
 
 Interactive profile benchmarks measure elapsed time until the buffered WAV is

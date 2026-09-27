@@ -58,12 +58,21 @@ with tempfile.TemporaryDirectory() as temp:
     assert snapshot == Path(result["path"])
     # Repeated status checks do not rehash unchanged multi-GB weights.
     verifier = runner.verify_file
-    runner.verify_file = lambda *args: (_ for _ in ()).throw(AssertionError("rehashed unchanged file"))
-    assert runner.installed_snapshot(model_dir, model_id) == snapshot
-    runner.verify_file = verifier
+    if sys.platform != "win32":
+        runner.verify_file = lambda *args: (_ for _ in ()).throw(AssertionError("rehashed unchanged file"))
+        assert runner.installed_snapshot(model_dir, model_id) == snapshot
+        runner.verify_file = verifier
     assert len(calls) == len(runner.REQUIRED_FILES)
-    # A metadata-only directory or incomplete codec must never report installed.
+    # A harmless touch refreshes the cache after one verification.
     codec = snapshot / "speech_tokenizer/model.safetensors"
+    stat = codec.stat()
+    os.utime(codec, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+    assert runner.installed_snapshot(model_dir, model_id) == snapshot
+    if sys.platform != "win32":
+        runner.verify_file = lambda *args: (_ for _ in ()).throw(AssertionError("rehashed refreshed file"))
+        assert runner.installed_snapshot(model_dir, model_id) == snapshot
+        runner.verify_file = verifier
+    # A metadata-only directory or incomplete codec must never report installed.
     original = codec.stat()
     codec.write_bytes(b"x" * original.st_size)
     os.utime(codec, ns=(original.st_atime_ns, original.st_mtime_ns))

@@ -17,6 +17,7 @@ import os
 import re
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -35,6 +36,18 @@ REQUIRED_FILES = (
     "speech_tokenizer/config.json", "speech_tokenizer/configuration.json",
     "speech_tokenizer/model.safetensors", "speech_tokenizer/preprocessor_config.json",
 )
+
+
+def publish_json(path: Path, data: dict) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=".verified-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump(data, output)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def file_fingerprint(path: Path) -> list[int]:
@@ -71,14 +84,34 @@ def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
         if manifest["model_id"] != model_id or not re.fullmatch(r"[0-9a-f]{40}", revision):
             return None
         snapshot = model_dir / revision
+        cache_path = snapshot / ".verification.json"
+        try:
+            cache = json.loads(cache_path.read_text())
+            if not isinstance(cache, dict):
+                cache = {}
+        except (OSError, ValueError):
+            cache = {}
+        refreshed = {}
+        changed = False
         for filename in REQUIRED_FILES:
             path = snapshot / filename
-            metadata = manifest["files"][filename]
+            metadata = dict(manifest["files"][filename])
+            cached = cache.get(filename)
+            if isinstance(cached, dict) and all(cached.get(key) == metadata[key] for key in ("size", "algorithm", "digest")):
+                metadata = cached
             # The verified bytes stay valid while their filesystem identity and
             # change timestamps match. Rehash changed files, including equal-size
             # replacements, without rereading multi-GB weights on every status.
-            if file_fingerprint(path) != metadata.get("fingerprint"):
-                verify_file(path, metadata)
+            # Windows Python reports creation time as ctime, not change time;
+            # it cannot prove unchanged bytes when mtime has been restored.
+            if sys.platform == "win32" or file_fingerprint(path) != metadata.get("fingerprint"):
+                metadata["fingerprint"] = verify_file(path, metadata)
+                changed = True
+            refreshed[filename] = metadata
+        if changed:
+            # Per-revision cache cannot overwrite the readiness pointer when a
+            # concurrent download publishes a newer revision.
+            publish_json(cache_path, refreshed)
         return snapshot
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -121,18 +154,9 @@ def download_model(model_id: str, models_dir: Path) -> dict:
         metadata["fingerprint"] = verify_file(snapshot / filename, metadata)
         verified_files[filename] = metadata
 
-    marker = model_dir / "verified.json"
-    # Unique temporary markers also make separate explicit CLI downloads safe.
-    import tempfile
-    descriptor, temporary = tempfile.mkstemp(prefix=".verified-", dir=model_dir)
-    try:
-        with os.fdopen(descriptor, "w") as output:
-            json.dump({"model_id": model_id, "revision": revision, "files": verified_files}, output)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, marker)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    publish_json(model_dir / "verified.json", {
+        "model_id": model_id, "revision": revision, "files": verified_files,
+    })
     return {"ok": True, "modelId": model_id, "revision": revision, "path": str(snapshot)}
 
 
