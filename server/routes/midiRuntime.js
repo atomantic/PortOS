@@ -143,12 +143,16 @@ router.post('/install', asyncHandler(async (req, res) => {
     emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
+  // try/catch because this runs outside the request lifecycle — an uncaught
+  // throw here would take the process down instead of reaching the error
+  // middleware. Lifecycle cleanup runs first so a later throw can't leave the
+  // install lock held.
   child.on('close', async (code) => {
+    finished = true;
+    installInFlight = null;
     try {
       stdoutReader.flush();
       stderrReader.flush();
-      finished = true;
-      installInFlight = null;
       // Drop the cached resolve/ready so this probe (and the next transcription)
       // sees the freshly-created venv, then verify the import rather than trusting
       // the exit code alone — the setup script import-verifies MuScriptor and
@@ -164,8 +168,9 @@ router.post('/install', asyncHandler(async (req, res) => {
       }
       safeEnd();
     } catch (err) {
-      console.error(`❌ MuScriptor install completion check failed: ${err.message}`);
-      emit({ type: 'error', message: `Install completion check failed: ${err.message}` });
+      const message = err?.message || String(err);
+      console.error(`❌ MuScriptor install completion check failed: ${message}`);
+      emit({ type: 'error', message: `Install completion check failed: ${message}` });
       safeEnd();
     }
   });
