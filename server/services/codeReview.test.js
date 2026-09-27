@@ -1050,7 +1050,7 @@ describe('codeReview helpers', () => {
 
     // Transport/contract regression; the opt-in real-model test below checks judgement.
     it.each(manifestCases)('preserves the bounded manifest calibration and verdict: %s', async (_name, diff, verdict) => {
-      global.fetch = vi.fn(async (_url, init) => {
+      global.fetch = vi.fn().mockImplementationOnce(async (_url, init) => {
         const { messages } = JSON.parse(init.body)
         expect(messages[1].content).toContain(processManifestCase.objective)
         expect(messages[1].content).toContain(diff.trim())
@@ -1065,7 +1065,7 @@ describe('codeReview helpers', () => {
           verdict, missing: verdict === 'ship' ? [] : ['complete production manifest removal'],
           unrequested: [], evidence: 'Registry regression assertions are present only in cases carrying the test diff.',
         }) } }] })
-      })
+      }).mockResolvedValue(completion({ ...rejection, verdict }))
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: processManifestCase.objective, diff })
       expect(result).toMatchObject({ ok: true, verdict })
     })
@@ -1100,7 +1100,7 @@ describe('codeReview helpers', () => {
     it('independently checks surviving production evidence before returning a primary ship', async () => {
       global.fetch = vi.fn().mockResolvedValueOnce(completion(shipVerdict)).mockResolvedValueOnce(completion(rejection))
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
-      expect(result).toMatchObject({ ok: true, ...rejection })
+      expect(result).toMatchObject({ ok: true, ...rejection, evidence: shipVerdict.evidence })
       expect(global.fetch).toHaveBeenCalledTimes(2)
       const audit = JSON.parse(global.fetch.mock.calls[1][1].body)
       expect(audit).not.toHaveProperty('tools')
@@ -1120,11 +1120,35 @@ describe('codeReview helpers', () => {
       expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
-    it.each(['rethink', 'fix-first'])('preserves the primary %s without spending another provider call', async verdict => {
-      global.fetch = vi.fn().mockResolvedValue(completion({ ...rejection, verdict }))
+    it('adds the contradiction without replacing the primary scope or verification assessment', async () => {
+      const primary = { verdict: 'fix-first', missing: ['a required retry'], unrequested: ['an unrelated feature'], evidence: 'No verification was supplied.' }
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(primary)).mockResolvedValueOnce(completion({ ...rejection, missing: [] }))
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
-      expect(result).toMatchObject({ ok: true, verdict })
+      expect(result).toMatchObject({ ok: true, verdict: 'fix-first', missing: [rejection.evidence, ...primary.missing], unrequested: primary.unrequested, evidence: primary.evidence })
+    })
+
+    it('does not turn repeated generic objective words into production checks', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: 'example-model', objective: 'Update the process config name',
+        diff: 'diff --git a/runtime.js b/runtime.js\n+++ b/runtime.js\n@@ -1,2 +1,1 @@\n-process config name\n process config name',
+      })
+      expect(result).toMatchObject({ ok: true, ...shipVerdict })
       expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves a primary rethink without spending another provider call', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion({ ...rejection, verdict: 'rethink' }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, verdict: 'rethink' })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves a primary fix-first even when the surviving-use check ships', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(completion(rejection)).mockResolvedValueOnce(completion(shipVerdict))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff: incompleteRemoval })
+      expect(result).toMatchObject({ ok: true, ...rejection })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
     it.each(['transport', 'malformed'])('does not fall back to ship when the production check fails: %s', async failure => {
@@ -1143,7 +1167,7 @@ describe('codeReview helpers', () => {
         `+++ b/${'x'.repeat(300)}.js`,
         '@@ -1,201 +1,200 @@',
         '-retired-worker',
-        ...Array(200).fill(' retired-worker'),
+        ...Array.from({ length: 200 }, (_, index) => ` retired-worker + ${index}`),
       ].join('\n')
       global.fetch = vi.fn().mockResolvedValue(completion(shipVerdict))
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: removalObjective, diff })
@@ -1171,8 +1195,10 @@ describe('codeReview helpers', () => {
       if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
       else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
       if (_name === 'runtime process entry retained') {
-        expect([...result.missing, result.evidence].join(' ')).toMatch(/portos-ui/i)
-        expect([...result.missing, result.evidence].join(' ')).toMatch(/apps\.js|runtime|processes/i)
+        const explanation = [...result.missing, result.evidence].join(' ')
+        expect(explanation).toMatch(/portos-ui/i)
+        expect(explanation).toMatch(/apps\.js|runtime/i)
+        expect(explanation).toMatch(/retain|remain|surviv|still|contradict/i)
       }
     }, 190_000)
 

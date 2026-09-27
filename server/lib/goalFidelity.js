@@ -313,9 +313,13 @@ export function mergeOutcomeReview({ number, prState }) {
  */
 export function retainedProductionUses(objective, diff) {
   const tokens = text => text.match(/[A-Za-z_$][\w$]*(?:[.-][\w$]+)*/g) || [];
-  const names = new Set(tokens(objective));
+  const quotedNames = new Set([...objective.matchAll(/(?:^|\s)[`'"]([A-Za-z_$][\w$.-]*)[`'"](?=$|[\s.,;:!?])/g)].map(match => match[1]));
+  // Plain prose words (process, name, config, ...) are not removal targets.
+  // Keep explicitly quoted names and code-shaped identifiers.
+  const names = new Set(tokens(objective).filter(name => quotedNames.has(name) || /[-_.$]|[a-z][A-Z]|[A-Z].*[A-Z]/.test(name)));
   const removed = new Set();
   const survivors = [];
+  const seen = new Set();
   let file = null;
   let hunk = null;
   let testFile = false;
@@ -335,7 +339,11 @@ export function retainedProductionUses(objective, diff) {
       if (line.startsWith('-')) {
         for (const name of matches) removed.add(name);
       } else if (matches.length) {
-        survivors.push({ file, hunk, line: content, identifiers: matches });
+        const key = JSON.stringify([file, hunk, content]);
+        if (!seen.has(key)) {
+          seen.add(key);
+          survivors.push({ file, hunk, line: content, identifiers: matches });
+        }
       }
     }
   }

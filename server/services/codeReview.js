@@ -1107,7 +1107,9 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
   if (!verdict) {
     return { ok: false, backend, model: result.model, error: `${backend} returned no usable goal-fidelity verdict.` }
   }
-  if (verdict.verdict === 'ship') {
+  // Also sharpen an advisory fix-first: its original rationale can overlook
+  // the contradiction. A rethink already holds the run and is never replaced.
+  if (verdict.verdict !== 'rethink') {
     const retained = retainedProductionUses(trimmedObjective, trimmedDiff)
     if (retained.length) {
       const evidence = JSON.stringify(retained)
@@ -1134,7 +1136,16 @@ export async function runLocalGoalFidelityReview({ backend, model, objective, di
       const parsedAudit = extractJson(audit.content, { shapePredicate: value => value !== null && typeof value === 'object' && !Array.isArray(value) }).value
       const auditedVerdict = normalizeGoalFidelityVerdict(parsedAudit)
       if (!auditedVerdict) return { ok: false, backend, model: result.model, error: 'No usable production evidence verdict.' }
-      if (auditedVerdict.verdict !== 'ship') Object.assign(verdict, auditedVerdict)
+      if (auditedVerdict.verdict !== 'ship') {
+        // This narrow check has no tests or scope diff. Preserve the primary
+        // verification/scope assessment and add only its production finding.
+        const findings = auditedVerdict.missing.length ? auditedVerdict.missing : [auditedVerdict.evidence].filter(Boolean)
+        Object.assign(verdict, normalizeGoalFidelityVerdict({
+          ...verdict,
+          verdict: auditedVerdict.verdict,
+          missing: [...new Set([...findings, ...verdict.missing])],
+        }))
+      }
     }
   }
   return {
