@@ -497,7 +497,14 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
     // The free tool exposes one form in one persistent browser profile. Keep
     // every user-requested scene job, but serialize them so a later click
     // cannot replace the prompt/image of an in-flight render.
-    runTail = runTail.then(() => executeJob(job));
+    // executeJob() catches and records its own failures on the job object, but
+    // a rare failure before that internal catch (e.g. teardown throwing in the
+    // finally block) would otherwise leave `runTail` permanently rejected,
+    // silently skipping every future job's executeJob() call. Recover here so
+    // one failed run never wedges the queue for subsequent jobs.
+    runTail = runTail.catch((error) => {
+      console.error(`❌ fal.ai video automation queue recovered from a prior failure: ${error?.message || error}`);
+    }).then(() => executeJob(job));
     // Snapshot the queued state before the serialized runner can advance it;
     // both same-scene callers receive the same initial API contract.
     return publicJob(job);
