@@ -85,6 +85,34 @@ function routeSpawn(routes) {
 }
 
 describe('perpetualWork', () => {
+  it.each([
+    ['claim-issue', 'gh'], ['claim-issue-gitlab', 'glab'], ['claim-work', 'gh']
+  ])('excludes structural and user labels before rendering %s agent inputs', async (taskType, cli) => {
+    const { resolveTaskDataInputs } = await import('./taskDataInputs.js');
+    const labels = ['in-progress', 'blocked', 'needs-input', 'future', 'wontfix', 'question', 'discussion', 'Human-Only'];
+    const issues = labels.map((label, index) => ({
+      number: index + 1, iid: index + 1, title: `Excluded ${index}`,
+      labels: [index % 2 ? { name: label.toUpperCase() } : label]
+    }));
+    issues.push({ number: 20, iid: 20, title: 'Eligible work', labels: ['bug'] });
+    routeSpawn({ [`${cli} issue`]: { stdout: JSON.stringify(issues) } });
+    const options = {
+      app: { repoPath: '/repo' }, taskType,
+      taskMetadata: { issueAuthorFilter: 'any', issueExcludeLabels: [' human-only '] },
+      dependencies: {
+        resolveTracker: async () => ({ forge: cli, host: cli === 'gh' ? 'github.com' : 'gitlab.com' }),
+        resolveTokenEnv: async () => ({})
+      }
+    };
+    const [section] = await resolveTaskDataInputs(['open-issues'], options);
+    expect(section.content).toContain('#20 Eligible work');
+    expect(section.content).not.toContain('Excluded');
+    routeSpawn({ [`${cli} issue`]: { stdout: JSON.stringify(issues.slice(0, -1)) } });
+    const [empty] = await resolveTaskDataInputs(['open-issues'], options);
+    expect(empty.content).toContain('No open issues match');
+    expect(empty.content).not.toContain('Excluded');
+  });
+
   describe('isActionableIssue', () => {
     const base = { number: 7, title: 'Fix the thing', assignees: [], labels: [] };
 
