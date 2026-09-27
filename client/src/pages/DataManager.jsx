@@ -394,7 +394,8 @@ export default function DataManager() {
   const [purging, setPurging] = useState(null);
   const [confirmPurge, setConfirmPurge] = useState(null);
   const [deletingItem, setDeletingItem] = useState(null);
-  const [deletingBackup, setDeletingBackup] = useState(null);
+  // Ref, not state: two clicks in one render would both read a stale state value.
+  const deletingBackupsRef = useRef(new Set());
 
   const overviewRequestRef = useRef(0);
   const overviewReadRef = useRef(null);
@@ -520,20 +521,13 @@ export default function DataManager() {
   };
 
   const handleDeleteBackup = async (filename) => {
-    // Guard duplicate submissions: if a deletion is already in progress for this
-    // filename, return early without making another request.
-    if (deletingBackup === filename) return;
-
-    setDeletingBackup(filename);
-    const result = await api.deleteDataBackup(filename).catch(() => null);
-    setDeletingBackup(null);
-
-    // Only remove the row from the list if the deletion succeeded. On failure,
-    // the API layer's error toast stays visible, and the row remains so the user
-    // can retry.
-    if (result) {
-      setBackups(prev => prev.filter(b => b.name !== filename));
-    }
+    if (deletingBackupsRef.current.has(filename)) return;
+    deletingBackupsRef.current.add(filename);
+    // The API layer toasts the failure; keep the row on a rejected delete so
+    // the archive still on disk stays visible and the user can retry (#8922).
+    const deleted = await api.deleteDataBackup(filename).then(() => true, () => false);
+    deletingBackupsRef.current.delete(filename);
+    if (deleted) setBackups(prev => prev.filter(b => b.name !== filename));
   };
 
   // `fullHeight` + `padded` + the `p-4` bar/body mirror the loaded shell below,
