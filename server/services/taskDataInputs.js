@@ -262,6 +262,7 @@ const INPUT_LOADERS = {
           issueAuthorFilter: taskMetadata.issueAuthorFilter
             ?? (claimTask ? 'self' : 'any'),
           issueExcludeLabels: taskMetadata.issueExcludeLabels || [],
+          excludeNonActionableLabels: claimTask,
         }, forge.env)
       : await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
     return result.ok

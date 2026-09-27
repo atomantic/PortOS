@@ -142,12 +142,12 @@ describe('taskDataInputs', () => {
     };
     const sections = await resolveTaskDataInputs(['open-issues'], options);
     expect(sections[0].content).toContain('#7 Eligible');
-    expect(listConfiguredIssues).toHaveBeenCalledWith('gh', APP, options.taskMetadata, expect.any(Object));
+    expect(listConfiguredIssues).toHaveBeenCalledWith('gh', APP, { ...options.taskMetadata, excludeNonActionableLabels: true }, expect.any(Object));
     listConfiguredIssues.mockResolvedValue({ ok: false, issues: [] });
     expect((await resolveTaskDataInputs(['open-issues'], options))[0].content).toContain('could not be preloaded');
     options.taskMetadata = {};
     await resolveTaskDataInputs(['open-issues'], options);
-    expect(listConfiguredIssues).toHaveBeenLastCalledWith('gh', APP, { issueAuthorFilter: 'self', issueExcludeLabels: [] }, expect.any(Object));
+    expect(listConfiguredIssues).toHaveBeenLastCalledWith('gh', APP, { issueAuthorFilter: 'self', issueExcludeLabels: [], excludeNonActionableLabels: true }, expect.any(Object));
     expect(listIssues).not.toHaveBeenCalled();
   });
 

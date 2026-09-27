@@ -560,7 +560,7 @@ async function countOpenIssuesUnfiltered(cfg, repoPath, env) {
  * issues; 'any' = every author). The in-flight scan runs only when the list is
  * non-empty, so an empty queue parks without a wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], requireComplete = false } = {}, contextOnly = false, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], excludeNonActionableLabels = false, requireComplete = false } = {}, contextOnly = false, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -683,13 +683,17 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   if (trustedLogins) issues = issues.filter((i) => trustedLogins.has(i.authorLogin));
 
   // Prompt context observes author and configured label policy without hiding
-  // blocked/assigned work that a non-claim task may need to inspect.
+  // blocked/assigned work that a non-claim task may need to inspect. Claim
+  // preloads opt into the same structural label exclusions as the detector.
   if (contextOnly) {
-    const excluded = new Set((Array.isArray(issueExcludeLabels) ? issueExcludeLabels : []).map((label) => String(label).toLowerCase()));
+    const excluded = new Set((Array.isArray(issueExcludeLabels) ? issueExcludeLabels : []).map((label) => String(label).trim().toLowerCase()));
+    if (excludeNonActionableLabels) {
+      for (const label of NON_ACTIONABLE_ISSUE_LABELS) excluded.add(label);
+    }
     return {
       truncated: listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES,
       issues: issues.filter((issue) => !(issue.labels || []).some((label) =>
-        excluded.has(String(typeof label === 'string' ? label : label?.name).toLowerCase())
+        excluded.has(String(typeof label === 'string' ? label : label?.name).trim().toLowerCase())
       ))
     };
   }
