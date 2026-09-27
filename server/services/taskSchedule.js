@@ -431,6 +431,8 @@ function parkedUntilMs(record) {
  *   soonestParkAt    ms of the earliest un-elapsed park, or null when none
  *   anyDueNow        some tracked scope is unparked or its park has elapsed
  *   parkReason       first parked app's reason, else the parked global's
+ *   parkCounts       first parked app's counts, else the parked global's
+ *   parkSkipCauses   first parked app's skip breakdown, else the parked global's
  */
 function aggregatePerpetualParks(execution, now) {
   const appRecords = Object.values(execution?.perApp || {});
@@ -466,6 +468,8 @@ function aggregatePerpetualParks(execution, now) {
     }
   }
 
+  const parkedRecord = firstParkedApp || (globalParked ? execution : null);
+
   return {
     trackedAppCount: appRecords.length,
     trackedCount: appRecords.length + (globalTracked ? 1 : 0),
@@ -473,7 +477,9 @@ function aggregatePerpetualParks(execution, now) {
     globalParked,
     soonestParkAt,
     anyDueNow,
-    parkReason: firstParkedApp?.parkReason || (globalParked ? execution.parkReason : null) || null
+    parkReason: firstParkedApp?.parkReason || (globalParked ? execution.parkReason : null) || null,
+    parkCounts: parkedRecord?.parkCounts ?? null,
+    parkSkipCauses: parkedRecord?.parkSkipCauses ?? null
   };
 }
 
@@ -1513,6 +1519,8 @@ export async function getScheduleStatus() {
         trackedAppCount: parks.trackedAppCount,
         nextRecheckAt: parks.soonestParkAt === null ? null : new Date(parks.soonestParkAt).toISOString(),
         parkReason: parks.parkReason,
+        ...(parks.parkCounts != null && { parkCounts: parks.parkCounts }),
+        ...(parks.parkSkipCauses != null && { parkSkipCauses: parks.parkSkipCauses }),
         // A stall means the probe (e.g. gh/glab) has failed several evaluations
         // in a row WITHOUT parking — the drain keeps ticking, so it can be
         // present at the same time `globalParked`/`parkedAppCount` read "not

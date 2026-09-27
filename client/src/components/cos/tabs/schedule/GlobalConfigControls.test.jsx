@@ -360,6 +360,45 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
     renderControls({ config: { type: 'cron', cronExpression: '0 7 * * *', perpetual: true } });
     expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
   });
+
+  it('shows parked skip causes while leaving unattributed parks unchanged', () => {
+    renderControls({
+      config: {
+        type: 'on-demand',
+        perpetual: true,
+        autoStart: true,
+        status: { reason: 'perpetual-drain' },
+        perpetualStatus: {
+          globalParked: false,
+          parkedAppCount: 1,
+          trackedAppCount: 1,
+          nextRecheckAt: null,
+          parkReason: 'no-actionable-issues',
+          parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+          parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+        }
+      }
+    });
+    expect(screen.getByText('1 app(s) parked (no-actionable-issues) — 49 needs-input, 17 blocked')).toBeInTheDocument();
+
+    cleanup();
+    renderControls({
+      config: {
+        type: 'on-demand',
+        perpetual: true,
+        autoStart: true,
+        status: { reason: 'perpetual-drain' },
+        perpetualStatus: {
+          globalParked: false,
+          parkedAppCount: 1,
+          trackedAppCount: 1,
+          nextRecheckAt: null,
+          parkReason: 'branch-reconcile'
+        }
+      }
+    });
+    expect(screen.getByText('1 app(s) parked (branch-reconcile)')).toBeInTheDocument();
+  });
 });
 
 // A stall (the forge CLI failing several evaluations in a row) can coexist
