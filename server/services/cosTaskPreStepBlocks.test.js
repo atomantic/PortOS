@@ -392,6 +392,13 @@ describe('applyReleaseOptions — the do-release {releaseOptions} block', () => 
     expect(out.startsWith('Options:')).toBe(true);
   });
 
+  it('keeps dependency updates actionable when in-flight work is off', () => {
+    const out = applyReleaseOptions('{releaseOptions}', 'do-release', { finishInFlight: false });
+    expect(out).toContain('**Finish in-flight work: OFF**');
+    expect(out).toContain('dependency-bot PRs follow the Merge dependency updates option');
+    expect(out).toContain('**Merge dependency updates: ON**');
+  });
+
   it('prepends the block to a customized prompt that dropped the token', () => {
     const out = applyReleaseOptions('my custom release prompt', 'do-release', { resolveBlockers: false });
     expect(out.startsWith('## Release options for this run')).toBe(true);

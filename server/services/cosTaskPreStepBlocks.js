@@ -179,7 +179,7 @@ export function resolveIssueExcludeLabelsBlock(extraLabels = []) {
 // OFF forbids. Keyed by the same list the sanitizer allowlists, so an option
 // cannot be settable yet silently absent from the prompt.
 const RELEASE_OPTION_LINES = {
-  finishInFlight: ['Finish in-flight work', 'Step 1 runs: finish open PRs and lingering branches no live agent owns before releasing.', 'Step 1 is skipped: do not merge, close, or rebase other open PRs or branches.'],
+  finishInFlight: ['Finish in-flight work', 'Step 1 runs: finish open PRs and lingering branches no live agent owns before releasing.', 'Step 1 is skipped: do not merge, close, or rebase other open PRs or branches (dependency-bot PRs follow the Merge dependency updates option).'],
   mergeDependencyUpdates: ['Merge dependency updates', 'Step 2 runs: merge open dependency-bot PRs, fixing any that break the build.', 'Step 2 is skipped: leave dependency-bot PRs untouched.'],
   resolveBlockers: ['Resolve blockers', 'Step 4 runs: fix failing tests, red CI, and blocking bugs yourself or through a sub-agent.', 'Step 4 is skipped: report each blocker with its evidence and stop without fixing it.'],
   autoDecide: ['Make decisions', 'Make routine design and preference decisions yourself and list them for operator review.', 'Stop at the first design or preference decision and report the question.'],
