@@ -14,9 +14,10 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 // before transcript heuristics, which can mistake thinking or quoted commands
 // for an assistant reply or a /simplify boundary.
 function extractSentinelSummary(outputBuffer) {
-  const markerIndex = outputBuffer.lastIndexOf(SENTINEL_COMPLETION_MARKER);
+  const lines = outputBuffer.split('\n');
+  const markerIndex = lines.findLastIndex(line => line.trim() === SENTINEL_COMPLETION_MARKER);
   if (markerIndex < 0) return null;
-  return stripLifecycleLines(outputBuffer.slice(markerIndex + SENTINEL_COMPLETION_MARKER.length).split('\n')).join('\n').trim() || null;
+  return stripLifecycleLines(lines.slice(markerIndex + 1)).join('\n').trim() || null;
 }
 
 /**

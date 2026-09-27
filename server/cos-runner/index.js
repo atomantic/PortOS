@@ -389,10 +389,10 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
         current.completedBySentinel = true;
         const { summary } = parseSentinelPayload(validatedContents);
         if (summary) {
-          current.completionOutput = `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`;
+          current.completionOutput = `${SENTINEL_COMPLETION_MARKER}\n${summary}\n`;
           emitToServer('agent:output', {
             agentId,
-            text: current.completionOutput,
+            text: `${SENTINEL_COMPLETION_MARKER}\n${summary.slice(0, 4096)}\n`,
           });
         }
         if (!current.exited) current.process.kill();

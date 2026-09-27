@@ -58,7 +58,7 @@ describe('runner TUI exit handoff', () => {
 
   it('persists the sentinel received during exit instead of the Gemini thinking transcript', async () => {
     const run = setup({ outputBuffer: 'Thinking: inspect the code and write the completion file.' });
-    const summary = '✅ Agent signaled completion\n## Summary\nFixed the bug.\n';
+    const summary = `✅ Agent signaled completion\n## Summary\n${'Detailed results. '.repeat(400)}\nFinal conclusion.\n`;
     run.agent.sentinelWork = Promise.resolve().then(() => {
       run.agent.completedBySentinel = true;
       run.agent.completionOutput = summary;

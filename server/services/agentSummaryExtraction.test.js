@@ -4,7 +4,7 @@ import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExt
 describe('sentinel summary precedence', () => {
   it.each(['Thinking: I will now run /simplify.', 'tokens used\n123\nEarlier assistant reply.'])(
     'renders the latest completion summary instead of transcript content: %s', (transcript) => {
-      const summary = '## Summary\nFixed the reported bug.\n\n✅ Tests passed';
+      const summary = '## Summary\nFixed the reported bug.\n\nDocumented `✅ Agent signaled completion` behavior.\n✅ Tests passed';
       const output = [
         '✅ Agent signaled completion',
         'An earlier completion attempt.',
