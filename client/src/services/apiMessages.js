@@ -32,6 +32,9 @@ export const createMessageDraft = (data) => request('/messages/drafts', { method
 export const generateMessageDraft = (data) => request('/messages/drafts/generate', { method: 'POST', body: JSON.stringify(data) });
 export const updateMessageDraft = (id, data) => request(`/messages/drafts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const approveMessageDraft = (id) => request(`/messages/drafts/${id}/approve`, { method: 'POST' });
+export const reconcileMessageDraft = (id, data, options = {}) => request(`/messages/drafts/${id}/reconcile`, {
+  method: 'POST', body: JSON.stringify(data), ...options
+});
 export const sendMessageDraft = (id) => request(`/messages/drafts/${id}/send`, { method: 'POST' });
 export const deleteMessageDraft = (id) => request(`/messages/drafts/${id}`, { method: 'DELETE' });
 export const getMessageSelectors = () => request('/messages/selectors');

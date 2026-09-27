@@ -71,6 +71,11 @@ const updateDraftSchema = z.object({
   status: z.enum(['draft', 'pending_review', 'approved']).optional()
 });
 
+const reconcileDraftSchema = z.object({
+  attemptId: z.string().guid(),
+  outcome: z.enum(['sent', 'not_sent'])
+});
+
 const generateDraftSchema = z.object({
   accountId: z.string().guid(),
   replyToMessageId: z.string().nullish(),
@@ -268,6 +273,16 @@ router.post('/drafts/:id/approve', asyncHandler(async (req, res) => {
   }
   const draft = await messageDrafts.approveDraft(req.params.id);
   if (!draft) throw new ServerError('Draft not found', { status: 404 });
+  res.json(draft);
+}));
+
+router.post('/drafts/:id/reconcile', asyncHandler(async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) {
+    throw new ServerError('Invalid draft ID format', { status: 400 });
+  }
+  const data = validateRequest(reconcileDraftSchema, req.body);
+  const draft = await messageDrafts.reconcileDraftSend(req.params.id, data);
+  req.app.get('io')?.emit('messages:changed', {});
   res.json(draft);
 }));
 

@@ -6,6 +6,8 @@ import { buildIndex } from '../../services/domIndex.js';
 vi.mock('../../services/api', () => ({
   getMessageDrafts: vi.fn(),
   sendMessageDraft: vi.fn(),
+  reconcileMessageDraft: vi.fn(),
+  approveMessageDraft: vi.fn(),
 }));
 
 import * as api from '../../services/api';
@@ -74,5 +76,58 @@ describe('DraftsTab pending sends', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Send' })).toHaveLength(1));
     expect(screen.getByText('sent')).toBeInTheDocument();
     expect(api.getMessageDrafts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DraftsTab interrupted delivery', () => {
+  const unknown = {
+    id: 'd1', status: 'delivery_unknown', sendVia: 'api',
+    sendAttemptId: 'attempt-1', subject: 'Example interrupted message', body: 'Example body'
+  };
+
+  it('requires a mailbox check, records nondelivery once, and requires fresh approval', async () => {
+    api.getMessageDrafts.mockResolvedValue([unknown]);
+    let finish;
+    api.reconcileMessageDraft.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<DraftsTab accounts={[]} />);
+    const confirmNotSent = await screen.findByRole('button', { name: 'Confirm not sent' });
+    expect(screen.getByText(/It may already have reached the recipient/)).toBeInTheDocument();
+    expect(confirmNotSent).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(confirmNotSent);
+    fireEvent.click(confirmNotSent);
+    expect(confirmNotSent).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Confirm sent' })).toBeDisabled();
+    expect(api.reconcileMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.reconcileMessageDraft).toHaveBeenCalledWith('d1', {
+      attemptId: 'attempt-1', outcome: 'not_sent'
+    }, { silent: true });
+    await act(async () => finish({ ...unknown, status: 'draft' }));
+    expect(screen.queryByText('Delivery unknown')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    api.approveMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'approved' });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
+    expect(api.getMessageDrafts).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps uncertainty visible on conflict and makes confirmed delivery terminal', async () => {
+    api.getMessageDrafts.mockResolvedValue([unknown]);
+    api.reconcileMessageDraft.mockRejectedValueOnce(new Error('Draft state conflict'));
+    render(<DraftsTab accounts={[]} />);
+    await screen.findByText('Delivery unknown');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm sent' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Draft state conflict');
+    expect(screen.getByText('Delivery unknown')).toBeInTheDocument();
+    api.reconcileMessageDraft.mockResolvedValueOnce({ ...unknown, status: 'sent' });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm sent' }));
+    expect(await screen.findByText('sent')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(api.sendMessageDraft).not.toHaveBeenCalled();
   });
 });

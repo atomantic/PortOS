@@ -1,5 +1,5 @@
 import { messageLogError } from '../lib/messageLogError.js';
-import { getDraft, claimDraftForSend, finishDraftSend } from './messageDrafts.js';
+import { getDraft, claimDraftForSend, finishDraftSend, releaseDraftSend } from './messageDrafts.js';
 import { getAccount } from './messageAccounts.js';
 
 const ACCOUNT_TYPE_TO_SEND_VIA = {
@@ -35,22 +35,25 @@ export async function sendDraft(draftId, io) {
     return sendPlaywright(account, draft);
   };
 
-  const result = await dispatch().catch(async (error) => {
-    console.error(`📧 Draft send threw for ${draft.id}: ${messageLogError(error)}`);
-    return { success: false, status: 502, code: 'SEND_FAILED', error: error.message };
-  });
+  const complete = async () => {
+    const result = await dispatch().catch(async (error) => {
+      console.error(`📧 Draft send threw for ${draft.id}: ${messageLogError(error)}`);
+      return { success: false, status: 502, code: 'SEND_FAILED', error: error.message };
+    });
 
-  if (result?.success) {
-    await finishDraftSend(draftId, true);
-    io?.emit('messages:draft:sent', { draftId });
-    io?.emit('messages:changed', {});
-    console.log(`📧 Draft sent successfully: ${draft.id}`);
-  } else {
-    await finishDraftSend(draftId, false).catch(err => console.warn(`⚠️ Failed to mark draft as failed: ${messageLogError(err)}`));
-    const errorMsg = result?.error ?? 'Unknown error sending draft';
-    console.error(`📧 Draft send failed: ${messageLogError(result)}`);
-    return { success: false, status: result?.status ?? 500, code: result?.code ?? 'SEND_FAILED', error: errorMsg };
-  }
+    if (result?.success) {
+      await finishDraftSend(draftId, draft.sendAttemptId, true);
+      io?.emit('messages:draft:sent', { draftId });
+      io?.emit('messages:changed', {});
+      console.log(`📧 Draft sent successfully: ${draft.id}`);
+    } else {
+      await finishDraftSend(draftId, draft.sendAttemptId, false).catch(err => console.warn(`⚠️ Failed to mark draft as failed: ${messageLogError(err)}`));
+      const errorMsg = result?.error ?? 'Unknown error sending draft';
+      console.error(`📧 Draft send failed: ${messageLogError(result)}`);
+      return { success: false, status: result?.status ?? 500, code: result?.code ?? 'SEND_FAILED', error: errorMsg };
+    }
 
-  return result;
+    return result;
+  };
+  return complete().finally(() => releaseDraftSend(draftId, draft.sendAttemptId));
 }
