@@ -13,7 +13,8 @@ import {
   DEFAULT_GOALS,
   DEFAULT_LONGEVITY,
   loadJSON,
-  saveJSON
+  saveJSON,
+  mutateGoals
 } from './store.js';
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
 
@@ -491,42 +492,72 @@ export async function addMilestone(goalId, { title, targetDate }) {
 }
 
 export async function addProgressEntry(goalId, { date, note, durationMinutes }) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
-
-  if (!goal.progressLog) goal.progressLog = [];
-
-  const entry = {
-    id: `prog-${uuidv4()}`,
-    date,
-    note,
-    durationMinutes: durationMinutes || null,
-    createdAt: new Date().toISOString()
-  };
-
-  goal.progressLog.push(entry);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-
-  console.log(`📝 Progress logged for "${goal.title}": ${note} (${durationMinutes ? durationMinutes + 'min' : 'no duration'})`);
+  let entry = null;
+  await mutateGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    if (!goal) return goals;
+    entry = {
+      id: `prog-${uuidv4()}`,
+      date,
+      note,
+      durationMinutes: durationMinutes || null,
+      createdAt: new Date().toISOString()
+    };
+    (goal.progressLog ||= []).push(entry);
+    goal.updatedAt = goals.updatedAt = new Date().toISOString();
+    return goals;
+  });
   return entry;
 }
 
 export async function deleteProgressEntry(goalId, entryId) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal) return null;
+  let result = null;
+  await mutateGoals(goals => {
+    const goal = goals.goals.find(g => g.id === goalId);
+    const idx = (goal?.progressLog || []).findIndex(e => e.id === entryId);
+    if (idx === -1) return goals;
+    goal.progressLog.splice(idx, 1);
+    goal.updatedAt = goals.updatedAt = new Date().toISOString();
+    result = { deleted: true };
+    return goals;
+  });
+  return result;
+}
 
-  const idx = (goal.progressLog || []).findIndex(e => e.id === entryId);
-  if (idx === -1) return null;
-
-  goal.progressLog.splice(idx, 1);
-  goal.updatedAt = new Date().toISOString();
-  goals.updatedAt = new Date().toISOString();
-  await saveJSON(GOALS_FILE, goals);
-  return { deleted: true };
+/** Reconcile only progress owned by one calendar review; manual/legacy logs stay intact. */
+export async function reconcileCalendarProgress(sourceKey, { goalId, date, note, durationMinutes }) {
+  let entry = null;
+  await mutateGoals(goals => {
+    const target = goalId ? goals.goals.find(goal => goal.id === goalId) : null;
+    if (goalId && !target) {
+      throw new ServerError('Goal not found', { status: 404, code: 'GOAL_NOT_FOUND' });
+    }
+    const previous = goals.goals.flatMap(goal => goal.progressLog || [])
+      .find(progress => progress.sourceKey === sourceKey);
+    const now = new Date().toISOString();
+    // One store mutation moves the owned entry across goals atomically. Scanning
+    // by provenance also repairs a retry after the old link changed on disk.
+    for (const goal of goals.goals) {
+      if (!goal.progressLog?.some(progress => progress.sourceKey === sourceKey)) continue;
+      goal.progressLog = goal.progressLog.filter(progress => progress.sourceKey !== sourceKey);
+      goal.updatedAt = now;
+    }
+    if (target) {
+      entry = {
+        id: previous?.id || `prog-${uuidv4()}`,
+        sourceKey,
+        date,
+        note,
+        durationMinutes: durationMinutes || null,
+        createdAt: previous?.createdAt || now
+      };
+      (target.progressLog ||= []).push(entry);
+      target.updatedAt = now;
+    }
+    goals.updatedAt = now;
+    return goals;
+  });
+  return entry;
 }
 
 export async function completeMilestone(goalId, milestoneId) {

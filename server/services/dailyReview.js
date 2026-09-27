@@ -2,9 +2,11 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import * as calendarSync from './calendarSync.js';
 import * as calendarAccounts from './calendarAccounts.js';
-import { addProgressEntry, getGoals } from './identity.js';
+import { getGoals, reconcileCalendarProgress } from './identity.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 const REVIEW_DIR = join(PATHS.calendar, 'daily-reviews');
+const reviewQueue = createKeyCachedQueue();
 
 async function loadReview(date) {
   await ensureDir(REVIEW_DIR);
@@ -16,12 +18,17 @@ async function saveReview(date, data) {
 }
 
 export async function getDailyReview(date) {
+  // Recover a durable intent before projecting confirmations or goal progress.
+  const existing = await reviewQueue(date, async () => {
+    const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
+    await finishPendingReview(date, review);
+    return review;
+  });
   // Get all events for this date across all accounts
   const startDate = `${date}T00:00:00`;
   const endDate = `${date}T23:59:59`;
-  const [{ events }, existing, accounts, goalsData] = await Promise.all([
+  const [{ events }, accounts, goalsData] = await Promise.all([
     calendarSync.getEvents({ startDate, endDate, limit: 200 }),
-    loadReview(date).then(r => r || { confirmations: {}, updatedAt: null }),
     calendarAccounts.listAccounts(),
     getGoals()
   ]);
@@ -96,34 +103,50 @@ export async function getDailyReview(date) {
   };
 }
 
-export async function confirmEvent(date, { eventId, happened, goalId, durationMinutes, note }) {
-  const existing = await loadReview(date) || { confirmations: {}, updatedAt: null };
+// The intent is saved before goal effects; only completed effects publish a
+// confirmation. Replaying after either write failed uses the same source key.
+async function finishPendingReview(date, review) {
+  const pending = review.pendingOperation;
+  if (!pending) return null;
+  const { eventId, confirmation, sourceKey } = pending;
+  const progressEntry = await reconcileCalendarProgress(sourceKey, {
+    goalId: confirmation.happened ? confirmation.goalId : null,
+    date,
+    note: confirmation.note || 'Calendar event confirmed',
+    durationMinutes: confirmation.durationMinutes
+  });
+  review.confirmations[eventId] = confirmation;
+  review.updatedAt = confirmation.confirmedAt;
+  delete review.pendingOperation;
+  await saveReview(date, review);
+  return progressEntry;
+}
 
-  existing.confirmations[eventId] = {
-    happened,
-    goalId: goalId || null,
-    durationMinutes: durationMinutes || null,
-    note: note || '',
-    confirmedAt: new Date().toISOString()
-  };
-  existing.updatedAt = new Date().toISOString();
-
-  await saveReview(date, existing);
-
-  // If event happened and linked to a goal, auto-create progress entry
-  let progressEntry = null;
-  if (happened && goalId) {
-    const entryNote = note || 'Calendar event confirmed';
-    progressEntry = await addProgressEntry(goalId, {
-      date,
-      note: entryNote,
-      ...(durationMinutes ? { durationMinutes } : {})
-    });
-    console.log(`📅 Auto-logged progress for goal ${goalId} from daily review`);
-  }
-
-  console.log(`📅 Event ${eventId} ${happened ? 'confirmed' : 'skipped'} for ${date}`);
-  return { confirmation: existing.confirmations[eventId], progressEntry };
+export function confirmEvent(date, { eventId, happened, goalId, durationMinutes, note }) {
+  return reviewQueue(date, async () => {
+    const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
+    // A new desired state for the SAME event may supersede an interrupted intent
+    // (including a goal that was deleted). Other events must finish theirs first.
+    if (review.pendingOperation?.eventId !== eventId) await finishPendingReview(date, review);
+    const sourceKey = `calendar-review:${date}:${eventId}`;
+    review.pendingOperation = {
+      eventId,
+      sourceKey,
+      priorGoalId: review.pendingOperation?.priorGoalId ?? review.confirmations[eventId]?.goalId ?? null,
+      confirmation: {
+        happened,
+        goalId: goalId || null,
+        durationMinutes: durationMinutes || null,
+        note: note || '',
+        sourceKey,
+        confirmedAt: new Date().toISOString()
+      }
+    };
+    await saveReview(date, review);
+    const progressEntry = await finishPendingReview(date, review);
+    console.log(`📅 Event ${eventId} ${happened ? 'confirmed' : 'skipped'} for ${date}`);
+    return { confirmation: review.confirmations[eventId], progressEntry };
+  });
 }
 
 export async function getDailyReviewHistory(startDate, endDate) {

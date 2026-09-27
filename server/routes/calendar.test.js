@@ -66,6 +66,7 @@ import calendarRoutes from './calendar.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
 import { getUserTimezone } from '../services/userTimezone.js';
+import * as dailyReview from '../services/dailyReview.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
 import * as calendarGoogleApiSync from '../services/calendarGoogleApiSync.js';
 import * as googleAuth from '../services/googleAuth.js';
@@ -88,6 +89,14 @@ describe('Calendar Routes — normalized error handling', () => {
   });
 
   describe('thrown ServerErrors map to the standard JSON envelope', () => {
+    it('POST /review/:date/confirm preserves typed missing-goal errors', async () => {
+      dailyReview.confirmEvent.mockRejectedValue(new ServerError('Goal not found', { status: 404, code: 'GOAL_NOT_FOUND' }));
+      const response = await request(app).post('/api/calendar/review/2026-01-02/confirm')
+        .send({ eventId: 'event-a', happened: true, goalId: 'goal-a', durationMinutes: 30 });
+      expect(response.status).toBe(404);
+      expect(response.body.code).toBe('GOAL_NOT_FOUND');
+    });
+
     it('POST /sync/:accountId surfaces a 409 sync-lock conflict', async () => {
       calendarSync.syncAccount.mockRejectedValue(new ServerError('Sync already in progress', { status: 409 }));
 

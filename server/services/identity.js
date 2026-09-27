@@ -52,6 +52,7 @@ export {
   unlinkActivity,
   addMilestone,
   addProgressEntry,
+  reconcileCalendarProgress,
   deleteProgressEntry,
   completeMilestone,
   linkCalendarToGoal,
