@@ -10,11 +10,10 @@
  */
 
 import { execFileSync } from 'child_process';
-import { createInterface } from 'readline';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { parseEnvFile, upsertEnvKey } from './lib/envFile.js';
-import { parseDockerPort, parseNativePort, resolveStorageMenuChoice } from './lib/setupDbChoice.js';
+import { parseEnvFile } from './lib/envFile.js';
+import { parseDockerPort, parseNativePort } from './lib/setupDbChoice.js';
 import { resolveBashBinary } from '../server/lib/bashResolver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -204,48 +203,6 @@ function getDockerHints(issue) {
   return issue === 'not_installed' ? hints.install : hints.start;
 }
 
-// Write PGMODE to .env (create or update)
-function setPgMode(mode) {
-  upsertEnvKey(join(rootDir, '.env'), 'PGMODE', mode);
-}
-
-// Prompt user to choose storage mode (TTY only)
-function promptStorageChoice(message, hint) {
-  // Non-interactive (stdout/stdin redirected, e.g. `npm start` under PM2): we
-  // can't prompt. By the time we reach here, handleDockerUnavailable() has
-  // already ruled out a healthy native PostgreSQL, so there is no usable DB and
-  // no file fallback anymore — setup genuinely failed. Exit NON-ZERO so the
-  // `&&`-chained `npm start` / `npm run setup` halts here instead of launching
-  // a server that would immediately fail-fast and crash-loop under PM2.
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error(`❌ ${message}`);
-    console.error(`   ${hint}`);
-    console.error('   PostgreSQL is required. Start Docker (or set up native PostgreSQL) then run: npm run setup');
-    process.exit(1);
-  }
-
-  return new Promise((resolve) => {
-    console.log(`⚠️  ${message}`);
-    console.log(`   ${hint}`);
-    console.log('');
-    console.log('   Choose a PostgreSQL hosting mode:');
-    console.log('');
-    console.log('   1) Docker PostgreSQL (recommended — containerized, no system install)');
-    console.log('   2) Native PostgreSQL (use system-installed PostgreSQL on port 5432)');
-    console.log('');
-    // NOTE: File-based JSON storage is intentionally NOT offered here. PostgreSQL
-    // is a mandatory dependency (the creative catalog has no file-backed
-    // equivalent). `PGMODE=file` survives only as an advanced/unsupported dev
-    // escape hatch honored when already present in .env — never a menu choice.
-
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('   Enter choice [1/2]: ', (answer) => {
-      rl.close();
-      resolve(resolveStorageMenuChoice(answer));
-    });
-  });
-}
-
 // Attempt full native PostgreSQL setup via db.sh setup-native. Idempotent:
 // db.sh setup-native re-checks each step (brew install, role, db, extensions,
 // schema). Verifies success at the *domain* level — the role can auth and the
@@ -284,42 +241,13 @@ function exitNativeSetupFailed() {
   process.exit(1);
 }
 
-async function handleDockerUnavailable(message, issue) {
-  // Default to native when a healthy local PortOS PostgreSQL is already
-  // reachable — no need to prompt or fall back to Docker. The schema-ready
-  // probe (role can auth + memories table present) is the proof that a usable
-  // native PostgreSQL 17 + pgvector install is in place.
-  if (isPortOSDbReady()) {
-    console.log('   Healthy native PostgreSQL detected — using native mode.');
-    setPgMode('native');
-    console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
-    process.exit(0);
-  }
-
-  const hint = getDockerHints(issue);
-  const choice = await promptStorageChoice(message, hint);
-
-  if (choice === 'native') {
-    console.log('   Switching to native PostgreSQL mode...');
-    setPgMode('native');
-    // Fast path: portos role can already authenticate to portos db and the
-    // schema is in place. Skip setup-native to avoid re-ALTERing credentials
-    // and the brew/psql startup-time hit on every `npm start`.
-    if (isPortOSDbReady()) {
-      console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
-      process.exit(0);
-    }
-    // Otherwise (fresh checkout, missing role, missing schema, wrong password)
-    // run the full bootstrap.
-    if (setupNativePostgres()) {
-      process.exit(0);
-    }
-    exitNativeSetupFailed();
-  }
-
-  // choice === 'exit' — user wants Docker, tell them to install/start it
-  console.log(`   ${hint}`);
-  console.log('   Install/start Docker and re-run setup');
+function handleDockerUnavailable(message, issue) {
+  console.error(`❌ ${message}`);
+  console.error(`   ${getDockerHints(issue)}`);
+  console.error('   Restore Docker and re-run: npm run setup:db');
+  console.error('   Keeping the selected database unchanged. Setup never switches backends.');
+  console.error('   For a fresh native install, select PGMODE=native in .env before setup.');
+  console.error('   Existing installs require coordinated maintenance cutover; see docs/STORAGE.md.');
   process.exit(1);
 }
 
@@ -357,15 +285,15 @@ if (mode === 'native') {
 
 // Docker mode
 if (!hasDocker()) {
-  await handleDockerUnavailable('Docker not found — skipping database setup', 'not_installed');
+  handleDockerUnavailable('Docker not found — database setup failed', 'not_installed');
 }
 
 if (!isDockerRunning()) {
-  await handleDockerUnavailable('Docker daemon not running — skipping database setup', 'not_running');
+  handleDockerUnavailable('Docker daemon not running — database setup failed', 'not_running');
 }
 
 if (!hasCompose()) {
-  await handleDockerUnavailable('docker compose not available — skipping database setup', 'not_installed');
+  handleDockerUnavailable('docker compose not available — database setup failed', 'not_installed');
 }
 
 if (isContainerRunning()) {
@@ -391,8 +319,7 @@ try {
   });
 } catch (err) {
   console.error(`❌ Failed to start PostgreSQL container: ${err.message}`);
-  console.error('   PostgreSQL is required — try native mode instead:');
-  console.error('   scripts/db.sh set-mode native && npm run setup');
+  console.error('   Keep the selected backend; check Docker and run: docker compose logs db');
   process.exit(1);
 }
 
