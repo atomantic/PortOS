@@ -423,6 +423,22 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ 'needs-input': 1, assigned: 1, 'in-flight': 1, 'good first issue': 1 });
     });
 
+    it('counts a cause named after an Object.prototype key (a configured exclude label named "constructor")', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'reserved', assignees: [], labels: [{ name: 'constructor' }] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['constructor'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      // A plain-object counter would read the inherited `constructor` and
+      // produce a garbage string the formatter's Number.isFinite filter
+      // silently drops — the park would explain nothing.
+      expect(out.skipCauses).toEqual({ constructor: 1 });
+    });
+
     it('keeps an issue assigned to the authenticated account claimable', async () => {
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@ghe.example.com:acme/widget.git\n');

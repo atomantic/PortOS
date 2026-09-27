@@ -773,7 +773,10 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // bare "78 filtered". `inFlightCount` already accounts for the in-flight
   // skips separately, so `in-flight` here is informational only — the counts
   // sum to `total` only when the queue holds no malformed records.
-  const skipCauses = {};
+  // Null-prototype: a configured exclude label named `constructor` (or any
+  // other Object.prototype key) must count as a cause, not inherit the
+  // inherited property and corrupt the counter.
+  const skipCauses = Object.create(null);
   if (actionable.length === 0 && total > 0) {
     for (const issue of issues) {
       const cause = issueSkipCause(issue, inFlight, excludeSet, currentLogin);
