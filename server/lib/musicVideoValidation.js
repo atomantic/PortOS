@@ -39,6 +39,49 @@ export const musicVideoVideoSettingsSchema = z.object({
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();
 
+// Timed lyric cues (#8964). Editable, user-owned text: a cue carries its line
+// and optional timing against the project's CURRENT audio source. `startSec`
+// null means "not yet timed" (plain pasted lyrics, or timings invalidated by an
+// audio-source change — see projectsLogic.applyProjectPatch). The id is
+// optional on input; the server mints one so edits stay addressable.
+const timedSec = z.number().min(0).max(36000).nullable().optional();
+export const musicVideoLyricCueSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  text: z.string().max(500),
+  startSec: timedSec,
+  endSec: timedSec,
+}).strict();
+
+// A musical-phrase annotation: a span of the song with an optional visual
+// intent (what the picture should do there). Phrase edges are preferred cut
+// points for the shot planner and the intent is handed to the prompt seeder.
+export const musicVideoPhraseSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  label: z.string().max(120).optional(),
+  startSec: timedSec,
+  endSec: timedSec,
+  intent: z.string().max(2000).optional(),
+}).strict();
+
+// Shot pacing for the planner. `maxShotSec` is capped at the renderer's clip
+// capacity (one generated clip); `hookSec` bounds the opening shot so the video opens on a cut.
+export const musicVideoPacingSchema = z.object({
+  minShotSec: z.number().min(0.5).max(60).optional(),
+  maxShotSec: z.number().min(1).max(120).optional(),
+  hookSec: z.number().min(0.5).max(60).optional(),
+}).strict();
+
+const lyricCueList = z.array(musicVideoLyricCueSchema).max(2000);
+const phraseList = z.array(musicVideoPhraseSchema).max(500);
+
+// Import lyric cues from pasted text: LRC (`[mm:ss.xx] line`), SRT/WebVTT
+// cue blocks, or plain lines (untimed). `auto` sniffs the format.
+export const musicVideoLyricsImportSchema = z.object({
+  format: z.enum(['auto', 'lrc', 'srt', 'text']).optional(),
+  text: z.string().max(200000),
+  mode: z.enum(['replace', 'append']).optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -60,6 +103,9 @@ export const musicVideoProjectUpdateSchema = z.object({
   concept: musicVideoConceptSchema.nullable().optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
+  lyricCues: lyricCueList.optional(),
+  phrases: phraseList.optional(),
+  pacing: musicVideoPacingSchema.nullable().optional(),
 }).strict();
 
 // Fork a project into its next editable version. The server derives lineage and
@@ -81,6 +127,13 @@ export const musicVideoSceneCreateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
+  // repeat the source clip across a longer authored span; a scene with no
+  // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
+  loop: z.boolean().optional(),
+  sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
+  lyricText: z.string().max(2000).nullable().optional(),
+  visualIntent: z.string().max(2000).nullable().optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -98,6 +151,13 @@ export const musicVideoSceneUpdateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
+  // repeat the source clip across a longer authored span; a scene with no
+  // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
+  loop: z.boolean().optional(),
+  sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
+  lyricText: z.string().max(2000).nullable().optional(),
+  visualIntent: z.string().max(2000).nullable().optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
 }).strict();

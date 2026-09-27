@@ -21,6 +21,7 @@ import {
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
+  musicVideoLyricsImportSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -49,6 +50,7 @@ import {
 import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { planProject } from '../services/musicVideo/planner.js';
+import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -173,6 +175,27 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
   const result = await planProject(req.params.id, { seedPrompts, providerId, model });
   res.json(result);
+}));
+
+// Import timed lyric cues (#8964) from pasted LRC, SRT/WebVTT, or plain lines
+// (plain lines arrive untimed, ready to be timed by hand). `replace` swaps the
+// project's cue list; `append` adds after it. The cues persist through the
+// ordinary project PATCH path, so ids/normalization match hand edits.
+const MAX_LYRIC_CUES = 2000;
+router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
+  const { format = 'auto', text, mode = 'replace' } = validateRequest(musicVideoLyricsImportSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { format: detected, cues } = parseLyricCues(text, format);
+  if (cues.length === 0) {
+    throw new ServerError(`No lyric lines found in the ${detected} text`, { status: 422, code: 'NO_LYRICS' });
+  }
+  const lyricCues = mode === 'append' ? [...(project.lyricCues || []), ...cues] : cues;
+  if (lyricCues.length > MAX_LYRIC_CUES) {
+    throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const updated = await updateProject(project.id, { lyricCues });
+  res.json({ project: updated, imported: cues.length, format: detected });
 }));
 
 // --- Audio → MIDI transcription (MuScriptor) ---
