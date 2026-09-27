@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn } from '../lib/childProcess.js';
 import { createHash } from 'node:crypto';
 import { closeSync, createReadStream, fsyncSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
