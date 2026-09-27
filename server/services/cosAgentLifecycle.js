@@ -572,14 +572,13 @@ export async function getAgent(agentId, { limit = AGENT_OUTPUT_TAIL_LINES, maxBy
 // Used by the AgentCard UI to let the user inspect what was pasted into the
 // TUI / sent to the CLI so the prompt can be iterated on.
 export async function getAgentPrompt(agentId) {
-  const state = await loadState();
-  const agent = state.agents[agentId];
+  const agent = await getAgentRecord(agentId);
   if (!agent) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
-  const agentDir = getAgentDir(agentId, agent.archiveDate);
-  const promptPath = join(agentDir, 'prompt.txt');
+  const date = agent.archiveDate || (agent.status === 'completed' ? agent.completedAt?.slice(0, 10) : null);
+  const promptPath = join(getAgentDir(agentId, date), 'prompt.txt');
   if (!existsSync(promptPath)) throw new ServerError('Prompt file not found', { status: 404, code: 'NOT_FOUND' });
   const prompt = await readFile(promptPath, 'utf8');
-  return { prompt, bytes: prompt.length };
+  return { prompt, bytes: Buffer.byteLength(prompt) };
 }
 
 // Terminate an agent (will be handled by spawner)

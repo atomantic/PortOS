@@ -1,4 +1,4 @@
-import { readdir, stat, lstat, statfs } from 'fs/promises';
+import { readdir, opendir, stat, lstat, statfs } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from '../lib/childProcess.js';
@@ -225,6 +225,20 @@ export async function resolveCategoryBusy(categoryKey) {
 // Validate category key contains only safe characters
 const SAFE_NAME = /^[a-z0-9_-]+$/;
 
+// Walk one directory at a time: never buffer an entire tree's path list in a
+// child-process stdout pipe. Failed scans stay unknown, distinct from empty.
+async function countFiles(dirPath, deadline) {
+  if (Date.now() >= deadline) throw new Error('File count timed out');
+  let count = 0;
+  const directory = await opendir(dirPath);
+  for await (const entry of directory) {
+    if (Date.now() >= deadline) throw new Error('File count timed out');
+    if (entry.isDirectory()) count += await countFiles(join(dirPath, entry.name), deadline);
+    else if (entry.isFile()) count++;
+  }
+  return count;
+}
+
 async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
   if (strict) {
     const present = await stat(dirPath).then(
@@ -245,19 +259,17 @@ async function getDirSizeAndCount(dirPath, { strict = false } = {}) {
         if (strict) throw err;
         return '0';
       }),
-    execFileAsync('find', [dirPath, '-type', 'f'], { timeout: 30000 })
-      .then(r => r.stdout.trim().split('\n').filter(Boolean).length)
-      .catch((err) => {
-        if (strict) throw err;
-        return 0;
-      })
+    countFiles(dirPath, Date.now() + 30000).catch((err) => {
+      if (strict) throw err;
+      return null;
+    })
   ]);
   const kb = typeof duOut === 'string' ? parseInt(duOut.split('\t')[0], 10) : NaN;
   if (!Number.isFinite(kb) || kb < 0) {
     if (strict) throw new Error(`Could not parse directory size for ${dirPath}`);
-    return { size: 0, fileCount: typeof findOut === 'number' ? findOut : 0 };
+    return { size: 0, fileCount: findOut };
   }
-  const fileCount = typeof findOut === 'number' ? findOut : (parseInt(findOut, 10) || 0);
+  const fileCount = findOut;
   return { size: kb * 1024, fileCount };
 }
 
@@ -304,7 +316,7 @@ export async function getDataOverview({ strict = false } = {}) {
   };
 }
 
-export async function getCategoryDetail(categoryKey) {
+export async function getCategoryDetail(categoryKey, { measure = false } = {}) {
   if (!SAFE_NAME.test(categoryKey)) return null;
   const dirPath = join(DATA_DIR, categoryKey);
   if (!existsSync(dirPath)) return null;
@@ -333,7 +345,11 @@ export async function getCategoryDetail(categoryKey) {
   const totalSize = items.reduce((sum, item) => sum + item.size, 0);
   const busy = await resolveCategoryBusy(categoryKey);
 
-  return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items };
+  const measurement = measure ? {
+    ...await getDirSizeAndCount(dirPath, { strict: true }),
+    disk: await statfs(DATA_DIR).then(parseFilesystemStats).catch(() => null),
+  } : undefined;
+  return { key: categoryKey, ...categoryMeta(categoryKey), ...busy, totalSize, items, ...(measurement && { measurement }) };
 }
 
 export async function archiveCategory(categoryKey, options = {}) {

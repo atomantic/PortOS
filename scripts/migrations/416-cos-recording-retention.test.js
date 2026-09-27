@@ -1,0 +1,23 @@
+import { afterAll, expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import migration from './416-cos-recording-retention.js';
+const rootDir = await mkdtemp(join(tmpdir(), 'cos-retention-migration-'));
+afterAll(() => rm(rootDir, { recursive: true, force: true }));
+it('adopts lossless retention without touching archives, overriding choices, or resetting invalid config', async () => {
+  expect(await migration.up({ rootDir })).toEqual({ updated: 0 });
+  const dir = join(rootDir, 'data', 'cos'); await mkdir(dir, { recursive: true });
+  const file = join(dir, 'config.json');
+  await writeFile(file, JSON.stringify({ maxConcurrentAgents: 2 }));
+  expect(await migration.up({ rootDir })).toEqual({ updated: 1 });
+  const value = JSON.parse(await readFile(file, 'utf8'));
+  expect(value).toMatchObject({ maxConcurrentAgents: 2, agentStorage: { autoCompress: true, autoPurge: false } });
+  value.agentStorage.autoCompress = false;
+  await writeFile(file, JSON.stringify(value));
+  expect(await migration.up({ rootDir })).toEqual({ updated: 0 });
+  expect(JSON.parse(await readFile(file, 'utf8')).agentStorage.autoCompress).toBe(false);
+  await writeFile(file, '{broken');
+  await expect(migration.up({ rootDir })).rejects.toThrow('Invalid CoS config');
+  expect(await readFile(file, 'utf8')).toBe('{broken');
+});
