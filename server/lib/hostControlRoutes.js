@@ -96,6 +96,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
   // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
   'POST /api/runs',
+  'POST /api/voice/studio/setup',
 
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
@@ -124,6 +125,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/apps/:id/pull-requests/:number/do-review',
   // Enable or queue CoS agent work against an app.
   'POST /api/apps/:id/launch-videos',
+  'POST /api/apps/:id/launch-videos/publish',
   'POST /api/apps/:id/quality-schedule/apply',
   'PUT /api/apps/bulk-task-type/:taskType',
   'PUT /api/apps/:id/task-types/all',

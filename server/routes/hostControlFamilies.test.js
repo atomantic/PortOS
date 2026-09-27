@@ -55,6 +55,7 @@ import { createPortOSProviderRoutes } from './providers.js';
 // under test, and a handler that never runs is the proof nothing was written.
 const settingsWrite = vi.fn((req, res) => res.json({ saved: Object.keys(req.body) }));
 const cosConfigWrite = vi.fn((req, res) => res.json({ saved: Object.keys(req.body) }));
+const mediaHostAction = vi.fn((_req, res) => res.json({ started: true }));
 
 // Mirrors the order server/index.js mounts them in.
 const buildGatedApp = (remoteAddress) => {
@@ -73,6 +74,8 @@ const buildGatedApp = (remoteAddress) => {
   app.use('/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } }));
   app.put('/api/settings', settingsWrite);
   app.put('/api/cos/config', cosConfigWrite);
+  app.post('/api/voice/studio/setup', mediaHostAction);
+  app.post('/api/apps/:id/launch-videos/publish', mediaHostAction);
   app.use(errorMiddleware);
   return app;
 };
@@ -100,6 +103,8 @@ const REFUSED_WRITES = [
   ['post', '/api/loops', { prompt: 'run the example', interval: '5m' }],
   ['post', '/api/loops/loop-1/trigger', {}],
   ['post', '/api/providers/runtimes/install?runtime=codex', {}],
+  ['post', '/api/voice/studio/setup', {}],
+  ['post', '/api/apps/example-app/launch-videos/publish', {}],
   ['put', '/api/settings', { harnesses: { claude: { enabled: true } } }],
   ['put', '/api/cos/config', { avatarStyle: 'svg', maxConcurrentAgents: 9 }],
 ];
@@ -127,6 +132,7 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
     expect(settingsWrite).not.toHaveBeenCalled();
     expect(cosConfigWrite).not.toHaveBeenCalled();
+    expect(mediaHostAction).not.toHaveBeenCalled();
   });
 
   it('leaves a remote caller the writes that only stop work or change no execution policy', async () => {
@@ -149,10 +155,12 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
       for (const write of [
         ['post', '/api/feature-agents/agent-1/start'],
         ['post', '/api/loops/loop-1/trigger'],
+        ['post', '/api/voice/studio/setup'],
+        ['post', '/api/apps/example-app/launch-videos/publish'],
         ['put', '/api/settings', { codeReview: { reviewers: ['claude'] } }],
         ['put', '/api/cos/config', { maxConcurrentAgents: 2 }],
       ]) statuses.push((await call(local(), write, proxyClient)).status);
-      expect(statuses).toEqual([200, 200, 200, 200]);
+      expect(statuses).toEqual([200, 200, 200, 200, 200, 200]);
     }
     expect(featureAgents.activateFeatureAgent).toHaveBeenCalledTimes(2);
     expect(loops.triggerLoop).toHaveBeenCalledTimes(2);
