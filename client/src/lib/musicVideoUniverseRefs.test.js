@@ -15,10 +15,14 @@ describe('pullUniverseCanonReferences', () => {
     expect(added).toBe(3);
     expect(skipped).toBe(1); // 'No Image' has neither primaryImageRef nor imageRefs
     expect(next).toEqual([
-      { imageId: 'nyra-primary.png', role: 'character', label: 'Nyra', condition: false },
-      { imageId: 'harbor.png', role: 'set', label: 'Harbor', condition: false },
-      { imageId: 'lantern.png', role: 'prop', label: 'Lantern', condition: false },
+      { id: expect.any(String), imageId: 'nyra-primary.png', role: 'character', label: 'Nyra', condition: false },
+      { id: expect.any(String), imageId: 'harbor.png', role: 'set', label: 'Harbor', condition: false },
+      { id: expect.any(String), imageId: 'lantern.png', role: 'prop', label: 'Lantern', condition: false },
     ]);
+    // Every pulled reference gets its OWN id — sharing one (e.g. all
+    // `undefined`) would make VisualSpecPanel's by-id edit/remove handlers
+    // treat several rows as a single one until the server round-trips ids.
+    expect(new Set(next.map((r) => r.id)).size).toBe(3);
   });
 
   it('is idempotent: an image already present as a reference is skipped, not duplicated', () => {

@@ -1,11 +1,14 @@
 // Map a linked universe's canon (characters/places/objects) onto a music
 // video project's visual-spec references (#8978 "Pull from universe"). Pure
-// and read-only: the caller owns persisting the result via the ordinary
-// visualSpec PATCH (see VisualSpecPanel.jsx).
+// (aside from minting reference ids) and read-only: the caller owns
+// persisting the result via the ordinary visualSpec PATCH (see
+// VisualSpecPanel.jsx).
 //
 // Mirrors the server's 24-reference cap
 // (server/lib/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull
 // can never produce a spec the server would reject.
+
+import { uuidv4 } from './uuid.js';
 
 export const MUSIC_VIDEO_MAX_REFERENCES = 24;
 
@@ -50,7 +53,13 @@ export function pullUniverseCanonReferences(universe, existingReferences = []) {
       if (!imageId) { skippedNoImage += 1; continue; }
       if (existingIds.has(imageId)) { skippedDuplicate += 1; continue; }
       existingIds.add(imageId); // two canon entries sharing one image only add it once
-      candidates.push({ imageId, role, label: (entry.name || '').slice(0, 120), condition: false });
+      // Mint a client-side id per addition (the server also mints one on
+      // save, but VisualSpecPanel's row edit/remove handlers match by `r.id`
+      // against the LOCAL, optimistic list — pulling several references at
+      // once with no id would make every one of them share the same
+      // `undefined` id and collapse into a single editable/removable row
+      // until the PATCH response lands).
+      candidates.push({ id: `mvr-pull-${uuidv4()}`, imageId, role, label: (entry.name || '').slice(0, 120), condition: false });
     }
   }
   const room = Math.max(0, MUSIC_VIDEO_MAX_REFERENCES - existingReferences.length);

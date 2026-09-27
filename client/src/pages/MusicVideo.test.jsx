@@ -1175,7 +1175,9 @@ describe('MusicVideo pull references from universe (#8978)', () => {
       'mv-universe',
       { visualSpec: { references: [
         { id: 'r0', imageId: 'harbor.png', role: 'mood', condition: false },
-        { imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
+        // Pulled references get their own client-minted id (not the server's
+        // stable one yet) so multiple additions never collide on `undefined`.
+        { id: expect.any(String), imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
       ] } },
       { silent: true },
     ));
