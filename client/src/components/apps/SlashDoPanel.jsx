@@ -16,7 +16,7 @@ import * as api from '../../services/api';
 
 export default function SlashDoPanel({ appId, appName, appType }) {
   const [loading, setLoading] = useState(null);
-  const picker = useRunWithPicker();
+  const picker = useRunWithPicker({ preselectDefaults: false });
   // A `configurable` command opens a pre-flight drawer instead of firing
   // immediately: the run's provider / model / effort / reviewer / simplify
   // settings, plus (for `/do:next`) which work item to claim. Holds the whole

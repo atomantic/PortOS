@@ -21,7 +21,7 @@ import { enabledProcessProviderFilter } from '../utils/providers.js';
  *   setEffort: Function,
  * }}
  */
-export default function useRunWithPicker() {
+export default function useRunWithPicker({ preselectDefaults = true } = {}) {
   const {
     providers,
     selectedProviderId,
@@ -33,7 +33,7 @@ export default function useRunWithPicker() {
   } = useProviderModels({
     filter: enabledProcessProviderFilter,
     allowDefault: true,
-    preselectDefaults: true,
+    preselectDefaults,
     silent: true,
     withEffort: true,
   });
