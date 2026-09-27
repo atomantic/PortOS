@@ -29,7 +29,7 @@ describe('migration 417 — rename release-check to do-release', () => {
     writeJson(schedulePath, {
       tasks: {
         'release-check': { type: 'cron', cron: '0 9 * * 1', prompt: 'custom release prompt', promptCustomized: true, taskMetadata: { requireApproval: true } },
-        'claim-issue': { runAfter: ['release-check'] },
+        'claim-issue': { runAfter: ['release-check'], suggestedAfter: ['release-check'] },
       },
       executions: { 'task:release-check': { count: 4, lastRun: '2026-09-20T00:00:00.000Z' } },
       onDemandRequests: [{ id: 'pending-1', taskType: 'release-check' }],
@@ -46,6 +46,7 @@ describe('migration 417 — rename release-check to do-release', () => {
       type: 'cron', cron: '0 9 * * 1', prompt: 'custom release prompt', promptCustomized: true, taskMetadata: { requireApproval: true },
     });
     expect(schedule.tasks['claim-issue'].runAfter).toEqual(['do-release']);
+    expect(schedule.tasks['claim-issue'].suggestedAfter).toEqual(['do-release']);
     expect(schedule.executions).toEqual({ 'task:do-release': { count: 4, lastRun: '2026-09-20T00:00:00.000Z' } });
     expect(schedule.onDemandRequests[0].taskType).toBe('do-release');
     expect(readJson(appsPath).apps['app-a'].taskTypeOverrides).toEqual({

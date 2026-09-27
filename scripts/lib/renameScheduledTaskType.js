@@ -39,6 +39,10 @@ async function readJson(rootDir, relPath) {
 
 const writeJson = (fullPath, value) => atomicWrite(fullPath, `${JSON.stringify(value, null, 2)}\n`);
 
+// Task-type lists on a schedule config: hard (`runAfter`) and advisory
+// (`suggestedAfter`) ordering.
+const ORDERING_FIELDS = ['runAfter', 'suggestedAfter'];
+
 function mergeConfig(legacy, current, renameTaskType) {
   const oldConfig = isObject(legacy) ? legacy : {};
   const newConfig = isObject(current) ? current : {};
@@ -51,10 +55,11 @@ function mergeConfig(legacy, current, renameTaskType) {
       ...(isObject(newConfig.taskMetadata) ? newConfig.taskMetadata : {}),
     };
   }
-  if (Array.isArray(oldConfig.runAfter) || Array.isArray(newConfig.runAfter)) {
-    merged.runAfter = [...new Set([
-      ...(Array.isArray(oldConfig.runAfter) ? oldConfig.runAfter : []),
-      ...(Array.isArray(newConfig.runAfter) ? newConfig.runAfter : []),
+  for (const field of ORDERING_FIELDS) {
+    if (!Array.isArray(oldConfig[field]) && !Array.isArray(newConfig[field])) continue;
+    merged[field] = [...new Set([
+      ...(Array.isArray(oldConfig[field]) ? oldConfig[field] : []),
+      ...(Array.isArray(newConfig[field]) ? newConfig[field] : []),
     ].map(renameTaskType))];
   }
   return merged;
@@ -113,11 +118,14 @@ function migrateSchedule(schedule, { from, to, renameTaskType }) {
       changed = true;
     }
     for (const config of Object.values(schedule.tasks)) {
-      if (!isObject(config) || !Array.isArray(config.runAfter)) continue;
-      const renamed = renameList(config.runAfter, renameTaskType);
-      if (renamed) {
-        config.runAfter = renamed;
-        changed = true;
+      if (!isObject(config)) continue;
+      for (const field of ORDERING_FIELDS) {
+        if (!Array.isArray(config[field])) continue;
+        const renamed = renameList(config[field], renameTaskType);
+        if (renamed) {
+          config[field] = renamed;
+          changed = true;
+        }
       }
     }
   }
