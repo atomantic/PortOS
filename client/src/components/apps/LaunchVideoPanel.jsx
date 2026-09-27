@@ -27,6 +27,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [format, setFormat] = useState('landscape');
   const [duration, setDuration] = useState(20);
   const [music, setMusic] = useState(false);
+  const [generateMusic, setGenerateMusic] = useState(true);
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
   const [error, setError] = useState('');
@@ -46,7 +47,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     submitting.current = true;
     await createAppLaunchVideo(appId, {
       tone, direction, format, targetDurationSec: duration,
-      ...(music ? { musicTrack } : {}),
+      ...(music ? (generateMusic ? { generateMusic: true } : { musicTrack }) : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
   });
@@ -60,9 +61,10 @@ function LaunchVideoForm({ appId, onQueued }) {
     <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
     <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
-    <div><label htmlFor="launch-duration">Duration (15–25 seconds)</label><input id="launch-duration" type="number" min={15} max={25} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
+    <div><label htmlFor="launch-duration">Duration (15–120 seconds)</label><input id="launch-duration" type="number" min={15} max={120} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
     <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
-    {music && <fieldset className="space-y-2">
+    {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">The agent uses your configured music engine; provider charges may apply.</p></div>}
+    {music && !generateMusic && <fieldset className="space-y-2">
       <legend>Music-library track</legend>
       {tracks === null && <p className="text-sm text-port-text-muted">Loading tracks…</p>}
       {tracks?.length === 0 && <p>Add a track to the Music library first.</p>}
@@ -84,7 +86,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       </ul>}
     </fieldset>}
     <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-    <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+    <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
   </form>;
 }
 

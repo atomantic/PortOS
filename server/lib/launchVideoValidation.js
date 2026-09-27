@@ -41,8 +41,8 @@ export function validateLaunchVideoAssets(assets, options) {
   if (!parsed.success) fail(`Invalid storyboard.json field: ${parsed.error.issues[0].path.join('.')}`);
   const storyboard = parsed.data;
   const durationSec = storyboard.scenes.reduce((sum, scene) => sum + scene.durationSec, 0);
-  if (durationSec < 15 || durationSec > 25 || Math.abs(durationSec - targetDurationSec) > 2) {
-    fail('storyboard.json scene durations must total 15–25s and match targetDurationSec within 2s');
+  if (durationSec < 15 || durationSec > 120 || Math.abs(durationSec - targetDurationSec) > 2) {
+    fail('storyboard.json scene durations must total 15–120s and match targetDurationSec within 2s');
   }
   if (storyboard.posterSec >= durationSec) fail('storyboard.json posterSec must be inside the video');
   storyboard.scenes.forEach((scene, sceneIndex) => scene.lines.forEach((line, lineIndex) => {

@@ -51,6 +51,22 @@ describe('user-triggered launch videos', () => {
     expect(duplicate.body.code).toBe('LAUNCH_VIDEO_ACTIVE');
   });
 
+  it('queues a two-minute managed-app video with explicit music generation and product context', async () => {
+    getAppById.mockResolvedValue({ id: 'example', name: 'Example Product', repoPath: process.cwd(), processes: [{ name: 'example-ui', port: 4321 }], secret: 'never-forward' });
+    expect((await submit({ targetDurationSec: 120, generateMusic: true })).status).toBe(202);
+    const [task] = addTask.mock.calls[0];
+    expect(task.prompt).toContain('"name":"Example Product"');
+    expect(task.prompt).toContain('"port":4321');
+    expect(task.prompt).toContain('"generateMusic":true');
+    expect(task.prompt).toContain('"targetDurationSec":120');
+    expect(task.prompt).toContain('NOT the selected app');
+    expect(task.prompt).toContain('/api/music/generate');
+    expect(task.prompt).not.toContain('never-forward');
+    expect((await submit({ targetDurationSec: 121 })).status).toBe(400);
+    expect((await submit({ generateMusic: true, musicTrack: 'example.wav' })).status).toBe(400);
+    expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses invalid options, missing music, and unavailable CoS before queuing', async () => {
     expect((await submit({ targetDurationSec: 4 })).status).toBe(400);
     expect((await submit({ tone: 'unknown' })).status).toBe(400);
