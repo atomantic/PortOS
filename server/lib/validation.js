@@ -2505,6 +2505,9 @@ export const htmlCompositionContractSchema = z.object({
   fps: z.number().int().min(12).max(60),
   width: z.number().int(),
   height: z.number().int(),
+  // Subframes averaged per output frame to fake motion blur on fast moves;
+  // 1 (default) keeps the existing single-sample-per-frame behavior.
+  motionBlur: z.number().int().min(1).max(4).default(1),
 }).superRefine((value, ctx) => {
   if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
     ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });

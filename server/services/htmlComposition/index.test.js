@@ -99,6 +99,24 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect((await readFile(join(PATHS.videoThumbnails, result.thumbnail))).length).toBeGreaterThan(0);
   }, 30000);
 
+  it('renders motionBlur:1 byte-identical to the default, and motionBlur:4 blends subframes into a smoothed leading edge', async () => {
+    const baseline = await renderComposition(await composition());
+    const explicit = await renderComposition(await composition(fixture('', 'motionBlur:1')));
+    expect(await readFile(join(PATHS.videos, explicit.filename))).toEqual(await readFile(join(PATHS.videos, baseline.filename)));
+
+    const blurred = await renderComposition(await composition(fixture('', 'motionBlur:4')));
+    const pixels = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, blurred.filename), '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 40 * 1024 * 1024 });
+    const frameBytes = 1280 * 720 * 3;
+    expect(pixels.length / frameBytes).toBe(12); // frame count still durationSec * fps, unaffected by motionBlur
+    // Frame six spans t=0.5..0.5625s across 4 subframes. The block's trailing
+    // edge (px 345) is only inside the block on the later subframes, so the
+    // blended average lands strictly between pure red and pure white.
+    const at = x => pixels.subarray(6 * frameBytes + (110 * 1280 + x) * 3, 6 * frameBytes + (110 * 1280 + x) * 3 + 3);
+    const blended = at(345);
+    expect(blended[1]).toBeGreaterThan(30);
+    expect(blended[1]).toBeLessThan(220);
+  }, 60000);
+
   it('renders a gated launch composition and uses its declared poster beat', async () => {
     const html = `<!doctype html><html><body><script>
       globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,
@@ -213,6 +231,7 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
   it.each([
     ['durationSec', 'durationSec:0'], ['fps', 'fps:12.5'], ['width', 'width:123'],
     ['durationSec', 'durationSec:1.01'], ['seek', 'seek:null'],
+    ['motionBlur', 'motionBlur:0'], ['motionBlur', 'motionBlur:5'], ['motionBlur', 'motionBlur:2.5'],
   ])('names the invalid %s before capture', async (field, contract) => {
     const input = await composition(fixture('', contract));
     await expect(renderComposition(input)).rejects.toThrow(field);
