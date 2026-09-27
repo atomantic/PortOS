@@ -6,6 +6,7 @@ import {
   attachSseClient,
   closeJobAfterDelay,
   createJobFailureFinalizer,
+  dispatchTerminalEvent,
   createSseRunner
 } from './sseUtils.js';
 
@@ -186,6 +187,50 @@ describe('closeJobAfterDelay', () => {
   });
 });
 
+describe('dispatchTerminalEvent', () => {
+  // Regression (#8915): the terminal dispatch used to be a bare
+  // `sseSend(); emitEvent();` pair — a throw from sseSend (e.g. a dead
+  // client's res.write) skipped emitEvent entirely, silently dropping the
+  // durable side effects (gallery index, peer sync, job-queue settlement)
+  // the lifecycle event drives, even though the SSE write failure was purely
+  // best-effort and unrelated to whether the job actually settled.
+  it('still calls emitEvent when sseSend throws', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sseSend = vi.fn(() => { throw new Error('dead client'); });
+    const emitEvent = vi.fn();
+
+    dispatchTerminalEvent('job-123', sseSend, emitEvent);
+
+    expect(sseSend).toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed [job-123]'));
+    errSpy.mockRestore();
+  });
+
+  it('still calls sseSend, and does not re-throw, when emitEvent throws', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sseSend = vi.fn();
+    const emitEvent = vi.fn(() => { throw new Error('listener exploded'); });
+
+    expect(() => dispatchTerminalEvent('job-123', sseSend, emitEvent)).not.toThrow();
+
+    expect(sseSend).toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('Lifecycle event dispatch failed [job-123]'));
+    errSpy.mockRestore();
+  });
+
+  it('calls both dispatches once each on the normal (non-throwing) path', () => {
+    const sseSend = vi.fn();
+    const emitEvent = vi.fn();
+
+    dispatchTerminalEvent('job-123', sseSend, emitEvent);
+
+    expect(sseSend).toHaveBeenCalledTimes(1);
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('createJobFailureFinalizer', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
@@ -297,6 +342,26 @@ describe('createJobFailureFinalizer', () => {
     expect(job.status).toBe('error');
     expect(activeSlots.has('j1')).toBe(false);
     expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'Canceled' });
+  });
+
+  // Regression (#8915): createJobFailureFinalizer used to call
+  // `broadcastSse(...)` then `events.emit('failed', ...)` back to back — a
+  // throwing SSE client's res.write (dead pipe) aborted before the events.emit
+  // ran, so the six media-generation backends behind this finalizer
+  // (imageGen/{agy,codex,grok}.js, videoGen/{grok,fal,reactor}.js) would
+  // silently skip the queue-settlement/peer-sync bookkeeping `failed` drives.
+  it('still emits failed to the caller when a connected SSE client throws on write', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { events, finalize } = setup();
+    const throwingClient = { write: vi.fn(() => { throw new Error('write after end'); }) };
+    const job = { clients: [throwingClient], status: 'running' };
+
+    finalize(job, 'j1', { pid: 1 }, 'boom');
+
+    expect(job.status).toBe('error');
+    expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'boom' });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    errSpy.mockRestore();
   });
 
   it('.canceled accepts an optional slotOwner for a backend that does track one', () => {

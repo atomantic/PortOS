@@ -375,17 +375,19 @@ describe('grok provider — directed-path harvest', () => {
     expect(failedListener.mock.calls[0][0].error).toMatch(/Failed to spawn grok/);
   });
 
-  // Regression (#6830): the success path stamps job.status = 'complete'
-  // BEFORE its own broadcastSse('complete') + imageGenEvents 'completed'
-  // tail, so a throw from that tail — a subscriber's res.write failing
-  // inside broadcastSse, same as any throw the surrounding catch was written
-  // to contain — used to hit the idempotency guard as a silent no-op: no
-  // 'failed' event, job stuck reading 'complete' with no terminal frame ever
-  // delivered. videoGen/grok.js already forces past this window (fa3796650);
-  // the three image backends never did until the shared finalizer's `force`
-  // option was threaded through their post-exit catches.
-  it('still emits failed when the post-exit handler throws after job.status is already complete', async () => {
+  // Regression (#8915): the success-path tail dispatches its terminal SSE
+  // frame and its `imageGenEvents.emit('completed', ...)` INDEPENDENTLY via
+  // `dispatchTerminalEvent` — a throwing subscriber's res.write (a dead SSE
+  // client) must not suppress the 'completed' event, which is what drives the
+  // gallery index / peer-sync / job-queue settlement. (This used to instead
+  // hit the shared finalizer's `force` escape hatch and flip a successful
+  // render into a spurious 'failed' — see #6830 history — which was itself
+  // only correct for a REAL post-processing throw, not a merely-best-effort
+  // SSE write failing on an already-successful render.)
+  it('still emits completed when a connected SSE client throws on the terminal complete frame', async () => {
+    const completedListener = vi.fn();
     const failedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
     imageGenEvents.on('failed', failedListener);
 
     const job = await grok.generateImage({ prompt: 'a fox' });
@@ -404,14 +406,18 @@ describe('grok provider — directed-path harvest', () => {
       write: vi.fn((msg) => {
         if (msg.includes('"type":"complete"')) throw new Error('subscriber write failed');
       }),
+      end: vi.fn(),
       req: { on: vi.fn() },
     };
     grok.attachSseClient(job.jobId, throwingClient);
 
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await closeChild(0, 0);
 
-    await vi.waitFor(() => expect(failedListener).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 50 });
-    expect(failedListener.mock.calls[0][0].error).toMatch(/post-exit handler failed/i);
+    await vi.waitFor(() => expect(completedListener).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 50 });
+    expect(failedListener).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE terminal broadcast failed'));
+    errSpy.mockRestore();
   }, 10000);
 });
 

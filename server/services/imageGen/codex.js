@@ -40,7 +40,7 @@ import { atomicWrite, copyFileGuarded, ensureDir, PATHS } from '../../lib/fileUt
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/providerModels.js';
@@ -449,8 +449,11 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       activeJobs.delete(jobId);
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
       const result = { filename, path: `/data/images/${filename}` };
-      broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename });
+      dispatchTerminalEvent(
+        jobId,
+        () => broadcastSse(job, { type: 'complete', result }),
+        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename }),
+      );
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       // force: true — 'complete' is already stamped above; see

@@ -25,7 +25,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
 import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { hfChildEnv } from '../hfToken.js';
@@ -743,8 +743,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
+    dispatchTerminalEvent(
+      jobId,
+      () => broadcastSse(job, { type: 'error', error: reason }),
+      () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+    );
     activeProcess = null;
     activeJob = null;
     void releaseHeavyClaim();
@@ -963,8 +966,11 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         job.error = emptyFrame;
         console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
         terminalEmitted = true;
-        broadcastSse(job, { type: 'error', error: emptyFrame });
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame });
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: emptyFrame }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame }),
+        );
         return;
       }
       if (code !== 0) {
@@ -1043,10 +1049,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         job.errorKind = userKind;
         job.errorRepo = userRepo;
         terminalEmitted = true;
-        broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
         // Propagate the friendly message (not the raw "Exit code 1") to the
         // job queue so its `failed` log line and future SSE replays carry it.
-        imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error });
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error }),
+        );
       } else {
         job.status = 'complete';
         // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
@@ -1113,20 +1122,26 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         // stays null so nothing treats it as a gallery URL.
         const result = { filename, seed: actualSeed, path: publicPath, outputPath, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) };
         terminalEmitted = true;
-        broadcastSse(job, { type: 'complete', result });
         // Include `seed` so /sdapi/v1/txt2img can surface the actual seed used
         // (mflux generates a random one if the client didn't pass one). Emit the
         // gallery `completed` (which drives the media-asset index + peer-sync
         // hooks) ONLY for a gallery target — a temp render must not be indexed or
         // federated. The queue's own `completed` handler still fires off the
         // return value below, so the job settles either way.
-        if (!skipSidecar) {
-          imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
-        } else {
-          // `temp: true` tells the media-asset-index + peer-sync hooks to ignore
-          // this render — there's no gallery file or sidecar to index/federate.
-          imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
-        }
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'complete', result }),
+          () => {
+            if (!skipSidecar) {
+              imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: publicPath, filename, seed: actualSeed, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+            } else {
+              // `temp: true` tells the media-asset-index + peer-sync hooks to
+              // ignore this render — there's no gallery file or sidecar to
+              // index/federate.
+              imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, path: null, filename, seed: actualSeed, outputPath, temp: true, ...(meta.executionProvenance ? { executionProvenance: meta.executionProvenance } : {}) });
+            }
+          },
+        );
       }
     } catch (err) {
       const reason = err?.message || String(err);
@@ -1140,18 +1155,18 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       if (!terminalEmitted) {
         job.status = 'error';
         job.error = reason;
-        // Guard the dispatch itself: a throwing SSE writer (a dead client's
-        // res.write) or a throwing imageGenEvents listener must not re-throw
-        // out of this catch — that would escape the close handler as an
-        // unhandled rejection, defeating the whole point of this try/catch.
-        // job.status/job.error above are already correct even if delivery
-        // fails partway, and `finally` below still runs the job cleanup.
-        try {
-          broadcastSse(job, { type: 'error', error: reason });
-          imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
-        } catch (dispatchErr) {
-          console.error(`❌ Image generation terminal-event dispatch failed [${jobId.slice(0, 8)}]: ${dispatchErr?.message || dispatchErr}`);
-        }
+        // `dispatchTerminalEvent` guards each call independently — a throwing
+        // SSE writer (a dead client's `res.write`) can't suppress the
+        // `imageGenEvents.emit` (or vice versa), and neither can re-throw out
+        // of this catch, which would escape the close handler as an
+        // unhandled rejection. job.status/job.error above are already correct
+        // even if delivery fails partway, and `finally` below still runs the
+        // job cleanup.
+        dispatchTerminalEvent(
+          jobId,
+          () => broadcastSse(job, { type: 'error', error: reason }),
+          () => imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason }),
+        );
       }
     } finally {
       closeJobAfterDelay(jobs, jobId);
