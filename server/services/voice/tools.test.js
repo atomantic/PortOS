@@ -266,21 +266,21 @@ describe('dispatch_code_agent', () => {
   });
 
   it('rejects an empty task without creating a CoS task', async () => {
-    const r = await dispatchTool('dispatch_code_agent', { task: '   ' });
+    const r = await dispatchTool('dispatch_code_agent', { task: '   ' }, { hasHostControl: () => true });
     expect(r.ok).toBe(false);
     expect(mockedAddTask).not.toHaveBeenCalled();
   });
 
   it('refuses when codeAgent is disabled', async () => {
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: false } } });
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' }, { hasHostControl: () => true });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/disabled/);
     expect(mockedAddTask).not.toHaveBeenCalled();
   });
 
   it('creates a voice-dispatched user task without pinning provider/model by default', async () => {
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the failing backup test' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the failing backup test' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     expect(r.taskId).toBe('task-test');
     expect(mockedAddTask).toHaveBeenCalledTimes(1);
@@ -295,7 +295,7 @@ describe('dispatch_code_agent', () => {
 
   it('pins provider/model when configured', async () => {
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'codex-cli', model: 'gpt-5' } } });
-    await dispatchTool('dispatch_code_agent', { task: 'add a flag' });
+    await dispatchTool('dispatch_code_agent', { task: 'add a flag' }, { hasHostControl: () => true });
     expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'codex-cli', model: 'gpt-5' });
   });
 
@@ -307,7 +307,7 @@ describe('dispatch_code_agent', () => {
       { id: 'lmstudio', type: 'api', enabled: true },
       { id: 'codex', type: 'cli', enabled: true },
     ] });
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     const [data] = mockedAddTask.mock.calls[0];
     expect(data.provider).toBe('codex');
@@ -318,7 +318,7 @@ describe('dispatch_code_agent', () => {
   it('errors when the system default is an API backend and no CLI/TUI provider is enabled', async () => {
     mockedGetActiveProvider.mockResolvedValue({ id: 'lmstudio', type: 'api', enabled: true });
     mockedGetAllProviders.mockResolvedValue({ providers: [{ id: 'lmstudio', type: 'api', enabled: true }] });
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' }, { hasHostControl: () => true });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/code-capable/);
     expect(mockedAddTask).not.toHaveBeenCalled();
@@ -333,7 +333,7 @@ describe('dispatch_code_agent', () => {
       { id: 'lmstudio', type: 'api', enabled: true },
       { id: 'claude-code', type: 'tui', enabled: true },
     ] });
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     const [data] = mockedAddTask.mock.calls[0];
     expect(data.provider).toBe('claude-code');
@@ -345,20 +345,20 @@ describe('dispatch_code_agent', () => {
     // the spawner rather than swapping a provider we know nothing about.
     mockedGetVoiceConfig.mockResolvedValue({ llm: { codeAgent: { enabled: true, provider: 'my-custom-cli', model: 'x' } } });
     mockedGetProviderById.mockResolvedValue(null);
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the build' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     expect(mockedAddTask.mock.calls[0][0]).toMatchObject({ provider: 'my-custom-cli', model: 'x' });
   });
 
   it('warns in the summary when the CoS runner is stopped', async () => {
     mockedIsRunning.mockReturnValue(false);
-    const r = await dispatchTool('dispatch_code_agent', { task: 'refactor X' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'refactor X' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     expect(r.summary).toMatch(/stopped/i);
   });
 
   it('resolves a spoken `app` to a managed-app id and threads it through addTask', async () => {
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'book loom' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'book loom' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     expect(r.app).toBe('bookloom-abc');
     expect(r.summary).toMatch(/in BookLoom/);
@@ -366,12 +366,12 @@ describe('dispatch_code_agent', () => {
   });
 
   it('omits the `app` field on addTask when no target is spoken (PortOS-self)', async () => {
-    await dispatchTool('dispatch_code_agent', { task: 'fix the test' });
+    await dispatchTool('dispatch_code_agent', { task: 'fix the test' }, { hasHostControl: () => true });
     expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
   });
 
   it('errors when the spoken app is unknown — does NOT silently fall through to PortOS', async () => {
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'GhostApp' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: 'GhostApp' }, { hasHostControl: () => true });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/GhostApp/);
     expect(r.summary).toMatch(/BookLoom/); // suggestion list pulled from active apps
@@ -379,7 +379,7 @@ describe('dispatch_code_agent', () => {
   });
 
   it('ignores an empty/whitespace `app` string (treats as omitted)', async () => {
-    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: '   ' });
+    const r = await dispatchTool('dispatch_code_agent', { task: 'fix the test', app: '   ' }, { hasHostControl: () => true });
     expect(r.ok).toBe(true);
     expect(mockedAddTask.mock.calls[0][0]).not.toHaveProperty('app');
   });
@@ -569,10 +569,10 @@ describe('goal_log_note type guard', () => {
 
 describe('pm2_restart type guard', () => {
   it('rejects non-string name', async () => {
-    await expect(dispatchTool('pm2_restart', { name: 12345 })).rejects.toThrow(/name is required/);
+    await expect(dispatchTool('pm2_restart', { name: 12345 }, { hasHostControl: () => true })).rejects.toThrow(/name is required/);
   });
   it('rejects empty string name', async () => {
-    await expect(dispatchTool('pm2_restart', { name: '  ' })).rejects.toThrow(/name is required/);
+    await expect(dispatchTool('pm2_restart', { name: '  ' }, { hasHostControl: () => true })).rejects.toThrow(/name is required/);
   });
 });
 

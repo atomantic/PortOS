@@ -493,7 +493,22 @@ describe('cosToolRegistry', () => {
       context: { signal },
     });
     expect(result.state).toBe('completed');
-    expect(mocks.dispatch).toHaveBeenCalledWith('brain_search', { query: 'example' }, { sideEffects: [], signal });
+    expect(mocks.dispatch).toHaveBeenCalledWith('brain_search', { query: 'example' }, { sideEffects: [], signal, hasHostControl: expect.any(Function) });
+    expect(mocks.dispatch.mock.calls[0][2].hasHostControl()).toBe(false);
+  });
+
+  it('derives the voice adapter grant from a validated principal, never the arguments', async () => {
+    await executeCosToolCall({
+      call: { requestId: 'authorized-write', name: 'brain.capture', arguments: { text: 'example' } },
+      authority: { scope: 'mind', capabilities: { writePortos: true } },
+    });
+    expect(mocks.dispatch.mock.calls[0][2].hasHostControl()).toBe(true);
+    await executeCosToolCall({
+      call: { requestId: 'voice-read', name: 'brain.search', arguments: { query: 'example' } },
+      authority: { scope: 'voice', authenticated: true },
+      context: { hasHostControl: () => true },
+    });
+    expect(mocks.dispatch.mock.calls[1][2].hasHostControl()).toBe(false);
   });
 
   it('blocks untrusted HTTP mutations and ungranted mind tools', async () => {

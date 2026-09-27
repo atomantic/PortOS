@@ -984,7 +984,13 @@ const executeAdapter = async (tool, args, context, authority) => {
       : adjustPersistentMindLocalContext(args, context);
   }
   if (tool.adapter.kind === 'voice-tool') {
-    return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+    return dispatchTool(tool.adapter.legacyName, args, {
+      sideEffects: [], signal: context.signal,
+      // executeCosToolCall already validated this server-owned principal and
+      // the tool's capability. Never promote arguments or voice scope to host authority.
+      hasHostControl: () => ['agent', 'mind'].includes(authority?.scope)
+        || (authority?.scope === 'ui' && authority.authenticated === true),
+    });
   }
   if (tool.adapter.kind.startsWith('persistent-mind-issue-')) {
     const { filePersistentMindIssue, listPersistentMindIssues } = await import('./persistentMindIssueCapability.js');

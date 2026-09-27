@@ -251,9 +251,24 @@ const hasHostControl = (auth, localConnection) =>
 
 export const HOST_CONTROL_FORBIDDEN_MESSAGE = 'Host control requires an operator session, or a local connection when no password is set. Set an instance password to use it remotely.';
 
+// Server-derived HTTP authority; never read caller-provided body fields.
+export const requestHasHostControl = (req) => hasHostControl(
+  req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers),
+);
+
+// Re-check at tool dispatch, after any STT/LLM wait. A handshake/session that
+// was valid when a turn started is not a durable grant to execute later.
+export const socketHasCurrentHostControl = async (socket) => {
+  if (socket.disconnected === true) return false;
+  if (await isAuthEnabled()) {
+    return await verifyRequestSession({ headers: socket.handshake?.headers || {} }) === true;
+  }
+  return socketHasHostControl(socket);
+};
+
 // Mount after authGate: missing context fails closed.
 export const requireHostControl = (req, res, next) => {
-  if (hasHostControl(req.portosAuthContext, isLocalConnection(req.socket?.remoteAddress, req.headers))) return next();
+  if (requestHasHostControl(req)) return next();
   sendErrorResponse(res, new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, {
     status: 403, code: 'HOST_CONTROL_FORBIDDEN',
   }));

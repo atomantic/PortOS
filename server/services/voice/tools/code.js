@@ -19,6 +19,7 @@ export const CODE_INTENT_RE = /\b(?:have (?:claude|codex|antigravity|gemini|the 
 export const CODE_TOOLS = [
   {
     name: 'dispatch_code_agent',
+    hostControl: true,
     description:
       'Hand a software-engineering task to an autonomous coding agent that works in an isolated git worktree and opens a pull request for review. Use when the user asks you to write, fix, refactor, debug, or test CODE — e.g. "fix the failing test in X", "add a --dry-run flag to the backup script", "refactor the widget registry". Do NOT use for capturing notes/ideas (that is brain_capture) or for clicking/navigating the UI. The work runs in the background and the user is told when it finishes — do not wait for it. State the task in the user\'s own words with enough detail to act on it. When the user names a managed app to work in ("…in BookLoom", "fix the bug in the finance tracker"), pass that name as `app`; omit `app` for tasks on PortOS itself. The coding agent and model come from the user\'s configured default; never put a provider or model in this call.',
     parameters: {
