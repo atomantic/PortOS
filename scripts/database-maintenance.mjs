@@ -22,7 +22,10 @@ function main() {
   if (command === 'status' && args.length === 0) {
     const record = journal.read();
     // Endpoints are local-only; the operator-facing status needs only direction.
-    return record ? { id: record.id, stage: record.stage, source: record.source.mode, target: record.target.mode } : { stage: 'idle' };
+    if (!record) return { stage: 'idle' };
+    const coordinator = journal.coordinatorStatus(record.id);
+    return { id: record.id, stage: record.stage, source: record.source.mode, target: record.target.mode,
+      ...(coordinator.state === 'unclaimed' ? {} : { coordinator }) };
   }
   if (command === 'begin' && args.length === 2) {
     const [sourceMode, targetMode] = args;

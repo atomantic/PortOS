@@ -1,0 +1,154 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { spawnDetached } from './detachedSpawn.js';
+
+const moduleUrl = new URL('./databaseMaintenanceJournal.js', import.meta.url).href;
+const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
+const target = { ...source, mode: 'docker', port: 5561 };
+let root;
+let data;
+let journal;
+let children;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'portos-coordinator-'));
+  data = join(root, 'data');
+  writeFileSync(join(root, '.portos-disposable-root'), '');
+  journal = createDatabaseMaintenanceJournal(data);
+  children = [];
+});
+afterEach(async () => {
+  for (const child of children) {
+    if (!child.finished) child.handle.kill('SIGKILL');
+    await child.done;
+  }
+  rmSync(root, { recursive: true, force: true });
+});
+
+async function launchWorker(operation, token, stage = 'importing') {
+  const controlDir = journal.reserveCoordinatorWorker(operation.id, token);
+  const script = join(root, `worker-${token}.mjs`);
+  writeFileSync(script, `import {writeFileSync, existsSync} from 'node:fs';
+    import {setTimeout} from 'node:timers/promises';
+    import {createDatabaseMaintenanceJournal} from ${JSON.stringify(moduleUrl)};
+    const journal=createDatabaseMaintenanceJournal(${JSON.stringify(data)});
+    const stages=['accepted','quiescing','exporting','importing'];
+    while(journal.read().stage!==${JSON.stringify(stage)}) {
+      const current=journal.read().stage;
+      journal.transition(${JSON.stringify(operation.id)},${JSON.stringify(token)},current,stages[stages.indexOf(current)+1]);
+    }
+    writeFileSync(${JSON.stringify(join(controlDir, 'ready'))},'ready');
+    while(!existsSync(${JSON.stringify(join(controlDir, 'finish'))})) await setTimeout(20);
+    process.exitCode=17;
+  `);
+  const env = { ...process.env, PORTOS_DATA_ROOT: root, NODE_ENV: 'test' };
+  delete env.VITEST;
+  const handle = await spawnDetached(process.execPath, [script], { env, controlDir, cleanup: false, pollMs: 25 });
+  const child = { handle, finished: false };
+  child.done = new Promise((resolve, reject) => {
+    handle.once('close', (code, signal) => { child.finished = true; resolve({ code, signal }); });
+    handle.once('error', err => { child.finished = true; reject(err); });
+  });
+  // Attach a rejection observer immediately; teardown still awaits the result.
+  child.done.catch(() => {});
+  children.push(child);
+  await vi.waitFor(() => expect(readFileSync(join(controlDir, 'ready'), 'utf8')).toBe('ready'), { timeout: 20_000 });
+  return { ...child, controlDir };
+}
+
+function recoveryProcess(operation, token) {
+  const code = `import {createDatabaseMaintenanceJournal} from ${JSON.stringify(moduleUrl)};
+    try {console.log(createDatabaseMaintenanceJournal(${JSON.stringify(data)}).recoverCoordinator(${JSON.stringify(operation.id)},${JSON.stringify(token)}));}
+    catch {process.exitCode=1;}`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.once('error', reject);
+    child.once('close', status => resolve({ status, token: stdout.trim() }));
+  });
+}
+
+describe('same-operation coordinator recovery', () => {
+  it.each([[source, target], [target, source]])('recovers an exited detached worker without changing direction, stage, or admission', async (from, to) => {
+    const operation = journal.begin({ source: from, target: to });
+    const token = journal.acquireCoordinator(operation.id);
+    const worker = await launchWorker(operation, token);
+    // A paused import is not a recoverable dead owner, however old its PID or
+    // timestamps appear. Only the supervisor's completed exit receipt counts.
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'awaiting-exit' });
+    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.reserveCoordinatorWorker(operation.id, token)).toThrow();
+    expect(() => journal.assertAdmission()).toThrow();
+    writeFileSync(join(worker.controlDir, 'finish'), '');
+    expect(await worker.done).toEqual({ code: 17, signal: null });
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'exited', exitCode: 17 });
+
+    const outcomes = await Promise.all([recoveryProcess(operation, token), recoveryProcess(operation, token)]);
+    expect(outcomes.map(item => item.status).sort()).toEqual([0, 1]);
+    const successor = outcomes.find(item => item.status === 0).token;
+    expect(successor).not.toBe(token);
+    expect(journal.read()).toEqual({ ...operation, stage: 'importing' });
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
+    expect(() => journal.transition(operation.id, token, 'importing', 'committing')).toThrow();
+    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(() => journal.begin({ source: to, target: from })).toThrow();
+    expect(() => journal.cancel(operation.id, from)).toThrow();
+    expect(() => journal.assertAdmission()).toThrow();
+    // Original supervisor evidence is retained, never truncated for a retry.
+    expect(readFileSync(join(worker.controlDir, 'exit'), 'utf8').trim()).toBe('17');
+    const nextDirectory = journal.reserveCoordinatorWorker(operation.id, successor);
+    expect(nextDirectory).not.toBe(worker.controlDir);
+    // No worker was launched into the new reservation; recovery cannot invent
+    // success from a missing/dead PID, even on repeated attempts.
+    writeFileSync(join(nextDirectory, 'pid'), '2147483647');
+    expect(() => journal.recoverCoordinator(operation.id, successor)).toThrow();
+  }, 40_000);
+
+  it('recovers a killed worker only after its supervisor acknowledges exit', async () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const worker = await launchWorker(operation, token, 'exporting');
+    worker.handle.kill('SIGKILL');
+    await worker.done;
+    const next = journal.recoverCoordinator(operation.id, token);
+    expect(next).not.toBe(token);
+    expect(journal.read()).toEqual({ ...operation, stage: 'exporting' });
+    expect(() => journal.assertAdmission()).toThrow();
+  }, 40_000);
+
+  it('refuses absent, partial, foreign, or damaged completion evidence and preserves the fence', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    const controlDir = journal.reserveCoordinatorWorker(operation.id, token);
+    for (const value of ['', 'success', '0 trailing', '99999999999', '1\n0']) {
+      writeFileSync(join(controlDir, 'exit'), value);
+      expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    }
+    writeFileSync(join(controlDir, 'exit'), '0\n');
+    writeFileSync(join(controlDir, 'owner.json'), JSON.stringify({ id: operation.id, token: '00000000-0000-4000-8000-000000000000' }));
+    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(journal.read()).toEqual(operation);
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
+  it('does not let a stale predecessor or later-stage recovery reopen an operation', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const directory = journal.reserveCoordinatorWorker(operation.id, token);
+    writeFileSync(join(directory, 'exit'), '0');
+    let current = 'accepted';
+    for (const next of ['quiescing', 'exporting', 'importing', 'committing']) {
+      journal.transition(operation.id, token, current, next);
+      current = next;
+    }
+    expect(() => journal.recoverCoordinator(operation.id, token)).toThrow();
+    expect(journal.read().stage).toBe('committing');
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+});

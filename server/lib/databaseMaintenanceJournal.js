@@ -24,6 +24,12 @@ const journalSchema = z.object({
   target: databaseMaintenanceEndpointSchema,
 }).strict();
 
+const coordinatorSchema = z.object({
+  id: z.string().uuid(),
+  token: z.string().uuid(),
+}).strict();
+const successorSchema = coordinatorSchema.extend({ previousToken: z.string().uuid() });
+
 const normalizedHost = host => ['localhost', '127.0.0.1', '::1', '[::1]'].includes(host.toLowerCase())
   ? 'loopback' : host.toLowerCase();
 
@@ -125,9 +131,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return record;
   };
 
-  // One durable owner for the operation's entire lifetime. Never infer that an
-  // owner is dead from a PID or elapsed time; interrupted ownership needs an
-  // explicit recovery protocol before another process may advance the journal.
+  // Initial durable owner. Successors require explicit same-operation recovery
+  // backed by the detached supervisor's exit receipt, never PID/elapsed time.
   const acquireCoordinator = (id) => {
     assertNotRealDataWrite(activeDir, 'database maintenance ownership');
     const current = read();
@@ -140,15 +145,119 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return token;
   };
 
+  // Recovery appends an immutable successor instead of overwriting ownership.
+  // Each predecessor admits exactly one successor, even across processes. A
+  // missing/partial worker receipt never authorizes reclaiming an owner.
+  const readCoordinator = (id) => {
+    const current = read();
+    if (!current || current.id !== id) throw databaseMaintenanceError();
+    const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
+    try { lstatSync(ownerPath); } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw databaseMaintenanceError();
+    }
+    if (!lstatSync(ownerPath).isFile()) throw databaseMaintenanceError();
+    let owner = coordinatorSchema.parse(JSON.parse(readFileSync(ownerPath, 'utf8')));
+    if (owner.id !== id) throw databaseMaintenanceError();
+    const visited = new Set();
+    while (true) {
+      if (visited.has(owner.token)) throw databaseMaintenanceError();
+      visited.add(owner.token);
+      const nextPath = join(activeDir, 'coordinator-after-' + owner.token + '.json');
+      try { lstatSync(nextPath); } catch (err) {
+        if (err.code === 'ENOENT') return owner;
+        throw databaseMaintenanceError();
+      }
+      if (!lstatSync(nextPath).isFile()) throw databaseMaintenanceError();
+      const next = successorSchema.parse(JSON.parse(readFileSync(nextPath, 'utf8')));
+      if (next.id !== id || next.previousToken !== owner.token) throw databaseMaintenanceError();
+      owner = { id, token: next.token };
+    }
+  };
+
+  const assertCoordinator = (id, token) => {
+    const owner = readCoordinator(id);
+    if (!owner || typeof token !== 'string' || owner.token !== token) throw databaseMaintenanceError();
+    return owner;
+  };
+
+  const workerDirectory = token => join(activeDir, 'worker-' + token);
+
+  // Reserve once, BEFORE spawnDetached. Never reuse this directory: resetting
+  // its exit sentinel could let an old supervisor acknowledge a later worker.
+  // The caller must use cleanup:false and launch only the coordinator here.
+  const reserveCoordinatorWorker = (id, token) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance worker reservation');
+    const owner = assertCoordinator(id, token);
+    const directory = workerDirectory(token);
+    mkdirSync(directory, { mode: 0o700 });
+    syncDirectory(activeDir);
+    writeDurableExclusive(join(directory, 'owner.json'), owner);
+    syncDirectory(directory);
+    return directory;
+  };
+
+  const coordinatorStatus = (id) => {
+    const owner = readCoordinator(id);
+    if (!owner) return { state: 'unclaimed' };
+    const directory = workerDirectory(owner.token);
+    try { lstatSync(directory); } catch (err) {
+      if (err.code === 'ENOENT') return { state: 'unregistered' };
+      throw databaseMaintenanceError();
+    }
+    if (!lstatSync(directory).isDirectory()) throw databaseMaintenanceError();
+    const bindingPath = join(directory, 'owner.json');
+    if (!lstatSync(bindingPath).isFile()) throw databaseMaintenanceError();
+    const binding = coordinatorSchema.parse(JSON.parse(readFileSync(bindingPath, 'utf8')));
+    if (binding.id !== id || binding.token !== owner.token) throw databaseMaintenanceError();
+    const exitPath = join(directory, 'exit');
+    try { lstatSync(exitPath); } catch (err) {
+      if (err.code === 'ENOENT') return { state: 'awaiting-exit' };
+      throw databaseMaintenanceError();
+    }
+    if (!lstatSync(exitPath).isFile()) throw databaseMaintenanceError();
+    const raw = readFileSync(exitPath, 'utf8');
+    if (!/^-?\d{1,10}\r?\n?$/.test(raw)) throw databaseMaintenanceError();
+    const exitCode = Number(raw.trim());
+    if (!Number.isSafeInteger(exitCode) || exitCode < -2147483648 || exitCode > 4294967295) throw databaseMaintenanceError();
+    return { state: 'exited', exitCode };
+  };
+
+  // This transfers journal ownership only, NEVER database authority. Before
+  // export/import a successor must re-establish writer/child quiescence: the
+  // worker's exit says nothing about descendants it might have left behind.
+  // No PID probe, clock, reverse operation, or source-success inference occurs.
+  const recoverCoordinator = (id, previousToken) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance coordinator recovery');
+    assertCoordinator(id, previousToken);
+    const current = read();
+    if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(current.stage)
+      || coordinatorStatus(id).state !== 'exited') throw databaseMaintenanceError();
+    const directory = workerDirectory(previousToken);
+    const fd = openSync(join(directory, 'exit'), 'r+');
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+    syncDirectory(directory);
+    const next = { id, token: randomUUID(), previousToken };
+    const pending = join(activeDir, 'coordinator-' + next.token + '.pending');
+    writeDurableExclusive(pending, next);
+    try {
+      // EEXIST is a LOST recovery race, unlike an idempotent stage publication:
+      // the winner owns a different token and this caller must not execute.
+      linkSync(pending, join(activeDir, 'coordinator-after-' + previousToken + '.json'));
+    } finally {
+      unlinkSync(pending);
+    }
+    syncDirectory(activeDir);
+    assertCoordinator(id, next.token);
+    return next.token;
+  };
+
   const transition = (id, token, expectedStage, nextStage) => {
     assertNotRealDataWrite(activeDir, 'database maintenance transition');
     const current = read();
     if (!current || current.id !== id || !stages.includes(expectedStage)
       || stages.indexOf(nextStage) !== stages.indexOf(expectedStage) + 1) throw databaseMaintenanceError();
-    const ownerPath = join(activeDir, 'cancel-' + id + '.claim');
-    if (!lstatSync(ownerPath).isFile()) throw databaseMaintenanceError();
-    const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-    if (typeof token !== 'string' || owner.id !== id || owner.token !== token) throw databaseMaintenanceError();
+    assertCoordinator(id, token);
     // An acknowledged publication may have crashed before returning to its
     // caller. Only that exact owned transition is idempotent, never a reversal.
     if (current.stage === nextStage) {
@@ -203,7 +312,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return { id, stage: 'cancelled' };
   };
 
-  return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition };
+  return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition,
+    reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator };
 }
 
 const journal = createDatabaseMaintenanceJournal();
