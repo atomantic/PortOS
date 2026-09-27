@@ -249,7 +249,7 @@ fused attention. Both bfloat16 paths differ materially from float32; the test
 does not isolate kernel, accumulation, interpolation or rounding effects, nor
 show that the difference causes a scene change. No precision correction is
 applied on this evidence alone.
-The layer-level investigation is tracked in [#8948](https://github.com/atomantic/PortOS/issues/8948).
+The [layer-level investigation for #8948](minimax-h3-vision-precision.md) isolates interpolation and kernel arithmetic without selecting a production precision correction.
 
 Reproduce vision outputs with `scripts/diagnose_minimax_h3_vision.py`, using
 an interpreter containing the versions above plus torchvision 0.27.0 and
