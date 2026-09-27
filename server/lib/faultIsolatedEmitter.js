@@ -27,7 +27,8 @@ export function makeEmitterFaultIsolating(emitter) {
       try {
         listener.apply(emitter, args);
       } catch (err) {
-        console.error(`❌ Listener for '${String(eventName)}' threw: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`❌ Listener for '${String(eventName)}' threw: ${message}`);
       }
     }
     return listeners.length > 0;

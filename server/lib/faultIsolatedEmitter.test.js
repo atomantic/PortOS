@@ -36,6 +36,22 @@ describe('makeEmitterFaultIsolating', () => {
     expect(emitter.listenerCount('progress')).toBe(0);
   });
 
+  it('does not itself throw when a listener throws a non-Error value', () => {
+    const emitter = makeEmitterFaultIsolating(new EventEmitter());
+    const secondListener = vi.fn();
+    emitter.on('completed', () => {
+      // eslint-disable-next-line no-throw-literal
+      throw 'plain string failure';
+    });
+    emitter.on('completed', secondListener);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => emitter.emit('completed')).not.toThrow();
+    errorSpy.mockRestore();
+
+    expect(secondListener).toHaveBeenCalled();
+  });
+
   it('returns true when listeners existed, false otherwise', () => {
     const emitter = makeEmitterFaultIsolating(new EventEmitter());
     expect(emitter.emit('unheard')).toBe(false);
