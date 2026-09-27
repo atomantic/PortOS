@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { createDatabaseAuthority } from './databaseAuthority.js';
 
 export const databaseMaintenanceEndpointSchema = z.object({
   mode: z.enum(['native', 'docker']),
@@ -52,6 +53,22 @@ const transferImportSchema = z.object({
   id: z.string().uuid(),
   target: databaseMaintenanceEndpointSchema,
   sha256: sha256Schema,
+}).strict();
+// A restarted ordinary server proved ITS OWN pool reaches the recorded target.
+// Evidence, not authority: the coordinator accepts it only for the PM2 pid it
+// reads back itself AND that process's start time (a reused pid cannot inherit
+// an earlier process's proof), and every booting process proves its own pool.
+// startedAt is null only on Windows, which has no process-table start time.
+const targetProofSchema = z.object({
+  id: z.string().uuid(),
+  pid: z.number().int().positive(),
+  startedAt: z.number().int().nullable(),
+  target: databaseMaintenanceEndpointSchema,
+}).strict();
+const recoveryIntentSchema = z.object({
+  id: z.string().uuid(),
+  previousToken: z.string().uuid(),
+  recoveryToken: z.string().uuid(),
 }).strict();
 const workerGroupSchema = coordinatorSchema.extend({ pgid: z.number().int().positive() }).strict();
 const decisionSchema = coordinatorSchema.extend({
@@ -364,9 +381,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return receipt;
   };
 
-  // Immutable no-replace publication of already-fsynced bytes. A retry of the
-  // identical record is accepted; a different record is never substituted.
-  const publishImmutable = (destination, value) => {
+  // No-replace publication of already-fsynced bytes; the first writer wins.
+  const publishFirst = (destination, value) => {
     const pending = join(activeDir, 'record-' + randomUUID() + '.pending');
     writeDurableExclusive(pending, value);
     try {
@@ -377,6 +393,12 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       unlinkSync(pending);
     }
     syncDirectory(activeDir);
+  };
+
+  // Immutable publication: a retry of the identical record is accepted; a
+  // different record is never substituted.
+  const publishImmutable = (destination, value) => {
+    publishFirst(destination, value);
     if (readFileSync(destination, 'utf8') !== JSON.stringify(value, null, 2) + '\n') throw databaseMaintenanceError();
   };
 
@@ -481,11 +503,12 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     }
     assertCoordinator(id, previousToken);
     if (coordinatorStatus(id).state !== 'exited') throw databaseMaintenanceError();
-    // Only four transfer stages can advance here; each interrupted transition
-    // completion moves strictly forward, never reverses an import to success.
+    // Every unreleased stage can advance here; each interrupted transition
+    // completion moves strictly forward, never reverses an import to success
+    // or a committed mode back to the source.
     while (true) {
       const current = read();
-      if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(current.stage)) throw databaseMaintenanceError();
+      if (!stages.includes(current.stage)) throw databaseMaintenanceError();
       const decision = decide(id, previousToken, current.stage, { kind: 'recovery', recoveryToken });
       if (decision.kind === 'recovery') {
         if (decision.recoveryToken !== recoveryToken) throw databaseMaintenanceError();
@@ -527,6 +550,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
       return current;
     }
     if (current.stage !== expectedStage) throw databaseMaintenanceError();
+    // Mode commit is reachable only from a committed import of this operation.
+    if (nextStage === 'committing' && !readTransferImport(id)) throw databaseMaintenanceError();
     // Do not reinterpret interrupted writes from the old publication protocol.
     if (existsSync(join(activeDir, 'stage-' + expectedStage + '.claim'))) throw databaseMaintenanceError();
     const decision = decide(id, token, expectedStage, { kind: 'transition', nextStage });
@@ -579,7 +604,79 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // Operation-scoped archive for detached-writer records proven quiescent.
   const reconciledWritersDirectory = join(activeDir, 'reconciled-writers');
 
+  const targetProofPath = pid => join(activeDir, 'target-proof-' + z.number().int().positive().parse(pid) + '.json');
+
+  // Published by a booting ordinary server AFTER its own pool passed the
+  // read-only target verification. Only verifying/verified may carry one.
+  const recordTargetProof = (id, pid, startedAt) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance target proof');
+    const current = read();
+    if (!current || current.id !== id || !['verifying', 'verified'].includes(current.stage)) throw databaseMaintenanceError();
+    publishImmutable(targetProofPath(pid), targetProofSchema.parse({ id, pid, startedAt, target: current.target }));
+    return readTargetProof(id, pid);
+  };
+
+  function readTargetProof(id, pid) {
+    const current = read();
+    if (!current || current.id !== id) throw databaseMaintenanceError();
+    const proof = readRecord(targetProofPath(pid), targetProofSchema);
+    if (proof && (proof.id !== id || proof.pid !== pid
+      || JSON.stringify(proof.target) !== JSON.stringify(current.target))) throw databaseMaintenanceError();
+    return proof;
+  }
+
+  /**
+   * Same-operation recovery, as one retryable step for the operator/API. The
+   * successor token is persisted BEFORE recoverCoordinator publishes it, so a
+   * crash after publication is completed by the next call with the SAME token
+   * instead of stranding an owner nobody can launch. Returns the token that may
+   * launch a worker, or null while the current owner's worker has no exit
+   * receipt (running, or interrupted before its supervisor recorded one).
+   */
+  const prepareRecovery = (id) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance recovery');
+    const current = read();
+    if (!current || current.id !== id) throw databaseMaintenanceError();
+    const owner = readCoordinator(id);
+    if (!owner) throw databaseMaintenanceError();
+    const status = coordinatorStatus(id);
+    if (status.state === 'unregistered') return owner.token;
+    if (status.state !== 'exited') return null;
+    const intentPath = join(activeDir, 'recovery-after-' + owner.token + '.json');
+    // Concurrent requests race to publish; every one adopts the winner.
+    if (!readRecord(intentPath, recoveryIntentSchema)) {
+      publishFirst(intentPath, recoveryIntentSchema.parse({ id, previousToken: owner.token, recoveryToken: randomUUID() }));
+    }
+    const intent = readRecord(intentPath, recoveryIntentSchema);
+    if (!intent || intent.id !== id || intent.previousToken !== owner.token) throw databaseMaintenanceError();
+    return recoverCoordinator(id, owner.token, intent.recoveryToken);
+  };
+
+  /**
+   * Reopen admission for a VERIFIED operation, from its entered worker only.
+   * The authority record (target in, source retired) is durable BEFORE the
+   * fence directory moves, so no process can be admitted without the stale-
+   * backend check seeing it. A crash between the two leaves `verified` fenced
+   * and the next recovery repeats both steps idempotently.
+   */
+  const releaseAdmission = (id, token) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance release');
+    const current = assertEnteredCoordinatorWorker(id, token);
+    if (current.stage !== 'verified' || !readTransferImport(id)) throw databaseMaintenanceError();
+    createDatabaseAuthority(dataDir).record({ operationId: id, source: current.source, target: current.target });
+    const archiveDir = join(dataDir, 'database-maintenance-completed');
+    mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+    const destination = join(archiveDir, id);
+    if (existsSync(destination)) throw databaseMaintenanceError();
+    assertEnteredCoordinatorWorker(id, token);
+    renameSync(activeDir, destination);
+    syncDirectory(archiveDir);
+    syncDirectory(dataDir);
+    return { id, stage: 'released', source: current.source.mode, target: current.target.mode };
+  };
+
   return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition, reconciledWritersDirectory,
+    recordTargetProof, readTargetProof, prepareRecovery, releaseAdmission,
     reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker,
     readProducerSnapshot, recordProducerSnapshot, assertEnteredCoordinatorWorker, recordCoordinatorGroup,
     readPredecessorWorkers, transferDumpPath, readTransferDump, readTransferImport, recordTransferDump,

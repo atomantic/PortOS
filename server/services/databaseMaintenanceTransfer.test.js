@@ -151,7 +151,7 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     const manifest = JSON.parse(readFileSync(join(root, 'data', 'database-maintenance', 'transfer-dump.json'), 'utf8'));
     expect(manifest).toEqual({ id: operation.id, source, file: `portos-maintenance-${operation.id}.sql`,
       bytes: Buffer.byteLength(STUB_DUMP_COMPLETE), sha256: sha256(STUB_DUMP_COMPLETE) });
-    // Direction, mode and the fence are unchanged; restart is #8851's.
+    // Direction, mode and the fence are unchanged; restart is the cutover worker's.
     expect(journal.read()).toEqual({ ...operation, stage: 'importing' });
     expect(journal.transferStatus(operation.id)).toEqual({ dump: 'recorded', import: 'committed' });
     expect(existsSync(join(root, '.env'))).toBe(false);

@@ -60,12 +60,22 @@ function run(args = [], endpoint = target, overrides = {}) {
     encoding: 'utf8', timeout: 15_000, env,
   });
 }
+// Walk an owned operation to `finalStage`, publishing the dump manifest and
+// import receipt the journal requires before mode commit.
 function operation(from = source, to = target, finalStage = 'verifying') {
   const record = journal.begin({ source: from, target: to });
   const token = journal.acquireCoordinator(record.id);
+  journal.reserveCoordinatorWorker(record.id, token);
+  journal.enterCoordinatorWorker(record.id, token);
+  const sha256 = 'a'.repeat(64);
   let previous = 'accepted';
   for (const next of ['quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified']) {
     if (previous === finalStage) break;
+    if (previous === 'exporting') {
+      journal.recordTransferDump(record.id, token, { id: record.id, source: from,
+        file: `portos-maintenance-${record.id}.sql`, bytes: 1, sha256 });
+    }
+    if (previous === 'importing') journal.recordTransferImport(record.id, token, { id: record.id, target: to, sha256 });
     journal.transition(record.id, token, previous, next);
     previous = next;
   }
@@ -88,18 +98,32 @@ describe('managed database verification startup', () => {
     expect(() => journal.assertAdmission()).toThrow();
   });
 
-  it('refuses ordinary startup before even resolving the application graph while fenced', () => {
-    const record = operation();
-    expect(run().status).toBe(1);
+  it('refuses ordinary startup before even resolving the application graph while fenced before verification', () => {
+    const record = operation(source, target, 'importing');
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain('APPLICATION_IMPORTED');
     expect(events()).toEqual([]);
     expect(journal.read()).toEqual(record);
+  });
+
+  it.each(['verifying', 'verified'])('refuses an ordinary %s boot whose own pool is not the recorded target', stage => {
+    const record = operation(source, target, stage);
+    const result = run([], source);
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain('APPLICATION_IMPORTED');
+    expect(events()).not.toContain('connected');
+    expect(journal.read()).toEqual(record);
+    expect(journal.isFenced()).toBe(true);
   });
 
   it('loads the ordinary application through the managed entrypoint only when unfenced', () => {
     const result = run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe('APPLICATION_IMPORTED');
-    expect(events()).toEqual([]);
+    // The boot fence reads the pool identity for the retired-backend check;
+    // it never connects or queries before the application loads.
+    expect(events()).toEqual([{ pool: { host: target.host, port: target.port, database: target.database, user: target.user } }]);
   });
 
   it('refuses wrong operations, old-source pools, premature stages, and non-test databases before checkout', () => {
@@ -137,7 +161,7 @@ describe('managed database verification startup', () => {
       const result = run(['--verify-database', record.id]);
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ id: record.id, stage: 'verified', fenced: true });
-      expect(run().status).toBe(1);
+      expect(run([], source).status).toBe(1);
     }
     expect(journal.read()).toEqual(record);
   });

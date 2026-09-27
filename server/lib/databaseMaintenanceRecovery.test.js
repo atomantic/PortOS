@@ -238,18 +238,23 @@ describe('same-operation coordinator recovery', () => {
     expect(() => journal.assertAdmission()).toThrow();
   });
 
-  it('does not let a stale predecessor or later-stage recovery reopen an operation', () => {
+  it('does not let a stale predecessor advance, or recovery reopen, an operation', () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);
     const directory = journal.reserveCoordinatorWorker(operation.id, token);
     writeFileSync(join(directory, 'exit'), '0');
     let current = 'accepted';
-    for (const next of ['quiescing', 'exporting', 'importing', 'committing']) {
+    for (const next of ['quiescing', 'exporting', 'importing']) {
       journal.transition(operation.id, token, current, next);
       current = next;
     }
+    const successor = journal.recoverCoordinator(operation.id, token, randomUUID());
+    // Ownership moved; the stage and the fence did not.
+    expect(() => journal.transition(operation.id, token, 'importing', 'committing')).toThrow();
     expect(() => journal.recoverCoordinator(operation.id, token, randomUUID())).toThrow();
-    expect(journal.read().stage).toBe('committing');
+    expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
+    expect(successor).not.toBe(token);
+    expect(journal.read().stage).toBe('importing');
     expect(() => journal.assertAdmission()).toThrow();
   });
 });

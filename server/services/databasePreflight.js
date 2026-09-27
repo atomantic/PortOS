@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from '../lib/paths.js';
 import { POOL_CONFIG } from '../lib/db.js';
-import { assertDatabaseAdmission, databaseMaintenanceEndpointSchema } from '../lib/databaseMaintenanceJournal.js';
+import { assertDatabaseAdmission, createDatabaseMaintenanceJournal, databaseMaintenanceEndpointSchema } from '../lib/databaseMaintenanceJournal.js';
 import { databaseMaintenancePreflightSchema } from '../lib/validation.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
@@ -57,12 +57,9 @@ function validateDirection(direction, configuration) {
     || ['host', 'port', 'database', 'user'].some(key => configuration.source[key] !== POOL_CONFIG[key])) throw stale();
 }
 
-/** Non-mutating advice only; no operation token, reservation, or writer drain. */
-export async function preflightDatabaseMaintenance(input) {
-  const direction = databaseMaintenancePreflightSchema.parse(input);
-  assertDatabaseAdmission();
-  const initial = readConfiguration();
-  validateDirection(direction, initial);
+// Trusted idle: every activity slice present and quiet. Reads process/state
+// files only, so it stays valid after the admission fence closes.
+async function assertTrustedIdle() {
   // Keep heavy activity/CoS graphs off ordinary database admin imports. Use the
   // lifecycle-only reader, not GPU telemetry or external Ollama probes.
   const [snapshot, activeAgents, mindGuard] = await Promise.all([
@@ -74,6 +71,15 @@ export async function preflightDatabaseMaintenance(input) {
   if (!activity.success || !Number.isInteger(activeAgents) || activeAgents < 0
     || mindGuard?.trusted !== true || typeof mindGuard.safe !== 'boolean') throw unavailable();
   if (!summarizeSystemActivity(activity.data).idle || activeAgents > 0 || !mindGuard.safe) throw busy();
+}
+
+/** Non-mutating advice only; no operation token, reservation, or writer drain. */
+export async function preflightDatabaseMaintenance(input) {
+  const direction = databaseMaintenancePreflightSchema.parse(input);
+  assertDatabaseAdmission();
+  const initial = readConfiguration();
+  validateDirection(direction, initial);
+  await assertTrustedIdle();
   // No await between the final fence/configuration checks and the response.
   // This narrows the observation race, but is deliberately NOT acceptance.
   assertDatabaseAdmission();
@@ -81,4 +87,57 @@ export async function preflightDatabaseMaintenance(input) {
   validateDirection(direction, final);
   if (JSON.stringify(initial) !== JSON.stringify(final)) throw stale();
   return { source: direction.source, target: direction.target, advisory: true, accepted: false };
+}
+
+/**
+ * Accept a cutover. Repeats the advisory validation, then publishes the
+ * operation — which closes admission synchronously — and repeats the idle and
+ * configuration checks UNDER the fence: work admitted just before publication
+ * must already be finished, and nothing new can be admitted. Only then does a
+ * coordinator take ownership. A failed final check cancels the still-unowned
+ * operation — but only while the saved source still equals the recorded one;
+ * otherwise the fence stays for the operator.
+ *
+ * Returns `{ accepted, launch }`. The caller runs `launch()` only after its
+ * response is sent: the worker's first act is stopping this server. An owner
+ * whose worker never launched is resumable with same-operation recovery.
+ */
+export async function acceptDatabaseMaintenance(input) {
+  const direction = databaseMaintenancePreflightSchema.parse(input);
+  await preflightDatabaseMaintenance(direction);
+  const configuration = readConfiguration();
+  validateDirection(direction, configuration);
+  const journal = createDatabaseMaintenanceJournal();
+  let operation;
+  try {
+    operation = journal.begin({ source: configuration.source, target: configuration.target });
+  } catch {
+    throw refuse('DATABASE_MAINTENANCE', 'Another database maintenance operation is active or requires recovery.');
+  }
+  try {
+    await assertTrustedIdle();
+    const final = readConfiguration();
+    validateDirection(direction, final);
+    if (final.revision !== configuration.revision) throw stale();
+  } catch (err) {
+    // cancel() itself refuses when the saved source no longer matches the
+    // record; a changed or unreadable configuration keeps the fence closed.
+    let current = null;
+    try { current = readConfiguration().source; } catch { /* keep the fence */ }
+    if (current) {
+      try { journal.cancel(operation.id, current); } catch { /* keep the fence */ }
+    }
+    throw err;
+  }
+  const token = journal.acquireCoordinator(operation.id);
+  const { spawnDatabaseMaintenanceWorker } = await import('../lib/detachedSpawn.js');
+  const launch = async () => {
+    try {
+      const worker = await spawnDatabaseMaintenanceWorker(operation.id, token);
+      worker.on('error', () => console.error('❌ Database cutover worker failed to launch; run scripts/database-maintenance.mjs recover'));
+    } catch {
+      console.error('❌ Database cutover worker failed to launch; run scripts/database-maintenance.mjs recover');
+    }
+  };
+  return { accepted: { id: operation.id, stage: 'accepted', source: direction.source, target: direction.target, accepted: true }, launch };
 }

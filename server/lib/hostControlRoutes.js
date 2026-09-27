@@ -76,6 +76,10 @@ import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Database cutover stops/restarts PortOS under PM2 and rewrites .env (#8851).
+  'POST /api/database/maintenance/cutover',
+  'POST /api/database/maintenance/recover',
+
   // Setting a password mints an operator session: bootstrap must be local,
   // and rotation must already hold operator authority (#8771).
   'POST /api/auth/password',

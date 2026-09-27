@@ -110,17 +110,20 @@ async function assertRecordedDump(journal, id, dump) {
 /**
  * Internal offline transfer for the one entered coordinator worker. It never
  * changes saved mode, restarts producers, or reopens admission: the result is
- * a committed target import at `importing`, awaiting verified restart (#8851).
+ * a committed target import at `importing`. The cutover worker
+ * (databaseMaintenanceCutover.js) then commits mode and verifies the restart.
  *
  * Every attempt (including a recovered successor) first repeats quiescence.
  * `exporting` without a recorded dump re-exports; a recorded dump is reused
  * only when its bytes still match. `importing` retries only the recorded dump
  * into the recorded target, in one transaction. Direction never changes.
- * `options` only shortens reconciliation waits for subprocess tests.
+ * `options` only shortens reconciliation waits for subprocess tests; the
+ * cutover worker passes `entered: true` after claiming the one-use entry.
  */
 export async function runDatabaseTransfer(id, token, options = {}) {
   const journal = createDatabaseMaintenanceJournal();
-  const entered = journal.enterCoordinatorWorker(id, token);
+  const entered = options.entered
+    ? journal.assertEnteredCoordinatorWorker(id, token) : journal.enterCoordinatorWorker(id, token);
   if (!['accepted', 'quiescing', 'exporting', 'importing'].includes(entered.stage)) {
     throw refused(`stage ${entered.stage} is not a transfer stage`);
   }
@@ -141,7 +144,7 @@ export async function runDatabaseTransfer(id, token, options = {}) {
   let imported = false;
   // A crash after the target commits but before the receipt publishes makes the
   // next attempt import the same --clean dump again. That retry is idempotent:
-  // nothing can write the target before verified restart (#8851), which needs
+  // nothing can write the target before verified restart, which needs
   // this receipt, so it reproduces the identical committed state.
   if (!journal.readTransferImport(id)) {
     const path = await assertRecordedDump(journal, id, dump);

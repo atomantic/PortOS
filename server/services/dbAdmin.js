@@ -10,6 +10,9 @@ import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
 import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 
+import { acceptDatabaseMaintenance } from './databasePreflight.js';
+import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
+
 export { preflightDatabaseMaintenance } from './databasePreflight.js';
 
 const rootDir = PATHS.root;
@@ -41,17 +44,40 @@ async function withDatabaseOperation(operation) {
  * Read only the durable operation, including while pool admission is fenced.
  * This is not a health probe or permission to resume writers. Even a verified
  * journal remains fenced until the coordinator explicitly releases admission.
+ * Bounded: modes, stage and coordinator state — never endpoints or tokens.
  */
 export function getMaintenanceStatus() {
-  const operation = createDatabaseMaintenanceJournal().read();
-  if (!operation) return { stage: 'idle', fenced: false };
+  const journal = createDatabaseMaintenanceJournal();
+  const operation = journal.read();
+  if (!operation) {
+    const last = createDatabaseAuthority().read();
+    return { stage: 'idle', fenced: false,
+      ...(last ? { lastCutover: { id: last.operationId, source: last.source.mode, target: last.target.mode, sourceRetained: true } } : {}) };
+  }
   return {
     id: operation.id,
     stage: operation.stage,
     source: operation.source.mode,
     target: operation.target.mode,
+    coordinator: journal.coordinatorStatus(operation.id).state,
     fenced: true,
   };
+}
+
+/**
+ * Accept an offline cutover. Serialized with every other database admin
+ * mutation. Returns `{ accepted, launch }`: the route sends its 202 first and
+ * launches the worker afterward, because the worker then stops PortOS.
+ */
+export const acceptDatabaseCutover = (direction) => withDatabaseOperation(() => acceptDatabaseMaintenance(direction));
+
+/**
+ * Same-operation recovery: `{ status, launch }`, launch deferred like
+ * acceptance. Runs while fenced, so it bypasses the admin lock.
+ */
+export async function beginDatabaseCutoverRecovery(id) {
+  const { beginDatabaseCutoverRecovery: begin } = await import('./databaseMaintenanceCutover.js');
+  return begin(id);
 }
 
 /**
