@@ -64,7 +64,7 @@ export default function DataSelectionPanel({ overview, totalFiles, selected, det
         <ProgressBar percent={share} tone={kind?.tone ?? 'accent'} track="border" label="Share of data/" className="mt-2" />
         <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
           <Stat label="Of data/">{formatPercent(share, { decimals: share < 10 ? 1 : 0 })}</Stat>
-          <Stat label="Files">{formatCount(fileCount, { fallback: '0' })}</Stat>
+          <Stat label="Files">{formatCount(fileCount, { fallback: 'Unavailable' })}</Stat>
           <Stat label="Kind">{kind ? kind.label : `${formatCount(categories.length)} categories`}</Stat>
           <Stat label="Entries">{itemCount == null ? '—' : formatCount(itemCount)}</Stat>
         </div>

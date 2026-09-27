@@ -2503,6 +2503,7 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
   it('cancels the timer with the other CoS jobs on stop()', () => {
     const stopFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function stop'));
     expect(stopFn).toMatch(/cancelEvent\('cos-health-check'\)/);
+    expect(stopFn).toMatch(/cancelEvent\('cos-recording-maintenance'\)/);
     expect(stopFn).toMatch(/cancelEvent\('cos-pending-merge-sweep'\)/);
   });
 

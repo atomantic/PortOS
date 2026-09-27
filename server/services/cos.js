@@ -101,7 +101,6 @@ import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTas
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
 
-const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
 // CD recovery normally resolves in <100ms; hold start() at most this long so
 // a stuck recovery doesn't block daemon boot indefinitely.
@@ -121,7 +120,7 @@ const RECENT_COMPLETION_GRACE_MS = 60_000;
 let daemonStartPromise = null;
 
 // Internal imports for functions used in this module
-import { pruneOldAgentArchives, loadAgentIndex } from './cosAgentIndex.js';
+import { loadAgentIndex } from './cosAgentIndex.js';
 import { archiveStaleAgents as _archiveStaleAgents } from './cosAgentArchive.js';
 import { initializeAgentFeedback } from './cosAgentFeedback.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
@@ -417,10 +416,15 @@ async function runStart() {
     emitLog('info', `📦 Startup: archived ${archived} stale agent(s) from state`);
   }
 
-  // Prune agent archives older than 90 days
-  await pruneOldAgentArchives(AGENT_ARCHIVE_RETENTION_DAYS).catch(err =>
-    console.warn(`⚠️ pruneOldAgentArchives failed: ${err?.message || err}`)
-  );
+  // Lossless raw-recording maintenance; historical records never expire.
+  scheduleEvent({
+    id: 'cos-recording-maintenance', type: 'interval', intervalMs: 3600000,
+    handler: async () => {
+      const { runAutomaticAgentStorage } = await import('./cosAgentStorage.js');
+      await runAutomaticAgentStorage();
+    },
+    metadata: { description: 'Compress old CoS raw recordings; retain run history' }
+  });
 
   // Health check + orphan cleanup (15 min)
   scheduleEvent({
@@ -611,6 +615,7 @@ export async function stop() {
 
   // Cancel all scheduled events
   cancelEvent('cos-health-check');
+  cancelEvent('cos-recording-maintenance');
   cancelEvent('cos-performance-summary');
   cancelEvent('cos-learning-insights');
   cancelEvent('cos-rehabilitation-check');
