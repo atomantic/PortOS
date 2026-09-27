@@ -27,7 +27,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [format, setFormat] = useState('landscape');
   const [duration, setDuration] = useState(20);
   const [music, setMusic] = useState(false);
-  const [generateMusic, setGenerateMusic] = useState(true);
+  const [generateMusic, setGenerateMusic] = useState(false);
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
   const [error, setError] = useState('');
