@@ -10,6 +10,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import useMounted from '../hooks/useMounted';
+import CollapsibleListItem from '../components/ui/CollapsibleListItem';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import DataTreemap from '../components/dataManager/DataTreemap';
@@ -146,7 +147,7 @@ function SizeBar({ size, maxSize, color }) {
   );
 }
 
-function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, deletingItem, confirmingPurge, archiving, purging }) {
+function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, detail, onArchive, onPurge, onConfirmPurge, onCancelPurge, onDeleteItem, onRemoveItem, deletingItem, confirmingPurge, archiving, purging }) {
   // Directories with no CATEGORIES entry come back with `classified: false` and
   // no Archive/Purge flags. Say why the buttons are missing in outcome terms so
   // the row reads as a deliberate safety stance, not a broken row (#3285).
@@ -158,7 +159,9 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
   // whole-directory Purge button is replaced by a per-row delete in the detail
   // table (#3327). Older servers omit `purgeScope` entirely — treat that as the
   // legacy category-wide behavior rather than silently dropping the button.
+  const [removingItems, setRemovingItems] = useState(new Set());
   const itemScoped = cat.deletable && cat.purgeScope === 'items';
+  const itemColumns = cat.deletable ? 'minmax(160px, 1fr) 80px 60px 120px' : 'minmax(160px, 1fr) 80px 60px';
   const categoryPurgeable = cat.deletable && !itemScoped;
   // Some reproducible-scratch categories hold the working state of a job that is
   // running right now — the server refuses the whole-directory purge while that
@@ -212,7 +215,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               {cat.archivable && (
                 <button
                   onClick={() => onArchive(cat.key)}
-                  disabled={archiving}
+                  disabled={archiving || !!deletingItem || !!purging}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
                 >
                   <Archive size={12} />
@@ -224,7 +227,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               ) : (
                 <button
                   onClick={() => onPurge(cat.key)}
-                  disabled={purging}
+                  disabled={purging || !!deletingItem || !!archiving}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-error/10 text-port-error rounded hover:bg-port-error/20 transition-colors disabled:opacity-50"
                 >
                   <Trash2 size={12} />
@@ -253,57 +256,69 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               {detail.items.length === 0 ? (
                 <div className="p-3 text-xs text-gray-500">Empty</div>
               ) : (
-                <table className={`w-full text-xs ${itemScoped ? 'min-w-[420px]' : ''}`}>
-                  <thead>
-                    <tr className="text-gray-500 border-b border-port-border/30">
-                      <th className="text-left p-2 pl-3 font-medium">Name</th>
-                      <th className="text-right p-2 font-medium">Size</th>
-                      <th className="text-right p-2 pr-3 font-medium">Files</th>
-                      {itemScoped && <th className="text-right p-2 pr-3 font-medium"><span className="sr-only">Delete</span></th>}
-                    </tr>
-                  </thead>
-                  <tbody>
+                <div role="table" aria-label={`${cat.label} contents`} className="w-full min-w-[460px] text-xs" tabIndex={-1}>
+                  <div role="rowgroup">
+                    <div role="row" tabIndex={-1} style={{ gridTemplateColumns: itemColumns }} className="grid text-gray-500 border-b border-port-border/30">
+                      <div role="columnheader" tabIndex={-1} className="text-left p-2 pl-3 font-medium">Name</div>
+                      <div role="columnheader" tabIndex={-1} className="text-right p-2 font-medium">Size</div>
+                      <div role="columnheader" tabIndex={-1} className="text-right p-2 pr-3 font-medium">Files</div>
+                      {cat.deletable && <div role="columnheader" tabIndex={-1} className="text-right p-2 pr-3 font-medium"><span className="sr-only">Delete</span></div>}
+                    </div>
+                  </div>
+                  <div role="rowgroup">
                     {detail.items.map(item => (
-                      <tr key={item.name} className="border-b border-port-border/20 hover:bg-port-card/30">
-                        <td className="p-2 pl-3 text-gray-300 flex items-center gap-1.5">
-                          {item.type === 'directory' ? <FolderOpen size={11} className="text-port-accent shrink-0" /> : <File size={11} className="text-gray-500 shrink-0" />}
-                          <span className="truncate">{item.name}</span>
-                        </td>
-                        <td className="p-2 text-right text-gray-400 font-mono">{formatBytes(item.size)}</td>
-                        <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? (item.fileCount == null ? 'Unavailable' : formatCount(item.fileCount)) : '—'}</td>
-                        {itemScoped && (
-                          <td className="p-2 pr-3 text-right">
-                            {item.type === 'directory' ? (
-                              // Subdirectories of these categories are another
-                              // feature's working state (in-flight render
-                              // control dirs, scratch), not user assets — the
-                              // server refuses them too.
-                              <span className="text-gray-600" title="Directories here hold working files for other features and are not deletable from this page">—</span>
-                            ) : isConfirming(item.name) ? (
-                              <ConfirmButtonPair
-                                className="justify-end"
-                                prompt="Delete?"
-                                onConfirm={() => confirmDelete(() => onDeleteItem(cat.key, item.name))}
-                                onCancel={cancelDelete}
-                                ariaLabel={`Confirm delete ${item.name} from ${cat.label}`}
-                              />
-                            ) : (
-                              <button
-                                onClick={() => requestDelete(item.name)}
-                                disabled={deletingItem === item.name}
-                                className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
-                                title={`Delete ${item.name}`}
-                                aria-label={`Delete ${item.name} from ${cat.label}`}
-                              >
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                          </td>
-                        )}
-                      </tr>
+                      <CollapsibleListItem key={item.name} spacing="0" removing={removingItems.has(item.name)} onExited={() => {
+                        onRemoveItem(cat.key, item.name);
+                        setRemovingItems(prev => { const next = new Set(prev); next.delete(item.name); return next; });
+                      }}>
+                        <div role="row" tabIndex={-1} style={{ gridTemplateColumns: itemColumns }} className="grid border-b border-port-border/20 hover:bg-port-card/30">
+                          <div role="cell" className="p-2 pl-3 text-gray-300 flex items-center gap-1.5">
+                            {item.type === 'directory' ? <FolderOpen size={11} className="text-port-accent shrink-0" /> : <File size={11} className="text-gray-500 shrink-0" />}
+                            <div className="min-w-0">
+                              {item.sourceHref ? <a href={item.sourceHref} className="block truncate text-port-accent hover:underline" title={`Open source for ${item.name}`}>{item.label || item.name}</a> : <span className="block truncate">{item.label || item.name}</span>}
+                              {item.label && item.label !== item.name && <span className="block truncate text-gray-500" title={item.name}>{item.name}</span>}
+                              {(item.description || item.sourceUnavailable) && <span className="block text-gray-500">{item.description || item.sourceUnavailable}</span>}
+                            </div>
+                          </div>
+                          <div role="cell" className="p-2 text-right text-gray-400 font-mono">{formatBytes(item.size)}</div>
+                          <div role="cell" className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? (item.fileCount == null ? 'Unavailable' : formatCount(item.fileCount)) : '—'}</div>
+                          {cat.deletable && (
+                            <div role="cell" className="p-2 pr-3 text-right">
+                              {itemScoped && item.type === 'directory' ? (
+                                // Subdirectories of these categories are another
+                                // feature's working state (in-flight render
+                                // control dirs, scratch), not user assets — the
+                                // server refuses them too.
+                                <span className="text-gray-600" title="Directories here hold working files for other features and are not deletable from this page">—</span>
+                              ) : isConfirming(item.name) ? (
+                                <ConfirmButtonPair
+                                  className="justify-end flex-wrap"
+                                  prompt={item.type === 'directory' ? "Delete folder and contents?" : "Delete?"}
+                                  busy={busy || !!deletingItem || !!purging || !!archiving || confirmingPurge}
+                                  onConfirm={() => confirmDelete(async () => {
+                                    if (await onDeleteItem(cat.key, item.name)) setRemovingItems(prev => new Set(prev).add(item.name));
+                                  })}
+                                  onCancel={cancelDelete}
+                                  ariaLabel={`Confirm delete ${item.name} from ${cat.label}`}
+                                />
+                              ) : (
+                                <button
+                                  onClick={() => requestDelete(item.name)}
+                                  disabled={busy || !!deletingItem || !!purging || !!archiving || confirmingPurge}
+                                  className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
+                                  title={`Delete ${item.name}`}
+                                  aria-label={`Delete ${item.name} from ${cat.label}`}
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </CollapsibleListItem>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </div>
               )}
             </div>
           ) : (
@@ -396,6 +411,7 @@ export default function DataManager() {
   const [deletingItem, setDeletingItem] = useState(null);
   // Ref, not state: two clicks in one render would both read a stale state value.
   const deletingBackupsRef = useRef(new Set());
+  const maintenanceInFlightRef = useRef(false);
 
   const overviewRequestRef = useRef(0);
   const overviewReadRef = useRef(null);
@@ -494,30 +510,44 @@ export default function DataManager() {
   }, []);
 
   const handleArchive = async (key) => {
+    if (maintenanceInFlightRef.current) return;
+    maintenanceInFlightRef.current = true;
     setArchiving(key);
     const result = await api.archiveDataCategory(key).catch(() => null);
+    maintenanceInFlightRef.current = false;
     setArchiving(null);
     if (result) refreshAfterAction(key);
   };
 
   const executePurge = async (key) => {
+    if (maintenanceInFlightRef.current) return;
+    maintenanceInFlightRef.current = true;
     setPurging(key);
     setConfirmPurge(null);
     await api.purgeDataCategory(key).catch(() => null);
+    maintenanceInFlightRef.current = false;
     setPurging(null);
     refreshAfterAction(key);
   };
 
-  // Per-item purge for `purgeScope: 'items'` categories — the only delete those
-  // categories offer (#3327). Drops the row locally for immediate feedback and
-  // refetches the overview so the size bars and totals catch up.
   const handleDeleteItem = async (key, name) => {
+    if (maintenanceInFlightRef.current) return false;
+    maintenanceInFlightRef.current = true;
     setDeletingItem(name);
     const result = await api.purgeDataCategory(key, { subPath: name }).catch(() => null);
+    maintenanceInFlightRef.current = false;
     setDeletingItem(null);
-    if (!result) return;
-    setDetail(prev => (prev?.key === key ? { ...prev, items: prev.items.filter(i => i.name !== name) } : prev));
+    if (!result) return false;
     fetchOverview();
+    return true;
+  };
+
+  const removeDeletedItem = (key, name) => {
+    setDetail(prev => {
+      if (prev?.key !== key) return prev;
+      const removed = prev.items.find(item => item.name === name);
+      return { ...prev, totalSize: Math.max(0, (prev.totalSize || 0) - (removed?.size || 0)), items: prev.items.filter(item => item.name !== name) };
+    });
   };
 
   const handleDeleteBackup = async (filename) => {
@@ -640,6 +670,7 @@ export default function DataManager() {
                   onConfirmPurge={executePurge}
                   onCancelPurge={() => setConfirmPurge(null)}
                   onDeleteItem={handleDeleteItem}
+                  onRemoveItem={removeDeletedItem}
                   deletingItem={expandedCat === cat.key ? deletingItem : null}
                   confirmingPurge={confirmPurge === cat.key}
                   archiving={archiving === cat.key}

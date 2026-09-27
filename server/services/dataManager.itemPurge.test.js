@@ -20,7 +20,10 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return makePathsProxy(actual, { dataRoot: TEST_DATA_ROOT });
 });
 
-const { purgeCategory } = await import('./dataManager.js');
+vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
+const { query } = await import('../lib/db.js');
+
+const { purgeCategory, getCategoryDetail } = await import('./dataManager.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -113,5 +116,36 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
   it('still refuses a nested subPath', async () => {
     await expect(purgeCategory('messages', { subPath: '../images/render-0001.png' })).rejects.toThrow(/single entry/);
     expect(existsSync(dataPath('images', 'render-0001.png'))).toBe(true);
+  });
+});
+
+
+describe('training-run source details', () => {
+  it('resolves stored run names and dataset links while retaining orphan folders', async () => {
+    for (const id of ['example-run', 'orphan-run']) {
+      mkdirSync(dataPath('training-runs', id), { recursive: true });
+      writeFileSync(dataPath('training-runs', id, 'checkpoint.bin'), 'checkpoint');
+    }
+    query.mockResolvedValue({ rows: [{ data: {
+      id: 'example-run', name: 'Example portrait study', datasetId: 'example-dataset',
+      baseModelId: 'example-model', status: 'completed',
+    } }] });
+    const detail = await getCategoryDetail('training-runs');
+    expect(detail.items.find(item => item.name === 'example-run')).toMatchObject({
+      label: 'Example portrait study', sourceHref: '/models/training/example-dataset',
+      description: 'example-model · completed',
+    });
+    expect(detail.items.find(item => item.name === 'orphan-run')).toMatchObject({ sourceUnavailable: 'Run record no longer available' });
+    await purgeCategory('training-runs', { subPath: 'example-run' });
+    expect(existsSync(dataPath('training-runs', 'example-run'))).toBe(false);
+    expect(existsSync(dataPath('training-runs', 'orphan-run', 'checkpoint.bin'))).toBe(true);
+  });
+
+  it('keeps storage details usable when source lookup fails', async () => {
+    mkdirSync(dataPath('training-runs', 'example-run'), { recursive: true });
+    query.mockRejectedValue(new Error('database unavailable'));
+    const detail = await getCategoryDetail('training-runs');
+    expect(detail.items[0]).toMatchObject({ name: 'example-run', sourceUnavailable: 'Source lookup unavailable' });
+    expect(detail.items[0].sourceHref).toBeUndefined();
   });
 });
