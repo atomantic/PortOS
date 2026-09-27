@@ -65,6 +65,33 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
 
+// ---- Scene takes (#8965) ----
+// Every render/import for a scene slot is an immutable take; the scene's
+// referenceImageId / videoHistoryId is the explicit selection among them.
+// addMusicVideoSceneTake body: { kind: 'image'|'video', assetId, source?, provider?, originalName? }
+// → { scene, take }. select / review resolve to the updated scene.
+const takesPath = (id, sceneId) => `/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes`;
+export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => request(takesPath(id, sceneId), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
+    method: 'PATCH', body: JSON.stringify(review), ...options,
+  });
+
+// ---- External-asset handoff (#8965) ----
+// Export the per-scene prompt/reference manifest for a tool PortOS doesn't
+// drive (e.g. Midjourney), and import what was generated there. Import body:
+// { provider, items: [{ kind, assetId, sceneId?, originalName? }] } where each
+// asset was already stored through the gallery upload routes; resolves to
+// { project, imported, skipped }.
+export const getMusicVideoHandoff = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/handoff`, options);
+export const importMusicVideoHandoff = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/handoff/import`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Audio → MIDI transcription (MuScriptor) ----
 // Transcribe the project's source audio into a .mid via the local MuScriptor
 // sidecar. Kickoff resolves to { jobId, model } (503 with an install hint when

@@ -587,7 +587,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // to the OLD track — an edit that then wins LWW onto the upgraded peer.
   // Gating makes a v1 receiver reject the ahead-version transfer until it
   // upgrades; pre-#8964 records need no rewrite (absent `loop` = legacy loop).
-  musicVideoProjects: 2,
+  // v3 = immutable scene takes + explicit selection and the project visual spec
+  // (#8965). A v2 receiver stores the body verbatim but mis-executes it: its
+  // completion hooks overwrite `referenceImageId`/`videoHistoryId` with the
+  // newest render — replacing a take the director explicitly selected — and
+  // record no take for it, an edit that then wins LWW onto the upgraded peer.
+  // Gating makes a v2 receiver reject the ahead-version transfer until it
+  // upgrades; pre-#8965 records need no rewrite (a selected slot with no take
+  // is materialized as a `legacy` take on first use).
+  musicVideoProjects: 3,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

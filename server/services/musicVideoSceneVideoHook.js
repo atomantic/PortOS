@@ -2,8 +2,10 @@
  * Music Video scene i2v-clip attach hook (issue #1760, Phase 1).
  *
  * Subscribes to mediaJobEvents and, for each completed VIDEO job that carries
- * `params.musicVideo`, files the resulting history id onto that project scene's
- * `videoHistoryId` — server-side, independent of any mounted client. This is the
+ * `params.musicVideo`, appends the resulting history id to that project scene's
+ * immutable takes (#8965) — server-side, independent of any mounted client. The
+ * take becomes the scene's `videoHistoryId` only while that slot is still
+ * unselected; it never replaces a clip the director already selected. This is the
  * i2v counterpart to the Phase 1b reference-frame hook
  * (`musicVideoSceneImageHook`): a scene's video is generated from its chosen
  * reference frame via the video route's `image` (i2v) mode, and a long local/
@@ -22,15 +24,15 @@
  * echo the field still attaches the right clip.
  *
  * The shared completion-hook scaffold (tag-decode, per-project serialization,
- * the newest-render-wins guard, best-effort error handling, idempotent init/
- * reset) lives in `createMediaJobImageHook` (#1791) — generalized to the video
+ * best-effort error handling, idempotent init/reset) lives in `createMediaJobImageHook` (#1791) — generalized to the video
  * `kind` in #1760 Phase 1. This file is just the music-video-video config,
  * structurally identical to its scene-image sibling. Mounted once at server boot
  * from server/index.js (after the media job queue is running).
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
-import { updateScene } from './musicVideo/projects.js';
+import { basename } from 'path';
+import { appendSceneTakes } from './musicVideo/projects.js';
 import { musicVideoEvents } from './musicVideo/events.js';
 
 const hook = createMediaJobImageHook({
@@ -55,16 +57,30 @@ const hook = createMediaJobImageHook({
   // backend) and the later write would clobber the earlier scene's
   // `videoHistoryId`. Different projects still attach concurrently.
   serializeKey: ({ projectId }) => projectId,
-  // Newest-render-wins per scene: a clip kicked off from another client (or after
-  // a refresh cleared the local spinner) can complete out of order — drop an
-  // older render so it can't overwrite a newer clip.
-  sceneKey: ({ projectId, sceneId }) => `${projectId}:${sceneId}`,
+  // No newest-render-wins guard (#8965): out-of-order clips are all kept as
+  // takes, and none of them can displace a selection.
   describe: ({ projectId, sceneId }) => `${projectId}/${sceneId}`,
-  attach: ({ projectId, sceneId, videoHistoryId }) =>
-    updateScene(projectId, sceneId, { videoHistoryId }),
-  onAttached: ({ projectId, sceneId, videoHistoryId }) => {
-    musicVideoEvents.emit('scene-video', { projectId, sceneId, videoHistoryId });
-    console.log(`🎬 music-video scene clip ${projectId.slice(0, 8)}/${sceneId} ← ${videoHistoryId.slice(0, 8)}`);
+  // A deleted project/scene 404s here, so a late completion can't resurrect it.
+  attach: ({ projectId, sceneId, videoHistoryId, job }) => appendSceneTakes(projectId, sceneId, [{
+    kind: 'video',
+    assetId: videoHistoryId,
+    source: 'generated',
+    provider: 'portos',
+    jobId: typeof job.id === 'string' ? job.id : null,
+    prompt: typeof job.params?.prompt === 'string' ? job.params.prompt : null,
+    // The frame this clip was generated from — a basename only; job params
+    // carry the server's absolute path, which never belongs on a synced record.
+    sourceImageId: typeof job.params?.sourceImagePath === 'string' ? basename(job.params.sourceImagePath) : null,
+  }]),
+  onAttached: ({ projectId, sceneId, videoHistoryId }, { scene, appended }) => {
+    musicVideoEvents.emit('scene-video', {
+      projectId,
+      sceneId,
+      videoHistoryId: scene.videoHistoryId ?? null,
+      takes: scene.takes,
+      takeId: appended[0]?.takeId ?? null,
+    });
+    console.log(`🎬 music-video scene clip take ${projectId.slice(0, 8)}/${sceneId} ← ${videoHistoryId.slice(0, 8)}`);
   },
 });
 

@@ -444,8 +444,8 @@ const generateBodySchema = z.object({
     z.array(z.number().min(0).max(2)).max(8).optional(),
   ),
   // Music Video director-board i2v render (#1760 Phase 1). When present, the
-  // mediaJobQueue completion hook (`musicVideoSceneVideoHook`) files the finished
-  // clip's history id onto the project scene's `videoHistoryId` — durably, even
+  // mediaJobQueue completion hook (`musicVideoSceneVideoHook`) appends the
+  // finished clip's history id to the project scene's takes (#8965) — durably, even
   // if the director board unmounted mid-render (the i2v counterpart to the
   // Phase 1b reference-frame `musicVideo` tag on the image route). The shot
   // prompt rides in `prompt` and the reference frame in `sourceImageFile`, so

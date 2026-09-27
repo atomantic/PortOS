@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
+import SceneTakeStrip from './SceneTakeStrip.jsx';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -17,13 +18,18 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * (`image:<filename>`) or clip (`video:<historyId>`). The frame thumb is the
  * whole button; the clip keeps native play/pause and uses a corner expand
  * control so the open handler never fights the player.
+ *
+ * Each slot's takes (#8965) render as a review strip under it: a regenerate
+ * adds a candidate rather than replacing the selection, and the director picks,
+ * rejects, or notes takes there. `onImportTake` adds an externally generated
+ * frame (gallery pick or upload) as a take.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
   settingsSaving, videoBlockedReason, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
-  onOpenPreview,
+  onOpenPreview, onSelectTake, onReviewTake, onImportTake, takeBusy = false,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -138,14 +144,29 @@ export default function SceneCard({
               />
             </button>
           )}
-          <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
-            className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-            title="Generate a still reference frame for this scene">
-            {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
-            {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'Regenerate frame' : 'Generate frame')}
-          </button>
+          <div className="flex flex-col gap-1">
+            <button onClick={() => onGenerateFrame(scene)} disabled={!!generatingFrame}
+              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+              title={scene.referenceImageId
+                ? 'Render another candidate frame — your selected frame stays until you pick a new one'
+                : 'Generate a still reference frame for this scene'}>
+              {generatingFrame ? <Activity size={14} className="animate-spin" /> : <ImageIcon size={14} />}
+              {generatingFrame ? 'Generating frame…' : (scene.referenceImageId ? 'New frame take' : 'Generate frame')}
+            </button>
+            {onImportTake && (
+              <button type="button" onClick={() => onImportTake(scene)} disabled={takeBusy}
+                className="flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
+                title="Add a frame from the gallery or an upload (e.g. made in an external tool) as a take">
+                <ImagePlus size={14} /> Import take
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      <SceneTakeStrip scene={scene} kind="image" busy={takeBusy}
+        onSelect={(take) => onSelectTake?.(scene, take)}
+        onReview={(take, review) => onReviewTake?.(scene, take, review)}
+        onOpenPreview={onOpenPreview} />
       {/* Scene clip — i2v video generated from the reference frame (Phase 1) */}
       <div className="flex items-center gap-2 flex-wrap">
         {scene.videoHistoryId && (
@@ -187,7 +208,7 @@ export default function SceneCard({
           title={videoBlockedReason
             || (scene.referenceImageId ? "Generate this scene's video from its reference frame (i2v)" : 'Generate a reference frame first')}>
           {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-          {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'Regenerate video' : 'Generate video')}
+          {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
         </button>
         {scene.videoHistoryId && canContinueShot && (
           <button
@@ -200,6 +221,10 @@ export default function SceneCard({
           </button>
         )}
       </div>
+      <SceneTakeStrip scene={scene} kind="video" busy={takeBusy}
+        onSelect={(take) => onSelectTake?.(scene, take)}
+        onReview={(take, review) => onReviewTake?.(scene, take, review)}
+        onOpenPreview={onOpenPreview} />
     </div>
   );
 }

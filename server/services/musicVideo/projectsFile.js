@@ -6,6 +6,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createProjectFileStore } from '../projectFileStore.js';
 import * as logic from './projectsLogic.js';
+import * as takes from './takes.js';
 
 const store = createProjectFileStore({
   file: join(PATHS.data, 'music-video-projects.json'),
@@ -86,4 +87,32 @@ export async function reorderProjectScenes(id, orderedIds) {
   all[idx] = logic.reorderScenes(all[idx], orderedIds);
   await saveAll(all);
   return all[idx];
+}
+
+// ---- scene takes (#8965) — one load/modify/save per take operation ----------
+async function mutateProject(id, transform) {
+  const { all, idx } = await loadAllAndIndex(id);
+  const outcome = transform(all[idx]);
+  all[idx] = outcome.project;
+  await saveAll(all);
+  return outcome;
+}
+
+export async function appendSceneTakes(id, sceneId, inputs) {
+  const { scene, appended } = await mutateProject(id, (p) => takes.appendSceneTakes(p, sceneId, inputs));
+  return { scene, appended };
+}
+
+export async function appendTakesAcrossScenes(id, items) {
+  return mutateProject(id, (p) => takes.appendTakesAcrossScenes(p, items));
+}
+
+export async function selectSceneTake(id, sceneId, takeId) {
+  const { scene } = await mutateProject(id, (p) => takes.selectSceneTake(p, sceneId, takeId));
+  return scene;
+}
+
+export async function reviewSceneTake(id, sceneId, takeId, review) {
+  const { scene } = await mutateProject(id, (p) => takes.reviewSceneTake(p, sceneId, takeId, review));
+  return scene;
 }

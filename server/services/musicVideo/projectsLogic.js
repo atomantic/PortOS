@@ -29,6 +29,7 @@ import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
+import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -59,6 +60,31 @@ function parseSceneOrThrow(schema, input) {
   return parsed.data;
 }
 
+/**
+ * Normalize a validated visual specification (#8965): every reference persists
+ * a stable id and explicit defaults so edits stay addressable and a peer reads
+ * the same shape. `base` is the stored spec a partial patch merges onto — each
+ * sub-field present in the patch replaces its stored value; absent ones keep it.
+ */
+function normalizeVisualSpec(patch, base = null) {
+  const merged = { ...(base || {}), ...(patch || {}) };
+  const references = (Array.isArray(merged.references) ? merged.references : []).map((ref) => ({
+    id: typeof ref.id === 'string' && ref.id ? ref.id : `mvr-${randomUUID()}`,
+    imageId: ref.imageId,
+    role: ref.role || 'mood',
+    label: typeof ref.label === 'string' ? ref.label : '',
+    note: typeof ref.note === 'string' ? ref.note : '',
+    condition: ref.condition === true,
+  }));
+  return {
+    references,
+    palette: Array.isArray(merged.palette) ? merged.palette.map((c) => c.toLowerCase()) : [],
+    typography: typeof merged.typography === 'string' ? merged.typography : '',
+    cameraRules: typeof merged.cameraRules === 'string' ? merged.cameraRules : '',
+    moodBoardId: typeof merged.moodBoardId === 'string' && merged.moodBoardId ? merged.moodBoardId : null,
+  };
+}
+
 /** Build a fresh project record from validated create input. */
 export function buildProjectRecord(input, { id, now }) {
   const {
@@ -79,6 +105,9 @@ export function buildProjectRecord(input, { id, now }) {
     trackId,
     uploadedAudioFilename,
     concept,
+    // #8965 — the reusable visual specification (moodboard/reference assets,
+    // palette, typography, camera rules). Null until the director sets one.
+    visualSpec: input.visualSpec ? normalizeVisualSpec(input.visualSpec) : null,
     videoSettings: {
       backend: videoSettings.backend ?? 'local',
       modelId: videoSettings.modelId ?? null,
@@ -127,6 +156,9 @@ export function cloneProjectRecord(source, {
     order,
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
+    // Takes are immutable pointers to shared media, so a media-keeping clone
+    // carries the whole candidate history; a clean clone starts empty.
+    takes: includeGeneratedMedia ? ensureSceneTakes(scene, now) : [],
   }));
   const mediaReady = includeGeneratedMedia
     && scenes.length > 0
@@ -160,9 +192,11 @@ export function applyProjectPatch(project, patch) {
   // can't clobber a sibling sub-field (e.g. prompt) set concurrently by another
   // sync peer (#3168). An explicit `concept: null` still clears it outright.
   // Edited cue/phrase lists replace the stored list whole, normalized so every
-  // entry persists a stable id and a forward time range (timedText.js).
+  // entry persists a stable id and a forward time range (timedText.js). A
+  // `visualSpec` patch merges per sub-field the same way (#8965).
   const timedPatch = {
     ...patch,
+    ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
   };
@@ -268,6 +302,9 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     referenceImageId: null,
     videoHistoryId: null,
+    // #8965 — immutable candidate takes; the two slot fields above are the
+    // director's selection among them (see takes.js).
+    takes: [],
   };
 }
 
@@ -311,7 +348,11 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const updated = { ...scenes[idx], ...data };
+  const merged = { ...scenes[idx], ...data };
+  // Setting a slot directly (an older client, or a hand edit) still records the
+  // asset as a take so the candidate list stays a superset of the selection.
+  const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
+  const updated = touchesSlot ? { ...merged, takes: ensureSceneTakes(merged, undefined, 'manual') } : merged;
   // The partial-patch schema can't enforce endSec >= startSec (the paired value
   // may be unchanged on the record), so validate the merged range here.
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {

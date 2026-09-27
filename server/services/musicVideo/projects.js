@@ -157,6 +157,36 @@ export async function reorderProjectScenes(id, orderedIds) {
   return next;
 }
 
+// ---- scene takes (#8965) ----
+// Append candidate takes to one scene: `{ scene, appended }`. A take fills its
+// slot only while the slot is empty — never replaces a selection (takes.js).
+export async function appendSceneTakes(id, sceneId, inputs) {
+  const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
+  emitRecordUpdated('musicVideoProject', id);
+  return result;
+}
+
+/** Append takes across scenes in one write (handoff import): `{ project, appended }`. */
+export async function appendTakesAcrossScenes(id, items) {
+  const result = await (await selectBackend()).appendTakesAcrossScenes(id, items);
+  emitRecordUpdated('musicVideoProject', id);
+  return result;
+}
+
+/** Explicitly select a take for its scene slot. Returns the updated scene. */
+export async function selectSceneTake(id, sceneId, takeId) {
+  const scene = await (await selectBackend()).selectSceneTake(id, sceneId, takeId);
+  emitRecordUpdated('musicVideoProject', id);
+  return scene;
+}
+
+/** Reject/restore a take and/or set its note. Returns the updated scene. */
+export async function reviewSceneTake(id, sceneId, takeId, review) {
+  const scene = await (await selectBackend()).reviewSceneTake(id, sceneId, takeId, review);
+  emitRecordUpdated('musicVideoProject', id);
+  return scene;
+}
+
 /** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
 export async function mergeProjectsFromSync(remoteProjects, options = {}) {
   return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);

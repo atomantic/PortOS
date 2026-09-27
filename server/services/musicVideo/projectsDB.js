@@ -5,6 +5,7 @@ import { withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createProjectDbStore } from '../projectDbStore.js';
 import * as logic from './projectsLogic.js';
+import * as takes from './takes.js';
 
 const store = createProjectDbStore({
   table: 'music_video_projects',
@@ -84,4 +85,33 @@ export async function deleteScene(id, sceneId) {
 export async function reorderProjectScenes(id, orderedIds) {
   const { project } = await withLockedProject(id, (current) => ({ project: logic.reorderScenes(current, orderedIds) }));
   return project;
+}
+
+// ---- scene takes (#8965) — each operation runs under the project row lock,
+// so a job completion and a director's select/reject can't interleave. -------
+async function mutateLocked(id, transform) {
+  const { result } = await withLockedProject(id, (current) => {
+    const outcome = transform(current);
+    return { project: outcome.project, result: outcome };
+  });
+  return result;
+}
+
+export async function appendSceneTakes(id, sceneId, inputs) {
+  const { scene, appended } = await mutateLocked(id, (p) => takes.appendSceneTakes(p, sceneId, inputs));
+  return { scene, appended };
+}
+
+export async function appendTakesAcrossScenes(id, items) {
+  return mutateLocked(id, (p) => takes.appendTakesAcrossScenes(p, items));
+}
+
+export async function selectSceneTake(id, sceneId, takeId) {
+  const { scene } = await mutateLocked(id, (p) => takes.selectSceneTake(p, sceneId, takeId));
+  return scene;
+}
+
+export async function reviewSceneTake(id, sceneId, takeId, review) {
+  const { scene } = await mutateLocked(id, (p) => takes.reviewSceneTake(p, sceneId, takeId, review));
+  return scene;
 }

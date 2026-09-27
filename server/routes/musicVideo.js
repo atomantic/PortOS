@@ -22,12 +22,16 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTakeReviewSchema,
+  musicVideoHandoffImportSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
 import {
   listProjects,
   getProject,
@@ -41,7 +45,13 @@ import {
   deleteScene,
   reorderProjectScenes,
   setProjectMidiTranscription,
+  appendSceneTakes,
+  appendTakesAcrossScenes,
+  selectSceneTake,
+  reviewSceneTake,
 } from '../services/musicVideo/projects.js';
+import { buildHandoffManifest, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
+import { getHistoryItem } from '../services/videoGen/history.js';
 import {
   startMidiTranscription,
   attachMidiTranscriptionSseClient,
@@ -295,6 +305,80 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const updated = await reorderProjectScenes(req.params.id, sceneIds);
   res.json(updated);
+}));
+
+// --- Scene takes (#8965) ---
+// Every render or import for a scene slot is kept as an immutable take; the
+// slot field is the director's explicit selection among them. A take's asset
+// must already exist in this install's media stores — an image in the gallery,
+// a clip in the video history (both reached through the existing upload
+// routes) — so a take can never point at an arbitrary file.
+async function takeAssetExists(kind, assetId) {
+  if (kind === 'image') return Boolean(resolveGalleryImage(assetId));
+  return Boolean(await getHistoryItem(assetId));
+}
+
+// Add one candidate take to a scene: the synchronous image lane's inline
+// render, or an asset the director imports from the gallery.
+router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
+  const { kind, assetId, source = 'imported', provider, originalName } = validateRequest(musicVideoTakeInputSchema, req.body);
+  if (!(await takeAssetExists(kind, assetId))) {
+    throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+  const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName,
+  }]);
+  res.status(201).json({ scene, take: appended[0] });
+}));
+
+router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
+  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
+  const review = validateRequest(musicVideoTakeReviewSchema, req.body);
+  res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
+}));
+
+// --- External-asset handoff (#8965) ---
+// Export per-scene prompts + reference files for a tool PortOS does not drive
+// (e.g. Midjourney), and import what the director generated there. Nothing
+// here contacts the external service.
+router.get('/:id/handoff', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(buildHandoffManifest(project));
+}));
+
+// Associate already-uploaded assets with scenes. An item names its scene
+// explicitly or carries the manifest's file tag in `originalName`; an item that
+// resolves to no scene, or whose asset isn't in this install's media stores, is
+// reported in `skipped` rather than guessed. All matched items land in one
+// record write with `imported` source + provider provenance.
+router.post('/:id/handoff/import', asyncHandler(async (req, res) => {
+  const { provider, items } = validateRequest(musicVideoHandoffImportSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const sceneIds = new Set((project.scenes || []).map((scene) => scene.sceneId));
+  const accepted = [];
+  const skipped = [];
+  for (const item of items) {
+    const sceneId = item.sceneId || matchSceneByFileTag(project.scenes, item.originalName);
+    const skip = (reason) => skipped.push({ assetId: item.assetId, originalName: item.originalName ?? null, reason });
+    if (!sceneId || !sceneIds.has(sceneId)) { skip('no-matching-scene'); continue; }
+    if (!musicVideoTakeInputSchema.safeParse({ kind: item.kind, assetId: item.assetId }).success
+      || !(await takeAssetExists(item.kind, item.assetId))) { skip('asset-not-found'); continue; }
+    accepted.push({ sceneId, kind: item.kind, assetId: item.assetId, source: 'imported', provider, originalName: item.originalName });
+  }
+  if (accepted.length === 0) {
+    return res.json({ project, imported: [], skipped });
+  }
+  const { project: next, appended } = await appendTakesAcrossScenes(project.id, accepted);
+  res.json({
+    project: next,
+    imported: appended.map(({ sceneId, take }) => ({ sceneId, takeId: take.takeId, kind: take.kind, assetId: take.assetId, originalName: take.originalName })),
+    skipped,
+  });
 }));
 
 export default router;

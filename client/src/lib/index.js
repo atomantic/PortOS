@@ -66,6 +66,7 @@ export * from './issueLength.js';
 export * from './issueRefs.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
+export * from './musicVideoTakes.js';
 export * from './pipelineImageDefaults.js';
 export * from './reverseOutlineGrid.js';
 export * from './reviewerModels.js';

@@ -58,8 +58,13 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   transcribeMusicVideoMidi: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
   musicVideoMidiEventsUrl: (jobId) => `/api/music-video/transcribe-midi/${jobId}/events`,
   cancelMusicVideoMidiTranscription: vi.fn(async () => ({ ok: true })),
+  addMusicVideoSceneTake: vi.fn(),
+  selectMusicVideoSceneTake: vi.fn(),
+  reviewMusicVideoSceneTake: vi.fn(),
+  getMusicVideoHandoff: vi.fn(),
+  importMusicVideoHandoff: vi.fn(),
 }));
-vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
+vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
     providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
@@ -72,6 +77,7 @@ vi.mock('../hooks/useMidiNotes.js', () => ({
 }));
 vi.mock('../services/apiImageVideo.js', () => ({
   generateVideo: vi.fn(),
+  uploadGalleryVideo: vi.fn(),
   listLorasFull: vi.fn(async () => [{
     filename: 'audio-reactive.safetensors',
     name: 'Audio Reactive',
@@ -134,7 +140,9 @@ import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
   importMusicVideoLyrics, updateMusicVideoScene,
+  selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
+import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 import { generateVideo, getVideoGenStatus } from '../services/apiImageVideo.js';
 
@@ -782,7 +790,9 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
 
   it('disables the Import button until a URL is entered', async () => {
     await openProject(PROJECT_NO_CLIP);
-    const importBtns = screen.getAllByRole('button', { name: /Import/i });
+    // Exact name: the board also carries "Import take" / handoff import controls.
+    const importBtns = screen.getAllByRole('button', { name: /^Import$/i });
+    expect(importBtns.length).toBeGreaterThan(0);
     importBtns.forEach((btn) => expect(btn).toHaveProperty('disabled', true));
   });
 
@@ -1035,5 +1045,93 @@ describe('MusicVideo media lightbox (#3718)', () => {
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
     expect(dialog.getAttribute('aria-label')).toMatch(/img1|image:img1/);
+  });
+});
+
+describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
+  const SPEC_PROJECT = {
+    ...PROJECT_NO_CLIP,
+    id: 'mv-spec',
+    name: 'Spec Project',
+    concept: { style: 'grainy 16mm' },
+    visualSpec: {
+      palette: ['#112233'],
+      cameraRules: 'locked-off wides',
+      typography: '',
+      references: [
+        { id: 'r1', imageId: 'mood.png', role: 'character', label: 'Lead', note: '', condition: true },
+        { id: 'r2', imageId: 'set.png', role: 'set', label: 'Pier', note: '', condition: false },
+      ],
+    },
+    scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
+  };
+
+  it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
+    generateImage.mockRejectedValueOnce(Object.assign(
+      new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
+      { code: 'REFERENCE_IMAGES_FLUX2_ONLY', status: 400 },
+    ));
+    await openProject(SPEC_PROJECT);
+    fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
+      prompt: 'harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides',
+      referenceImageFiles: ['mood.png'],
+      musicVideo: { projectId: 'mv-spec', sceneId: 's1' },
+    }, { silent: true }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/can't condition on 1 reference image: Reference images are only supported/),
+    ));
+  });
+
+  it('keeps a new render as a candidate and lets the director explicitly pick and reject takes', async () => {
+    const scene = {
+      sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'take-a.png', videoHistoryId: null,
+      takes: [
+        { takeId: 't-a', kind: 'image', assetId: 'take-a.png', source: 'generated', provider: 'portos', status: 'candidate', note: null },
+        { takeId: 't-b', kind: 'image', assetId: 'take-b.png', source: 'imported', provider: 'midjourney', status: 'candidate', note: null },
+      ],
+    };
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, referenceImageId: 'take-b.png' });
+    reviewMusicVideoSceneTake.mockResolvedValueOnce({
+      ...scene,
+      referenceImageId: 'take-b.png',
+      takes: [{ ...scene.takes[0], status: 'rejected' }, scene.takes[1]],
+    });
+    await openProject({ ...PROJECT_NO_CLIP, id: 'mv-takes', name: 'Takes Project', scenes: [scene] });
+
+    const strip = screen.getByRole('list', { name: /Frame takes/ });
+    expect(within(strip).getByText(/imported · midjourney/)).toBeTruthy();
+    fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-b', { silent: true }));
+    // The server's answer moves the selection; the other take now offers "Use".
+    await waitFor(() => expect(within(strip).getAllByText(/Selected/)).toHaveLength(1));
+    const items = within(strip).getAllByRole('listitem');
+    expect(within(items[1]).queryByRole('button', { name: /Use/ })).toBeNull();
+
+    fireEvent.click(within(items[0]).getByRole('button', { name: /Reject/ }));
+    await waitFor(() => expect(reviewMusicVideoSceneTake).toHaveBeenCalledWith('mv-takes', 's1', 't-a', { status: 'rejected' }, { silent: true }));
+    await waitFor(() => expect(within(items[0]).getByRole('button', { name: /Restore/ })).toBeTruthy());
+  });
+
+  it('imports externally generated files through the gallery upload, then associates them by scene tag with provider provenance', async () => {
+    uploadGalleryImage.mockResolvedValueOnce({ filename: 'upload-0001.png', path: '/data/images/upload-0001.png' });
+    const importedTake = { takeId: 't-mj', kind: 'image', assetId: 'upload-0001.png', source: 'imported', provider: 'midjourney', status: 'candidate', note: null, originalName: 'S01-s1-harbor.png' };
+    importMusicVideoHandoff.mockResolvedValueOnce({
+      project: { ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'upload-0001.png', takes: [importedTake] }] },
+      imported: [{ sceneId: 's1', takeId: 't-mj', kind: 'image', assetId: 'upload-0001.png', originalName: 'S01-s1-harbor.png' }],
+      skipped: [],
+    });
+    await openProject(SPEC_PROJECT);
+
+    const file = new File(['png-bytes'], 'S01-s1-harbor.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('Import generated files'), { target: { files: [file] } });
+    await waitFor(() => expect(importMusicVideoHandoff).toHaveBeenCalledWith('mv-spec', {
+      provider: 'midjourney',
+      items: [{ kind: 'image', assetId: 'upload-0001.png', originalName: 'S01-s1-harbor.png' }],
+    }, { silent: true }));
+    expect(uploadGalleryImage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Imported 1 take from midjourney'));
+    // The imported take filled the empty slot on the board.
+    expect(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' })).toBeTruthy();
   });
 });
