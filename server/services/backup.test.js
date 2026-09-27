@@ -197,6 +197,61 @@ describe('DEFAULT_EXCLUDES anchoring', () => {
   });
 });
 
+describe('deployed LoRA backup recovery', () => {
+  it('restores selected adapter bytes while excluding both runtimes checkpoints and honoring custom filters', async context => {
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+    }
+    const root = await fs.mkdtemp(joinPath(tmpdir(), 'portos-lora-backup-'));
+    const source = joinPath(root, 'source');
+    const snapshot = joinPath(root, 'snapshot');
+    const restored = joinPath(root, 'restored');
+    const customSnapshot = joinPath(root, 'custom');
+    const selected = Buffer.from('selected checkpoint step 250');
+    const final = Buffer.from('different final checkpoint step 500');
+    const sidecar = JSON.stringify({ name: 'Example trained adapter', step: 250 });
+    const files = {
+      'loras/selected.safetensors': selected,
+      'loras/selected.metadata.json': sidecar,
+      'training-runs/torch-run/checkpoints/step-250.safetensors': selected,
+      'training-runs/mflux-run/mflux/checkpoints/step-250.safetensors': selected,
+      'training-runs/torch-run/final.safetensors': final,
+    };
+    try {
+      for (const [relative, bytes] of Object.entries(files)) {
+        const file = joinPath(source, relative);
+        await fs.mkdir(joinPath(file, '..'), { recursive: true });
+        await fs.writeFile(file, bytes);
+      }
+      for (const dest of [snapshot, restored, customSnapshot]) await fs.mkdir(dest);
+      // A legacy disabled default is accepted without rewriting settings; it
+      // cannot resurrect the removed exclusion or disable checkpoint filtering.
+      const legacy = ['/loras/*.safetensors'];
+      const copy = (from, to, excludes = []) => {
+        const result = spawnSync(resolveRsyncBinary(), ['-a', ...excludes.flatMap(path => ['--exclude', path]), `${from}/`, `${to}/`], { encoding: 'utf8' });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+      };
+      copy(source, snapshot, computeEffectiveExcludes({ disabledDefaultExcludes: legacy }));
+      copy(snapshot, restored);
+      expect(await fs.readFile(joinPath(restored, 'loras/selected.safetensors'))).toEqual(selected);
+      expect(await fs.readFile(joinPath(restored, 'loras/selected.metadata.json'), 'utf8')).toBe(sidecar);
+      expect(await fs.readFile(joinPath(restored, 'training-runs/torch-run/final.safetensors'))).toEqual(final);
+      for (const path of ['training-runs/torch-run/checkpoints', 'training-runs/mflux-run/mflux/checkpoints']) {
+        expect(existsSync(joinPath(restored, path))).toBe(false);
+      }
+      const custom = ['/loras/*.safetensors'];
+      copy(source, customSnapshot, computeEffectiveExcludes({ excludePaths: custom, disabledDefaultExcludes: legacy }));
+      expect(existsSync(joinPath(customSnapshot, 'loras/selected.safetensors'))).toBe(false);
+      expect(await fs.readFile(joinPath(customSnapshot, 'loras/selected.metadata.json'), 'utf8')).toBe(sidecar);
+      expect(custom).toEqual(['/loras/*.safetensors']);
+      expect(legacy).toEqual(['/loras/*.safetensors']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('computeEffectiveExcludes', () => {
   it('includes every DEFAULT_EXCLUDES path when nothing is disabled', () => {
     const result = computeEffectiveExcludes({ excludePaths: [], disabledDefaultExcludes: [] });

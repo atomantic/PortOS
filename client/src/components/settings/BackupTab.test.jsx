@@ -702,18 +702,18 @@ describe('BackupTab', () => {
     // Regression: wildcard rules must survive edits and reload without the UI
     // promising that disabling a default includes the matching files.
     it('preserves independent custom rules through default toggles, save, and reload', async () => {
-      const loraPath = '/loras/*.safetensors';
+      const checkpointPath = '/training-runs/**/checkpoints/';
       const custom = ['*.safetensors', '/lo*/', 'loras/'];
-      const backup = { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: custom, disabledDefaultExcludes: [loraPath, '/cache'] };
+      const backup = { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: custom, disabledDefaultExcludes: [checkpointPath, '/cache'] };
       getSettings.mockResolvedValue({ backup });
-      getBackupStatus.mockResolvedValue({ defaultExcludes: [EXCLUDES[0], { path: loraPath, reason: 'LoRA weights', overridable: true }] });
+      getBackupStatus.mockResolvedValue({ defaultExcludes: [EXCLUDES[0], { path: checkpointPath, reason: 'Intermediate LoRA checkpoints', overridable: true }] });
       updateSettings.mockImplementation(async payload => { getSettings.mockResolvedValue(payload); return {}; });
       await renderTab();
 
       expect(screen.getByText(/Additional rules still apply/)).toBeTruthy();
       expect(screen.getByRole('button', { name: /Default exclusions/ }).textContent).toMatch(/1 enabled, 1 disabled/);
       fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
-      const toggle = screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` });
+      const toggle = screen.getByRole('switch', { name: `Disable default exclusion ${checkpointPath}` });
       expect(toggle.getAttribute('aria-checked')).toBe('true');
       expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
       expect(screen.queryByText(/re-included|\(included\)|paths? skipped/)).toBeNull();
@@ -732,14 +732,14 @@ describe('BackupTab', () => {
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/ })); });
       // Anchored on the way in (#7241): `loras/**` is a path, not a wildcard-led
       // any-depth pattern, so it becomes `/loras/**`.
-      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, '/loras/**'] } }, { silent: true });
+      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', checkpointPath], excludePaths: [...custom, '/loras/**'] } }, { silent: true });
       expect(toast.error).not.toHaveBeenCalled();
 
       cleanup();
       await renderTab();
       for (const pattern of [...custom, '/loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
-      expect(screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('switch', { name: `Disable default exclusion ${checkpointPath}` }).getAttribute('aria-checked')).toBe('true');
       expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
       expect(screen.getByText(/Disabling a default does not guarantee/)).toBeTruthy();
     });

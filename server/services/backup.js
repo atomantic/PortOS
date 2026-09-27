@@ -161,11 +161,10 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
-  { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
   // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer
   // writes training-runs/<id>/checkpoints/, mflux writes
   // training-runs/<id>/mflux/checkpoints/.
-  { path: '/training-runs/**/checkpoints/', reason: 'LoRA training checkpoints — large intermediate adapter state, resumable-but-regenerable. Final trained adapters land in data/loras/ (weights excluded there too); run samples + configs ARE backed up.', overridable: true },
+  { path: '/training-runs/**/checkpoints/', reason: 'LoRA training checkpoints — large intermediate adapter state, resumable-but-regenerable. Deployed adapters in data/loras/, including promoted checkpoints, ARE backed up along with run samples + configs.', overridable: true },
   { path: '/training-runs/*/cache/', reason: 'Precomputed latent/text-embedding training cache — regenerated from the dataset on the next run', overridable: false },
   { path: '/training-runs/*/data/.mflux_cache/', reason: 'mflux low_ram disk-backed encode cache (written inside the staged training data dir) — regenerable', overridable: false },
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
