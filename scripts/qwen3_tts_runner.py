@@ -820,7 +820,7 @@ def main() -> int:
             return 0
         except Exception as error:
             code = "QWEN3_DOWNLOAD_UNAVAILABLE" if isinstance(error, ImportError) else "QWEN3_DOWNLOAD_FAILED"
-            print(json.dumps({"ok": False, "code": code, "error": str(error)}), file=sys.stderr)
+            print(json.dumps({"ok": False, "code": code, "error": "Qwen3 model download failed"}), file=sys.stderr)
             return 1
 
     if args.probe:

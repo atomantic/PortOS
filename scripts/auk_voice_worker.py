@@ -14,9 +14,9 @@ def main():
     root = Path(sys.argv[1])
     engine = None
     for line in sys.stdin:
-        request = json.loads(line)
         started = time.monotonic()
         try:
+            request = json.loads(line)
             with contextlib.redirect_stdout(sys.stderr):
                 import soundfile as sf
                 from auk_mlx.infer import AukMLX, GenerateOptions

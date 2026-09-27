@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
@@ -533,5 +533,26 @@ with tempfile.TemporaryDirectory() as temp:
       'QWEN3_RUNTIME_UNAVAILABLE',
       'QWEN3_TRAINING_FAILED',
     ]);
+  });
+});
+
+
+describe.skipIf(!python)('Qwen3 download process errors', () => {
+  it.each([
+    ['ImportError', 'QWEN3_DOWNLOAD_UNAVAILABLE'],
+    ['RuntimeError', 'QWEN3_DOWNLOAD_FAILED'],
+  ])('redacts %s diagnostics while preserving the download failure code', (exception, code) => {
+    const result = spawnSync(python, ['-c', fixture + String.raw`
+def fail_download(*args):
+    raise ${exception}("private-fixture-token at /example/private/model")
+runner.download_model = fail_download
+sys.argv = [sys.argv[1], "--download", "--model-id", model_id, "--models-dir", "/example/models"]
+raise SystemExit(runner.main())
+`, script], { encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(JSON.parse(result.stderr)).toEqual({ ok: false, code, error: 'Qwen3 model download failed' });
+    expect(result.stderr).not.toContain('private-fixture-token');
+    expect(result.stderr).not.toContain('/example/private/model');
   });
 });
