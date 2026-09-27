@@ -138,4 +138,22 @@ describe('share-bucket watcher backlog lifecycle', () => {
     await deliver(watcher, 'change', path);
     expect(processBacklog).toHaveBeenCalledTimes(4);
   });
+
+  it('bundle-sync path event with failing backlog scan does not produce unhandled rejection and subsequent scan still runs', async () => {
+    const { watcher, paths, root } = await attach();
+    const blocked = deferred();
+    const secondStarted = deferred();
+    processBacklog
+      .mockImplementationOnce(() => blocked.promise.then(() => { throw new Error('Bundle sync backlog failure'); }))
+      .mockImplementationOnce(() => { secondStarted.resolve(); return Promise.resolve(); });
+    const assetPath = paths.join(root, 'assets', 'blobs', 'example-blob');
+    const pending = deliver(watcher, 'add', assetPath);
+    const trailing = deliver(watcher, 'add', assetPath);
+    expect(processBacklog).toHaveBeenCalledTimes(1);
+    blocked.resolve();
+    await secondStarted.promise;
+    await Promise.all([pending, trailing]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Bundle sync backlog failure'));
+    expect(processBacklog).toHaveBeenCalledTimes(2);
+  });
 });
