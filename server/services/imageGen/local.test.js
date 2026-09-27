@@ -1106,3 +1106,94 @@ describe('local render failure delivery — post-render throw safety net', () =>
     }
   });
 });
+
+// Regression (#8915): the terminal dispatch was a bare
+// `broadcastSse(...); imageGenEvents.emit(...)` pair — a throwing SSE client
+// (e.g. a dead connection's res.write) that fires from inside broadcastSse
+// would abort BEFORE the lifecycle emit ran, silently skipping the gallery
+// index / peer-sync / job-queue bookkeeping the emit drives even though the
+// job's own status/error fields were already correct. Both dispatch paths
+// (the `code !== 0` failure branch and the success branch) now go through
+// `dispatchTerminalEvent`, which isolates each call in its own try/catch.
+describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', () => {
+  beforeEach(() => {
+    mockRejectDegenerateFrame.mockReset();
+    mockRejectDegenerateFrame.mockResolvedValue(null);
+  });
+
+  it('still emits the failed lifecycle event when a connected SSE client throws on write', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    // Feed the stderr diagnosis BEFORE attaching the throwing client — the
+    // intermediate status broadcasts this line triggers are unrelated to the
+    // terminal-dispatch decoupling under test.
+    child.stderr.emit('data', Buffer.from('runner.py: error: invalid value for --steps\n'));
+
+    // A connected client whose write() throws — the dead-client hazard the
+    // issue names (a broken pipe surfacing as a synchronous throw) — attached
+    // just before the terminal close so only the terminal SSE frame hits it.
+    // (attachSseClient's own replay of the cached lastPayload is a first,
+    // separate write call — let that one through so it doesn't mask the
+    // terminal-dispatch assertion below.)
+    let writeCalls = 0;
+    const throwingClient = {
+      writeHead: vi.fn(),
+      write: vi.fn(() => {
+        writeCalls += 1;
+        if (writeCalls > 1) throw new Error('write after end');
+      }),
+      end: vi.fn(),
+      req: new EventEmitter(),
+    };
+    expect(attachSseClient(jobId, throwingClient)).toBe(true);
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    child.emit('close', 2);
+
+    // The lifecycle event still fires — and still carries the real
+    // diagnosis — even though the SSE broadcast to this client threw.
+    const failure = await failed;
+    expect(failure.error).toContain('invalid value for --steps');
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
+    errSpy.mockRestore();
+  });
+
+  it('still emits the completed lifecycle event when a connected SSE client throws on write', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+
+    const throwingClient = {
+      writeHead: vi.fn(),
+      write: vi.fn(() => { throw new Error('write after end'); }),
+      end: vi.fn(),
+      req: new EventEmitter(),
+    };
+    expect(attachSseClient(jobId, throwingClient)).toBe(true);
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const completed = new Promise((resolve) => imageGenEvents.once('completed', resolve));
+    child.emit('close', 0);
+
+    // Gallery indexing / peer-sync (driven by 'completed') still fires even
+    // though the SSE 'complete' frame threw delivering to this client.
+    await expect(completed).resolves.toMatchObject({ mode: 'local' });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('SSE client write failed'));
+    errSpy.mockRestore();
+  });
+});

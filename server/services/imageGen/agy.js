@@ -35,7 +35,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -455,8 +455,11 @@ async function runAgy(job, jobId, bin, args, {
       activeJobs.delete(jobId);
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (agy)`);
       const result = { filename, path: `/data/images/${filename}` };
-      broadcastSse(job, { type: 'complete', result });
-      imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename });
+      dispatchTerminalEvent(
+        jobId,
+        () => broadcastSse(job, { type: 'complete', result }),
+        () => imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, path: result.path, filename }),
+      );
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
