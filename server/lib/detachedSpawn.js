@@ -62,6 +62,7 @@ import { ensureDir, sleep } from './fileUtils.js';
 import { safeChildProcessOptions } from './processEnv.js';
 import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
+import { reserveDatabaseWriter } from './databaseWriterRegistry.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -547,6 +548,20 @@ export async function spawnDetached(bin, args = [], {
   // `kill` reports false until the supervisor records a PID, so a setup failure
   // (below) still returns a usable handle.
   const handle = createDetachedHandle({ killProcessGroup });
+  // Publish before any await: a launch admitted immediately before maintenance
+  // is visible even while async setup or the detached supervisor is pending.
+  let writer;
+  try { writer = reserveDatabaseWriter(controlDir, killProcessGroup); } catch (err) {
+    setImmediate(() => handle.emit('error', err));
+    return handle;
+  }
+  const recordCompletion = (code, signal) => {
+    try { writer.completed(code, signal); } catch {
+      // Missing evidence is unresolved, never synthesized into quiescence.
+      console.error('❌ Could not persist detached writer completion evidence');
+    }
+  };
+  handle.once('close', recordCompletion);
 
   const pidFile = join(controlDir, 'pid');
   const exitFile = join(controlDir, 'exit');
@@ -586,6 +601,10 @@ export async function spawnDetached(bin, args = [], {
   // writes two control files before it spawns, so it can fail with a rejection
   // too; route that into the same slot rather than letting it reject
   // spawnDetached, for the reason ensureControlDir above spells out.
+  try { writer.assertLaunchAllowed(); } catch (err) {
+    setImmediate(() => handle.emit('error', err));
+    return handle;
+  }
   let launcherSpawnError = null;
   let launcherExit = null;
   const launcher = isWindows
@@ -653,6 +672,13 @@ export async function spawnDetached(bin, args = [], {
   };
 
   await awaitPid();
+  if (handle.pid !== null) {
+    try { writer.launched(handle.pid); } catch {
+      // The child may already exist. Preserve the reservation and control
+      // files; inventory cannot mistake this for a completed or absent writer.
+      console.error('❌ Could not persist detached writer launch evidence');
+    }
+  }
 
   if (isWindows && launchError) {
     // Persist cancellation before returning or scheduling cleanup. A supervisor

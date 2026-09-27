@@ -1,3 +1,8 @@
+// Lifecycle-specific suite; durable admission has its own subprocess contract.
+vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
+  assertLaunchAllowed() {}, launched() {}, completed() {},
+}) }));
+
 import { EventEmitter } from 'events';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';

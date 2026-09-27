@@ -1,3 +1,8 @@
+// Lifecycle-specific suite; durable admission has its own subprocess contract.
+vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
+  assertLaunchAllowed() {}, launched() {}, completed() {},
+}) }));
+
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -363,6 +368,7 @@ describe('spawnDetached', () => {
     const heartbeat = join(controlDir, 'heartbeat');
     // A stand-in for portos-server: it spawns the job and then just stays alive.
     const spawnerPath = join(controlDir, 'spawner.mjs');
+    await writeFile(join(controlDir, '.portos-disposable-root'), '');
     await writeFile(spawnerPath, [
       `import { spawnDetached } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, 'detachedSpawn.js')).href)};`,
       'await spawnDetached(process.execPath, [',
@@ -374,7 +380,9 @@ describe('spawnDetached', () => {
       'setInterval(() => {}, 1000);',
     ].join('\n'));
 
-    const spawner = spawn(process.execPath, [spawnerPath], { stdio: 'ignore' });
+    const spawner = spawn(process.execPath, [spawnerPath], {
+      stdio: 'ignore', env: { ...process.env, PORTOS_DATA_ROOT: controlDir },
+    });
     const pidFile = join(controlDir, 'pid');
     const readPid = async () => Number.parseInt(await readFile(pidFile, 'utf8').catch(() => ''), 10);
     expect(await waitUntil(async () => Number.isFinite(await readPid()))).toBe(true);

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PATHS } from '../server/lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../server/lib/databaseMaintenanceJournal.js';
+import { createDatabaseWriterRegistry } from '../server/lib/databaseWriterRegistry.js';
 
 const journal = createDatabaseMaintenanceJournal();
 const require = createRequire(import.meta.url);
@@ -19,6 +20,11 @@ function configuredEndpoints() {
 
 function main() {
   const [command, ...args] = process.argv.slice(2);
+  if (command === 'writers' && args.length === 0) {
+    const counts = { unresolved: 0, launched: 0, exited: 0 };
+    for (const writer of createDatabaseWriterRegistry().read()) counts[writer.state] += 1;
+    return { ...counts, quiescenceVerified: false };
+  }
   if (command === 'status' && args.length === 0) {
     const record = journal.read();
     // Endpoints are local-only; the operator-facing status needs only direction.
@@ -39,7 +45,7 @@ function main() {
   if (command === 'cancel' && args.length === 1) {
     return journal.cancel(args[0], configuredEndpoints().source);
   }
-  throw new Error('Usage: node scripts/database-maintenance.mjs status | begin <native|docker> <native|docker> | cancel <operation-id>');
+  throw new Error('Usage: node scripts/database-maintenance.mjs status | writers | begin <native|docker> <native|docker> | cancel <operation-id>');
 }
 
 try {
