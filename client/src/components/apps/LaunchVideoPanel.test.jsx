@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LaunchVideoPanel from './LaunchVideoPanel';
-import { createAppLaunchVideo, getAppLaunchVideos } from '../../services/apiApps';
-vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn() }));
+import { createAppLaunchVideo, getAppLaunchVideos, publishAppLaunchVideo } from '../../services/apiApps';
+vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn() }));
 vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: async () => ({ tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] }) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
@@ -74,4 +74,23 @@ describe('launch video drawer', () => {
     fireEvent.click(takes.querySelectorAll('button')[0]);
     expect(await screen.findByText('Newest caption.')).toBeTruthy();
   });
+});
+
+
+it('publishes the URL-selected take once and exposes the queued workflow', async () => {
+  getAppLaunchVideos.mockResolvedValueOnce({ videos: [
+    { id: 'newest', filename: 'newest.mp4', createdAt: '2026-01-02' },
+    { id: 'older', filename: 'older.mp4', createdAt: '2026-01-01' },
+  ] });
+  let finish;
+  publishAppLaunchVideo.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  renderPanel('/?video=older');
+  fireEvent.click(await screen.findByRole('button', { name: 'Publish GIF to README and merge PR' }));
+  expect(screen.getByRole('button', { name: 'Queuing publication…' }).disabled).toBe(true);
+  expect(publishAppLaunchVideo).toHaveBeenCalledExactlyOnceWith('example', {
+    videoId: 'older', provider: 'example-provider', model: 'example-model',
+  }, { silent: true });
+  finish({ taskId: 'task-publish' });
+  expect((await screen.findByRole('status')).textContent).toContain('README publication queued');
+  expect(screen.getByRole('link', { name: /Follow the render/ }).getAttribute('href')).toBe('/cos/agents');
 });

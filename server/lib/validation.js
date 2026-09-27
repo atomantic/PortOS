@@ -2438,6 +2438,10 @@ export const mindBundleApplySchema = z.object({
   )).strict(),
 }).strict();
 
+export const appLaunchVideoPublishSchema = z.object({
+  videoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),
+}).strict();
+
 export const appLaunchVideoRequestSchema = z.object({
   tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
   direction: z.string().trim().max(2000).default(''),
