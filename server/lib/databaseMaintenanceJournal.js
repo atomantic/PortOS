@@ -29,6 +29,15 @@ const coordinatorSchema = z.object({
   token: z.string().uuid(),
 }).strict();
 const successorSchema = coordinatorSchema.extend({ previousToken: z.string().uuid() });
+const producerSnapshotSchema = z.object({
+  id: z.string().uuid(),
+  producers: z.array(z.object({
+    name: z.enum(['portos-cos', 'portos-server']),
+    pmId: z.number().int().nonnegative(), pid: z.number().int().nonnegative(),
+    cwd: z.string().min(1), script: z.string().min(1),
+    status: z.enum(['online', 'stopped']),
+  }).strict()).length(2),
+}).strict();
 const decisionSchema = coordinatorSchema.extend({
   stage: z.enum(stages),
   action: z.discriminatedUnion('kind', [
@@ -259,6 +268,33 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return current;
   };
 
+  // Retain the pre-stop producer identities across same-operation recovery.
+  // Partial publication is never interpreted as an empty producer set.
+  const readProducerSnapshot = (id, token) => {
+    assertCoordinatorWorker(id, token);
+    const path = join(activeDir, 'producers.json');
+    try {
+      if (!lstatSync(path).isFile()) throw databaseMaintenanceError();
+      const snapshot = producerSnapshotSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+      if (snapshot.id !== id || new Set(snapshot.producers.map(p => p.name)).size !== 2
+        || new Set(snapshot.producers.map(p => p.pmId)).size !== 2) throw databaseMaintenanceError();
+      return snapshot.producers;
+    } catch (err) {
+      if (err.code === 'ENOENT' && read().stage === 'accepted') return null;
+      throw databaseMaintenanceError();
+    }
+  };
+
+  const recordProducerSnapshot = (id, token, producers) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance producer inventory');
+    assertCoordinatorWorker(id, token);
+    if (read().stage !== 'accepted' || readProducerSnapshot(id, token)) throw databaseMaintenanceError();
+    const snapshot = producerSnapshotSchema.parse({ id, producers });
+    writeDurableExclusive(join(activeDir, 'producers.json'), snapshot);
+    syncDirectory(activeDir);
+    return readProducerSnapshot(id, token);
+  };
+
   // A durable CAS for EACH outgoing (owner, stage) state. Transition and
   // recovery compete on the SAME file, so a predecessor paused after checking
   // its token cannot publish a new stage after losing ownership. Interrupted
@@ -400,7 +436,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   };
 
   return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition,
-    reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker };
+    reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker,
+    readProducerSnapshot, recordProducerSnapshot };
 }
 
 const journal = createDatabaseMaintenanceJournal();

@@ -544,6 +544,23 @@ export async function listProcessesStrict(pm2Home = null) {
   return list.map(mapProcess);
 }
 
+/** Internal maintenance inventory: fresh daemon read, no UI cache or env dump. */
+export async function listMaintenanceProcesses() {
+  return connectAndRun(pm2 => new Promise((resolve, reject) => {
+    pm2.list((err, list) => {
+      if (err || !Array.isArray(list)) {
+        reject(new Error('PM2 maintenance inventory unavailable.'));
+        return;
+      }
+      resolve(list.map(proc => ({
+        name: proc?.name, pmId: proc?.pm_id, pid: proc?.pid,
+        status: proc?.pm2_env?.status,
+        cwd: proc?.pm2_env?.pm_cwd, script: proc?.pm2_env?.pm_exec_path,
+      })));
+    });
+  }));
+}
+
 // Shared shaping for listProcesses / listProcessesStrict so the two never drift.
 function mapProcess(proc) {
   return {

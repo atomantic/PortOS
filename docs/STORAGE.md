@@ -283,6 +283,26 @@ not promise that a later request is safe. The future acceptance path must repeat
 these checks under its final admission protocol. Missing/unreadable work state,
 configuration drift, or an existing maintenance fence refuses the check.
 
+The internal `stopOwnedDatabaseProducers` coordinator stage retains the original
+PM2 CoS/server identities in the operation's local `producers.json`, stops CoS
+before the server by numeric PM2 id, and verifies a fresh daemon read after each
+stop. Missing/duplicate/foreign identities, changed live PIDs, unknown lifecycle
+states, failed stops, or failed readback keep the operation fenced. Recovery
+uses the same recorded operation and original identities; it never changes the
+saved backend. Producer shutdown alone does **not** prove child/spawn quiescence
+or authorize a dump. Public migration and the inspection-only worker remain
+disabled for transfer until descendant reconciliation (#8870), transfer (#8871),
+and verified restart (#8851) are integrated.
+
+For stage diagnostics, run `node scripts/database-maintenance.mjs status` and
+`node scripts/database-maintenance.mjs writers`. `accepted` means no transfer
+has begun; `quiescing` requires retained producer and child reconciliation
+evidence. Do not remove the fence, erase `producers.json`, probe a PID to infer
+ownership, or reverse source/target. There is no user-callable resume or bypass
+for the unfinished transfer stages. A same-operation internal successor requires
+the prior detached supervisor's durable exit receipt and must repeat shutdown
+readback before any subsequent transfer stage.
+
 Keep the existing backend selected and use backups until the coordinated
 offline cutover is available (tracked in #8797 / #8805). A safe cutover requires
 downtime for **all** PortOS writers, including the CoS runner, and verification
