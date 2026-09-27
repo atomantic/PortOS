@@ -233,6 +233,17 @@ describe('style reference (#8961)', () => {
     expect(await readFile(join(runRoot, 'reference', 'style-reference.jpg'))).toEqual(JPEG_HEADER);
   });
 
+  it('names the copied reference by its real detected format, not a misleading filename', async () => {
+    await mkdir(PATHS.uploads, { recursive: true });
+    // A real PNG saved under a `.jpg` name — the destination extension must
+    // follow the sniffed bytes, or the agent gets handed an unreadable file.
+    await writeFile(join(PATHS.uploads, 'abc12345-mislabeled.jpg'), PNG_HEADER);
+    const response = await submit({ styleReference: { kind: 'image', source: 'upload', filename: 'abc12345-mislabeled.jpg' } });
+    expect(response.status).toBe(202);
+    const runRoot = join(PATHS.data, 'launch-videos', 'example', response.body.runId);
+    expect(await readdir(join(runRoot, 'reference'))).toEqual(['style-reference.png']);
+  });
+
   it('rejects an oversized reference and a file claiming to be an image that is not one', async () => {
     await mkdir(PATHS.images, { recursive: true });
     await writeFile(join(PATHS.images, 'not-an-image.png'), 'plain text, no magic bytes');

@@ -71,13 +71,15 @@ async function resolveStyleReferenceSource(dataRoot, { source, kind, filename })
   if (info.size > MAX_STYLE_REFERENCE_BYTES) {
     throw new ServerError('Style reference file is too large', { status: 400 });
   }
-  if (kind === 'image') {
-    const handle = await open(sourcePath, 'r');
-    const head = Buffer.alloc(16);
-    await handle.read(head, 0, 16, 0).finally(() => handle.close());
-    if (!detectImageFormat(head)) throw new ServerError('Style reference is not a recognized image', { status: 400 });
-  }
-  return sourcePath;
+  if (kind !== 'image') return { path: sourcePath, ext: extname(sourcePath) || '.mp4' };
+  const handle = await open(sourcePath, 'r');
+  const head = Buffer.alloc(16);
+  await handle.read(head, 0, 16, 0).finally(() => handle.close());
+  const detected = detectImageFormat(head);
+  if (!detected) throw new ServerError('Style reference is not a recognized image', { status: 400 });
+  // The real extension, not the client-controlled filename's: a genuine PNG
+  // saved under a misleading name (or none) must not be copied in as one.
+  return { path: sourcePath, ext: detected.ext };
 }
 
 router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res) => {
@@ -226,9 +228,8 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     if (styleReferenceSource) {
       const referenceDir = join(outputRoot, 'reference');
       await mkdir(referenceDir, { recursive: true });
-      const referenceName = `style-reference${extname(styleReferenceSource) || (styleReference.kind === 'video' ? '.mp4' : '.png')}`;
-      const referencePath = join(referenceDir, referenceName);
-      await copyFileGuarded(styleReferenceSource, referencePath);
+      const referencePath = join(referenceDir, `style-reference${styleReferenceSource.ext}`);
+      await copyFileGuarded(styleReferenceSource.path, referencePath);
       styleReferencePrompt = { referencePaths: [referencePath] };
       if (styleReference.kind === 'video') {
         const { encodeReferenceContactSheet } = await import('../../services/htmlComposition/encode.js');

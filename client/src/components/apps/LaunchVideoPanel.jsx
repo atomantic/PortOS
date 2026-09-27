@@ -215,7 +215,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       </ul>}
     </fieldset>}
     <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-    <button type="submit" className={buttonClass} disabled={running || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+    <button type="submit" className={buttonClass} disabled={running || referenceUploading || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
   </form>;
 }
 
