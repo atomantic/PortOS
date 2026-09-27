@@ -56,6 +56,16 @@ function runner(assertDatabaseAdmission = vi.fn()) {
   const spawn = vi.fn(makeChild);
   const pty = { spawn: vi.fn(makeChild) };
   const commandExists = vi.fn(async () => true);
+  const createAgentSentinelAccess = vi.fn(() => ({
+    path: null,
+    exists: () => false,
+    resolvedPath: () => null,
+    read: async () => '',
+    remove: async () => {},
+    promote: async () => true,
+    cleanup: async () => {},
+    watch: vi.fn(() => () => {}),
+  }));
   runInNewContext(source, {
     assertDatabaseAdmission,
     express, http: { createServer: () => server }, SocketServer: function () { return io; },
@@ -65,6 +75,7 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     readFile: async path => files.get(path) ?? '{}', writeFile, withState, drainState,
     createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
     armForceKillShared: armForceKill, killProcessTree, spawn, pty,
+    createAgentSentinelAccess,
     buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),
     prepareCliPrompt: (command, args) => ({ args, useStdin: false, cleanup: vi.fn() }),
     commandExists, findCommandOnPath: command => command,

@@ -147,6 +147,7 @@ vi.mock('fs', () => ({
   // Default: no .agent-done sentinel on disk. The completion-sentinel test
   // overrides this to true. Re-set in beforeEach so it can't leak between tests.
   existsSync: vi.fn().mockReturnValue(false),
+  statSync: vi.fn().mockReturnValue({ isFile: () => true, mtimeMs: Date.now() }),
   watch: vi.fn(() => {
     let onClose;
     return {
@@ -238,7 +239,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   return { ...actual, execFile: vi.fn((_file, _args, _opts, cb) => cb(new Error('not mocked'))) };
 });
 
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { readFile, rm } from 'fs/promises';
 import { execFile } from '../lib/childProcess.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
@@ -808,6 +809,7 @@ describe('spawnTuiAgent runtime', () => {
     // completion-sentinel test overrides both. clearAllMocks keeps the factory
     // implementation, so re-set explicitly to prevent cross-test leakage.
     vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(statSync).mockReturnValue({ isFile: () => true, mtimeMs: Date.now() });
     vi.mocked(readFile).mockResolvedValue('');
 
   });
@@ -2923,6 +2925,36 @@ describe('spawnTuiAgent runtime', () => {
       .join('');
     expect(outputTxtWrites).toContain('Implemented the fix.');
     expect(outputTxtWrites).toContain('https://example.com/pr/42');
+  });
+
+  it('finalizes a one-character-truncated sentinel and stops the idle nudge loop', async () => {
+    const truncatedName = '.agent-done-agent-ded2dcc';
+    const sentinel = '## Summary\nRecovered after a terminal path truncation.';
+    vi.mocked(existsSync).mockImplementation((filePath) =>
+      filePath === '/tmp/ws' || (typeof filePath === 'string' && filePath.endsWith(truncatedName))
+    );
+    vi.mocked(readFile).mockImplementation(async (filePath) =>
+      typeof filePath === 'string' && filePath.endsWith(truncatedName) ? sentinel : ''
+    );
+
+    const spawnPromise = runSpawn({ agentId: 'agent-ded2dccb', workspacePath: '/tmp/ws' });
+    await flushMicrotasks();
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await spawnPromise;
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-ded2dccb',
+        success: true,
+        completionReason: 'agent-signaled-done',
+      }),
+    );
+
+    const pasteCount = vi.mocked(shellService.pasteToSession).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * (STALL_NUDGE_MAX_ATTEMPTS + 1));
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(pasteCount);
   });
 
   // ── 11. A PortOS host restart is an interruption, never a completion ─────────

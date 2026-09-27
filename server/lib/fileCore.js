@@ -66,8 +66,23 @@ export function parseFilesystemStats(stats) {
   };
 }
 
-/** Watch for a file to appear without repeatedly stat'ing its parent directory. */
-export function watchForFile(filePath, onDetected, { settleMs = 50, pollMs = FILE_WATCH_FALLBACK_POLL_MS } = {}) {
+/**
+ * Watch for a file to appear without repeatedly stat'ing its parent directory.
+ *
+ * `shouldDetect` is a run-specific acceptance gate for callers watching a
+ * compatibility name. It is evaluated only after the target exists, so a
+ * rejected stale/ambiguous file remains watchable and can be accepted if a
+ * later write makes it valid.
+ */
+export function watchForFile(
+  filePath,
+  onDetected,
+  {
+    settleMs = 50,
+    pollMs = FILE_WATCH_FALLBACK_POLL_MS,
+    shouldDetect = () => true,
+  } = {},
+) {
   const targetName = basename(filePath);
   const targetDir = dirname(filePath);
   let closed = false;
@@ -89,7 +104,7 @@ export function watchForFile(filePath, onDetected, { settleMs = 50, pollMs = FIL
     watcher.close();
   };
   const detect = (settle = true) => {
-    if (closed || detected || !existsSync(filePath)) return;
+    if (closed || detected || !existsSync(filePath) || !shouldDetect(filePath)) return;
     detected = true;
     if (!settle) {
       close(notify);

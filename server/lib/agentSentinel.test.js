@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { DONE_SENTINEL_NAME, doneSentinelAgentId, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, missingSentinelLogMessage, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelAgentId, doneSentinelCandidateNames, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, missingSentinelLogMessage, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
 
 describe('missingSentinelLogMessage', () => {
   it('names a startup failure as the reason the sentinel was never written', () => {
@@ -56,6 +56,21 @@ describe('agentSentinel', () => {
       // A traversal-shaped id must not escape the workspace directory.
       expect(doneSentinelName('../../etc/passwd')).toBe('.agent-done-passwd');
       expect(doneSentinelName('a b/c')).toBe('.agent-done-c');
+    });
+  });
+
+  describe('doneSentinelCandidateNames', () => {
+    it('keeps the canonical name first and bounds recovery to one dropped hex suffix', () => {
+      expect(doneSentinelCandidateNames('agent-ded2dccb')).toEqual([
+        '.agent-done-agent-ded2dccb',
+        '.agent-done-agent-ded2dcc',
+      ]);
+    });
+
+    it('does not broaden recovery for non-generated or non-hex ids', () => {
+      expect(doneSentinelCandidateNames('agent-1a2b3c')).toEqual(['.agent-done-agent-1a2b3c']);
+      expect(doneSentinelCandidateNames('agent-1234567g')).toEqual(['.agent-done-agent-1234567g']);
+      expect(doneSentinelCandidateNames(null)).toEqual(['.agent-done']);
     });
   });
 

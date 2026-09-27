@@ -13,7 +13,7 @@ import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
-import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -970,10 +970,11 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // by finalizeAgent before this cleanup runs. Ignore it for the preservation
   // decision, while still preserving the tree if any real change remains; the
   // eventual forced worktree removal discards it with the rest of the completed
-  // checkout. Both names — THIS run's `.agent-done-<agentId>` and the legacy
-  // shared one a pre-upgrade run may have left — and no other agent's.
+  // checkout. The run's canonical name and its bounded truncation-recovery
+  // name, plus the legacy shared one a pre-upgrade run may have left — and no
+  // other agent's.
   const dirt = classifyWorktreeDirt(dirtyFiles, {
-    ignoredPaths: [DONE_SENTINEL_NAME, doneSentinelName(agentId)]
+    ignoredPaths: [DONE_SENTINEL_NAME, ...doneSentinelCandidateNames(agentId)]
   });
   if (!dirt.clean && options.discardDirt) {
     // Throwaway posture: the caller has already established that nothing in this

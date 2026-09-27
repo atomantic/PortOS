@@ -24,8 +24,6 @@
  */
 
 import { join } from 'path';
-import { existsSync } from 'fs';
-import { readFile, rm } from 'fs/promises';
 import * as shellService from './shell.js';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
@@ -36,9 +34,10 @@ import { buildTuiSpawnConfig } from './agentTuiSpawning/spawnConfig.js';
 import { finalizeAgent } from './agentFinalization.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { activeAgents, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
-import { PATHS, watchForFile } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
+import { createAgentSentinelAccess } from './agentSentinelWatcher.js';
 import { PTY_UNAVAILABLE_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { leavesPrForHuman } from '../lib/prDisposition.js';
@@ -304,6 +303,12 @@ export async function spawnTuiAgent({
   // exit) finalizes first. Resolved from the shared helper, so this is
   // byte-identical to the path the prompt told the agent to write.
   const doneSentinelPath = resolveDoneSentinelPath(cwd, agentId);
+  const sentinelAccess = createAgentSentinelAccess({
+    workspacePath: cwd,
+    agentId,
+    startedAt: Date.now(),
+    getActiveAgentIds: () => activeAgents.keys(),
+  });
   // Every TUI that is a real coding harness drives its own push → PR → review
   // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
   // the slashdo command (`prOpenedBy: 'agent-slashdo'`),
@@ -381,10 +386,13 @@ export async function spawnTuiAgent({
     },
     sentinel: {
       path: doneSentinelPath,
-      exists: () => !!doneSentinelPath && existsSync(doneSentinelPath),
-      read: () => readFile(doneSentinelPath, 'utf8'),
-      remove: () => (doneSentinelPath ? rm(doneSentinelPath).catch(() => {}) : Promise.resolve()),
-      watch: (onDetect) => (doneSentinelPath ? watchForFile(doneSentinelPath, onDetect) : null),
+      exists: sentinelAccess.exists,
+      resolvedPath: sentinelAccess.resolvedPath,
+      read: () => sentinelAccess.read(),
+      remove: () => sentinelAccess.remove(),
+      promote: (contents) => sentinelAccess.promote(contents),
+      cleanup: () => sentinelAccess.cleanup(),
+      watch: (onDetect) => sentinelAccess.watch(onDetect),
     },
     finalization: {
       finalizeAgent,

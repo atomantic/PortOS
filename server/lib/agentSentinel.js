@@ -62,6 +62,24 @@ export function doneSentinelName(agentId) {
 }
 
 /**
+ * The names a run-scoped watcher may inspect, in canonical-first order.
+ *
+ * Producers have exactly one name: `doneSentinelName(agentId)`. The second
+ * name is a deliberately narrow recovery for a generated agent id whose final
+ * hexadecimal character was dropped while a terminal copied the path. It is
+ * not a second producer contract: runtime consumers must still require a
+ * fresh, unambiguous file before accepting it.
+ */
+export function doneSentinelCandidateNames(agentId) {
+  const canonical = doneSentinelName(agentId);
+  const normalizedId = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!/^agent-[0-9a-f]{8}$/.test(normalizedId)) return [canonical];
+
+  const truncated = doneSentinelName(normalizedId.slice(0, -1));
+  return truncated === canonical ? [canonical] : [canonical, truncated];
+}
+
+/**
  * The agent id encoded in a done-sentinel filename.
  *
  * The inverse of `doneSentinelName`, and the only place that reverses it:
@@ -80,18 +98,6 @@ export function doneSentinelAgentId(name) {
   return name.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null;
 }
 
-/**
- * The one path this run's sentinel lives at — `null` without a workspace.
- *
- * Every producer and consumer resolves it here: the prompt the agent is given
- * (agentPromptBuilder), the sentinel watchers and the durable runner's watch
- * (agentTuiSpawning), the CLI exit check (agentCliSpawning), and the
- * output-hook payload read (agentFinalization). One path, not a candidate list:
- * a second accepted name would give those pollers different answers to "did
- * this run finish", which is the failure the scoped name exists to remove.
- *
- * Pure: callers do their own `existsSync` / read.
- */
 const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'command-not-found']);
 
 /**
@@ -111,6 +117,14 @@ export function missingSentinelLogMessage({ agentId, reason, sentinelPath, merge
   return `${agentId} finalized (${reason}) with no completion sentinel — expected ${sentinelPath}`;
 }
 
+/**
+ * The one canonical path this run's sentinel lives at — `null` without a
+ * workspace. Producers and normal consumers resolve it here: the prompt the
+ * agent is given, the canonical TUI watcher, the CLI exit check, and the
+ * output-hook payload read. The TUI runtime may additionally use
+ * `doneSentinelCandidateNames` for its bounded terminal-copy recovery; this
+ * function remains the producer's one canonical path and is pure.
+ */
 export function doneSentinelPath(workspacePath, agentId) {
   if (!workspacePath || typeof workspacePath !== 'string') return null;
   return join(workspacePath, doneSentinelName(agentId));
