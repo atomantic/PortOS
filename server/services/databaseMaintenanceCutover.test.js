@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 import { installCutoverStubs, restartedServerEndpoint } from '../test/fixtures/databaseCutoverStubs.js';
+import { snapshotProcesses } from '../lib/detachedSpawn.js';
 
 const context = vi.hoisted(() => ({ root: undefined, list: null, stop: null, restart: null }));
 vi.mock('../lib/paths.js', async original => {
@@ -37,6 +38,8 @@ const native = { mode: 'native', host: 'db.example.invalid', port: 5432, databas
 const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, database: 'example_test', user: 'example' };
 const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 4000 };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const processStart = async pid => process.platform === 'win32' ? null
+  : (await snapshotProcesses()).find(row => row.pid === pid)?.startedAt;
 const savedEnv = { ...process.env };
 
 let root;
@@ -197,7 +200,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     // A healthy restarted server proves the target and waits at the fence.
     const pid = cutover.launchServer(docker);
     rows.find(row => row.name === 'portos-server').pid = pid;
-    await vi.waitFor(() => expect(journal.readTargetProof(operation.id, pid)).not.toBeNull(), { timeout: 15_000, interval: 20 });
+    await vi.waitFor(async () => expect(journal.readTargetProof(operation.id, pid, await processStart(pid))).not.toBeNull(), { timeout: 15_000, interval: 20 });
     // A worker crashes between verification and release.
     successor();
     journal.enterCoordinatorWorker(operation.id, token);
@@ -230,6 +233,11 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
       await expect(run()).rejects.toThrow(/did not prove the target backend/);
       expect(journal.read().stage).toBe('verifying');
       expect(() => journal.assertAdmission()).toThrow();
+      // The new incarnation can publish its own proof without colliding with
+      // immutable evidence left by the earlier holder of this PID.
+      const startedAt = await processStart(impostor.pid);
+      expect(journal.recordTargetProof(operation.id, impostor.pid, startedAt)).toMatchObject({ startedAt });
+      expect(journal.readTargetProof(operation.id, impostor.pid, startedAt)).toMatchObject({ startedAt });
     } finally {
       impostor.kill('SIGKILL');
     }
@@ -242,7 +250,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     cutover.setHealth('healthy');
     const pid = cutover.launchServer(docker);
     rows.find(row => row.name === 'portos-server').pid = pid;
-    await vi.waitFor(() => expect(journal.readTargetProof(operation.id, pid)).not.toBeNull(), { timeout: 15_000, interval: 20 });
+    await vi.waitFor(async () => expect(journal.readTargetProof(operation.id, pid, await processStart(pid))).not.toBeNull(), { timeout: 15_000, interval: 20 });
     successor();
     journal.enterCoordinatorWorker(operation.id, token);
     journal.transition(operation.id, token, 'verifying', 'verified');

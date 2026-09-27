@@ -604,7 +604,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   // Operation-scoped archive for detached-writer records proven quiescent.
   const reconciledWritersDirectory = join(activeDir, 'reconciled-writers');
 
-  const targetProofPath = pid => join(activeDir, 'target-proof-' + z.number().int().positive().parse(pid) + '.json');
+  const targetProofPath = (pid, startedAt) => join(activeDir, 'target-proof-' + z.number().int().positive().parse(pid)
+    + (startedAt === undefined ? '' : '-' + z.number().int().nullable().parse(startedAt)) + '.json');
 
   // Published by a booting ordinary server AFTER its own pool passed the
   // read-only target verification. Only verifying/verified may carry one.
@@ -612,17 +613,20 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     assertNotRealDataWrite(activeDir, 'database maintenance target proof');
     const current = read();
     if (!current || current.id !== id || !['verifying', 'verified'].includes(current.stage)) throw databaseMaintenanceError();
-    publishImmutable(targetProofPath(pid), targetProofSchema.parse({ id, pid, startedAt, target: current.target }));
-    return readTargetProof(id, pid);
+    publishImmutable(targetProofPath(pid, startedAt), targetProofSchema.parse({ id, pid, startedAt, target: current.target }));
+    return readTargetProof(id, pid, startedAt);
   };
 
-  function readTargetProof(id, pid) {
+  function readTargetProof(id, pid, startedAt) {
     const current = read();
     if (!current || current.id !== id) throw databaseMaintenanceError();
-    const proof = readRecord(targetProofPath(pid), targetProofSchema);
+    // Retain already-written proofs from older installs, but never let a
+    // reused PID inherit evidence belonging to another process incarnation.
+    const proof = readRecord(targetProofPath(pid, startedAt), targetProofSchema)
+      ?? readRecord(targetProofPath(pid), targetProofSchema);
     if (proof && (proof.id !== id || proof.pid !== pid
       || JSON.stringify(proof.target) !== JSON.stringify(current.target))) throw databaseMaintenanceError();
-    return proof;
+    return proof && startedAt !== undefined && proof.startedAt !== startedAt ? null : proof;
   }
 
   /**

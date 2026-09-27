@@ -114,11 +114,11 @@ async function commitSavedMode(operation) {
 
 // A proof counts only for the process that wrote it: same pid AND the start
 // time the process table reports for that pid now.
-async function proofMatchesProcess(proof, pid) {
-  if (!proof) return false;
-  if (process.platform === 'win32') return proof.startedAt === null;
+async function proofMatchesProcess(journal, id, pid) {
+  if (process.platform === 'win32') return journal.readTargetProof(id, pid, null)?.startedAt === null;
   const row = (await snapshotProcesses().catch(() => [])).find(value => value.pid === pid);
-  return Number.isSafeInteger(proof.startedAt) && row?.startedAt === proof.startedAt;
+  if (!Number.isSafeInteger(row?.startedAt)) return false;
+  return journal.readTargetProof(id, pid, row.startedAt)?.startedAt === row.startedAt;
 }
 
 /**
@@ -136,7 +136,7 @@ async function awaitRestartedTarget(journal, operation, token, saved, { proofTim
     journal.assertEnteredCoordinatorWorker(id, token);
     const server = (await readRecordedProducers(saved)).find(row => row.name === 'portos-server');
     if (server.status === 'online' && server.pid > 0
-      && await proofMatchesProcess(journal.readTargetProof(id, server.pid), server.pid)) return server.pid;
+      && await proofMatchesProcess(journal, id, server.pid)) return server.pid;
     if (server.status !== 'online' && !restarted) {
       journal.assertEnteredCoordinatorWorker(id, token);
       const result = await restartMaintenanceProducer('portos-server', recordedEndpointEnv(operation)).catch(() => null);
