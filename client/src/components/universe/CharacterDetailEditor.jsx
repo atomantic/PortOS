@@ -47,9 +47,9 @@ import {
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
-  benchmarkProfileInteractive,
   startFineTuningJob,
 } from '../../services/apiVoice';
+import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 import VoicePicker from '../voice/VoicePicker';
 import TabPills from '../ui/TabPills';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -900,9 +900,18 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
     return result;
   }, { errorMessage: 'Could not render voice benchmark' });
 
+  const [pendingPlayback, setPendingPlayback] = useState(null);
+  const playbackReady = pendingPlayback?.profileId === profile?.id && pendingPlayback?.profileRevision === profile?.version;
   const [qualifyInteractive, qualifyingInteractive] = useAsyncAction(async () => {
     if (!profile?.id) return null;
-    const result = await benchmarkProfileInteractive(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+    if (!playbackReady) {
+      const probe = await prepareProfilePlayback(profile.id, { maxFirstAudioMs: 900 }, { silent: true });
+      setPendingPlayback(probe);
+      return probe;
+    }
+    setPendingPlayback(null);
+    const result = await pendingPlayback.play();
+    setProfile(result?.profile || null);
     await refreshProfiles();
     return result;
   }, { errorMessage: 'Interactive benchmark qualification failed' });
@@ -959,7 +968,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
               </p>
               {profile.benchmark?.interactiveLatencyMs ? (
                 <p className="text-[10px] text-port-success">
-                  Interactive Latency Benchmark: {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
+                  {profile.benchmark.interactiveMeasurement?.boundary === 'browser-playing-segmented' ? 'Render + playback-start benchmark:' : 'Buffered synthesis benchmark:'} {profile.benchmark.interactiveLatencyMs}ms (threshold: {profile.routes?.interactive?.maxFirstAudioMs || 900}ms)
                 </p>
               ) : null}
             </div>
@@ -984,7 +993,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
               type="button" onClick={qualifyInteractive} disabled={disabled || qualifyingInteractive || !approved}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
-              {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} Qualify interactive route
+              {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} {playbackReady ? 'Play benchmark to qualify' : 'Qualify interactive route'}
             </button>
           </div>
 

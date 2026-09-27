@@ -61,13 +61,25 @@ reported revisions before treating this as a validated speech runtime. The
 reference is generated, so no personal recording or consent is needed for this
 smoke. A successful command or non-silent WAV alone does not establish quality.
 
-Interactive profile benchmarks measure elapsed time until the buffered WAV is
-available at the synthesis service boundary. This includes model startup and
-rendering, but excludes browser/network playback latency. They record no
-similarity score without an actual similarity evaluator. Passing this latency
-gate does not establish intelligibility, speaker identity, or non-silent speech.
-Qualification and its
-route decision are saved together only for the profile revision rendered.
+Interactive profile qualification plays a fresh buffered WAV in the browser.
+The first click renders and transfers the probe. A second explicit playback
+click preserves browser autoplay permission. The latency gate sums measured
+render-request time and click-to-`playing` startup time, including response
+transfer and decoding, while excluding the operator's wait between clicks.
+It is a render-plus-playback-start benchmark, not continuous request-to-playback
+or first-chunk streaming latency. Rendering
+alone never enables the route. A one-use receipt expires after two minutes, binds
+the measurement to the rendered profile revision, and saves its boundary, model
+revision and route decision together. Restarting the server or changing the
+profile requires a fresh benchmark. The probe must reach `ended` after `playing`
+before submitting its startup measurement. Playback rejection or timeout cannot
+qualify.
+The browser reports its own playback event; this is a trusted operator-reported
+measurement, not an attestation of another machine's audio output. The receipt
+binds the report to a current probe but cannot prove that a remote client played
+it. Qualification changes profile routing, not execution authority. No similarity score is
+invented, and passing this latency gate does not establish intelligibility or
+speaker identity.
 
 ### FaceTime Audio control plane
 

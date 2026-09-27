@@ -42,6 +42,7 @@ vi.mock('../services/voice/profiles.js', async (importActual) => ({
 vi.mock('../services/voice/profileBenchmarks.js', () => ({
   renderProfileBenchmark: vi.fn(),
   benchmarkProfileInteractive: vi.fn(),
+  completeProfileInteractiveBenchmark: vi.fn(),
 }));
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
   getQwen3RuntimeStatus: vi.fn(),
@@ -198,12 +199,25 @@ describe('Voice Routes', () => {
     });
 
     it('runs interactive latency qualification benchmark', async () => {
-      profileBenchmarks.benchmarkProfileInteractive.mockResolvedValue({ id: 'voice-profile-1' });
+      profileBenchmarks.benchmarkProfileInteractive.mockResolvedValue({ benchmarkId: 'example-probe', audioBase64: 'fixture' });
       const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive').send({
         maxFirstAudioMs: 800,
       });
       expect(res.status).toBe(200);
+      expect(res.body).toEqual({ benchmark: { benchmarkId: 'example-probe', audioBase64: 'fixture' } });
       expect(profileBenchmarks.benchmarkProfileInteractive).toHaveBeenCalledWith('voice-profile-1', { maxFirstAudioMs: 800 });
+    });
+
+    it('validates a playback receipt before completing interactive qualification', async () => {
+      profileBenchmarks.completeProfileInteractiveBenchmark.mockResolvedValue({ id: 'voice-profile-1' });
+      const receipt = { benchmarkId: '12345678-1234-4234-8234-123456789012', renderRequestLatencyMs: 150, playbackStartupMs: 50 };
+      const res = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive/complete').send(receipt);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
+      expect(profileBenchmarks.completeProfileInteractiveBenchmark).toHaveBeenCalledWith('voice-profile-1', receipt);
+      const invalid = await request(buildApp()).post('/api/voice/profiles/voice-profile-1/benchmark-interactive/complete')
+        .send({ ...receipt, playbackStartupMs: -1 });
+      expect(invalid.status).toBe(400);
     });
 
     it('runs fixed benchmarks only for a valid profile id', async () => {

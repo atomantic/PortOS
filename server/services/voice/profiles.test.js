@@ -23,6 +23,7 @@ const {
   getProfileForSynthesis,
   profileArtifactDirectory,
   recordVoiceProfileRender,
+  saveProfileBenchmark,
 } = await import('./profiles.js');
 
 const PROFILE = {
@@ -254,6 +255,28 @@ describe('voice profile contract', () => {
       timing: { latencyMs: 24, durationMs: 850 },
       mastering: PROFILE.mastering,
     });
+  });
+
+  it('saves playback evidence and route atomically for the rendered revision and rejects stale revisions', async () => {
+    const benchmark = {
+      renderedAt: '2026-09-01T00:00:00.000Z', profileRevision: PROFILE.version,
+      interactiveLatencyMs: 120, similarityScore: null,
+      interactiveMeasurement: { boundary: 'browser-playing-segmented', synthesisLatencyMs: 90, renderRequestLatencyMs: 100, playbackStartupMs: 20, modelRevision: PROFILE.modelRevision },
+    };
+    const interactive = { enabled: true, maxFirstAudioMs: 900 };
+    queryMock.mockResolvedValueOnce({ rows: [{ data: { ...PROFILE, benchmark, routes: { ...PROFILE.routes, interactive } } }] });
+    const saved = await saveProfileBenchmark(PROFILE, benchmark, { interactive });
+    expect(saved.benchmark.interactiveMeasurement).toEqual(benchmark.interactiveMeasurement);
+    expect(saved.routes.interactive).toEqual(interactive);
+    const [sql, args] = queryMock.mock.calls[0];
+    expect(sql).toContain("(data->>'version')::int = $3");
+    expect(sql).toContain("COALESCE(NULLIF(data->'benchmark', 'null'::jsonb), '{}'::jsonb) || ($2::jsonb->'benchmark')");
+    expect(JSON.parse(args[1]).benchmark).not.toHaveProperty('lines');
+    expect(JSON.parse(args[1]).benchmark.interactiveMeasurement).toEqual(benchmark.interactiveMeasurement);
+    expect(args[2]).toBe(PROFILE.version);
+    expect(JSON.parse(args[3])).toEqual(interactive);
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    await expect(saveProfileBenchmark(PROFILE, benchmark, { interactive })).rejects.toMatchObject({ code: 'VOICE_PROFILE_BENCHMARK_STALE' });
   });
 
   it('rejects a profile on a disabled route instead of silently synthesizing it', async () => {

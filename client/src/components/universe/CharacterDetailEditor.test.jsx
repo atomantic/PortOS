@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import CharacterDetailEditor from './CharacterDetailEditor';
 import { MemoryRouter, useLocation } from 'react-router';
 
@@ -16,7 +16,7 @@ vi.mock('../../services/apiVoice', () => ({
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
   promoteVoiceProfile: vi.fn(),
-  benchmarkProfileInteractive: vi.fn(),
+
   startFineTuningJob: vi.fn(),
 }));
 
@@ -25,8 +25,10 @@ import {
   listVoiceProfiles,
   promoteVoicePreset,
   createVoiceDesignCandidate,
-  benchmarkProfileInteractive,
 } from '../../services/apiVoice';
+
+vi.mock('../../services/voiceProfileBenchmark', () => ({ prepareProfilePlayback: vi.fn() }));
+import { prepareProfilePlayback } from '../../services/voiceProfileBenchmark';
 
 const ARIA = { id: 'chr-aria', name: 'Aria' };
 const BRAM = { id: 'chr-bram', name: 'Bram' };
@@ -287,7 +289,8 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
         routes: { studio: { enabled: true }, interactive: { enabled: false, maxFirstAudioMs: 900 } },
       }],
     });
-    benchmarkProfileInteractive.mockResolvedValueOnce({
+    const play = vi.fn().mockResolvedValue({ profile: { id: 'voice-profile-1' } });
+    prepareProfilePlayback.mockResolvedValueOnce({ profileId: 'voice-profile-1', profileRevision: 1, play,
       profile: {
         id: 'voice-profile-1', version: 1, approval: { status: 'approved' },
         routes: { studio: { enabled: true }, interactive: { enabled: true, maxFirstAudioMs: 900 } },
@@ -301,9 +304,13 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     fireEvent.click(await screen.findByRole('button', { name: /Qualify interactive route/i }));
 
-    await waitFor(() => expect(benchmarkProfileInteractive).toHaveBeenCalledWith(
+    await waitFor(() => expect(prepareProfilePlayback).toHaveBeenCalledWith(
       'voice-profile-1', { maxFirstAudioMs: 900 }, { silent: true },
     ));
+    expect(play).not.toHaveBeenCalled();
+    const playbackButton = await screen.findByRole('button', { name: /Play benchmark to qualify/i });
+    await act(async () => { fireEvent.click(playbackButton); });
+    expect(play).toHaveBeenCalled();
   });
 
   it('marks a voice-canon revision as approved', () => {
