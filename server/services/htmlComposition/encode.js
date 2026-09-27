@@ -4,6 +4,18 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { findFfmpeg, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
 
+// Size the viewport for this format, then let the composition reframe itself
+// (#8960) before any seek captures it. A composition without a layout hook
+// renders exactly as before.
+async function frameFormat(page, { width, height, layout }) {
+  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  if (layout) {
+    page.check();
+    await page.evaluate(`globalThis.portosComposition.layout({ width: ${width}, height: ${height} })`);
+  }
+  page.check();
+}
+
 // Stream one frame at a time. The write callback supplies back-pressure and
 // the terminal race releases a pending write on exit, disconnect or cancel.
 export async function encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress } = {}) {
@@ -20,7 +32,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   const motionBlurFilter = sub > 1
     ? `tmix=frames=${sub},select='eq(mod(n\\,${sub})\\,${sub - 1})',setpts=N/${fps}/TB`
     : null;
-  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  await frameFormat(page, contract);
   const args = ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps * sub), '-vcodec', 'png', '-i', 'pipe:0'];
   if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
   args.push('-map', '0:v', '-vf', [motionBlurFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
@@ -98,7 +110,7 @@ export async function encodeContactSheet(page, contract, outputPath, { times, si
   const tileWidth = width < height ? 240 : 360;
   const columns = Math.min(PROOF_COLUMNS, times.length);
   const rows = Math.ceil(times.length / columns);
-  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  await frameFormat(page, contract);
   const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png', '-i', 'pipe:0',
     '-vf', `scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
     '-frames:v', '1', '-y', outputPath], safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));

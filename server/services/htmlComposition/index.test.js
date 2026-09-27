@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -145,6 +145,64 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
     expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
   }, 60000);
+
+  it('renders one launch timeline in three declared formats, each reframed by layout, as one take', async () => {
+    // layout() recolors the frame per orientation, so each poster proves the
+    // hook ran at that format's size before its seeks were captured.
+    const html = `<!doctype html><html><body style="margin:0"><script>
+      let fill = 'rgb(0,0,0)';
+      globalThis.portosComposition = { durationSec:15, fps:12, width:1920, height:1080,
+        formats: ['1920x1080', '1080x1920', '1080x1080'],
+        async layout({ width, height }) {
+          if (innerWidth !== width || innerHeight !== height) throw new Error('layout ran before the viewport resized');
+          fill = width === height ? 'rgb(0,0,255)' : width < height ? 'rgb(0,255,0)' : 'rgb(255,0,0)';
+        },
+        async seek(t) { document.body.style.background = fill; },
+      };</script></body></html>`;
+    const runId = randomUUID();
+    const input = await composition(html, `launch-videos/example/${runId}/composition`);
+    await writeFile(join(PATHS.data, input.directory, 'plan.md'), 'A fictional product demonstration.');
+    await writeFile(join(PATHS.data, input.directory, 'caption.txt'), 'Make a clear plan.');
+    await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({ posterSec: 5, scenes: [{ durationSec: 15, lines: [] }] }));
+    const launchVideo = { targetDurationSec: 15, appId: 'example', runId };
+    const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
+
+    // A proof checks one framing at a time: vertical gets phone-width 240px tiles.
+    const proof = await renderComposition({ ...input, launchVideo, proof: { everySec: 5, format: 'vertical' } });
+    expect(proof.proof).toMatchObject({ format: 'vertical', width: 1080, height: 1920, columns: 3, times: [0, 5, 10] });
+    expect((await readFile(join(PATHS.data, proof.proof.file))).readUInt32BE(16)).toBe(3 * 240 + 2 * 4);
+
+    // Requested out of order; rendered and delivered in the canonical order.
+    const jobId = randomUUID();
+    const result = await renderComposition({ ...input, jobId, launchVideo, formats: ['square', 'landscape', 'vertical'] });
+    const expected = [['landscape', 1920, 1080, [255, 0, 0]], ['vertical', 1080, 1920, [0, 255, 0]], ['square', 1080, 1080, [0, 0, 255]]];
+    expect(result.videos.map(video => video.format)).toEqual(expected.map(([format]) => format));
+    expect(result).toMatchObject({ generationId: jobId, id: jobId, appId: 'example', filename: `composition-${jobId}-landscape.mp4` });
+    const history = await loadHistory();
+    for (const [format, width, height, rgb] of expected) {
+      const video = result.videos.find(item => item.format === format);
+      expect(video).toMatchObject({ id: `${jobId}-${format}`, filename: `composition-${jobId}-${format}.mp4`, thumbnail: `${jobId}-${format}.jpg` });
+      // Same timeline: every format carries all 180 frames of the 15s storyboard.
+      expect(await probeVideoStreamInfo(join(PATHS.videos, video.filename))).toMatchObject({ width, height, frameCount: 180 });
+      expect(await readFile(join(runRoot, `video-${format}.mp4`))).toEqual(await readFile(join(PATHS.videos, video.filename)));
+      const pixel = execFileSync(ffmpeg, ['-v', 'error', '-i', join(runRoot, `poster-${format}.jpg`), '-vf', 'scale=1:1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      rgb.forEach((value, channel) => expect(Math.abs(pixel[channel] - value)).toBeLessThan(40));
+      expect(history).toContainEqual(expect.objectContaining({ id: video.id, width, height, durationSec: 15, numFrames: 180,
+        launchVideo: expect.objectContaining({ appId: 'example', runId, caption: 'Make a clear plan.' }) }));
+    }
+    // The storyboard, plan and caption are delivered once for the whole run.
+    expect((await readdir(runRoot)).sort()).toEqual(['caption.txt', 'composition', 'plan.md', 'poster-landscape.jpg', 'poster-square.jpg',
+      'poster-vertical.jpg', 'proofs', 'storyboard.json', 'video-landscape.mp4', 'video-square.mp4', 'video-vertical.mp4']);
+    expect(history.filter(item => item.launchVideo?.runId === runId)).toHaveLength(3);
+  }, 120000);
+
+  it('refuses a format the composition did not declare, before writing any output', async () => {
+    const input = await composition();
+    await expect(renderComposition({ ...input, formats: ['landscape', 'vertical'] })).rejects.toThrow('portosComposition.formats must include 1920x1080 to render landscape');
+    await expect(renderComposition({ ...input, jobId: randomUUID(), proof: { format: 'square' } })).rejects.toThrow('1080x1080');
+    expect((await readdir(PATHS.videos).catch(() => [])).some(name => name.includes(input.jobId))).toBe(false);
+    expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: expect.stringContaining(input.jobId) }));
+  });
 
   it('proofs a motion-kit launch composition as a contact sheet, then renders its synthesized cues', async () => {
     const html = `<!doctype html><html><body><script src="portos-motion.js"></script><script>

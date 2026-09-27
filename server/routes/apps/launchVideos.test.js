@@ -67,6 +67,29 @@ describe('user-triggered launch videos', () => {
     expect(duplicate.body.code).toBe('LAUNCH_VIDEO_ACTIVE');
   });
 
+  it('asks one run for several aspect ratios of the same film, keeping the single-format contract for one (#8960)', async () => {
+    const response = await submit({ formats: ['square', 'landscape', 'vertical'] });
+    expect(response.status).toBe(202);
+    const { prompt } = addTask.mock.calls[0][0];
+    // Canonical order in both the agent's options and the render payload it submits.
+    expect(prompt).toContain('"formats":["landscape","vertical","square"]');
+    expect(prompt).not.toContain('"format":');
+    const renderJson = JSON.parse(prompt.match(/^Render JSON: (.*)$/m)[1]);
+    expect(renderJson.formats).toEqual(['landscape', 'vertical', 'square']);
+    expect(prompt).toContain('portosComposition.formats');
+    addTask.mockClear();
+    // A one-item list is the older single-format request.
+    expect((await submit({ formats: ['vertical'] })).status).toBe(202);
+    const single = addTask.mock.calls[0][0].prompt;
+    expect(single).toContain('"format":"vertical"');
+    expect(JSON.parse(single.match(/^Render JSON: (.*)$/m)[1])).not.toHaveProperty('formats');
+    addTask.mockClear();
+    expect((await submit({ format: 'square', formats: ['square', 'vertical'] })).status).toBe(400);
+    expect((await submit({ formats: ['square', 'square'] })).status).toBe(400);
+    expect((await submit({ formats: [] })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('queues a two-minute managed-app video with explicit music generation and product context', async () => {
     getAppById.mockResolvedValue({ id: 'example', name: 'Example Product', repoPath: process.cwd(), processes: [{ name: 'example-ui', port: 4321 }], secret: 'never-forward' });
     expect((await submit({ targetDurationSec: 120, generateMusic: true, motionGraphics: true })).status).toBe(202);
@@ -151,6 +174,14 @@ describe('user-triggered launch videos', () => {
     expect(response.status).toBe(200);
     expect(response.body.videos).toHaveLength(50);
     expect(response.body.videos[0]).toEqual({ id: 'video-0', filename: 'example.mp4', thumbnail: 'example.jpg', createdAt: '2026-01-01T00:00:00.000Z', durationSec: 20, caption: 'A clear plan.' });
+    // A multi-format run's entries carry their run and frame so the tab groups them into one take.
+    loadHistory.mockResolvedValue([
+      { id: 'run-a-vertical', width: 1080, height: 1920, launchVideo: { appId: 'example', runId: 'run-a' } },
+      { id: 'run-a-square', width: 1080, height: 1080, launchVideo: { appId: 'example', runId: 'run-a' } },
+    ]);
+    expect((await request(app).get('/api/apps/example/launch-videos')).body.videos.map(({ id, runId, format }) => ({ id, runId, format }))).toEqual([
+      { id: 'run-a-vertical', runId: 'run-a', format: 'vertical' }, { id: 'run-a-square', runId: 'run-a', format: 'square' },
+    ]);
     loadHistory.mockRejectedValue(new Error('Storage unavailable'));
     expect((await request(app).get('/api/apps/example/launch-videos')).status).toBe(500);
   });
@@ -261,6 +292,15 @@ describe('feedback revisions', () => {
     expect(task.prompt).toContain('"targetDurationSec":18');
     expect(task.prompt).toContain('"format":"vertical"');
     expect(task.prompt).toContain('"synthesizeMusic":true');
+  });
+  it('revises every format of a multi-format take, whichever format was previewed (#8960)', async () => {
+    const sibling = (format, width, height) => ({ ...video, id: `take-${format}`, width, height });
+    loadHistory.mockResolvedValue([sibling('square', 1080, 1080), video, sibling('landscape', 1920, 1080),
+      { ...sibling('landscape', 1920, 1080), id: 'other-run', launchVideo: { ...video.launchVideo, runId: 'other-run' } }]);
+    expect((await submit({ sourceVideoId: 'take-square', feedback: 'Tighten the intro' })).status).toBe(202);
+    const { prompt } = addTask.mock.calls[0][0];
+    expect(prompt).toContain('"formats":["landscape","vertical","square"]');
+    expect(JSON.parse(prompt.match(/^Render JSON: (.*)$/m)[1]).formats).toEqual(['landscape', 'vertical', 'square']);
   });
   it('drops a stale beats.json copied from the source take when this revision has no musicTrack (#8958)', async () => {
     // Simulates a source composition carrying a leftover beats.json from an

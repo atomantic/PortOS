@@ -17,6 +17,14 @@ const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
 const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
 const posterUrl = video => `/data/video-thumbnails/${encodeURIComponent(video.thumbnail)}`;
+// One run can render the same timeline in several frames (#8960); the order is
+// the server's canonical render order.
+const FORMATS = [
+  ['landscape', 'Landscape 16:9'],
+  ['vertical', 'Vertical 9:16'],
+  ['square', 'Square 1:1'],
+];
+const formatLabel = format => FORMATS.find(([value]) => value === format)?.[1] ?? format;
 const MOTION_STYLES = [
   ['walkthrough', 'Product walkthrough', 'A paced tour of the key flow, a cursor driving real actions on springs.'],
   ['showreel', 'Motion-graphics showreel', 'Beat-cut kinetic type, color-field swaps and generative shapes around the key flow.'],
@@ -29,7 +37,7 @@ const MOTION_STYLES = [
 function LaunchVideoForm({ appId, onQueued }) {
   const [tone, setTone] = useState('default');
   const [direction, setDirection] = useState('');
-  const [format, setFormat] = useState('landscape');
+  const [formats, setFormats] = useState(['landscape']);
   const [duration, setDuration] = useState(20);
   const [motionStyle, setMotionStyle] = useState('walkthrough');
   const [critiqueRounds, setCritiqueRounds] = useState(2);
@@ -61,7 +69,8 @@ function LaunchVideoForm({ appId, onQueued }) {
     if (submitting.current) return;
     submitting.current = true;
     await createAppLaunchVideo(appId, {
-      tone, direction, format, targetDurationSec: duration, motionStyle, critiqueRounds,
+      // A single frame keeps the original `format` request shape.
+      tone, direction, ...(formats.length === 1 ? { format: formats[0] } : { formats }), targetDurationSec: duration, motionStyle, critiqueRounds,
       ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
       ...picker.pin,
@@ -76,7 +85,16 @@ function LaunchVideoForm({ appId, onQueued }) {
     </section>
     <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
-    <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+    <fieldset>
+      <legend>Formats</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {FORMATS.map(([value, label]) => <label key={value} htmlFor={`launch-format-${value}`}>
+          <input id={`launch-format-${value}`} type="checkbox" checked={formats.includes(value)}
+            onChange={event => setFormats(current => FORMATS.map(([name]) => name).filter(name => name === value ? event.target.checked : current.includes(name)))} /> {label}
+        </label>)}
+      </div>
+      <p className="text-sm text-port-text-muted">Several formats render one film from a single timeline, recomposed for each frame.</p>
+    </fieldset>
     <div><label htmlFor="launch-duration">Duration (15–120 seconds)</label><input id="launch-duration" type="number" min={15} max={120} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
     <div>
       <label htmlFor="launch-motion-style">Motion style</label>
@@ -130,7 +148,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       </ul>}
     </fieldset>}
     <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-    <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+    <button type="submit" className={buttonClass} disabled={running || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
   </form>;
 }
 
@@ -191,8 +209,17 @@ export default function LaunchVideoPanel({ app }) {
   const [videos, setVideos] = useState([]);
   const [error, setError] = useState('');
   const [queued, setQueued] = useState(false);
-  // The previewed take lives in the URL so a specific video is linkable.
+  // The previewed video lives in the URL so a specific take and format is linkable.
   const selected = videos.find(video => video.id === search.get('video')) ?? videos[0];
+  // A multi-format run registers one video per format under one runId (#8960);
+  // the tab shows it as a single take. Older entries without a runId stand alone.
+  const takes = [...videos.reduce((groups, video) => {
+    const key = video.runId ?? video.id;
+    groups.set(key, [...(groups.get(key) ?? []), video]);
+    return groups;
+  }, new Map()).values()];
+  const selectedTake = takes.find(take => take.includes(selected)) ?? [];
+  const selectVideo = id => updateParams({ video: id }, { replace: true });
 
   useEffect(() => {
     let active = true;
@@ -221,10 +248,16 @@ export default function LaunchVideoPanel({ app }) {
     {error && <p role="alert" className="text-port-error">{error}</p>}
     {!videos.length && !error && <p className="text-sm text-port-text-muted">No launch videos yet.</p>}
     {selected && <div className="space-y-2">
+      {selectedTake.length > 1 && <div role="group" aria-label="Formats in this take" className="flex flex-wrap gap-2">
+        {selectedTake.map(video => <button key={video.id} type="button" aria-pressed={video.id === selected.id} onClick={() => selectVideo(video.id)}
+          className={`rounded border px-2 py-1 text-sm ${video.id === selected.id ? 'border-port-accent text-port-text' : 'border-port-border text-port-text-muted'}`}>{formatLabel(video.format)}</button>)}
+      </div>}
       <video key={selected.id} controls preload="metadata" className="max-h-[60vh] w-full bg-black" src={videoUrl(selected)} poster={posterUrl(selected)} aria-label="Selected launch video" />
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <span className="text-port-text-muted">{formatDateTime(selected.createdAt)}{Number.isFinite(selected.durationSec) ? ` · ${formatDurationSec(selected.durationSec)}` : ''}</span>
-        <a className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(selected)} download={`${app.id}-launch-video-${selected.id}.mp4`}><Download size={14} aria-hidden="true" />Download</a>
+        {selectedTake.length > 1
+          ? selectedTake.map(video => <a key={video.id} className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(video)} download={`${app.id}-launch-video-${video.id}.mp4`}><Download size={14} aria-hidden="true" />Download {formatLabel(video.format)}</a>)
+          : <a className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(selected)} download={`${app.id}-launch-video-${selected.id}.mp4`}><Download size={14} aria-hidden="true" />Download</a>}
         <button type="button" className="text-port-accent" onClick={() => copyToClipboard(selected.caption)}>Copy caption</button>
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
@@ -233,13 +266,16 @@ export default function LaunchVideoPanel({ app }) {
       <ReviseLaunchVideo key={`revision:${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
       <PublishLaunchVideo key={`${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
     </div>}
-    {videos.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-      {videos.map(video => <li key={video.id}>
-        <button type="button" aria-pressed={video.id === selected?.id} onClick={() => updateParams({ video: video.id }, { replace: true })} className={`w-full overflow-hidden rounded border text-left ${video.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`}>
-          <img src={posterUrl(video)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
-          <span className="block truncate p-1 text-xs text-port-text-muted">{formatDateTime(video.createdAt)}</span>
-        </button>
-      </li>)}
+    {takes.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+      {takes.map(([video, ...others]) => {
+        const current = selectedTake[0] === video;
+        return <li key={video.id}>
+          <button type="button" aria-pressed={current} onClick={() => selectVideo(video.id)} className={`w-full overflow-hidden rounded border text-left ${current ? 'border-port-accent' : 'border-port-border'}`}>
+            <img src={posterUrl(video)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
+            <span className="block truncate p-1 text-xs text-port-text-muted">{formatDateTime(video.createdAt)}{others.length ? ` · ${others.length + 1} formats` : ''}</span>
+          </button>
+        </li>;
+      })}
     </ul>}
     <Drawer open={open} onClose={() => updateParams({ launchVideo: null })} title="Make launch video" size="md">
       {queued ? <div className="space-y-3"><p>Launch video queued. Closing this drawer leaves the run active.</p><Link className="text-port-accent" to="/cos/agents">Open CoS agents to follow or cancel the run</Link></div>

@@ -2451,12 +2451,24 @@ export const appLaunchVideoPublishSchema = z.object({
 
 export const LAUNCH_VIDEO_MOTION_STYLES = Object.freeze(['walkthrough', 'showreel', 'ui-morph']);
 
+// One launch timeline can render several frames (#8960). Each name maps to the
+// exact size a composition declares in portosComposition.formats; the order is
+// the canonical render/delivery order.
+export const LAUNCH_VIDEO_FORMAT_SIZES = Object.freeze({ landscape: '1920x1080', vertical: '1080x1920', square: '1080x1080' });
+export const LAUNCH_VIDEO_FORMATS = Object.freeze(Object.keys(LAUNCH_VIDEO_FORMAT_SIZES));
+const launchVideoFormatSchema = z.enum(LAUNCH_VIDEO_FORMATS);
+const launchVideoFormatListSchema = z.array(launchVideoFormatSchema).min(1).max(LAUNCH_VIDEO_FORMATS.length)
+  .refine(list => new Set(list).size === list.length, 'formats must not repeat');
+
 export const appLaunchVideoRequestSchema = z.object({
   sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   feedback: z.string().trim().min(1).max(4000).optional(),
   tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
   direction: z.string().trim().max(2000).default(''),
-  format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
+  // `format` is the single-frame form older callers send; `formats` asks one
+  // run for several aspect ratios of the same film. The route normalizes both.
+  format: launchVideoFormatSchema.optional(),
+  formats: launchVideoFormatListSchema.optional(),
   targetDurationSec: z.number().int().min(15).max(120).default(20),
   generateMusic: z.boolean().default(false),
   musicMethod: z.enum(['agent', 'service']).default('agent'),
@@ -2495,10 +2507,15 @@ export const htmlCompositionRenderSchema = z.object({
   synthesizeMusic: z.boolean().optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-  // A proof renders a silent contact sheet for review instead of the video.
-  proof: z.object({ everySec: z.number().min(0.25).max(10).default(1) }).strict().optional(),
+  // Several aspect ratios of one timeline, rendered in sequence on one page.
+  // Omitted, the job renders the composition's own width/height as before.
+  formats: launchVideoFormatListSchema.optional(),
+  // A proof renders a silent contact sheet for review instead of the video;
+  // `format` checks one declared framing, defaulting to the composition's own.
+  proof: z.object({ everySec: z.number().min(0.25).max(10).default(1), format: launchVideoFormatSchema.optional() }).strict().optional(),
 }).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
-  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack');
+  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack')
+  .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
 
 // GET /api/html-composition/beats — a Music-library filename, same shape as
 // htmlCompositionRenderSchema's musicTrack but required (this endpoint exists
@@ -2515,6 +2532,10 @@ export const htmlCompositionContractSchema = z.object({
   // Subframes averaged per output frame to fake motion blur on fast moves;
   // 1 (default) keeps the existing single-sample-per-frame behavior.
   motionBlur: z.number().int().min(1).max(4).default(1),
+  // Extra sizes this one timeline can render (#8960), reframed by the optional
+  // layout({ width, height }) hook before each format's first seek.
+  formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
+  layout: z.boolean().default(false),
 }).superRefine((value, ctx) => {
   if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
     ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
