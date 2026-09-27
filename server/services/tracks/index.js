@@ -30,6 +30,7 @@ export {
   DURATION_MAX_SEC,
   RENDER_ID_MAX,
   RENDERS_MAX,
+  RENDER_SOURCES,
   TRACK_ID_RE,
   trackAudioFilename,
   makeRender,

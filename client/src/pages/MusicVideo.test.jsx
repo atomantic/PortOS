@@ -537,6 +537,15 @@ describe('MusicVideo audio preview + download', () => {
     expect(dl.getAttribute('download')).toBe('neon song.mp3');
   });
 
+  it('labels a linked track whose active take was imported from a Suno export (#8967)', async () => {
+    listTracks.mockResolvedValue([{
+      id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3',
+      renders: [{ id: 'r-old', audioFilename: 'old.wav', source: '' }, { id: 'r-1', audioFilename: 'neon.mp3', source: 'suno' }],
+    }]);
+    await openProject(PROJECT_WITH_CLIP);
+    expect(await screen.findByTitle('Audio imported from Suno')).toHaveTextContent('Suno');
+  });
+
   it('falls back to the project uploaded-audio file when there is no linked track', async () => {
     await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: 'upload.wav' });
     const player = await screen.findByLabelText('Preview track audio');

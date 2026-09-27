@@ -14,6 +14,7 @@ import { Maximize2, Sparkles, Download, Trash2, CheckCircle2, Music2, Upload, Fi
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
 import { trackAudioUrl } from '../../services/api';
+import { renderSourceLabel } from '../../lib/trackProvenance';
 
 export default function TrackRenderCard({
   render,
@@ -29,6 +30,8 @@ export default function TrackRenderCard({
   // An uploaded take has no engine (the studio cleared the gen metadata on
   // attach) — label it so a generated vs. imported take reads at a glance.
   const isUpload = !engine;
+  // Where imported audio came from (e.g. a Suno export) — '' for a plain upload.
+  const sourceLabel = renderSourceLabel(render.source);
 
   return (
     <div className={`bg-port-card border rounded-xl p-2.5 space-y-2 ${active ? 'border-port-accent' : 'border-port-border'}`}>
@@ -55,10 +58,11 @@ export default function TrackRenderCard({
       {prompt ? (
         <p className="text-[11px] text-gray-300 line-clamp-2" title={prompt}>{prompt}</p>
       ) : (
-        <p className="text-[11px] text-gray-600 italic">{isUpload ? 'Uploaded audio' : 'No prompt'}</p>
+        <p className="text-[11px] text-gray-600 italic">{sourceLabel ? `Imported from ${sourceLabel}` : isUpload ? 'Uploaded audio' : 'No prompt'}</p>
       )}
 
       <div className="flex flex-wrap gap-1 text-[9px]">
+        {sourceLabel ? <span className="px-1.5 py-0.5 bg-port-border text-gray-300 rounded">{sourceLabel}</span> : null}
         {engine ? <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{engine}</span> : null}
         {modelId ? <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded truncate max-w-[140px]" title={modelId}>{modelId}</span> : null}
         {durationSec ? <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{formatTimecode(durationSec)}</span> : null}

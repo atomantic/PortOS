@@ -21,6 +21,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
 import { createTrack, DURATION_MAX_SEC } from './tracks/index.js';
+import { RENDER_SOURCES } from './tracks/logic.js';
 import { resolveYtDlpBinaries, downloadAudioToTempMp3, cleanupYtDlpTemp } from './ytdlpAudioImport.js';
 
 // YouTube-only by design (issue #1945 scope: "start narrow" — other video hosts
@@ -118,7 +119,11 @@ export async function startYoutubeImport(url) {
       const { title, outPath } = result;
       const { filename } = await importUploadedTrack(outPath, `${title || 'YouTube Import'}.mp3`);
       const durationSec = await probeVideoDuration(join(PATHS.music, filename)).catch(() => null);
-      const track = await createTrack({ title: title || 'YouTube Import', audioFilename: filename, durationSec });
+      // The take records its provenance (#8967) so the library can say where it came from.
+      const track = await createTrack({
+        title: title || 'YouTube Import', audioFilename: filename, durationSec,
+        renders: [{ audioFilename: filename, durationSec, source: RENDER_SOURCES.YOUTUBE }],
+      });
 
       console.log(`📺 YouTube import ${shortId(jobId)} complete — track=${shortId(track.id)} "${track.title}"`);
       broadcastSse(job, { type: 'complete', trackId: track.id, track });

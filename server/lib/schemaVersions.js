@@ -297,7 +297,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // its v1-only normalizeWaveSketch, which strips a painting to null, and would
   // LWW that loss back — so it must reject the record instead. Stored v1
   // sketches still normalize and render unchanged; nothing to migrate.
-  tracks: 8,
+  // tracks v9 = render-history entries record their provenance `source`
+  // (`'suno'` for a hand-imported Suno export, `'youtube'`, `'upload'`, #8967).
+  // A <=v8 peer's sanitizer would strip it and LWW the unlabelled take back, so
+  // an exported song would silently lose its attribution. Pre-v9 renders read
+  // as `source: ''` (unrecorded); nothing to migrate.
+  tracks: 9,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

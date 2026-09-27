@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { Plus, Loader2, Trash2, Save, Upload, Music2, Library, Sparkles } from 'lucide-react';
+import { Plus, Loader2, Trash2, Save, Upload, Music2, Library, Sparkles, FileMusic } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import FilePickerButton from '../ui/FilePickerButton';
@@ -269,13 +269,15 @@ export default function TracksManager() {
     return true;
   };
 
-  const handleAudioFile = async (e) => {
-    const file = e.target.files?.[0];
+  // `fields` are the multipart provenance fields (#8967): a Suno export sends
+  // `source: 'suno'` plus the style prompt and lyrics it was made from.
+  const uploadAudio = async (file, fields = {}) => {
     if (!file || !requireSaved()) return;
     if (file.size > AUDIO_MAX_BYTES) { toast.error(`Audio exceeds ${formatBytes(AUDIO_MAX_BYTES, 0)}`); return; }
     const targetId = persisted.id; // server write targets THIS track
     setUploading(true);
     const fd = new FormData();
+    Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
     fd.append('track', file, file.name);
     const res = await uploadTrackAudio(targetId, fd, { silent: true }).catch((err) => { toast.error(err.message || 'Upload failed'); return null; });
     setUploading(false);
@@ -284,8 +286,21 @@ export default function TracksManager() {
       // Only touch the open form if THIS track is still selected (the user may
       // have switched tracks during the upload round-trip).
       if (selectedIdRef.current === targetId) setForm((f) => ({ ...f, audioFilename: res.track.audioFilename }));
-      toast.success('Audio uploaded');
+      toast.success(fields.source === 'suno' ? 'Suno export imported' : 'Audio uploaded');
     }
+  };
+
+  const handleAudioFile = (e) => uploadAudio(e.target.files?.[0]);
+
+  // Import a song exported from Suno (a manual import — no Suno API is called).
+  // Save the open form first so the style prompt + lyrics typed above persist on
+  // the track AND ride onto the imported take as its provenance.
+  const handleSunoExport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !requireSaved()) return;
+    const saved = await persistForm();
+    if (!saved) return;
+    await uploadAudio(file, { source: 'suno', prompt: saved.prompt || '', lyrics: saved.lyrics || '' });
   };
 
   const openLibrary = async () => {
@@ -642,6 +657,16 @@ export default function TracksManager() {
                         className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
                       >
                         {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Upload
+                      </FilePickerButton>
+                      <FilePickerButton
+                        accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac"
+                        onChange={handleSunoExport}
+                        disabled={uploading || saving}
+                        ariaLabel="Import Suno export audio"
+                        title="Import audio you exported from Suno. The prompt (style) and lyrics above are saved with the take."
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+                      >
+                        <FileMusic size={14} /> Suno export
                       </FilePickerButton>
                       <button
                         type="button"
