@@ -84,6 +84,13 @@ describe('launch-video render admission', () => {
     expect((await submit()).status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
+  it('admits a two-minute storyboard while retaining target matching', async () => {
+    const plan = storyboard();
+    plan.scenes[0].durationSec = 120;
+    await put('storyboard.json', JSON.stringify(plan));
+    expect((await submit({ launchVideo: { targetDurationSec: 120 } })).status).toBe(202);
+    expect((await submit({ launchVideo: { targetDurationSec: 60 } })).status).toBe(400);
+  });
   it('cannot omit the gate for a launch-videos directory', async () => {
     expect((await submit({ launchVideo: undefined })).status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();

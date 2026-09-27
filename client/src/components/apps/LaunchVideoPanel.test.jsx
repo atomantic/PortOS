@@ -25,7 +25,7 @@ describe('launch video drawer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Make launch video' }));
     fireEvent.change(screen.getByLabelText('Tone'), { target: { value: 'cinematic' } });
     fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'vertical' } });
-    fireEvent.change(screen.getByLabelText('Duration (15–25 seconds)'), { target: { value: '22' } });
+    fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '22' } });
     fireEvent.click(screen.getByLabelText('Include music'));
     // Each track is identifiable by name + file and audible before choosing it.
     const choice = await screen.findByRole('radio', { name: /Example track/ });
@@ -45,6 +45,18 @@ describe('launch video drawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Close/ }));
     expect(screen.queryByText('Launch video queued. Closing this drawer leaves the run active.')).toBeNull();
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues generated music without requiring a library track for a longer video', async () => {
+    createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
+    renderPanel('/?launchVideo=true');
+    fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '90' } });
+    fireEvent.click(screen.getByLabelText('Include music'));
+    expect(screen.getByLabelText('Generate original music').checked).toBe(false);
+    fireEvent.click(screen.getByLabelText('Generate original music'));
+    fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true }), { silent: true }));
+    expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
   });
 
   it('previews the URL-selected take and offers it for download', async () => {
