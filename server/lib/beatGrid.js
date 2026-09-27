@@ -35,6 +35,16 @@ import { stat } from 'node:fs/promises';
 // structure is shared across channels.
 export const BEAT_GRID_SAMPLE_RATE = 22050;
 
+// Cap how much of a track ffmpeg decodes (issue #8973). Buffering unbounded
+// decoded f32 PCM in memory scales with track length — a 20+ minute ambient
+// bed or DJ mix can push a single decode into the hundreds of MB, doubling
+// briefly at the Buffer.concat in decodeAudioToPcm. Tempo/beat estimation
+// doesn't need the whole track: five minutes gives autocorrelation dozens of
+// bars to lock onto, far more than the TEMPO_WINDOW_SEC-scale windows other
+// tempo estimators use. Passing `-t` lets ffmpeg itself truncate the decode
+// instead of PortOS buffering (and then discarding) the rest of the stream.
+export const MAX_ANALYSIS_SEC = 300;
+
 // Frame hop for the onset envelope: ~43 frames/sec at 22.05kHz, giving
 // sub-1-BPM tempo resolution and ~23ms beat-placement granularity.
 export const ONSET_HOP = 512;
@@ -356,11 +366,18 @@ export function __analyzeBeatGridPcm(samples, sampleRate, { hop = ONSET_HOP } = 
  * ffmpeg. Returns `null` when ffmpeg is unavailable or the decode fails —
  * callers treat that as "couldn't measure a beat grid" rather than throwing.
  *
+ * Decodes at most MAX_ANALYSIS_SEC seconds of the source (see its doc
+ * comment) — a track longer than the cap gets its beat grid measured from
+ * that leading window only.
+ *
  * @param {string} audioPath absolute path to the source audio
- * @param {{ signal?: AbortSignal }} [opts]
+ * @param {{ signal?: AbortSignal, maxDurationSec?: number }} [opts]
+ *   `maxDurationSec` overrides MAX_ANALYSIS_SEC — a test-only seam so the
+ *   truncation path can be exercised against a short fixture rather than a
+ *   real multi-minute file; real callers should not pass it.
  * @returns {Promise<{ samples: Float32Array, sampleRate: number } | null>}
  */
-export async function decodeAudioToPcm(audioPath, { signal } = {}) {
+export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC } = {}) {
   if (typeof audioPath !== 'string' || !audioPath) return null;
   if (signal?.aborted) return null;
   const ffmpeg = await findFfmpeg();
@@ -371,6 +388,7 @@ export async function decodeAudioToPcm(audioPath, { signal } = {}) {
     const args = [
       '-v', 'error',
       '-i', audioPath,
+      '-t', String(maxDurationSec),
       '-ac', '1',
       '-ar', String(BEAT_GRID_SAMPLE_RATE),
       '-f', 'f32le',

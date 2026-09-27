@@ -174,6 +174,25 @@ describe('decodeAudioToPcm (ffmpeg round-trip)', () => {
     expect(result.bpm).toBeGreaterThan(120 - BPM_TOLERANCE);
     expect(result.bpm).toBeLessThan(120 + BPM_TOLERANCE);
   });
+
+  // Issue #8973: decodeAudioToPcm must bound decoded PCM size regardless of
+  // source track length, rather than buffering the whole file. Encoding a
+  // real multi-minute fixture would make this suite slow, so this exercises
+  // the same ffmpeg `-t` truncation path against a short fixture via the
+  // `maxDurationSec` test seam.
+  it('truncates decode to maxDurationSec instead of buffering the whole track (skipped without ffmpeg)', async () => {
+    if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping truncation round-trip'); return; }
+    const wavSampleRate = 44100;
+    const samples = clickTrack({ bpm: 120, durationSec: 10, sampleRate: wavSampleRate });
+    const wavPath = join(tmpDir, 'click-120-long.wav');
+    await writeFile(wavPath, encodeWav(samples, wavSampleRate));
+    const decoded = await decodeAudioToPcm(wavPath, { maxDurationSec: 2 });
+    expect(decoded).not.toBeNull();
+    expect(decoded.sampleRate).toBe(BEAT_GRID_SAMPLE_RATE);
+    // Truncated to ~2s, not the full ~10s the source contains.
+    expect(decoded.samples.length).toBeGreaterThan(BEAT_GRID_SAMPLE_RATE * 1.5);
+    expect(decoded.samples.length).toBeLessThan(BEAT_GRID_SAMPLE_RATE * 3);
+  });
 });
 
 describe('getBeatGrid (mtime-keyed cache)', () => {
