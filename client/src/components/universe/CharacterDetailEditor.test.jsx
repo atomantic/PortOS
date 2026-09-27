@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import CharacterDetailEditor from './CharacterDetailEditor';
 import { MemoryRouter, useLocation } from 'react-router';
 
@@ -308,7 +308,8 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
       'voice-profile-1', { maxFirstAudioMs: 900 }, { silent: true },
     ));
     expect(play).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole('button', { name: /Play benchmark to qualify/i }));
+    const playbackButton = await screen.findByRole('button', { name: /Play benchmark to qualify/i });
+    await act(async () => { fireEvent.click(playbackButton); });
     expect(play).toHaveBeenCalled();
   });
 
