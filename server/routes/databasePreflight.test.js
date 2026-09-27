@@ -212,7 +212,8 @@ describe('database cutover acceptance HTTP contract', () => {
     expect(operation).toMatchObject({ stage: 'accepted', source: { mode: source }, target: { mode: target } });
     // Owned before launch: cancellation and a second owner are refused.
     expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'unregistered' });
-    expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1);
+    // Launched only after the 202 is sent — the worker stops this server.
+    await vi.waitFor(() => expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1));
     expect(spawnDatabaseMaintenanceWorker.mock.calls[0][0]).toBe(operation.id);
     expect(() => journal.acquireCoordinator(operation.id)).toThrow();
     // Acceptance itself never changes the saved mode.
@@ -277,6 +278,7 @@ describe('database cutover acceptance HTTP contract', () => {
     expect((await recover('not-a-uuid')).status).toBe(400);
     const accepted = await accept();
     const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    await vi.waitFor(() => expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(1));
     const [id, token] = spawnDatabaseMaintenanceWorker.mock.calls[0];
     const directory = journal.reserveCoordinatorWorker(id, token);
     // Still running (no receipt): recovery launches nothing.
@@ -285,8 +287,8 @@ describe('database cutover acceptance HTTP contract', () => {
     expect((await recover('00000000-0000-4000-8000-000000000000')).status).toBe(503);
     const recovered = await recover(id);
     expect(recovered.status).toBe(202);
-    expect(recovered.body).toEqual({ id: accepted.body.id, stage: 'accepted', recovery: 'launched' });
-    expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(2);
+    expect(recovered.body).toEqual({ id: accepted.body.id, stage: 'accepted', recovery: 'launching' });
+    await vi.waitFor(() => expect(spawnDatabaseMaintenanceWorker).toHaveBeenCalledTimes(2));
     expect(spawnDatabaseMaintenanceWorker.mock.calls[1][0]).toBe(id);
     expect(spawnDatabaseMaintenanceWorker.mock.calls[1][1]).not.toBe(token);
   });

@@ -188,25 +188,37 @@ export async function runDatabaseCutover(id, token, options = {}) {
     importCommitted: true, sourceRetained: true, restartVerified: true, cosRestarted };
 }
 
-/**
- * Same-operation recovery for the operator CLI and the authenticated API.
- * Requires the current owner's supervisor exit receipt (or an owner whose
- * worker was never reserved); repeated calls reuse the one persisted successor
- * and never start a second worker for it. Returns bounded status only.
- */
-export async function recoverDatabaseCutover(id) {
-  const journal = createDatabaseMaintenanceJournal();
-  const token = journal.prepareRecovery(id);
-  if (!token) return { id, stage: journal.read()?.stage ?? 'idle', recovery: 'running' };
+async function launchRecoveryWorker(journal, id, token) {
   const { spawnDatabaseMaintenanceWorker } = await import('../lib/detachedSpawn.js');
   let worker;
   try {
     worker = await spawnDatabaseMaintenanceWorker(id, token);
   } catch {
     // A concurrent recovery already reserved this successor's one-use worker.
-    if (journal.coordinatorStatus(id).state === 'awaiting-exit') return { id, stage: journal.read()?.stage ?? 'idle', recovery: 'running' };
+    if (journal.coordinatorStatus(id).state === 'awaiting-exit') return 'running';
     throw refused('the recovery worker could not be launched');
   }
   worker.on('error', () => console.error('❌ Database cutover recovery worker failed to launch'));
-  return { id, stage: journal.read()?.stage ?? 'idle', recovery: 'launched' };
+  return 'launched';
+}
+
+/**
+ * Same-operation recovery for the operator CLI and the authenticated API.
+ * Requires the current owner's supervisor exit receipt (or an owner whose
+ * worker was never reserved); repeated calls reuse the one persisted successor
+ * and never start a second worker for it. Returns bounded status plus a
+ * `launch` step (null when the current worker is still running), so an HTTP
+ * caller can respond before the worker stops this server.
+ */
+export function beginDatabaseCutoverRecovery(id) {
+  const journal = createDatabaseMaintenanceJournal();
+  const token = journal.prepareRecovery(id);
+  const stage = journal.read()?.stage ?? 'idle';
+  if (!token) return { status: { id, stage, recovery: 'running' }, launch: null };
+  return { status: { id, stage, recovery: 'launching' }, launch: () => launchRecoveryWorker(journal, id, token) };
+}
+
+export async function recoverDatabaseCutover(id) {
+  const { status, launch } = beginDatabaseCutoverRecovery(id);
+  return launch ? { ...status, recovery: await launch() } : status;
 }

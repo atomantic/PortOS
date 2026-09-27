@@ -65,16 +65,19 @@ export function getMaintenanceStatus() {
 }
 
 /**
- * Accept an offline cutover (202). Serialized with every other database admin
- * mutation; the worker then stops PortOS, so the response is the last thing
- * this server process sends before its restart.
+ * Accept an offline cutover. Serialized with every other database admin
+ * mutation. Returns `{ accepted, launch }`: the route sends its 202 first and
+ * launches the worker afterward, because the worker then stops PortOS.
  */
 export const acceptDatabaseCutover = (direction) => withDatabaseOperation(() => acceptDatabaseMaintenance(direction));
 
-/** Same-operation recovery. Runs while fenced, so it bypasses the admin lock. */
-export async function recoverDatabaseCutover(id) {
-  const { recoverDatabaseCutover: recover } = await import('./databaseMaintenanceCutover.js');
-  return recover(id);
+/**
+ * Same-operation recovery: `{ status, launch }`, launch deferred like
+ * acceptance. Runs while fenced, so it bypasses the admin lock.
+ */
+export async function beginDatabaseCutoverRecovery(id) {
+  const { beginDatabaseCutoverRecovery: begin } = await import('./databaseMaintenanceCutover.js');
+  return begin(id);
 }
 
 /**

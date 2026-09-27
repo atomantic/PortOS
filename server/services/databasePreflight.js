@@ -94,9 +94,13 @@ export async function preflightDatabaseMaintenance(input) {
  * operation — which closes admission synchronously — and repeats the idle and
  * configuration checks UNDER the fence: work admitted just before publication
  * must already be finished, and nothing new can be admitted. Only then does a
- * coordinator take ownership and the detached worker launch. A failed final
- * check cancels the still-unowned operation — but only while the saved source
- * still equals the recorded one; otherwise the fence stays for the operator.
+ * coordinator take ownership. A failed final check cancels the still-unowned
+ * operation — but only while the saved source still equals the recorded one;
+ * otherwise the fence stays for the operator.
+ *
+ * Returns `{ accepted, launch }`. The caller runs `launch()` only after its
+ * response is sent: the worker's first act is stopping this server. An owner
+ * whose worker never launched is resumable with same-operation recovery.
  */
 export async function acceptDatabaseMaintenance(input) {
   const direction = databaseMaintenancePreflightSchema.parse(input);
@@ -127,7 +131,13 @@ export async function acceptDatabaseMaintenance(input) {
   }
   const token = journal.acquireCoordinator(operation.id);
   const { spawnDatabaseMaintenanceWorker } = await import('../lib/detachedSpawn.js');
-  const worker = await spawnDatabaseMaintenanceWorker(operation.id, token);
-  worker.on('error', () => console.error('❌ Database cutover worker failed to launch; inspect scripts/database-maintenance.mjs status'));
-  return { id: operation.id, stage: 'accepted', source: direction.source, target: direction.target, accepted: true };
+  const launch = async () => {
+    try {
+      const worker = await spawnDatabaseMaintenanceWorker(operation.id, token);
+      worker.on('error', () => console.error('❌ Database cutover worker failed to launch; run scripts/database-maintenance.mjs recover'));
+    } catch {
+      console.error('❌ Database cutover worker failed to launch; run scripts/database-maintenance.mjs recover');
+    }
+  };
+  return { accepted: { id: operation.id, stage: 'accepted', source: direction.source, target: direction.target, accepted: true }, launch };
 }
