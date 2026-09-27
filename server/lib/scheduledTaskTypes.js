@@ -8,6 +8,8 @@ import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';
 // and the prompt-integrity history that follows the renamed key.
 export const TASK_TYPE_RENAMES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle', 'release-check': 'do-release' });
 export const currentTaskTypeName = (taskType) => TASK_TYPE_RENAMES[taskType] || taskType;
+// A task type's `task:`-prefixed schedule executions key, under its current name.
+export const taskExecutionKey = (taskType) => `task:${currentTaskTypeName(taskType.startsWith('task:') ? taskType.slice(5) : taskType)}`;
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   PRIVATE_SECURITY_TASK_TYPE,

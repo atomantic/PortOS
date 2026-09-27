@@ -3202,6 +3202,20 @@ describe('taskSchedule', () => {
         expect(saved.executions['task:security'].perApp['app-1'].consecutiveFailures).toBe(1)
       })
 
+      it('records a task queued under a retired type name on the renamed ledger', async () => {
+        // A release-check task queued before migration 417 finishes after it.
+        mockSchedule({
+          tasks: { 'do-release': { type: 'on-demand', enabled: true } },
+          executions: { 'task:do-release': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 1, lastFailureAt: new Date().toISOString() }
+          } } }
+        })
+        const rec = await recordTaskTypeFailure('release-check', 'app-1', { errorCategory: 'timeout' })
+        expect(rec.consecutiveFailures).toBe(2)
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions).not.toHaveProperty('task:release-check')
+      })
+
       it('auto-parks + notifies after FAILURE_PARK_THRESHOLD consecutive failures', async () => {
         mockSchedule({
           tasks: { security: { type: 'rotation', enabled: true } },

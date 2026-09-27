@@ -1,6 +1,9 @@
 /** Consecutive-failure backoff and auto-park state for scheduled task types. */
 
 import { cosEvents, emitLog } from './cosEvents.js';
+// Resolves a pre-rename task type (TASK_TYPE_RENAMES) to the ledger key the
+// rename migration moved its history to.
+import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import {
   FAILURE_BACKOFF_BASE_MS,
@@ -23,7 +26,6 @@ export function computeFailureBackoffMs(consecutiveFailures, baseMs = FAILURE_BA
   if (n <= 0) return 0;
   return Math.min(baseMs * Math.pow(2, n), capMs);
 }
-const executionKey = (taskType) => taskType.startsWith('task:') ? taskType : `task:${taskType}`;
 
 const ensureExecutionRecord = (schedule, taskType, appId) => {
   const key = executionKey(taskType);
