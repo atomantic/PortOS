@@ -187,6 +187,25 @@ describe('external-asset handoff', () => {
     expect(a.referenceImageId).toBe('upload-0001.png');
   });
 
+  it('serves a downloadable ZIP bundle carrying the manifest plus its reference images', async () => {
+    seedImage('ref-mood.png');
+    const patched = await request(app).patch(base()).send({
+      visualSpec: { references: [{ imageId: 'ref-mood.png', role: 'mood', condition: false }] },
+    });
+    expect(patched.status).toBe(200);
+
+    const res = await request(app).get(`${base()}/handoff/bundle`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+    expect(res.headers['content-disposition']).toMatch(/attachment; filename=".*\.zip"/);
+    // The fetch-based test harness reads the body as text — real ZIP-content
+    // assertions (missing-file reporting, per-entry bytes) live in the real
+    // file-store service test (handoff.test.js `buildHandoffBundle`); this
+    // route test only proves the wiring returns a non-empty ZIP-signed body.
+    expect(res.text.slice(0, 2)).toBe('PK');
+    expect(res.text.length).toBeGreaterThan(0);
+  });
+
   it('round-trips a short hand-authored scene id through its file tag', async () => {
     const raw = await reload();
     await projects.mergeProjectsFromSync([{

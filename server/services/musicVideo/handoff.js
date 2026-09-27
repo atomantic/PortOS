@@ -16,6 +16,10 @@
  * render pins, renderer settings and server paths never leave the install.
  */
 
+import { readFile } from 'fs/promises';
+import { resolveGalleryImage } from '../../lib/pathSafety.js';
+import { createZip } from '../../lib/zipWriter.js';
+
 export const HANDOFF_FORMAT = 'portos.music-video.handoff';
 export const HANDOFF_VERSION = 1;
 
@@ -122,4 +126,48 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
       },
     })),
   };
+}
+
+/**
+ * Build the downloadable ZIP counterpart of `buildHandoffManifest` (#8978):
+ * the same JSON manifest (with a `missing` list appended) plus the visual
+ * spec's reference images and each scene's currently-selected reference
+ * frame — so the director doesn't have to save every reference out of the
+ * gallery by hand before attaching it in the external tool. A reference or
+ * frame this install can't resolve on disk (deleted out from under the
+ * record) is reported in `missing` rather than failing the whole download.
+ *
+ * Returns `{ manifest, zip }` — `manifest` is the JSON actually written into
+ * the archive (so a caller/test can inspect `missing` without re-parsing the
+ * zip), `zip` is the archive Buffer.
+ */
+export async function buildHandoffBundle(project) {
+  const manifest = buildHandoffManifest(project);
+  const files = [];
+  const missing = [];
+  const seen = new Set();
+  const addImage = async (filename, archivePath) => {
+    if (!filename || seen.has(archivePath)) return;
+    seen.add(archivePath);
+    const resolved = resolveGalleryImage(filename);
+    if (!resolved) { missing.push({ filename, path: archivePath }); return; }
+    try {
+      files.push({ name: archivePath, data: await readFile(resolved) });
+    } catch {
+      missing.push({ filename, path: archivePath });
+    }
+  };
+  for (const ref of manifest.visualSpec.references) {
+    await addImage(ref.filename, `references/${ref.filename}`);
+  }
+  for (const scene of manifest.scenes) {
+    const frame = scene.selected?.referenceImageId;
+    if (frame) await addImage(frame, `scenes/${scene.fileTag}-${frame}`);
+  }
+  const bundleManifest = { ...manifest, missing };
+  const zip = createZip([
+    { name: 'manifest.json', data: JSON.stringify(bundleManifest, null, 2) },
+    ...files,
+  ]);
+  return { manifest: bundleManifest, zip };
 }
