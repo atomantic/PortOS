@@ -492,6 +492,7 @@ describe('authGate Express path matching', () => {
 
     for (const path of [
       '/api/example/records/ExampleRecord', '/aPi/example/records/ExampleRecord',
+      '/api/database/maintenance/status',
       '/data/images/ExampleAsset.txt', '/DaTa/images/ExampleAsset.txt',
       '/sdapi/v1/sd-models', '/SdApI/v1/sd-models',
     ]) {

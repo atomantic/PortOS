@@ -8,7 +8,7 @@ import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { resolvePostgresPort } from '../lib/ports.js';
-import { assertDatabaseAdmission } from '../lib/databaseMaintenanceJournal.js';
+import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 
 const rootDir = PATHS.root;
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
@@ -33,6 +33,23 @@ async function withDatabaseOperation(operation) {
   } finally {
     databaseOperationActive = false;
   }
+}
+
+/**
+ * Read only the durable operation, including while pool admission is fenced.
+ * This is not a health probe or permission to resume writers. Even a verified
+ * journal remains fenced until the coordinator explicitly releases admission.
+ */
+export function getMaintenanceStatus() {
+  const operation = createDatabaseMaintenanceJournal().read();
+  if (!operation) return { stage: 'idle', fenced: false };
+  return {
+    id: operation.id,
+    stage: operation.stage,
+    source: operation.source.mode,
+    target: operation.target.mode,
+    fenced: true,
+  };
 }
 
 /**

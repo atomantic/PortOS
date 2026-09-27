@@ -235,6 +235,8 @@ outside the CoS state/config scope do not acquire this boundary.
 
 ## Database maintenance admission
 
+While the server is still running, `GET /api/database/maintenance/status` reads the journal without querying PostgreSQL or launching shell probes. It uses the ordinary instance authentication gate (authentication remains optional) and returns `{ stage: "idle", fenced: false }` when no operation exists, or the operation's `id`, `stage`, source/target mode names, and `fenced: true`. Connection identities and coordinator credentials are never returned. Responses are not cacheable; damaged or unreadable state returns HTTP 503 with `DATABASE_MAINTENANCE`, never idle. A `verified` stage alone still reports fenced: it does not authorize writers or prove admission has reopened. Once the server has stopped or its boot fence refuses startup, use the local status command below; this endpoint does not bypass the boot fence.
+
 The persistent maintenance boundary is a prerequisite for coordinated offline migration (#8805). It does **not** migrate data, change saved mode, stop existing writer processes, or prove a target cutover. In particular, entering maintenance is not permission to invoke an uncoordinated SQL import or backend migration.
 
 From the install root, inspect or establish the fence:
