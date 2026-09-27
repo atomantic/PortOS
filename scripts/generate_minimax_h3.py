@@ -879,6 +879,20 @@ class _H3StepwisePreview:
             * (self.latent_height // patch_h)
             * (self.latent_width // patch_w)
         )
+        # The preview publishes one frame, not a clip. Decode just one VAE
+        # window around the midpoint instead of decoding the entire video on
+        # every diffusion step. Respect the decoder's lead-in/token-drop floor
+        # and slice on temporal patch boundaries so unpatchify stays valid.
+        chunk = pipe.video_vae.tokens_chunk_size
+        drop = pipe.video_vae.config.token_drop
+        minimum = 2 * chunk - drop if drop > 0 else chunk
+        self.preview_latent_frames = min(
+            self.num_latent_frames, ((minimum + patch_t - 1) // patch_t) * patch_t
+        )
+        rows_per_patch_frame = self.target_rows // (self.num_latent_frames // patch_t)
+        start = ((self.num_latent_frames - self.preview_latent_frames) // (2 * patch_t))
+        self.preview_row_start = start * rows_per_patch_frame
+        self.preview_row_end = self.preview_row_start + (self.preview_latent_frames // patch_t) * rows_per_patch_frame
         self._latest_rows = None
         self.saved = 0
 
@@ -894,9 +908,10 @@ class _H3StepwisePreview:
             return
         try:
             rows = self._latest_rows[-self.target_rows:]
+            rows = rows[self.preview_row_start:self.preview_row_end]
             frames = self.pipe._decode_video(
                 rows,
-                self.num_latent_frames,
+                self.preview_latent_frames,
                 self.latent_height,
                 self.latent_width,
             )
