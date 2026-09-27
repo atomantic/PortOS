@@ -98,6 +98,43 @@ def args_for(root, **kwargs):
         seed=42, output_wav=str(root / "output.wav"))
 `;
 
+// MLX uses a generator and a separate codec encoder; exercise its actual
+// adapter shape without importing Metal or synthesizing real model audio.
+const mlxFixture = String.raw`
+runner.platform.system = lambda: "Darwin"
+runner.platform.machine = lambda: "arm64"
+mlx = types.ModuleType("mlx")
+core = types.ModuleType("mlx.core")
+core.random = types.SimpleNamespace(seed=lambda seed: events.append({"mlxSeed": seed}))
+core.eval = lambda audio: events.append({"evaluated": True})
+core.metal = types.SimpleNamespace(is_available=lambda: True)
+mlx.core = core
+sys.modules["mlx"] = mlx
+sys.modules["mlx.core"] = core
+class MlxModel:
+    tokenizer = object()
+    speech_tokenizer = types.SimpleNamespace(has_encoder=True)
+    def generate_voice_design(self, **kwargs):
+        events.append({"mlxDesign": kwargs})
+        yield types.SimpleNamespace(audio=[1], sample_rate=24000)
+    def generate(self, **kwargs):
+        events.append({"mlxClone": kwargs})
+        yield types.SimpleNamespace(audio=[1], sample_rate=24000)
+def load_mlx(path, **kwargs):
+    assert isinstance(path, Path) and path.name == revision
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+    assert kwargs == {"strict": True}
+    events.append({"mlxLoad": True})
+    return MlxModel()
+utils = types.ModuleType("mlx_audio.tts.utils")
+utils.load_model = load_mlx
+sys.modules["mlx_audio.tts.utils"] = utils
+qwen_mlx = types.ModuleType("mlx_audio.tts.models.qwen3_tts")
+qwen_mlx.Model = MlxModel
+sys.modules["mlx_audio.tts.models.qwen3_tts"] = qwen_mlx
+`;
+
 describe.skipIf(!python)('Qwen3 explicit model acquisition', () => {
   it('publishes only complete immutable snapshots and detects missing/truncated required weights', () => {
     const result = run(String.raw`
@@ -207,7 +244,7 @@ with tempfile.TemporaryDirectory() as temp:
     expect(result.clone).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}`, effectiveControls: { mode: 'clone' } });
   });
 
-  it('refuses missing weights, unsupported controls/variants and Apple Silicon without calling the model', () => {
+  it('refuses missing weights, unsupported controls/variants and missing MLX dependencies without calling the model', () => {
     const result = run(inferenceFixture + String.raw`
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
@@ -226,6 +263,7 @@ with tempfile.TemporaryDirectory() as temp:
         args.checkpoint_path = None
         runner.platform.system = lambda: "Darwin"
         runner.platform.machine = lambda: "arm64"
+        sys.modules["mlx"] = None
         assert runner.run_synthesis(args) == 1
         assert runner.run_fine_tuning(args) == 1
     assert events == []
@@ -260,5 +298,76 @@ with tempfile.TemporaryDirectory() as temp:
     print(json.dumps(failures))
 `);
     expect(result.every((failure) => failure.code === 'QWEN3_SYNTHESIS_FAILED')).toBe(true);
+  });
+});
+
+
+describe.skipIf(!python)('Qwen3 Apple Silicon inference', () => {
+  it('runs design and transcript-conditioned cloning through the verified MLX snapshot', () => {
+    const result = run(inferenceFixture + mlxFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    runner.download_model(model_id, root)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert runner.run_synthesis(args_for(root, instructions="Warm natural alto")) == 0
+    design = json.loads(output.getvalue())
+    assert events == [{"mlxSeed": 42}, {"mlxLoad": True}, {"mlxDesign": {
+        "text": "An invented sentence.", "language": "auto", "instruct": "Warm natural alto",
+        "stream": False, "verbose": False}}, {"evaluated": True}]
+    model_id = runner.SUPPORTED_MODELS[1]
+    runner.download_model(model_id, root)
+    reference = root / "reference.wav"
+    reference.write_bytes(b"explicit test fixture")
+    events.clear()
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert runner.run_synthesis(args_for(root, mode="clone", reference=str(reference), transcript="Reference words.")) == 0
+    clone = json.loads(output.getvalue())
+    assert events[2]["mlxClone"] == {
+        "text": "An invented sentence.", "lang_code": "auto", "ref_audio": str(reference.resolve()),
+        "ref_text": "Reference words.", "split_pattern": None, "stream": False, "verbose": False}
+    with wave.open(str(root / "output.wav")) as audio:
+        assert audio.getnframes() == 240 and audio.getframerate() == 24000
+    print(json.dumps({"design": design, "clone": clone}))
+`);
+    expect(result.design).toMatchObject({ ok: true, effectiveControls: { mode: 'design', seed: 42 } });
+    expect(result.clone).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}`, effectiveControls: { mode: 'clone' } });
+  });
+
+  it('refuses cloning without transcript or encoder instead of publishing unconditioned speech', () => {
+    const result = run(inferenceFixture + mlxFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    model_id = runner.SUPPORTED_MODELS[1]
+    runner.download_model(model_id, root)
+    reference = root / "reference.wav"
+    reference.write_bytes(b"explicit test fixture")
+    args = args_for(root, mode="clone", reference=str(reference))
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert runner.run_synthesis(args) == 1
+        assert events == []
+        args.reference_transcript = "Reference words."
+        MlxModel.speech_tokenizer.has_encoder = False
+        assert runner.run_synthesis(args) == 1
+        assert not any("mlxClone" in event for event in events)
+        assert not (root / "output.wav").exists()
+    print(json.dumps({"noUnconditionedAudio": True}))
+`);
+    expect(result).toEqual({ noUnconditionedAudio: true });
+  });
+
+  it('probes MLX readiness without Torch or loading weights and refuses missing Metal', () => {
+    const result = run(inferenceFixture + mlxFixture + String.raw`
+sys.modules["torch"] = None
+sys.modules["transformers"] = None
+status = runner.probe_runtime()
+assert events == []
+core.metal.is_available = lambda: False
+unavailable = runner.probe_runtime()
+print(json.dumps({"status": status, "unavailable": unavailable}))
+`);
+    expect(result.status).toMatchObject({ ok: true, device: 'mlx', error: null, torch_installed: false });
+    expect(result.unavailable).toMatchObject({ ok: false });
   });
 });

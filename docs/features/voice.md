@@ -10,7 +10,7 @@ PortOS includes an optional voice assistant with support for fully local operati
 |-------|----------------|--------------|--------|
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
-| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (CPU/CUDA; MLX pending) | ✅ |
+| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (CPU/CUDA/Apple Silicon MLX) | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
@@ -19,8 +19,14 @@ The TTS engine is selectable in **Settings → Voice → TTS engine**.
 [qwen-tts inference API](https://github.com/QwenLM/Qwen3-TTS#python-package-usage)
 for voice design and reference cloning on CPU/CUDA. Install `qwen-tts` in the
 isolated Qwen Python environment; the package supplies Torch, NumPy and
-SoundFile. Apple Silicon MLX, training and custom checkpoints are still
-unavailable. Speech-rate changes and instruction-controlled Base cloning are
+SoundFile. Apple Silicon uses [MLX Audio](https://github.com/Blaizzy/mlx-audio)
+against the same verified official snapshots. In the isolated Qwen Python
+environment, install `mlx-audio` at commit
+`784b29e2691a93ca7483147d86f61859dfaa6296` (the adapter's reference API) plus
+`soundfile` and `huggingface_hub`. The runtime probe checks MLX/Metal availability
+without loading weights. MLX cloning requires a reference transcript and a
+loaded speech-tokenizer encoder; otherwise it fails rather than generating an
+unconditioned voice. Training and custom checkpoints remain unavailable. Speech-rate changes and instruction-controlled Base cloning are
 refused rather than reported as applied controls. Explicit model
 downloads in Settings fetch the official Qwen snapshot at an immutable Hub
 revision and verify the size and digest of every required file, including the
@@ -40,7 +46,7 @@ The returned model revision includes the immutable commit hash. No model
 download runs automatically. Audio is buffered, not streamed.
 
 A real-model intelligibility smoke run is still pending in #8857; fixture tests
-prove the adapter contract, not speech quality. On a CPU/CUDA host with the
+prove the adapter contract, not speech quality. On a supported host with the
 isolated environment and verified weights, run the following manually from
 the repository root (substitute the isolated Python executable and model root):
 
@@ -362,6 +368,6 @@ streaming qualification. Without that opt-in, AuK remains studio-only and the
 existing interactive fallback is retained. The production planner checks the
 interactive route rather than treating every approved studio voice as live-ready.
 
-The legacy Qwen runtime has placeholder inference/training and is excluded from
+The separate Qwen runtime supports verified local inference but has no training adapter and is excluded from
 Voice Studio assignment until repaired (issue #8857). Voice Studio does not
 claim a Qwen runtime is working merely because its metadata exists.
