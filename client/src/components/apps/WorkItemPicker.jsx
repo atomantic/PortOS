@@ -17,7 +17,7 @@ const EMPTY_REASONS = {
   'no-actionable-plan-items': 'Every PLAN.md item is checked, blocked, or already claimed.',
   'no-open-issues': 'The tracker has no open issues.',
   'no-authored-issues': 'Open issues exist, but none match the author filter — widen it to see them.',
-  'no-actionable-issues': 'Every open issue is assigned, blocked, in flight, or an already-decomposed epic.',
+  'no-actionable-issues': 'Every open issue is assigned, blocked, in flight, needs input, or an already-decomposed epic.',
   'owner-is-org': 'The repo owner is an organization, which never authors issues — switch the filter to "Any author".',
   'owner-is-group': 'The project namespace is a group, which never authors issues — switch the filter to "Any author".',
   'jira-not-configured': 'JIRA is not configured for this app.',

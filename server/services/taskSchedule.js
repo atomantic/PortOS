@@ -514,7 +514,7 @@ function resolveExecutionRecord(schedule, taskType, appId = null) {
 // Every field parkPerpetual stamps for a park. Kept as one list so the clear /
 // reset paths can't drift from what park writes (adding a park field here is the
 // single edit that keeps all three in sync).
-const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCounts', 'parkNotLaterThan', 'parkedAt'];
+const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCounts', 'parkSkipCauses', 'parkNotLaterThan', 'parkedAt'];
 
 /**
  * Park a perpetual task: its work-detector reported nothing actionable, so stop
@@ -541,7 +541,7 @@ const PARK_FIELDS = ['parkedUntil', 'parkReason', 'parkActionableCount', 'parkCo
  * zeroing the counter there would reset the budget before every dispatch, so the
  * cap could never fire.
  */
-export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, signature, dispatchCount = 0, notLaterThan = null } = {}) {
+export async function parkPerpetual(taskType, appId = null, { reason = null, actionableCount = 0, counts = null, skipCauses = null, signature, dispatchCount = 0, notLaterThan = null } = {}) {
   const { record, parkedUntil } = await updateSchedule(async (schedule) => {
     const interval = schedule.tasks[taskType] || {};
     // Bound HERE, not at the assignment: `parkedUntil` is also what the log line and
@@ -558,6 +558,12 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
     // breakdown (e.g. the reconcile scans), so the field is left off the record.
     if (counts != null) record.parkCounts = counts;
     else delete record.parkCounts;
+    // Per-cause skip attribution ({ 'needs-input': 49, blocked: 17, … }) for the
+    // same purpose: "78 filtered" alone can't tell a user their work is waiting
+    // on `needs-input` decisions rather than the task being broken. Same null
+    // contract as parkCounts — absent when the detector reported no attribution.
+    if (skipCauses != null) record.parkSkipCauses = skipCauses;
+    else delete record.parkSkipCauses;
     // The self-expiry has to OUTLIVE this call: updateTaskInterval restamps every
     // un-elapsed park from the new cadence, and without a remembered bound it would
     // stretch a correctly-shortened park back out — reintroducing the stacking this
@@ -594,8 +600,20 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
 
     return { result: { record, parkedUntil }, changed: true };
   });
-  emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
-  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts });
+  // A park on a non-empty queue needs its WHY in the log line itself — the
+  // operator reads PM2 output, where a bare `no-actionable-issues` next to "88
+  // open issues" reads as the task being broken. Render the top skip causes
+  // inline ("49 needs-input, 17 blocked") so the one line they see answers the
+  // question the toast exists for.
+  const causeSummary = skipCauses && Object.keys(skipCauses).length > 0
+    ? ` — ${Object.entries(skipCauses)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([cause, n]) => `${n} ${cause}`)
+      .join(', ')}`
+    : '';
+  emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'}${causeSummary})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
+  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts, skipCauses });
   return record;
 }
 
@@ -614,6 +632,7 @@ export async function getPerpetualParkInfo(taskType, appId = null) {
     parkReason: record.parkReason ?? null,
     parkActionableCount: record.parkActionableCount ?? null,
     parkCounts: record.parkCounts ?? null,
+    parkSkipCauses: record.parkSkipCauses ?? null,
     parkedAt: record.parkedAt ?? null,
     signatureRepeatCount: Number.isFinite(record.signatureRepeatCount) ? record.signatureRepeatCount : null
   };

@@ -167,7 +167,7 @@ import {
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
-import { cosEvents } from './cosEvents.js'
+import { cosEvents, emitLog } from './cosEvents.js'
 import { recordUserAction } from './userActions.js'
 
 // Prompt getters moved to taskPromptService.js (issue #744 split, #1083 cycle
@@ -2861,17 +2861,42 @@ describe('taskSchedule', () => {
         expect(record.parkCounts).toEqual({ open: 40, inFlight: 2, filtered: 38 })
       })
 
+      // A park on a non-empty queue must carry its WHY: the per-cause skip
+      // attribution ("49 needs-input, 17 blocked") is what tells the operator
+      // their work is waiting on decisions, not that the task is broken — the
+      // exact confusion behind reading a bare `no-actionable-issues` in PM2
+      // output next to 88 open issues.
+      it('parkPerpetual persists the per-cause skip attribution and names the top causes in its log line', async () => {
+        mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
+        const record = await parkPerpetual('claim-issue', 'app-1', {
+          reason: 'no-actionable-issues', actionableCount: 0,
+          counts: { open: 88, inFlight: 10, filtered: 78 },
+          skipCauses: { 'needs-input': 49, blocked: 17, 'decomposed-epic': 12, assigned: 2 }
+        })
+        expect(record.parkSkipCauses).toEqual({ 'needs-input': 49, blocked: 17, 'decomposed-epic': 12, assigned: 2 })
+        // The log line the operator reads in PM2 names the top 3 causes inline.
+        const logged = emitLog.mock.calls.at(-1);
+        expect(logged[1]).toMatch(/no-actionable-issues — 49 needs-input, 17 blocked, 12 decomposed-epic/);
+        expect(logged[1]).not.toMatch(/assigned: 2/);
+      })
+
+      it('parkPerpetual leaves parkSkipCauses absent when the detector reports no attribution', async () => {
+        mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
+        const record = await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, counts: null, skipCauses: null })
+        expect(record.parkSkipCauses).toBeUndefined()
+      })
+
       it('getPerpetualParkInfo reads back the park record (and null when not parked)', async () => {
         const future = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         mockSchedule({
           tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
-            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } },
+            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 }, parkSkipCauses: { 'needs-input': 30, blocked: 8 } },
             'app-2': { lastRun: null, count: 0 }
           } } }
         })
         const info = await getPerpetualParkInfo('claim-issue', 'app-1')
-        expect(info).toMatchObject({ parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 } })
+        expect(info).toMatchObject({ parkedUntil: future, parkReason: 'no-actionable-issues', parkActionableCount: 0, parkCounts: { open: 40, inFlight: 2, filtered: 38 }, parkSkipCauses: { 'needs-input': 30, blocked: 8 } })
         expect(await getPerpetualParkInfo('claim-issue', 'app-2')).toBeNull()
         expect(await getPerpetualParkInfo('claim-issue', 'unknown-app')).toBeNull()
       })

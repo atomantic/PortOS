@@ -382,6 +382,45 @@ describe('perpetualWork', () => {
       expect(out.total).toBe(7);
       expect(out.inFlightCount).toBe(0);
       expect(out.filteredCount).toBe(7); // the epic (#1) + 6 needs-input/blocked
+      // Per-cause attribution: the park breakdown must say WHY each of the 7 was
+      // filtered, not just how many — "0 of 7 open" alone reads as a broken task.
+      expect(out.skipCauses).toEqual({ 'needs-input': 5, blocked: 1, 'decomposed-epic': 1 });
+    });
+
+    it('attributes skips per cause (assigned / in-flight / excluded label) so a park names its reasons', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'plain', assignees: [], labels: [] },
+          { number: 2, title: 'taken', assignees: [{ login: 'x' }], labels: [] },
+          { number: 3, title: 'in flight', assignees: [], labels: [] },
+          { number: 4, title: 'reserved', assignees: [], labels: [{ name: 'good first issue' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-3\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['good first issue'] });
+      expect(out.actionable).toBe(true);
+      // Attribution is only computed for a park (0 actionable) — an actionable
+      // detection carries an empty map, not a partial one.
+      expect(out.skipCauses).toEqual({});
+    });
+
+    it('attributes every skip cause on a park, including in-flight and configured exclude labels', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 2, title: 'taken', assignees: [{ login: 'x' }], labels: [] },
+          { number: 3, title: 'in flight', assignees: [], labels: [] },
+          { number: 4, title: 'reserved', assignees: [], labels: [{ name: 'good first issue' }] },
+          { number: 5, title: 'waiting on you', assignees: [], labels: [{ name: 'needs-input' }] }
+        ]) },
+        'git branch': { stdout: 'main\norigin/claim/issue-3\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['good first issue'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      expect(out.inFlightCount).toBe(1);
+      expect(out.filteredCount).toBe(3);
+      expect(out.skipCauses).toEqual({ 'needs-input': 1, assigned: 1, 'in-flight': 1, 'good first issue': 1 });
     });
 
     it('keeps an issue assigned to the authenticated account claimable', async () => {

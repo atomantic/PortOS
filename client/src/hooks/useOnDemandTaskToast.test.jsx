@@ -117,6 +117,28 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(msg).not.toMatch(/0 of/);
   });
 
+  // The live failure mode behind this channel: 88 open issues, zero claimable,
+  // and a toast that said only "no claimable issues (0 of 88 open — 10
+  // in-flight, 78 filtered)" — which reads as the task being broken. The
+  // per-cause attribution names WHY each filtered issue was skipped, so the
+  // user sees their queue is 49 `needs-input` decisions deep, not stuck.
+  it('names the per-cause skip attribution instead of a bare "N filtered"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-actionable-issues',
+      counts: { open: 88, inFlight: 10, filtered: 78 },
+      skipCauses: { 'needs-input': 49, blocked: 17, 'decomposed-epic': 12 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no claimable issues/);
+    expect(msg).toMatch(/0 of 88 open/);
+    expect(msg).toMatch(/49 needs-input, 17 blocked, 12 decomposed-epic/);
+    // The causes replace the bare "78 filtered" — they ARE the filtered detail.
+    expect(msg).not.toMatch(/78 filtered/);
+  });
+
   // branch-reconcile's park used to report 'no-in-flight-branches' while merged
   // branches sat behind a protected worktree — "nothing to do" for a task the
   // user could see had work queued, which reads as the task not running at all.

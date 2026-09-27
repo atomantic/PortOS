@@ -2115,6 +2115,22 @@ const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global
 // escalating to `warn` — see recordPerpetualTransient's return value.
 export const PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD = 3;
 
+/**
+ * Render a detector skip-cause map ({ 'needs-input': 49, blocked: 17, … }) as a
+ * compact human string, largest cause first. Shared by the park log line and the
+ * on-demand toast so both answer "why did 88 open issues yield zero work" with
+ * the same words. Returns '' for an empty/absent map.
+ */
+export function formatSkipCauses(skipCauses, maxCauses = 3) {
+  if (!skipCauses || typeof skipCauses !== 'object') return '';
+  return Object.entries(skipCauses)
+    .filter(([, n]) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxCauses)
+    .map(([cause, n]) => `${n} ${cause}`)
+    .join(', ');
+}
+
 // Consecutive-transient-skip counters, keyed the same as transientVerdicts but
 // deliberately tracked SEPARATELY from it: this streak must survive across
 // evaluations more than 60s apart (it counts how many evaluations IN A ROW came
@@ -2360,7 +2376,8 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
     actionableCount: parkInfo?.parkActionableCount ?? null,
-    counts: parkInfo?.parkCounts || null
+    counts: parkInfo?.parkCounts || null,
+    skipCauses: parkInfo?.parkSkipCauses || null
   });
 }
 
@@ -2588,10 +2605,16 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const counts = detection.total != null
     ? { open: detection.total, inFlight: detection.inFlightCount ?? 0, filtered: detection.filteredCount ?? 0 }
     : null;
+  // Per-cause skip attribution for the same question at one level deeper: not
+  // just "78 filtered" but "49 needs-input, 17 blocked, …". Only the claim
+  // detectors report it; every other park shape keeps the field absent.
+  const skipCauses = detection.skipCauses && Object.keys(detection.skipCauses).length > 0
+    ? detection.skipCauses
+    : null;
   // Terminal park — parkPerpetual zeroes the dispatch budget in the same write, so
   // the next drain window starts fresh instead of capping early on this one's spend.
-  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, signature: null });
-  emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}`, { appId: app.id });
+  await taskSchedule.parkPerpetual(taskType, app.id, { reason: detection.reason, actionableCount: detection.count, counts, skipCauses, signature: null });
+  emitLog('info', `Perpetual ${taskType} parked for ${app.name}: ${detection.reason}${skipCauses ? ` (${formatSkipCauses(skipCauses)})` : ''}`, { appId: app.id });
   return { skip: true };
 }
 
