@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url';
 import {
   parseDockerPort,
   parseNativePort,
-  resolveStorageMenuChoice,
 } from './lib/setupDbChoice.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,31 +19,6 @@ const dockerPortBindings = dockerComposeSrc.match(/^    ports:\r?\n((?:^      - 
 describe('Docker PostgreSQL host binding', () => {
   it('publishes the configured host port on loopback only', () => {
     expect(dockerPortBindings).toEqual(['- "127.0.0.1:${PGPORT_DOCKER:-5561}:5432"']);
-  });
-});
-
-describe('setup-db menu choice resolver (Phase 1: Postgres mandatory)', () => {
-  it('maps "2" to native', () => {
-    expect(resolveStorageMenuChoice('2')).toBe('native');
-    expect(resolveStorageMenuChoice('  2  ')).toBe('native');
-  });
-
-  it('maps "1" (and default/empty) to docker exit', () => {
-    expect(resolveStorageMenuChoice('1')).toBe('exit');
-    expect(resolveStorageMenuChoice('')).toBe('exit');
-    expect(resolveStorageMenuChoice('  ')).toBe('exit');
-  });
-
-  it('no longer offers file storage as a numbered choice — "3" is not "file"', () => {
-    expect(resolveStorageMenuChoice('3')).not.toBe('file');
-    expect(resolveStorageMenuChoice('3')).toBe('exit');
-    expect(resolveStorageMenuChoice('file')).toBe('exit');
-  });
-
-  it('setup-db.js prompts [1/2] and never resolves "file"', () => {
-    expect(setupDbSrc).toContain('Enter choice [1/2]:');
-    expect(setupDbSrc).toContain('resolveStorageMenuChoice');
-    expect(setupDbSrc).not.toMatch(/resolve\('file'\)/);
   });
 });
 
@@ -85,5 +59,84 @@ describe('native setup inherited endpoint', () => {
     );
     expect(configure({ PGPORT: '5570', PORTOS_NATIVE_PGPORT: '5433' }).PGPORT).toBe('5433');
     expect(configure({ PGPORT: '5434' }).PGPORT).toBe('5434');
+  });
+});
+
+// Run the actual CLI body with synthetic configuration and subprocesses. No
+// imports execute, no install .env is read, and no database can be contacted.
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true } = {}) {
+  const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved' };
+  const initialEnv = { ...savedEnv };
+  const calls = [];
+  const errors = [];
+  const exitSignal = {};
+  let exitCode = 0;
+  let provisioned = false;
+  const source = setupDbSrc.replace(/^#!.*\n/, '').replace(/^import .*;\n/gm, '')
+    .replace('import.meta.url', 'scriptUrl');
+  try {
+    await runInNewContext(`(async () => {${source}\n})()`, {
+      scriptUrl: 'file:///example/scripts/setup-db.js', dirname, join, fileURLToPath,
+      parseNativePort, parseDockerPort,
+      parseEnvFile: () => savedEnv,
+      upsertEnvKey: (_path, key, value) => { savedEnv[key] = value; },
+      createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
+      resolveBashBinary: () => 'bash',
+      process: {
+        env: {}, platform: 'linux', stdin: { isTTY: tty }, stdout: { isTTY: tty },
+        exit: (code) => { exitCode = code; throw exitSignal; }
+      },
+      console: { log: () => {}, error: (message) => errors.push(message) },
+      execFileSync: (command, args) => {
+        calls.push([command, ...args]);
+        const invocation = [command, ...args].join(' ');
+        if (invocation === unavailable) throw new Error('Synthetic unavailable dependency');
+        if (command === 'psql') return nativeReady || provisioned ? '1\n' : '';
+        if (command === 'bash' && args[1] === 'setup-native') {
+          provisioned = true;
+          return '';
+        }
+        if (invocation === 'docker compose ps --format json db') return running ? '{"State":"running"}' : '';
+        if (invocation.startsWith('docker compose exec -T db psql')) return '1\n';
+        if (['docker --version', 'docker info', 'docker compose version',
+          'docker compose up -d db', 'docker compose exec -T db pg_isready -h 127.0.0.1 -U portos'].includes(invocation)) return '';
+        throw new Error(`Unexpected synthetic subprocess: ${invocation}`);
+      }
+    });
+  } catch (error) {
+    if (error !== exitSignal) throw error;
+  }
+  expect(savedEnv).toEqual(initialEnv);
+  return { exitCode, calls, errors };
+}
+
+describe('setup preserves the selected database', () => {
+  it.each(['docker --version', 'docker info', 'docker compose version'])(
+    'fails safely when %s is unavailable despite a healthy native database', async (unavailable) => {
+      for (const tty of [false, true]) {
+        const result = await runSetup({ unavailable, tty });
+        expect(result.exitCode).toBe(1);
+        expect(result.calls.every(([command]) => command === 'docker')).toBe(true);
+        expect(result.calls.some((call) => call.includes('up'))).toBe(false);
+        expect(result.errors.join('\n')).toContain('Restore Docker');
+        expect(result.errors.join('\n')).toContain('coordinated maintenance cutover');
+      }
+    }
+  );
+
+  it.each([true, false])('succeeds with selected Docker (container running: %s)', async (running) => {
+    const result = await runSetup({ running });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.every(([command]) => command === 'docker')).toBe(true);
+    expect(result.calls.some((call) => call.includes('up'))).toBe(!running);
+    expect(result.calls.some((call) => call.includes('pg_isready'))).toBe(true);
+    expect(result.calls.some((call) => call.includes('psql'))).toBe(true);
+  });
+
+  it.each([true, false])('succeeds with explicitly selected native (already ready: %s)', async (nativeReady) => {
+    const result = await runSetup({ mode: 'native', nativeReady });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.some(([command]) => command === 'docker')).toBe(false);
+    expect(result.calls.some((call) => call.includes('setup-native'))).toBe(!nativeReady);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * Pure setup-db helpers. setup-db.js is a CLI entrypoint that runs on import,
- * so the menu/port resolvers live here and are imported by both the script and
+ * so the port resolvers live here and are imported by both the script and
  * its tests.
  */
 
@@ -16,9 +16,4 @@ export function parseNativePort(value) {
 
 export function parseDockerPort(value) {
   return parsePort(value, 5561);
-}
-
-/** Menu choice 2 = native Postgres; anything else (incl. 1 / empty) = docker. */
-export function resolveStorageMenuChoice(answer) {
-  return String(answer).trim() === '2' ? 'native' : 'exit';
 }
