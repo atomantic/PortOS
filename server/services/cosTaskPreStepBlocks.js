@@ -199,11 +199,14 @@ function resolveReleaseOptionsBlock(metadata = {}) {
 /**
  * Render the operator's release options into a do-release prompt. A customized
  * stored prompt that dropped `{releaseOptions}` still gets the block PREPENDED,
- * so turning an option off is never a silent no-op on that install.
+ * so turning an option off is never a silent no-op on that install. Also
+ * resolves `{appId}` (the branch-reconcile trigger target) from the task's
+ * managed app — empty on the install-wide lane, which targets PortOS itself.
  */
 export function applyReleaseOptions(promptTemplate, taskType, metadata) {
-  const prompt = typeof promptTemplate === 'string' ? promptTemplate : '';
-  if (taskType !== 'do-release') return prompt;
+  if (taskType !== 'do-release') return typeof promptTemplate === 'string' ? promptTemplate : '';
+  const prompt = (typeof promptTemplate === 'string' ? promptTemplate : '')
+    .replace(/\{appId\}/g, () => metadata?.app ?? '');
   const block = resolveReleaseOptionsBlock(metadata);
   if (prompt.includes('{releaseOptions}')) return prompt.replace(/\{releaseOptions\}/g, () => block);
   return `## Release options for this run\n\n${block}\n\n---\n\n${prompt}`;

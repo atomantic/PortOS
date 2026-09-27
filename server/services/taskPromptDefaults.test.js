@@ -678,12 +678,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // v15: in-flight work and dependency PRs land first, respecting live owners.
     expect(current).toContain('Finish in-flight work first');
     expect(current).toContain('/api/cos/agents?active=1');
-    expect(current).toContain('"taskType":"branch-reconcile"');
+    // Scoped to the app being released, never the install's other repos.
+    expect(current).toContain('"taskType":"branch-reconcile","appId":"{appId}"');
     expect(current).toContain('Merge dependency updates');
     // v15: a blocker that outlasts the fix loop goes to a sub-agent; filing an
     // issue and leaving the release PR open is no longer an exit (v14 stopped
     // at its 10-commit bound with the release PR open).
     expect(current).toContain('Delegate instead of giving up');
+    // Waiting on a queued task can deadlock on the agent slot this run holds.
+    expect(current).toContain('Do not wait for the queued task');
     expect(current).toContain('Filing an issue and leaving the release PR open is NOT a resolution');
     expect(current).not.toContain('Bound the loop');
     expect(current).toContain('Local-only flake');

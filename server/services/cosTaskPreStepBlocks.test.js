@@ -399,6 +399,11 @@ describe('applyReleaseOptions — the do-release {releaseOptions} block', () => 
     expect(out.endsWith('my custom release prompt')).toBe(true);
   });
 
+  it('targets the branch-reconcile trigger at the released app, or PortOS on the global lane', () => {
+    expect(applyReleaseOptions('{"appId":"{appId}"}', 'do-release', { app: 'app-a' })).toContain('{"appId":"app-a"}');
+    expect(applyReleaseOptions('{"appId":"{appId}"}', 'do-release', {})).toContain('{"appId":""}');
+  });
+
   it('leaves every other task type untouched', () => {
     expect(applyReleaseOptions('{releaseOptions}', 'branch-reconcile', {})).toBe('{releaseOptions}');
   });
