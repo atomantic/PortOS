@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { appLaunchVideoRequestSchema, appLaunchVideoPublishSchema, validateRequest } from '../../lib/validation.js';
+import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublishSchema, validateRequest } from '../../lib/validation.js';
 import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { PORTOS_API_URL } from '../../lib/portosUrls.js';
@@ -25,6 +25,11 @@ const LAUNCH_VIDEO_LIST_LIMIT = 50;
 // composition/ directory so the agent can cut on it instead of guessing a BPM.
 const BEATS_FILENAME = 'beats.json';
 const publishTaskSchema = appLaunchVideoPublishSchema.extend(pullRequestProviderOverrideSchema.shape);
+// A rendered take's frame, from the size Media History recorded for it.
+const formatOf = ({ width, height }) => {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return undefined;
+  return width === height ? 'square' : width < height ? 'vertical' : 'landscape';
+};
 const missingVideoSource = err => {
   if (err.code === 'ENOENT') throw new ServerError('Launch video file is missing', { status: 404 });
   throw err;
@@ -63,9 +68,12 @@ router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res)
 }));
 
 router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
-  const { provider, model, effort, sourceVideoId, feedback, motionGraphics, ...options } = validateRequest(launchVideoTaskSchema, req.body);
+  const { provider, model, effort, sourceVideoId, feedback, motionGraphics, format, formats: requestedFormats, ...options } = validateRequest(launchVideoTaskSchema, req.body);
   options.motionStyle ??= motionGraphics ? 'showreel' : 'walkthrough';
   if (Boolean(sourceVideoId) !== Boolean(feedback)) throw new ServerError('Choose a source video and provide feedback together', { status: 400 });
+  if (format && requestedFormats) throw new ServerError('Choose format or formats, not both', { status: 400 });
+  // `format` is the older single-frame request; both normalize to one list.
+  let formats = requestedFormats ?? [format ?? 'landscape'];
   const app = req.loadedApp;
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(app.id) || !app.repoPath || !await pathExists(app.repoPath)) {
     throw new ServerError('App repository is unavailable', { status: 400 });
@@ -88,7 +96,8 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   let assets;
   if (sourceVideoId) {
     const { loadHistory } = await import('../../services/videoGen/history.js');
-    sourceVideo = (await loadHistory()).find(item => item.id === sourceVideoId && item.launchVideo?.appId === app.id);
+    const history = await loadHistory();
+    sourceVideo = history.find(item => item.id === sourceVideoId && item.launchVideo?.appId === app.id);
     if (!sourceVideo) throw new ServerError('Launch video not found for this app', { status: 404 });
     const sourceRunId = sourceVideo.launchVideo.runId;
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(sourceRunId ?? '')) throw new ServerError('This video has no editable source', { status: 409 });
@@ -102,11 +111,19 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     options.targetDurationSec = sourceVideo.durationSec;
     validateLaunchVideoAssets(assets, { targetDurationSec: options.targetDurationSec });
     // Revisions inherit the selected take, never the new-video form defaults.
-    options.format = sourceVideo.width === sourceVideo.height ? 'square' : sourceVideo.width < sourceVideo.height ? 'vertical' : 'landscape';
+    // A multi-format run (#8960) is one take, so its revision re-renders every
+    // format that run delivered, not only the one being previewed.
+    const runFormats = history.filter(item => item.launchVideo?.appId === app.id && item.launchVideo.runId === sourceRunId)
+      .map(formatOf).filter(Boolean);
+    formats = runFormats.length ? runFormats : [formatOf(sourceVideo) ?? 'landscape'];
     options.musicTrack = sourceVideo.launchVideo.musicTrack ?? undefined;
     options.generateMusic = false;
     for (const key of ['tone', 'direction', 'motionStyle', 'musicMethod']) delete options[key];
   }
+  formats = LAUNCH_VIDEO_FORMATS.filter(name => formats.includes(name));
+  // One format keeps the original single-format prompt and render contract.
+  if (formats.length > 1) options.formats = formats;
+  else options.format = formats[0];
   // A chosen library track gets its real tempo measured (#8958) so the agent
   // can cut on it instead of guessing a BPM. Best-effort: a track that fails
   // to decode (no ffmpeg, unsupported format, no confident tempo) still
@@ -119,7 +136,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
     const { getBeatGrid } = await import('../../lib/beatGrid.js');
     musicTrackBeatGrid = await getBeatGrid(trackPath).catch(() => null);
   }
-  const payload = { directory, musicTrack: options.musicTrack,
+  const payload = { directory, musicTrack: options.musicTrack, ...(options.formats ? { formats: options.formats } : {}),
     ...((sourceVideo?.launchVideo.synthesizeMusic || (options.generateMusic && options.musicMethod === 'agent')) ? { synthesizeMusic: true } : {}),
     launchVideo: { appId: app.id, runId, targetDurationSec: options.targetDurationSec, ...(sourceVideoId ? { sourceVideoId } : {}) } };
   const outputRoot = join(PATHS.data, 'launch-videos', app.id, runId);
@@ -170,9 +187,14 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
 router.get('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   const { loadHistory } = await import('../../services/videoGen/history.js');
   // Bounded projection of the existing media store, not a new run database.
-  const videos = (await loadHistory()).filter(item => item.launchVideo?.appId === req.loadedApp.id)
-    .slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(({ id, filename, thumbnail, createdAt, durationSec, launchVideo }) => ({
+  const all = (await loadHistory()).filter(item => item.launchVideo?.appId === req.loadedApp.id);
+  // Never cut a multi-format run at the limit: a take the tab shows keeps all
+  // of its formats (at most two past the limit).
+  const keptRuns = new Set(all.slice(0, LAUNCH_VIDEO_LIST_LIMIT).map(item => item.launchVideo.runId).filter(Boolean));
+  const videos = all.filter((item, index) => index < LAUNCH_VIDEO_LIST_LIMIT || keptRuns.has(item.launchVideo.runId)).map(({ id, filename, thumbnail, createdAt, durationSec, width, height, launchVideo }) => ({
       id, filename, thumbnail, createdAt, durationSec, caption: launchVideo.caption, ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
+      // runId groups a multi-format run's entries into one take in the tab.
+      runId: launchVideo.runId, format: formatOf({ width, height }),
     }));
   res.json({ videos });
 }));

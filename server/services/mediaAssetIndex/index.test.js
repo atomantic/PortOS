@@ -76,6 +76,16 @@ describe('initMediaAssetIndex', () => {
     expect(upsertAsset).toHaveBeenCalledWith(expect.objectContaining({
       mediaKey: 'video:job-1', kind: 'video', ref: 'job-1',
     }));
+    // A multi-format composition (#8960) lists one history entry per format;
+    // none of them is keyed by the job id, so each is indexed from `videos`.
+    upsertAsset.mockClear();
+    loadHistory.mockResolvedValueOnce([
+      { id: 'job-2-landscape', filename: 'a.mp4', createdAt: '2026-01-03T00:00:00.000Z' },
+      { id: 'job-2-vertical', filename: 'b.mp4', createdAt: '2026-01-03T00:00:00.000Z' },
+    ]);
+    videoGenEvents.emit('completed', { generationId: 'job-2', videos: [{ id: 'job-2-landscape' }, { id: 'job-2-vertical' }] });
+    await flush();
+    expect(upsertAsset.mock.calls.map(([row]) => row.mediaKey)).toEqual(['video:job-2-landscape', 'video:job-2-vertical']);
   });
 });
 

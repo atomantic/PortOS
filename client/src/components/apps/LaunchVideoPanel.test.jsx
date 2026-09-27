@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LaunchVideoPanel from './LaunchVideoPanel';
 import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
@@ -25,7 +25,9 @@ describe('launch video drawer', () => {
     renderPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Make launch video' }));
     fireEvent.change(screen.getByLabelText('Tone'), { target: { value: 'cinematic' } });
-    fireEvent.change(screen.getByLabelText('Format'), { target: { value: 'vertical' } });
+    // One frame keeps the original single `format` request.
+    fireEvent.click(screen.getByLabelText('Vertical 9:16'));
+    fireEvent.click(screen.getByLabelText('Landscape 16:9'));
     fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '22' } });
     fireEvent.click(screen.getByLabelText('Include music'));
     // Each track is identifiable by name + file and audible before choosing it.
@@ -57,14 +59,19 @@ describe('launch video drawer', () => {
     await waitFor(() => expect(screen.getByLabelText('Consult motion skills').disabled).toBe(false));
     fireEvent.click(screen.getByLabelText('Consult motion skills'));
     fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '90' } });
+    fireEvent.click(screen.getByLabelText('Landscape 16:9'));
+    expect(screen.getByRole('button', { name: 'Queue launch video' }).disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText('Square 1:1'));
+    fireEvent.click(screen.getByLabelText('Vertical 9:16'));
     fireEvent.click(screen.getByLabelText('Include music'));
     expect(screen.getByLabelText('Generate original music').checked).toBe(false);
     fireEvent.click(screen.getByLabelText('Generate original music'));
     expect(screen.getByLabelText('Music creation').value).toBe('agent');
     fireEvent.change(screen.getByLabelText('Music creation'), { target: { value: musicMethod } });
     fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
-    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, musicMethod, motionStyle: 'ui-morph', critiqueRounds: 3, motionSkills: true }), { silent: true }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ formats: ['vertical', 'square'], targetDurationSec: 90, generateMusic: true, musicMethod, motionStyle: 'ui-morph', critiqueRounds: 3, motionSkills: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
+    expect(createAppLaunchVideo.mock.calls[0][1].format).toBeUndefined();
   });
 
   it('previews the URL-selected take and offers it for download', async () => {
@@ -82,6 +89,31 @@ describe('launch video drawer', () => {
     fireEvent.click(takes.querySelectorAll('button')[0]);
     expect(await screen.findByText('Newest caption.')).toBeTruthy();
   });
+});
+
+
+it('groups a multi-format run into one take with a download per format', async () => {
+  getAppLaunchVideos.mockResolvedValueOnce({ videos: [
+    { id: 'run-a-landscape', runId: 'run-a', format: 'landscape', filename: 'a-landscape.mp4', thumbnail: 'a-landscape.jpg', createdAt: '2026-01-02T00:00:00.000Z', caption: 'Run A.' },
+    { id: 'run-a-vertical', runId: 'run-a', format: 'vertical', filename: 'a-vertical.mp4', thumbnail: 'a-vertical.jpg', createdAt: '2026-01-02T00:00:00.000Z', caption: 'Run A.' },
+    { id: 'run-b', runId: 'run-b', format: 'square', filename: 'b.mp4', thumbnail: 'b.jpg', createdAt: '2026-01-01T00:00:00.000Z', caption: 'Run B.' },
+  ] });
+  renderPanel('/?video=run-a-vertical');
+  expect(await screen.findByText('Run A.')).toBeTruthy();
+  expect(screen.getByLabelText('Selected launch video').getAttribute('src')).toBe('/data/videos/a-vertical.mp4');
+  // Two takes, not three videos; the run's tile names its format count.
+  const takes = screen.getByRole('list', { name: 'Launch video takes' });
+  expect(takes.querySelectorAll('button')).toHaveLength(2);
+  expect(takes.textContent).toContain('2 formats');
+  expect(screen.getByRole('link', { name: 'Download Landscape 16:9' }).getAttribute('href')).toBe('/data/videos/a-landscape.mp4');
+  expect(screen.getByRole('link', { name: 'Download Vertical 9:16' }).getAttribute('href')).toBe('/data/videos/a-vertical.mp4');
+  const switcher = screen.getByRole('group', { name: 'Formats in this take' });
+  fireEvent.click(within(switcher).getByRole('button', { name: 'Landscape 16:9' }));
+  await waitFor(() => expect(screen.getByLabelText('Selected launch video').getAttribute('src')).toBe('/data/videos/a-landscape.mp4'));
+  fireEvent.click(takes.querySelectorAll('button')[1]);
+  expect(await screen.findByText('Run B.')).toBeTruthy();
+  expect(screen.queryByRole('group', { name: 'Formats in this take' })).toBeNull();
+  expect(screen.getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/data/videos/b.mp4');
 });
 
 

@@ -50,6 +50,38 @@ with the same tail fade, and removes the temporary file after completion or
 failure. No music model, Python runtime, downloaded samples or music-library
 write is required. Missing or invalid audio fails the job.
 
+## Several formats from one timeline
+
+One job can render the same composition at several aspect ratios, so a launch
+posted to several platforms is one film recomposed per frame rather than one
+agent run per format. The composition declares the extra sizes it supports and
+an optional layout hook:
+
+```js
+globalThis.portosComposition = {
+  durationSec: 20, fps: 24, width: 1920, height: 1080,
+  formats: ['1920x1080', '1080x1920', '1080x1080'],
+  async layout({ width, height }) { /* reflow type and UI for this frame */ },
+  async seek(t) { /* same timeline in every format */ },
+};
+```
+
+The render request names formats: `"formats": ["landscape", "vertical", "square"]`
+(1920×1080, 1080×1920, 1080×1080). The renderer renders them in that canonical
+order, in sequence, on the same page and frozen asset snapshot: for each one it
+resizes the viewport, awaits `layout({ width, height })` when defined, then seeks
+every frame. Duration, fps and timing are shared, and synthesized music is
+rendered once and muxed into every format. A requested format whose size is
+neither the composition's own `width`×`height` nor listed in `formats` fails
+the job before any output, naming the missing size. Without `formats` in the
+request, a job renders the composition's own size exactly as before.
+
+Each format is its own Media History entry (`<jobId>-<format>`), all written in
+one history update, so a job registers every format or none. The completed
+job result keeps `generationId` as the job and names the first format in
+`id`/`filename`/`thumbnail`, and lists all of
+them in `videos: [{ format, id, filename, thumbnail, path }]`.
+
 ## Motion kit
 
 `server/services/htmlComposition/kit/portos-motion.js` is a deterministic
@@ -75,13 +107,15 @@ directory. It is ordinary UTF-8 source, so it passes the launch asset gate.
 ## Proof renders (contact sheets)
 
 Add `proof: { everySec: 1 }` (0.25–10 seconds) to the render request to get a
-silent contact sheet instead of a video. The renderer applies the same contract
+silent contact sheet instead of a video. `proof.format` (`landscape`,
+`vertical` or `square`) checks one declared framing, running `layout` first;
+a proof request cannot also carry `formats`. The renderer applies the same contract
 and launch-video gates, seeks one frame per interval (at most 60), and tiles
 them six across at phone size (360px wide, 240px for vertical) into one PNG.
 A proof is silent, so the request must omit `musicTrack` and
 `synthesizeMusic`. Nothing is registered in Media History and no
 launch-video artifacts are delivered. The completed job's result carries
-`proof: { file, url, times, columns, width, height }`, where `file` is
+`proof: { file, url, times, columns, width, height }` (plus `format` when one was requested), where `file` is
 relative to the data directory (never an absolute host path) and `url` serves
 it under `/data/`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other
@@ -120,7 +154,7 @@ explicitly when either binary is unavailable; route and queue tests still run.
 This option is required for directories rooted at `launch-videos/` and can also
 be applied to other composition directories. An app's **Launch Video** tab
 (`/apps/<appId>/launch-video`, also linked from Overview) queues a user-triggered CoS task with
-tone, direction, format, duration (15–120 seconds), an optional **Dynamic motion
+tone, direction, one or more formats (landscape, vertical, square), duration (15–120 seconds), an optional **Dynamic motion
 graphics** style, optional generated original
 music or an existing Music-library track (each listed with its filename and an
 inline audio preview), and an optional
@@ -168,10 +202,18 @@ App runs pass `appId` and `runId` together in `launchVideo`, with directory exac
 `launch-videos/<appId>/<runId>/composition`. The run is pinned to this instance.
 On success, the renderer exclusively creates `plan.md`, `storyboard.json`,
 `caption.txt`, `video.mp4` and `poster.jpg` beside `composition/`, using the
-validated in-memory source snapshot. Media History retains its normal video
+validated in-memory source snapshot. A run that asked for several formats
+(`formats` on the launch-video request; the older single `format` is a
+one-item list) gets one composition written against `layout`, and its render
+delivers `video-<format>.mp4` and `poster-<format>.jpg` per format with the
+plan, storyboard and caption once. Every format's history entry carries the
+same `launchVideo.runId`, and the privacy and storyboard gates run once per job
+on the frozen assets. A revision re-renders every format its source run
+delivered. Media History retains its normal video
 and thumbnail copies with app/run metadata. The Launch Video tab previews the
-recent takes (the selected one is the `?video=<id>` URL param, newest by
-default), with caption copy, an MP4 download, and a new-run action. Existing artifacts are never
+recent takes (the selected video is the `?video=<id>` URL param, newest by
+default), groups a run's formats into one take with a format switcher and a
+download per format, and offers caption copy and a new-run action. Existing artifacts are never
 overwritten. This reuses CoS queues and media history; it adds no record store.
 
 Alongside `index.html`, put non-empty `plan.md`, `caption.txt`, and
