@@ -146,6 +146,24 @@ describe('planShots', () => {
     expect(solo.every((s) => s.lyricText === null && s.sectionIndex === 1)).toBe(true);
   });
 
+  // The render honors a planned span only for a beatAligned shot; an off-grid
+  // cut would hand both neighbours back to their raw clip length and break the
+  // planned timeline. A line sung between beats still cuts on the grid.
+  it('keeps every planned span honored when lyric lines and the hook fall between beats', async () => {
+    const slowBeats = Array.from({ length: 31 }, (_, i) => i * 1.25); // 48 BPM
+    const { shots } = planShots([{ label: 'Verse', startSec: 0, endSec: 30 }], {
+      beats: slowBeats,
+      downbeats: slowBeats.filter((_, i) => i % 4 === 0),
+      lyricCues: [{ text: 'between beats', startSec: 8.1, endSec: 11 }],
+      pacing: { minShotSec: 2.1, hookSec: 2.4 },
+      clipCapacitySec: 5,
+    });
+    expectTiles(shots, 0, 30);
+    expect(shots.every((s) => s.beatAligned)).toBe(true);
+    expect(shots.every((s) => slowBeats.includes(s.startSec))).toBe(true);
+    expect(shots.map((s) => s.startSec)).toContain(7.5);
+  });
+
   it('carries phrase-level visual intent onto the shots it covers', () => {
     const phrases = [{ label: 'Lift', startSec: 20, endSec: 30, intent: 'slow push toward the sun' }];
     const { shots } = planShots(SECTIONS, { ...GRID, phrases, clipCapacitySec: 5 });

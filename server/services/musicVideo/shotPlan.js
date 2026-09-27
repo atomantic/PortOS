@@ -28,9 +28,6 @@ import { snapSectionsToGrid } from './audioAnalysis.js';
 const EPS = 1e-6;
 const SECTION_LABEL_MAX = 120;
 const LYRIC_TEXT_MAX = 2000;
-// A lyric/phrase boundary within this distance of a grid point cuts ON the grid
-// point: sung phrasing drifts a little off the beat, the picture should not.
-const BOUNDARY_SNAP_SEC = 0.2;
 // An untimed-end cue lasts until the next cue, capped here.
 const OPEN_CUE_MAX_SEC = 8;
 // Grok renders fixed 6s/10s clips; a local model's default render is ~5s
@@ -81,17 +78,20 @@ function timedPhrases(phrases) {
     .filter((p) => p && typeof p.startSec === 'number' && typeof p.endSec === 'number' && p.endSec > p.startSec);
 }
 
-function nearestWithin(grid, t, tol) {
+function nearest(grid, t) {
   let best = null;
   for (const g of grid) {
-    if (Math.abs(g - t) <= tol && (best == null || Math.abs(g - t) < Math.abs(best - t))) best = g;
+    if (best == null || Math.abs(g - t) < Math.abs(best - t)) best = g;
   }
   return best;
 }
 
 /**
  * Tier-ordered cut candidates: 0 = lyric/phrase boundary, 1 = downbeat, 2 = beat.
- * A boundary near a grid point is moved onto it (and counts as on-grid).
+ * A lyric/phrase boundary cuts on the grid point nearest it: sung phrasing
+ * drifts off the beat, the picture should not — and an on-grid cut is what
+ * lets the render honor the planned span exactly (`beatAligned`), so every
+ * shot keeps its planned timing instead of falling back to its clip length.
  */
 function buildCandidates({ cues, phrases, beats, downbeats }) {
   const grid = [...downbeats, ...beats];
@@ -101,8 +101,7 @@ function buildCandidates({ cues, phrases, beats, downbeats }) {
     ...phrases.flatMap((p) => [p.startSec, p.endSec]),
   ];
   for (const b of boundaries) {
-    const snapped = nearestWithin(grid, b, BOUNDARY_SNAP_SEC);
-    out.push({ t: snapped ?? b, tier: 0, onGrid: snapped != null });
+    out.push({ t: nearest(grid, b) ?? b, tier: 0, onGrid: true });
   }
   for (const t of downbeats) out.push({ t, tier: 1, onGrid: true });
   for (const t of beats) out.push({ t, tier: 2, onGrid: true });
@@ -138,6 +137,9 @@ function splitSpan(startSec, endSec, { minShotSec, maxShotSec, firstMaxSec, cand
         if (!pick || Math.abs(c.t - ideal) < Math.abs(pick.t - ideal) - EPS) pick = c;
       }
     }
+    // A short hook window can fall between beats on a slow grid: lift the hook
+    // cap rather than cut off the grid.
+    if (!pick && hasGrid && localMax < maxShotSec) { localMax = maxShotSec; continue; }
     const cut = pick ? round3(pick.t) : round3(ideal);
     shots.push({ startSec: cursor, endSec: cut, cutOnGrid: pick ? pick.onGrid : !hasGrid });
     cursor = cut;
