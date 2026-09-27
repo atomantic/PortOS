@@ -71,7 +71,9 @@ or first-chunk streaming latency. Rendering
 alone never enables the route. A one-use receipt expires after two minutes, binds
 the measurement to the rendered profile revision, and saves its boundary, model
 revision and route decision together. Restarting the server or changing the
-profile requires a fresh benchmark. Playback rejection or timeout cannot qualify.
+profile requires a fresh benchmark. The probe must reach `ended` after `playing`
+before submitting its startup measurement. Playback rejection or timeout cannot
+qualify.
 The browser reports its own playback event; this is a trusted operator-reported
 measurement, not an attestation of another machine's audio output. The receipt
 binds the report to a current probe but cannot prove that a remote client played

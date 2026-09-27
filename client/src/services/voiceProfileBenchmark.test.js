@@ -27,6 +27,9 @@ describe('profile browser playback qualification', () => {
     expect(completeVoiceProfileInteractiveBenchmark).not.toHaveBeenCalled();
     clock.mockReturnValue(10250);
     audio.dispatchEvent(new Event('playing'));
+    expect(completeVoiceProfileInteractiveBenchmark).not.toHaveBeenCalled();
+    clock.mockReturnValue(13000);
+    audio.dispatchEvent(new Event('ended'));
     await expect(pending).resolves.toEqual({ profile: { id: 'profile-1' } });
     expect(completeVoiceProfileInteractiveBenchmark).toHaveBeenCalledWith('profile-1', {
       benchmarkId: 'probe-1', renderRequestLatencyMs: 200, playbackStartupMs: 250,

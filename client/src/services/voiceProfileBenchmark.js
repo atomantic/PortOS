@@ -14,23 +14,26 @@ export async function prepareProfilePlayback(profileId, payload = {}, options) {
       const audio = new Audio(`data:audio/wav;base64,${benchmark.audioBase64}`);
       const playbackStartupMs = await new Promise((resolve, reject) => {
         let settled = false;
+        let firstPlaybackMs = null;
         const finish = (error) => {
           if (settled) return;
           settled = true;
-          const elapsed = Math.ceil(performance.now() - playbackStartedAt);
           clearTimeout(timeout);
           audio.removeEventListener('playing', onPlaying);
           audio.removeEventListener('error', onError);
+          audio.removeEventListener('ended', onEnded);
           audio.pause();
           audio.removeAttribute('src');
-          if (error) reject(error);
-          else resolve(elapsed);
+          if (error || firstPlaybackMs === null) reject(error || new Error('The benchmark ended without starting playback'));
+          else resolve(firstPlaybackMs);
         };
-        const onPlaying = () => finish();
+        const onPlaying = () => { firstPlaybackMs ??= Math.ceil(performance.now() - playbackStartedAt); };
+        const onEnded = () => finish();
         const onError = () => finish(new Error('The benchmark audio could not play'));
         const timeout = setTimeout(() => finish(new Error('Benchmark playback timed out')), 30000);
         audio.addEventListener('playing', onPlaying);
         audio.addEventListener('error', onError);
+        audio.addEventListener('ended', onEnded);
         // Browser play() reports playback denial through its promise.
         audio.play().catch(finish);
       });
