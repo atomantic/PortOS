@@ -2,6 +2,7 @@ import { useState, useCallback, useId, useRef } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { ISSUE_AUTHOR_FILTER_OPTIONS } from '../cos/constants';
 import { WORK_TRACKER_LABELS, workItemNoun } from './constants';
+import { formatSkipCauses } from '../../lib/perpetualSkipCauses';
 import * as api from '../../services/api';
 
 // Trackers with an author gate — PLAN.md items and JIRA sprint tickets have none.
@@ -38,6 +39,11 @@ function emptyMessage(work) {
       ? `Couldn't complete the check — ${work.remedy}.`
       : `Couldn't reach the tracker (${work.reason}) — retry, or let the agent decide.`;
   }
+  // The detector's per-cause attribution answers "why is nothing claimable"
+  // with the real counts ("49 needs-input, 17 blocked") rather than a static
+  // sentence that must re-enumerate the cause vocabulary by hand.
+  const causes = formatSkipCauses(work.skipCauses, 3, 'in-flight');
+  if (causes) return `${EMPTY_REASONS[work.reason] || `Nothing to pick (${work.reason || 'unknown'}).`} (${causes})`;
   return EMPTY_REASONS[work.reason] || `Nothing to pick (${work.reason || 'unknown'}).`;
 }
 

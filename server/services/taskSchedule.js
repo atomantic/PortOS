@@ -20,6 +20,7 @@
  */
 
 import { cosEvents, emitLog } from './cosEvents.js';
+import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { DAY, safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
@@ -605,13 +606,8 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
   // open issues" reads as the task being broken. Render the top skip causes
   // inline ("49 needs-input, 17 blocked") so the one line they see answers the
   // question the toast exists for.
-  const causeSummary = skipCauses && Object.keys(skipCauses).length > 0
-    ? ` — ${Object.entries(skipCauses)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([cause, n]) => `${n} ${cause}`)
-      .join(', ')}`
-    : '';
+  const causes = formatSkipCauses(skipCauses);
+  const causeSummary = causes ? ` — ${causes}` : '';
   emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'}${causeSummary})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
   cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts, skipCauses });
   return record;

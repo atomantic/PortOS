@@ -133,7 +133,9 @@ export function useOnDemandTaskToast() {
         // Per-cause attribution ("49 needs-input, 17 blocked") — the answer to
         // "why is nothing claimable when 88 issues are open". Replaces the bare
         // "N filtered" when present, since the causes ARE the filtered detail.
-        const causes = formatSkipCauses(data?.skipCauses);
+        // `in-flight` is excluded: the counts breakdown already shows it, and
+        // the detector includes it in the map as informational only.
+        const causes = formatSkipCauses(data?.skipCauses, 3, 'in-flight');
         if (causes) parts.push(causes);
         else if (c.filtered) parts.push(`${c.filtered} filtered`);
         const detail = parts.length ? ` — ${parts.join(', ')}` : '';

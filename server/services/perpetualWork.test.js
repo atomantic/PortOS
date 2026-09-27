@@ -387,7 +387,7 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ 'needs-input': 5, blocked: 1, 'decomposed-epic': 1 });
     });
 
-    it('attributes skips per cause (assigned / in-flight / excluded label) so a park names its reasons', async () => {
+    it('carries an empty skipCauses map when issues remain actionable (attribution is park-only)', async () => {
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([
           { number: 1, title: 'plain', assignees: [], labels: [] },

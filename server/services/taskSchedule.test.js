@@ -2877,7 +2877,7 @@ describe('taskSchedule', () => {
         // The log line the operator reads in PM2 names the top 3 causes inline.
         const logged = emitLog.mock.calls.at(-1);
         expect(logged[1]).toMatch(/no-actionable-issues — 49 needs-input, 17 blocked, 12 decomposed-epic/);
-        expect(logged[1]).not.toMatch(/assigned: 2/);
+        expect(logged[1]).not.toMatch(/2 assigned/);
       })
 
       it('parkPerpetual leaves parkSkipCauses absent when the detector reports no attribution', async () => {
