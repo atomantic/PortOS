@@ -10,7 +10,9 @@
  * it). Returns '' for an empty/absent map.
  */
 export function formatSkipCauses(skipCauses, maxCauses = 3, excludeCause = null) {
-  if (!skipCauses || typeof skipCauses !== 'object') return '';
+  // An array is also `typeof 'object'`, but its entries are index/count pairs —
+  // a corrupt persisted map would render bogus causes like "49 0, 17 1".
+  if (!skipCauses || typeof skipCauses !== 'object' || Array.isArray(skipCauses)) return '';
   return Object.entries(skipCauses)
     .filter(([cause, n]) => cause !== excludeCause && Number.isFinite(n) && n > 0)
     .sort((a, b) => b[1] - a[1])

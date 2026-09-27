@@ -19,6 +19,9 @@ describe('formatSkipCauses', () => {
     expect(formatSkipCauses(undefined)).toBe('');
     expect(formatSkipCauses({})).toBe('');
     expect(formatSkipCauses('needs-input')).toBe('');
+    // An array is typeof 'object' but its entries are index/count pairs — a
+    // corrupt persisted map must not render bogus causes like "49 0, 17 1".
+    expect(formatSkipCauses([49, 17])).toBe('');
   });
 
   it('drops non-finite and non-positive counts rather than rendering them', () => {
