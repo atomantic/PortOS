@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Plus, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -16,6 +16,7 @@ import {
   updateMusicVideoScene,
   deleteMusicVideoScene,
   reorderMusicVideoScenes,
+  importMusicVideoLyrics,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
@@ -38,6 +39,7 @@ import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
 import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
+import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
@@ -67,6 +69,7 @@ export default function MusicVideo() {
   const [arranging, setArranging] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
+  const [importingLyrics, setImportingLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
   const selected = projects.find((p) => p.id === selectedId) || null;
@@ -213,11 +216,11 @@ export default function MusicVideo() {
       .finally(() => setAnalyzing(false));
   };
 
-  // Autonomous shot planner (#1855): propose one scene per analyzed audio
-  // section (energy-aware durations fall out of the section boundaries
-  // themselves) and seed them onto the board, optionally with a first-pass
-  // framePrompt/prompt per scene. Director-first — seeded scenes are
-  // ordinary, fully-editable board entries, same as a hand-added one.
+  // Autonomous shot planner (#1855, multi-shot #8964): tile each analyzed
+  // section with bounded shots — cut on timed lyric lines, phrase edges and
+  // the beat grid, capped at the renderer's clip length — and seed them onto
+  // the board, optionally with a first-pass framePrompt/prompt per shot.
+  // Director-first — seeded shots are ordinary, fully-editable board entries.
   const handlePlan = () => {
     if (!selected?.audioAnalysis) return;
     setPlanning(true);
@@ -227,7 +230,7 @@ export default function MusicVideo() {
         const suffix = promptsSeeded
           ? ' with first-pass prompts'
           : (promptsSkippedReason && promptsSkippedReason !== 'not-requested' ? ` (prompts skipped: ${promptsSkippedReason})` : '');
-        toast.success(`Planned ${scenesAdded} scene${scenesAdded === 1 ? '' : 's'}${suffix}`);
+        toast.success(`Planned ${scenesAdded} shot${scenesAdded === 1 ? '' : 's'}${suffix}`);
       })
       .catch((err) => toast.error(err?.message || 'Plan failed'))
       .finally(() => setPlanning(false));
@@ -320,6 +323,30 @@ export default function MusicVideo() {
     replaceProject({ ...selected, concept: { ...selected.concept, ...patch } });
     updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save concept'));
+  };
+  // Lyric cues / phrases / pacing (#8964) — optimistic-local + silent PATCH on
+  // blur, like the scene editors. Each PATCH replaces a whole list, so the
+  // saves are chained: two quick blurs can never land out of order and let an
+  // older snapshot of the list overwrite a newer one.
+  const timedTextSaveChain = useRef(Promise.resolve());
+  const editProjectLocal = (patch) => patchProject(selected.id, patch);
+  const saveProjectFields = (patch) => {
+    const projectId = selected.id;
+    timedTextSaveChain.current = timedTextSaveChain.current
+      .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
+      .catch((err) => toast.error(err?.message || 'Failed to save lyrics'));
+  };
+  const handleImportLyrics = (body, onDone) => {
+    const projectId = selected.id;
+    setImportingLyrics(true);
+    importMusicVideoLyrics(projectId, body, { silent: true })
+      .then(({ project, imported, format }) => {
+        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        onDone?.();
+        toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
+      })
+      .catch((err) => toast.error(err?.message || 'Lyric import failed'))
+      .finally(() => setImportingLyrics(false));
   };
   // Buffered so a concept/style keystroke doesn't fire a round-trip per character,
   // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
@@ -552,6 +579,13 @@ export default function MusicVideo() {
                 finalVideo={finalVideo}
                 onOpenPreview={openPreview}
               />
+              <LyricsPanel
+                project={selected}
+                onEditLocal={editProjectLocal}
+                onSave={saveProjectFields}
+                onImport={handleImportLyrics}
+                importing={importingLyrics}
+              />
               <AnalysisPanel
                 audioAnalysis={selected.audioAnalysis}
                 scenes={selected.scenes || []}
@@ -560,7 +594,7 @@ export default function MusicVideo() {
             </div>
 
             {selected.audioAnalysis && (selected.scenes || []).length > 0 && (
-              <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} onCommit={commitSceneTiming} />
+              <BeatTimeline audioAnalysis={selected.audioAnalysis} scenes={selected.scenes} lyricCues={selected.lyricCues} onCommit={commitSceneTiming} />
             )}
 
             <div className="flex items-center justify-between">

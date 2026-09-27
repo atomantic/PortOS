@@ -32,11 +32,19 @@ export const setMusicVideoManualTempo = (id, body, options = {}) => request(`/mu
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
-// Autonomous shot planner (#1855): propose one scene per analyzed audio
-// section and seed them onto the board. `seedPrompts` (default true) also
+// Autonomous shot planner (#1855, multi-shot #8964): tile each analyzed
+// section with bounded shots (cut on lyric lines / phrases / beats) and seed
+// them onto the board. `seedPrompts` (default true) also
 // best-effort asks the active provider for a first-pass framePrompt/prompt
-// per scene. Returns `{ project, scenesAdded, promptsSeeded, promptsSkippedReason }`.
+// per scene. Returns `{ project, scenesAdded, promptsSeeded, promptsSkippedReason, pacing }`.
 export const planMusicVideoProject = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/plan`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Import timed lyric cues (#8964) from pasted LRC / SRT / WebVTT / plain lines.
+// Body: { text, format?: 'auto'|'lrc'|'srt'|'text', mode?: 'replace'|'append' }.
+// Resolves to { project, imported, format }.
+export const importMusicVideoLyrics = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 

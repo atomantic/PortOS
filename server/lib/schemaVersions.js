@@ -578,7 +578,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (uploaded audio, scene images/rendered videos) is NOT bundled in this phase —
   // it federates via its own channels / a follow-up. The FIRST incompatible
   // project-shape change MUST bump this to 2.
-  musicVideoProjects: 1,
+  // v2 = timed lyric cues, phrase annotations, pacing, and explicit per-shot
+  // `loop` semantics (#8964). The body is still stored verbatim by a v1
+  // receiver, but a v1 peer would mis-execute it and LWW the damage back: its
+  // renderer loops every clip (silently repeating footage in `loop: false`
+  // shots the newer peer refuses to render that way), and its audio-source
+  // change clears the analysis while leaving the lyric/phrase timings aligned
+  // to the OLD track — an edit that then wins LWW onto the upgraded peer.
+  // Gating makes a v1 receiver reject the ahead-version transfer until it
+  // upgrades; pre-#8964 records need no rewrite (absent `loop` = legacy loop).
+  musicVideoProjects: 2,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

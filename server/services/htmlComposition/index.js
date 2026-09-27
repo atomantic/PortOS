@@ -63,7 +63,7 @@ export async function renderComposition({ jobId, ...input }) {
     const metadata = await page.evaluate(`(() => {
       const c = globalThis.portosComposition;
       if (!c || typeof c.seek !== 'function') throw new Error('portosComposition.seek is required');
-      return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height };
+      return { durationSec: c.durationSec, fps: c.fps, width: c.width, height: c.height, motionBlur: c.motionBlur };
     })()`);
     const parsed = htmlCompositionContractSchema.safeParse(metadata);
     if (!parsed.success) throw new Error(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
