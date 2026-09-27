@@ -749,3 +749,5 @@ export * from './styleSourcePrompt.js';
 export * from './messageBrowserIdentity.js';
 
 export * from './databaseMaintenanceJournal.js';
+
+export * from './databaseWriterRegistry.js';
