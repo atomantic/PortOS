@@ -485,14 +485,15 @@ export function useVideoGenForm({
   // Until the user deliberately chooses a size, model changes carry their own
   // native default canvas. This is material for H3: the shared 768x512 default
   // is an off-distribution wiring-test size, while its trained 16:9 canvas is
-  // 1344x768. A source image still wins through the aspect-snap effect above,
-  // and Remix/Continue/user edits set sizeManuallySetRef so they are preserved.
+  // 1344x768. Apply it even while a source image is loading (or fails to load),
+  // then let its onload callback choose the closest native aspect preset.
+  // Remix/Continue/user edits set sizeManuallySetRef so they are preserved.
   useEffect(() => {
-    if (!currentModel || sizeManuallySetRef.current || sourceImageFile || sourceUploadUrl) return;
+    if (!currentModel || sizeManuallySetRef.current) return;
     const next = defaultResolutionForModel(currentModel);
     setWidth(next.w);
     setHeight(next.h);
-  }, [currentModel, sourceImageFile, sourceUploadUrl]);
+  }, [currentModel]);
 
   // Remix/deep-link/resume paths set model + sampler fields independently.
   // Reconcile them once the model is known so a legacy LTX 8n+1 frame count
