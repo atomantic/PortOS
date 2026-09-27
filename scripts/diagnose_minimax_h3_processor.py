@@ -66,7 +66,9 @@ def compare(case, reference, twin, patch_size):
         "twin_grid": twin_grid,
         "resampled": [grid_h * patch_size, grid_w * patch_size] != [case["height"], case["width"]],
         "shapes_match": ref_values.shape == twin_values.shape,
+        "parity": False,
     }
+    # A differing grid or shape already fails parity; there is nothing to diff.
     if result["shapes_match"] and ref_grid == twin_grid:
         difference = np.abs(ref_values.astype(np.float64) - twin_values.astype(np.float64))
         result.update(
@@ -74,10 +76,10 @@ def compare(case, reference, twin, patch_size):
             mean_abs=float(difference.mean()),
             bfloat16_mismatch=float(np.mean(bfloat16_bits(ref_values) != bfloat16_bits(twin_values))),
         )
-    result["parity"] = (
-        result["shapes_match"] and ref_grid == twin_grid and not result["resampled"]
-        and result["max_abs"] <= FLOAT32_TOLERANCE and result["bfloat16_mismatch"] == 0
-    )
+        result["parity"] = (
+            not result["resampled"] and result["max_abs"] <= FLOAT32_TOLERANCE
+            and result["bfloat16_mismatch"] == 0
+        )
     return result
 
 
