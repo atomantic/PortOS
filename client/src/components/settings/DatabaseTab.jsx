@@ -273,6 +273,12 @@ export function DatabaseTab() {
   // the same tab must still recognize its own cutover once it reconciles.
   const ownOperationRef = useRef(safeReadJsonSession(OWN_OPERATION_KEY));
   const wentDownAtRef = useRef(null);
+  // Bumped by every reconcile call AND by the optimistic snapshot handleMigrate
+  // / handleRecover set right after acceptance. A status read applies its
+  // result only if it is still the latest — otherwise a slow, stale GET
+  // (in flight before this tab accepted a cutover) could resolve afterward
+  // and overwrite the just-established fence with old idle data.
+  const reconcileSeqRef = useRef(0);
 
   const loadStatus = useCallback(() => {
     setDbLoading(true);
@@ -283,9 +289,11 @@ export function DatabaseTab() {
   }, []);
 
   const reconcileMaintenance = useCallback(() => {
+    const seq = ++reconcileSeqRef.current;
     setMaintenanceLoading(true);
     getDatabaseMaintenanceStatus()
       .then((status) => {
+        if (seq !== reconcileSeqRef.current) return; // superseded — see reconcileSeqRef above
         setMaintenance(status);
         const own = ownOperationRef.current;
         if (!own) return;
@@ -320,8 +328,8 @@ export function DatabaseTab() {
       // null, which would read as idle and re-enable competing actions while
       // a cutover may still be in flight. Only a first-ever failed read has
       // nothing to preserve, which correctly renders "unable to check".
-      .catch(() => setMaintenance((prev) => prev))
-      .finally(() => setMaintenanceLoading(false));
+      .catch(() => { if (seq === reconcileSeqRef.current) setMaintenance((prev) => prev); })
+      .finally(() => { if (seq === reconcileSeqRef.current) setMaintenanceLoading(false); });
   }, []);
 
   useEffect(() => {
@@ -396,6 +404,9 @@ export function DatabaseTab() {
         toast.loading(`Cutover accepted (${accepted.source} → ${accepted.target}) — PortOS will restart`, {
           id: CUTOVER_TOAST_ID, duration: Infinity,
         });
+        // Invalidate any in-flight status read from BEFORE acceptance — it
+        // could still resolve with stale idle data and clobber this snapshot.
+        reconcileSeqRef.current += 1;
         setMaintenance({ id: accepted.id, stage: accepted.stage, source: accepted.source, target: accepted.target, coordinator: 'unclaimed', fenced: true });
       })
       .catch(() => { /* request() already surfaces API errors as a toast */ })
@@ -421,14 +432,13 @@ export function DatabaseTab() {
       .finally(() => setRecovering(false));
   }, [reconcileMaintenance]);
 
-  // Fail closed: an unknown maintenance read (never loaded, or a failed
+  // Fail closed: an unknown maintenance read (never loaded yet, or a failed
   // re-read with nothing previously confirmed — see reconcileMaintenance)
-  // still counts as busy when THIS tab knows it has an unresolved operation
-  // from session storage, so a reload mid-outage can't re-enable competing
-  // actions just because the fresh status read hasn't landed yet.
-  const maintenanceUnknown = maintenance == null;
-  const busy = actionInProgress != null || recovering || Boolean(maintenance?.fenced)
-    || (maintenanceUnknown && ownOperationRef.current != null);
+  // counts as busy too, not just a confirmed fence. A CLI operator (or
+  // another tab) can hold a fence this browser has no session-storage record
+  // of, so "we don't know" must disable competing actions exactly like a
+  // confirmed one does — only a successful `fenced: false` read re-enables them.
+  const busy = actionInProgress != null || recovering || maintenance == null || Boolean(maintenance?.fenced);
   // The Recover button lives INSIDE the fenced/interrupted state, so it must
   // not be gated by `maintenance.fenced` — that would make it permanently
   // disabled the one time it needs to be clickable.

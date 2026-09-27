@@ -94,6 +94,29 @@ describe('DatabaseTab migration', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: /^Backup$/i })[0]).toBeDisabled());
   });
 
+  it('ignores a stale in-flight status read that resolves after a cutover was accepted', async () => {
+    cutoverDatabase.mockResolvedValue({ id: 'op-9', stage: 'accepted', source: 'docker', target: 'native', accepted: true });
+    await renderTab();
+
+    // A manual refresh is in flight (deliberately unresolved) when the user
+    // also accepts a cutover — the refresh was issued against the pre-cutover
+    // idle state and must not win the race against the acceptance snapshot.
+    let resolveStaleRead;
+    getDatabaseMaintenanceStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveStaleRead = resolve; }));
+    fireEvent.click(screen.getByTitle('Refresh status'));
+    await waitFor(() => expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole('button', { name: /Migrate Docker/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/i }));
+    await waitFor(() => expect(cutoverDatabase).toHaveBeenCalled());
+
+    // The stale read (issued before acceptance) resolves late with idle data.
+    // It must NOT clobber the just-established fence.
+    await act(async () => { resolveStaleRead(idleMaintenance); });
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /^Backup$/i })[0]).toBeDisabled());
+    expect(toast.dismiss).not.toHaveBeenCalledWith('portos-database-cutover');
+  });
+
   it('reconciles the durable journal on every socket connect, not on a timer', async () => {
     await renderTab();
     expect(getDatabaseMaintenanceStatus).toHaveBeenCalledTimes(1);
