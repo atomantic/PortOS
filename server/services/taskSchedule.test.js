@@ -3444,13 +3444,28 @@ describe('taskSchedule', () => {
         mockSchedule({
           tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
           executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: {
-            'app-1': { lastRun: null, count: 0, parkedUntil: future, parkReason: 'no-actionable-issues' },
+            'app-1': {
+              lastRun: null,
+              count: 0,
+              parkedUntil: future,
+              parkReason: 'no-actionable-issues',
+              parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+              parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+            },
             'app-2': { lastRun: null, count: 0 }
           } } }
         })
         const status = await getScheduleStatus()
         const p = status.tasks['claim-issue'].perpetualStatus
-        expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
+        expect(p).toMatchObject({
+          parkedAppCount: 1,
+          trackedAppCount: 2,
+          globalParked: false,
+          nextRecheckAt: future,
+          parkReason: 'no-actionable-issues',
+          parkCounts: { open: 88, inFlight: 2, filtered: 86 },
+          parkSkipCauses: { 'needs-input': 49, blocked: 17 }
+        })
       })
     })
 

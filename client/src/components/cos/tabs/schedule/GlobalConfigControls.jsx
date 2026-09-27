@@ -8,6 +8,7 @@ import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
+import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
 import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../../lib/reviewerModels';
@@ -403,11 +404,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
               if (allParked) {
                 const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
+                const skipSummary = formatSkipCauses(p.parkSkipCauses);
                 return (
                   <>
                     {stallNote}
                     <p className="text-xs text-port-warning mt-1">
-                      {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
+                      {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
                     </p>
                   </>
                 );
@@ -422,11 +424,12 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             }
             // Global (non-app) perpetual task: the global status.reason is accurate.
             if (status.reason === 'perpetual-parked') {
+              const skipSummary = formatSkipCauses(status.parkSkipCauses);
               return (
                 <>
                   {stallNote}
                   <p className="text-xs text-port-warning mt-1">
-                    Parked{status.parkReason ? ` (${status.parkReason})` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
+                    Parked{status.parkReason ? ` (${status.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
                   </p>
                 </>
               );

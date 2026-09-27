@@ -5,6 +5,7 @@ import {
 } from '../../../../utils/providers';
 import { timeUntil } from '../../../../utils/formatters';
 import { describeCron, summarizeAppSchedules } from '../../../../utils/cronHelpers';
+import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
 
 // The cadence model is two variants; `perpetual` is an orthogonal flag that
 // renders as its own badge alongside whichever one is selected.
@@ -276,10 +277,12 @@ export function describeNextRun(config) {
       const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
       if (allParked) {
         const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'parked';
+        const skipSummary = formatSkipCauses(p.parkSkipCauses);
+        const skipSuffix = skipSummary ? ` — ${skipSummary}` : '';
         return {
-          text: p.nextRecheckAt ? `${scope} · rechecks ${timeUntil(p.nextRecheckAt, 'soon')}` : `${scope} — no work`,
+          text: `${scope}${skipSuffix}${p.nextRecheckAt ? ` · rechecks ${timeUntil(p.nextRecheckAt, 'soon')}` : ' — no work'}`,
           tone: 'text-gray-400',
-          title: p.parkReason ? `Parked: ${p.parkReason}` : undefined,
+          title: p.parkReason ? `Parked: ${p.parkReason}${skipSuffix}` : skipSummary ? `Parked: ${skipSummary}` : undefined,
         };
       }
       return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
@@ -287,10 +290,12 @@ export function describeNextRun(config) {
     // Global (non-app) perpetual task: the global status.reason is accurate.
     if (config.status?.reason === 'perpetual-parked') {
       const next = config.status?.nextRunAt;
+      const skipSummary = formatSkipCauses(config.status?.parkSkipCauses);
+      const skipSuffix = skipSummary ? ` — ${skipSummary}` : '';
       return {
-        text: next ? `parked · rechecks ${timeUntil(next, 'soon')}` : 'parked — no work',
+        text: `parked${skipSuffix}${next ? ` · rechecks ${timeUntil(next, 'soon')}` : ' — no work'}`,
         tone: 'text-gray-400',
-        title: config.status?.parkReason ? `Parked: ${config.status.parkReason}` : undefined,
+        title: config.status?.parkReason ? `Parked: ${config.status.parkReason}${skipSuffix}` : skipSummary ? `Parked: ${skipSummary}` : undefined,
       };
     }
     return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
