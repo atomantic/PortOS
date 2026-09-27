@@ -427,9 +427,12 @@ const beatGridCache = new Map();
 // Re-entrancy guard: two overlapping requests for the SAME unmeasured track
 // (e.g. the launch-video form re-submitted quickly, or two runs that pick the
 // same library track) would otherwise each spawn their own ffmpeg decode and
-// run the DSP independently. Tracks the in-flight analysis promise per path so
-// a second caller awaits the first's result instead of duplicating the work.
+// run the DSP independently. Tracks the in-flight analysis promise per
+// (path, mtime) — not path alone — so a track overwritten WHILE a measurement
+// is running starts its own fresh analysis instead of a second caller
+// receiving a grid for bytes that are no longer on disk.
 const beatGridInFlight = new Map();
+const inFlightKey = (audioPath, mtimeMs) => `${audioPath}\u0000${mtimeMs}`;
 
 /**
  * Resolve the beat grid for an absolute audio file path, cached in memory per
@@ -447,7 +450,8 @@ export async function getBeatGrid(audioPath, { signal } = {}) {
   const cached = beatGridCache.get(audioPath);
   if (cached && cached.mtimeMs === stats.mtimeMs) return cached.result;
 
-  const inFlight = beatGridInFlight.get(audioPath);
+  const key = inFlightKey(audioPath, stats.mtimeMs);
+  const inFlight = beatGridInFlight.get(key);
   if (inFlight) return inFlight;
 
   const analysis = (async () => {
@@ -457,11 +461,11 @@ export async function getBeatGrid(audioPath, { signal } = {}) {
     beatGridCache.set(audioPath, { mtimeMs: stats.mtimeMs, result });
     return result;
   })();
-  beatGridInFlight.set(audioPath, analysis);
+  beatGridInFlight.set(key, analysis);
   try {
     return await analysis;
   } finally {
-    beatGridInFlight.delete(audioPath);
+    beatGridInFlight.delete(key);
   }
 }
 

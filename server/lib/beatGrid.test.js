@@ -230,4 +230,18 @@ describe('getBeatGrid (mtime-keyed cache)', () => {
     expect(updated.bpm).toBeGreaterThan(130 - BPM_TOLERANCE);
     expect(updated.bpm).toBeLessThan(130 + BPM_TOLERANCE);
   });
+
+  it('shares one in-flight analysis across concurrent calls for the same unmeasured track (skipped without ffmpeg)', async () => {
+    if (!ffmpeg) { console.log('⏭️  ffmpeg not found — skipping beat-grid in-flight dedup'); return; }
+    const wavSampleRate = 44100;
+    const wavPath = join(tmpDir, 'concurrent-track.wav');
+    await writeFile(wavPath, encodeWav(clickTrack({ bpm: 120, durationSec: 6, sampleRate: wavSampleRate }), wavSampleRate));
+
+    // Two concurrent callers against the same never-yet-cached path must
+    // resolve to the SAME object — proof they shared one decode+analysis
+    // rather than each spawning their own ffmpeg process.
+    const [a, b] = await Promise.all([getBeatGrid(wavPath), getBeatGrid(wavPath)]);
+    expect(a).not.toBeNull();
+    expect(b).toBe(a);
+  });
 });
