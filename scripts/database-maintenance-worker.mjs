@@ -11,7 +11,7 @@ try {
   const [id, token] = args;
   const journal = createDatabaseMaintenanceJournal();
   const operation = journal.enterCoordinatorWorker(id, token);
-  const writers = { unresolved: 0, launched: 0, exited: 0 };
+  const writers = { unresolved: 0, launching: 0, launched: 0, exited: 0, abandoned: 0 };
   for (const writer of createDatabaseWriterRegistry().read()) writers[writer.state] += 1;
   journal.assertCoordinatorWorker(id, token);
   console.log(JSON.stringify({ id: operation.id, stage: operation.stage,

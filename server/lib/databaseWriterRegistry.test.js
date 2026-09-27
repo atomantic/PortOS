@@ -70,44 +70,34 @@ describe('durable detached launch admission', () => {
     const result = await observe(handle);
     expect(result.error?.code).toBe('DATABASE_MAINTENANCE');
     expect(() => readFileSync(ran)).toThrow();
-    expect(registry.read()).toEqual([reserved]);
+    // A refusal before any launcher started is durable proof of no child.
+    expect(registry.read()).toEqual([{ ...reserved, state: 'abandoned' }]);
     expect(() => journal.assertAdmission()).toThrow();
   });
 
-  it('compacts repeated completed launches into durable unknown history after control cleanup', async () => {
+  it.skipIf(process.platform === 'win32')('retires completed launches only once their process groups are proven empty', async () => {
     for (let index = 0; index < 3; index += 1) {
       const controlDir = join(root, `control-${index}`);
       const handle = await spawnDetached(process.execPath, ['-e', 'process.exit(7)'], {
         controlDir, cleanup: true, pollMs: 10,
       });
-      expect(registry.read()).toContainEqual(expect.objectContaining({ state: 'launched', pid: handle.pid, controlDir }));
+      expect(registry.read()).toContainEqual(expect.objectContaining({ state: 'launched', pid: handle.pid, controlDir,
+        launcherPid: expect.any(Number), launchedAt: expect.any(String) }));
       expect(await observe(handle)).toEqual({ code: 7, signal: null });
-      expect(registry.read()).toEqual([{ state: 'unresolved', kind: 'retired-exits' }]);
+      // Ordinary completed jobs leave no per-launch directory behind.
+      await vi.waitFor(() => expect(registry.read()).toEqual([]), { timeout: 5000, interval: 20 });
     }
-    // A fresh reader sees the same warning after restart; no per-exit files
-    // accumulate and no control path or PID is inferred to be safe to kill.
-    expect(createDatabaseWriterRegistry(context.data).read()).toEqual([{ state: 'unresolved', kind: 'retired-exits' }]);
-    expect(readdirSync(join(context.data, 'database-writers'))).toEqual(['unreconciled-exits.json']);
+    expect(readdirSync(join(context.data, 'database-writers'))).toEqual([]);
   });
 
-  it.each(['history', 'launch'])('retains launch details when %s evidence cannot support safe compaction', async (missing) => {
-    const finish = join(root, 'finish');
-    const handle = await spawnDetached(process.execPath, ['-e',
-      `const t=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(finish)})){clearInterval(t);}},10);`], {
-      controlDir: join(root, 'control'), pollMs: 10,
-    });
-    const [record] = registry.read();
-    // Simulate corrupt/interrupted retirement publication. It must never turn
-    // the known launch into absence even though its child completes normally.
-    if (missing === 'history') mkdirSync(join(context.data, 'database-writers', 'unreconciled-exits.json'));
-    else unlinkSync(join(context.data, 'database-writers', record.id, 'launch.json'));
-    const done = observe(handle);
-    writeFileSync(finish, '');
-    expect(await done).toEqual({ code: 0, signal: null });
-    expect(JSON.parse(readFileSync(join(context.data, 'database-writers', record.id, 'reservation.json'), 'utf8')).id).toBe(record.id);
-    expect(JSON.parse(readFileSync(join(context.data, 'database-writers', record.id, 'completion.json'), 'utf8'))).toEqual({ code: 0, signal: null });
+  it('fails closed on legacy compacted exit history and refuses to extend it when unreadable', () => {
+    mkdirSync(join(context.data, 'database-writers'), { recursive: true });
+    writeFileSync(join(context.data, 'database-writers', 'unreconciled-exits.json'), JSON.stringify({ version: 1 }));
+    expect(registry.read()).toEqual([{ state: 'unresolved', kind: 'retired-exits' }]);
+    unlinkSync(join(context.data, 'database-writers', 'unreconciled-exits.json'));
+    mkdirSync(join(context.data, 'database-writers', 'unreconciled-exits.json'));
     expect(() => registry.read()).toThrow(/incomplete/);
-    if (missing === 'history') expect(() => registry.reserve(join(root, 'next-control'))).toThrow(/incomplete/);
+    expect(() => registry.reserve(join(root, 'next-control'))).toThrow(/incomplete/);
   });
 
   it('rejects an already-fenced launch without touching its control directory', async () => {
@@ -128,7 +118,7 @@ describe('durable detached launch admission', () => {
       encoding: 'utf8', env: { ...process.env, PORTOS_DATA_ROOT: root }, timeout: 10000,
     });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ unresolved: 1, launched: 0, exited: 0, quiescenceVerified: false });
+    expect(JSON.parse(result.stdout)).toEqual({ unresolved: 1, launching: 0, launched: 0, exited: 0, abandoned: 0, quiescenceVerified: false });
     expect(result.stdout).not.toContain(root);
   });
 

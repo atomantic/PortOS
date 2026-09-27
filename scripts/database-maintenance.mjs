@@ -21,7 +21,7 @@ function configuredEndpoints() {
 function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === 'writers' && args.length === 0) {
-    const counts = { unresolved: 0, launched: 0, exited: 0 };
+    const counts = { unresolved: 0, launching: 0, launched: 0, exited: 0, abandoned: 0 };
     for (const writer of createDatabaseWriterRegistry().read()) counts[writer.state] += 1;
     return { ...counts, quiescenceVerified: false };
   }

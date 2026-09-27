@@ -54,7 +54,7 @@ describe('owned maintenance worker launch', () => {
     expect(outcomes.map(value => value.status).sort((a, b) => a - b)).toEqual([1, 78]);
     const inspection = JSON.parse(outcomes.find(value => value.status === 78).stdout);
     expect(inspection).toEqual({ id: operation.id, stage: 'accepted', source: from.mode, target: to.mode,
-      writers: { unresolved: 0, launched: 0, exited: 0 }, quiescenceVerified: false, transferReady: false });
+      writers: { unresolved: 0, launching: 0, launched: 0, exited: 0, abandoned: 0 }, quiescenceVerified: false, transferReady: false });
     expect(journal.read()).toEqual(operation);
     expect(journal.coordinatorStatus(operation.id)).toEqual({ state: 'exited', exitCode: 78 });
     expect(createDatabaseWriterRegistry(join(root, 'data')).read()).toEqual([]);
