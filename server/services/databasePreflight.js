@@ -95,7 +95,8 @@ export async function preflightDatabaseMaintenance(input) {
  * configuration checks UNDER the fence: work admitted just before publication
  * must already be finished, and nothing new can be admitted. Only then does a
  * coordinator take ownership and the detached worker launch. A failed final
- * check cancels the still-unowned operation, reopening admission unchanged.
+ * check cancels the still-unowned operation — but only while the saved source
+ * still equals the recorded one; otherwise the fence stays for the operator.
  */
 export async function acceptDatabaseMaintenance(input) {
   const direction = databaseMaintenancePreflightSchema.parse(input);
@@ -115,7 +116,13 @@ export async function acceptDatabaseMaintenance(input) {
     validateDirection(direction, final);
     if (final.revision !== configuration.revision) throw stale();
   } catch (err) {
-    journal.cancel(operation.id, configuration.source);
+    // cancel() itself refuses when the saved source no longer matches the
+    // record; a changed or unreadable configuration keeps the fence closed.
+    let current = null;
+    try { current = readConfiguration().source; } catch { /* keep the fence */ }
+    if (current) {
+      try { journal.cancel(operation.id, current); } catch { /* keep the fence */ }
+    }
     throw err;
   }
   const token = journal.acquireCoordinator(operation.id);

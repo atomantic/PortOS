@@ -20,7 +20,7 @@ const cutoverFixtureUrl = new URL('../test/fixtures/databaseCutoverStubs.js', im
 
 const detachedUrl = new URL('./detachedSpawn.js', import.meta.url).href;
 const source = { mode: 'native', host: 'native.example.invalid', port: 5432, database: 'example_test', user: 'example' };
-const target = { ...source, mode: 'docker', host: 'docker.example.invalid', port: 5561 };
+const target = { ...source, mode: 'docker', port: 5561 };
 let root;
 let journal;
 let env;

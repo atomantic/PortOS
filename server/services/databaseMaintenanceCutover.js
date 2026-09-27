@@ -26,16 +26,34 @@ function syncPath(path) {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
+const ROUTING_VARIABLES = ['PGHOST', 'PGHOSTADDR', 'PGPORT', 'PGUSER', 'PGDATABASE', 'PGSERVICE', 'PGSERVICEFILE',
+  'PGOPTIONS', 'PGMODE', 'PORTOS_NATIVE_PGPORT', 'PGPORT_DOCKER'];
+
+/**
+ * The environment every ecosystem evaluation of this operation runs in. The
+ * worker inherits its launcher's variables — the pre-cutover server's active
+ * PGPORT, or an operator shell's overrides — and the ecosystem lets the
+ * environment outrank .env. Pin both backends' identities to the RECORDED
+ * endpoints so only the committed PGMODE decides which one is active.
+ */
+function recordedEndpointEnv(operation) {
+  const env = { ...process.env };
+  for (const key of ROUTING_VARIABLES) delete env[key];
+  const byMode = { [operation.source.mode]: operation.source, [operation.target.mode]: operation.target };
+  return { ...env, PGHOST: operation.target.host, PGUSER: operation.target.user, PGDATABASE: operation.target.database,
+    PORTOS_NATIVE_PGPORT: String(byMode.native.port), PGPORT_DOCKER: String(byMode.docker.port) };
+}
+
 /**
  * The endpoint the SAVED configuration resolves to, evaluated in a fresh
  * process exactly as the next `pm2 restart ecosystem.config.cjs` will. This
- * process's own require cache and environment captured the pre-cutover mode.
+ * process's own require cache captured the pre-cutover mode.
  */
-function readSavedEndpoint() {
+function readSavedEndpoint(env) {
   const config = join(PATHS.installRoot, 'ecosystem.config.cjs');
   const code = `const c=require(${JSON.stringify(config)});process.stdout.write(JSON.stringify(c.DATABASE_ENDPOINTS?.[c.DATABASE_MODE]??null))`;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['-e', code], { cwd: PATHS.installRoot, stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(process.execPath, ['-e', code], { cwd: PATHS.installRoot, env, stdio: ['ignore', 'pipe', 'ignore'] });
     let stdout = '';
     child.stdout.on('data', chunk => { if (stdout.length < 4096) stdout += chunk; });
     child.once('error', () => resolve(null));
@@ -45,8 +63,8 @@ function readSavedEndpoint() {
   });
 }
 
-async function assertSavedTarget(target) {
-  if (JSON.stringify(await readSavedEndpoint()) !== JSON.stringify(target)) {
+async function assertSavedTarget(operation) {
+  if (JSON.stringify(await readSavedEndpoint(recordedEndpointEnv(operation))) !== JSON.stringify(operation.target)) {
     throw refused('the saved configuration does not resolve to the recorded target');
   }
 }
@@ -57,7 +75,8 @@ async function assertSavedTarget(target) {
  * guesses from the file's current contents or restores the source mode.
  * Every other line is preserved byte for byte.
  */
-async function commitSavedMode(target) {
+async function commitSavedMode(operation) {
+  const { target } = operation;
   const envPath = join(PATHS.installRoot, '.env');
   // .env lives beside data/, outside the data-root write guard: a test run
   // must never rewrite a real install's configuration.
@@ -88,7 +107,7 @@ async function commitSavedMode(target) {
     renameSync(pending, envPath);
     syncPath(PATHS.installRoot);
   }
-  await assertSavedTarget(target);
+  await assertSavedTarget(operation);
 }
 
 /**
@@ -98,7 +117,8 @@ async function commitSavedMode(target) {
  * proof from an earlier pid is not success. The server is restarted at most
  * once per attempt; a crash-looping or wrong-pool server times out fenced.
  */
-async function awaitRestartedTarget(journal, id, token, saved, { proofTimeoutMs = PROOF_TIMEOUT_MS, pollMs = POLL_MS }) {
+async function awaitRestartedTarget(journal, operation, token, saved, { proofTimeoutMs = PROOF_TIMEOUT_MS, pollMs = POLL_MS }) {
+  const { id } = operation;
   const deadline = Date.now() + proofTimeoutMs;
   let restarted = false;
   while (true) {
@@ -107,7 +127,7 @@ async function awaitRestartedTarget(journal, id, token, saved, { proofTimeoutMs 
     if (server.status === 'online' && server.pid > 0 && journal.readTargetProof(id, server.pid)) return server.pid;
     if (server.status !== 'online' && !restarted) {
       journal.assertEnteredCoordinatorWorker(id, token);
-      const result = await restartMaintenanceProducer('portos-server').catch(() => null);
+      const result = await restartMaintenanceProducer('portos-server', recordedEndpointEnv(operation)).catch(() => null);
       if (result?.success !== true) throw refused('the server could not be restarted');
       restarted = true;
     }
@@ -145,23 +165,23 @@ export async function runDatabaseCutover(id, token, options = {}) {
     operation = journal.transition(id, token, 'importing', 'committing');
   }
   if (operation.stage === 'committing') {
-    await commitSavedMode(operation.target);
+    await commitSavedMode(operation);
     journal.assertEnteredCoordinatorWorker(id, token);
     operation = journal.transition(id, token, 'committing', 'verifying');
   }
   if (operation.stage === 'verifying') {
-    await awaitRestartedTarget(journal, id, token, saved, options);
+    await awaitRestartedTarget(journal, operation, token, saved, options);
     operation = journal.transition(id, token, 'verifying', 'verified');
   }
   if (operation.stage !== 'verified') throw refused(`stage ${operation.stage} cannot be released`);
   // A hand edit while fenced must never release admission onto another backend.
-  await assertSavedTarget(operation.target);
+  await assertSavedTarget(operation);
   journal.releaseAdmission(id, token);
 
   // Admission is open; CoS boots through its own fence and authority check.
   let cosRestarted = false;
   if (saved.find(row => row.name === 'portos-cos')?.status === 'online') {
-    cosRestarted = (await restartMaintenanceProducer('portos-cos').catch(() => null))?.success === true;
+    cosRestarted = (await restartMaintenanceProducer('portos-cos', recordedEndpointEnv(operation)).catch(() => null))?.success === true;
     if (!cosRestarted) console.error('❌ Database cutover released, but portos-cos did not restart; start it with pm2');
   }
   return { id, stage: 'released', source: operation.source.mode, target: operation.target.mode,

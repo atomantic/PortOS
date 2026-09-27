@@ -228,21 +228,33 @@ describe('database cutover acceptance HTTP contract', () => {
     expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['work admitted before the fence', () => busy()],
-    ['a saved-mode change', () => { saveMode('docker'); return idle(); }],
-  ])('cancels the unowned operation when the final fenced check sees %s', async (_label, observe) => {
-    getSystemActivity.mockResolvedValueOnce(idle()).mockImplementationOnce(async () => {
-      // This observation runs AFTER publication: admission is already closed.
-      expect(createDatabaseMaintenanceJournal(PATHS.data).isFenced()).toBe(true);
-      return observe();
-    });
+  // The second activity observation runs AFTER publication: admission is closed.
+  const raceFinalCheck = observe => getSystemActivity.mockResolvedValueOnce(idle()).mockImplementationOnce(async () => {
+    expect(createDatabaseMaintenanceJournal(PATHS.data).isFenced()).toBe(true);
+    return observe();
+  });
+
+  it('cancels the unowned operation when work admitted before the fence is still running', async () => {
+    raceFinalCheck(busy);
     const result = await accept();
     expect(result.status).toBe(409);
-    expect(['DATABASE_PREFLIGHT_BUSY', 'DATABASE_PREFLIGHT_STALE']).toContain(result.body.code);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_BUSY');
     const journal = createDatabaseMaintenanceJournal(PATHS.data);
     expect(journal.read()).toBeNull();
     expect(() => journal.assertAdmission()).not.toThrow();
+    expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
+  });
+
+  it('keeps the fence when the saved source changed during acceptance', async () => {
+    raceFinalCheck(() => { saveMode('docker'); return idle(); });
+    const result = await accept();
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_STALE');
+    // Reopening now would let a restart select the unimported backend.
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    expect(journal.read()).toMatchObject({ stage: 'accepted', source: { mode: 'native' } });
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(journal.coordinatorStatus(journal.read().id)).toEqual({ state: 'unclaimed' });
     expect(spawnDatabaseMaintenanceWorker).not.toHaveBeenCalled();
   });
 

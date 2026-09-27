@@ -32,8 +32,8 @@ const { createDatabaseAuthority } = await import('../lib/databaseAuthority.js');
 const { runDatabaseTransfer } = await import('./databaseMaintenanceTransfer.js');
 const { runDatabaseCutover } = await import('./databaseMaintenanceCutover.js');
 
-const native = { mode: 'native', host: 'native.example.invalid', port: 5432, database: 'example_test', user: 'example' };
-const docker = { mode: 'docker', host: 'docker.example.invalid', port: 5561, database: 'example_test', user: 'example' };
+const native = { mode: 'native', host: 'db.example.invalid', port: 5432, database: 'example_test', user: 'example' };
+const docker = { mode: 'docker', host: 'db.example.invalid', port: 5561, database: 'example_test', user: 'example' };
 const fast = { graceMs: 1500, pollMs: 20, proofTimeoutMs: 4000 };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const savedEnv = { ...process.env };
@@ -78,7 +78,11 @@ beforeEach(() => {
     row.status = 'online';
     return { success: true };
   });
-  Object.assign(process.env, { PATH: `${stubs.bin}:${savedEnv.PATH}`, PGPASSWORD: 'example-password' });
+  // The worker inherits its launcher's pre-cutover routing variables; they
+  // must not redirect the saved-configuration probe or the PM2 restart.
+  Object.assign(process.env, { PATH: `${stubs.bin}:${savedEnv.PATH}`, PGPASSWORD: 'example-password',
+    PGHOST: 'inherited.example.invalid', PGPORT: '1', PGUSER: 'inherited', PGDATABASE: 'inherited',
+    PORTOS_NATIVE_PGPORT: '2', PGPORT_DOCKER: '3' });
 });
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
@@ -121,6 +125,11 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     expect(stubs.events().slice(0, 6)).toEqual(['stop portos-cos', 'stop portos-server', 'dump writer=none',
       'import-start', 'import-commit', 'restart portos-server']);
     expect(stubs.events().indexOf('restart portos-cos')).toBeGreaterThan(stubs.events().indexOf('restart portos-server'));
+    // PM2 re-evaluates the ecosystem with the RECORDED endpoints, not inherited overrides.
+    const [, restartEnv] = context.restart.mock.calls.find(([name]) => name === 'portos-server');
+    expect(restartEnv).toMatchObject({ PGHOST: target.host, PGUSER: target.user, PGDATABASE: target.database,
+      PORTOS_NATIVE_PGPORT: String(native.port), PGPORT_DOCKER: String(docker.port) });
+    expect(restartEnv.PGPORT).toBeUndefined();
     expect(readFileSync(join(root, '.env'), 'utf8'))
       .toBe(`PGPASSWORD=example-password\nPGMODE=${target.mode}\nPORTOS_EXAMPLE=kept\n`);
     // Admission is open; the authority record retires the source endpoint.

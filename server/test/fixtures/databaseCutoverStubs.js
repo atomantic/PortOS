@@ -1,15 +1,16 @@
 // Disposable stand-ins for the restart half of a database cutover. Nothing
 // here reaches a real database, PM2 daemon or install configuration:
 //
-// - `ecosystem.config.cjs` in the disposable root resolves DATABASE_MODE from
-//   that root's `.env` exactly like the real file, over fixed test endpoints.
+// - the REAL `ecosystem.config.cjs` is copied into the disposable root, so the
+//   cutover's saved-configuration probe resolves endpoints exactly as PM2 will
+//   (both test endpoints therefore share one host/user/database, as real ones do).
 // - a `pg` stub (loaded through a module hook) answers the read-only target
 //   verification: `pg-health` = healthy | unhealthy switches the outcome, and
 //   the reported database/user are the pool's own configuration.
 // - `launchServer(endpoint)` starts a surrogate ordinary server: the REAL
 //   databaseCutoverHandshake + databaseBootFence against a pool configured
 //   from its environment, then records `server booted` (or `server refused`).
-import { appendFileSync, chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,13 +20,7 @@ const bootFenceUrl = new URL('../../services/databaseBootFence.js', import.meta.
 
 export function installCutoverStubs(root, dir, { source, target }) {
   writeFileSync(join(dir, 'endpoints.json'), JSON.stringify({ [source.mode]: source, [target.mode]: target }));
-  writeFileSync(join(root, 'ecosystem.config.cjs'), `const fs = require('fs');
-const path = require('path');
-const endpoints = JSON.parse(fs.readFileSync(${JSON.stringify(join(dir, 'endpoints.json'))}, 'utf8'));
-let mode = ${JSON.stringify(source.mode)};
-try { mode = /^PGMODE=(\\S+)/m.exec(fs.readFileSync(path.join(__dirname, '.env'), 'utf8'))?.[1] ?? mode; } catch {}
-module.exports = { DATABASE_MODE: mode, DATABASE_ENDPOINTS: endpoints };
-`);
+  copyFileSync(new URL('../../../ecosystem.config.cjs', import.meta.url), join(root, 'ecosystem.config.cjs'));
 
   const pgStub = join(dir, 'pg-stub.mjs');
   writeFileSync(pgStub, `import { existsSync, readFileSync } from 'node:fs';
