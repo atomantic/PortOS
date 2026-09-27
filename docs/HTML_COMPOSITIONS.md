@@ -50,6 +50,40 @@ with the same tail fade, and removes the temporary file after completion or
 failure. No music model, Python runtime, downloaded samples or music-library
 write is required. Missing or invalid audio fails the job.
 
+## Motion kit
+
+`server/services/htmlComposition/kit/portos-motion.js` is a deterministic
+helper script for compositions. Copy it beside `index.html`, load it with
+`<script src="portos-motion.js"></script>`, and read `globalThis.PortosMotion`:
+
+- `spring(t, stiffness, damping)` — closed-form damped spring from 0 to 1, a
+  pure function of the time since the move started. `SPRINGS` holds
+  `snappy`, `default`, `heavy` and `playful` presets.
+- `track(t, [[time, value], ...])` — a value that retargets several times, as
+  one spring per change, so motion never restarts or pops.
+- `indicator(t, stops, width)`, `swapAlpha(t, tIn, tOut)`, `loopT(t, dur)` —
+  stretching selection bars, content swaps inside a morphing container, loops.
+- `rng(seed)` — seeded noise (mulberry32); never use `Math.random`.
+- `beats(bpm)` — a beat grid (`at`, `bar`, `index`, `phase`, `list`).
+- `renderCues({ sampleRate, durationSec, cues })`, `mixCues`, `toPcm` —
+  synthesized `click`, `tick`, `pop`, `thump`, `whoosh` and `riser` cues
+  that return the plain PCM array `renderAudio` needs.
+
+Launch-video runs start with the kit already copied into their composition
+directory. It is ordinary UTF-8 source, so it passes the launch asset gate.
+
+## Proof renders (contact sheets)
+
+Add `proof: { everySec: 1 }` (0.25–10 seconds) to the render request to get a
+silent contact sheet instead of a video. The renderer applies the same contract
+and launch-video gates, seeks one frame per interval (at most 60), and tiles
+them six across at phone size (360px wide, 240px for vertical) into one PNG.
+Soundtrack options are ignored. Nothing is registered in Media History and no
+launch-video artifacts are delivered. The completed job's result carries
+`proof: { path, times, columns, width, height }`; tile *n* shows `times[n]`.
+Launch runs write `proofs/contact-<jobId>.png` beside the run; other
+compositions write `data/composition-proofs/`. Both are excluded from backups.
+
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,
 complete, error and canceled SSE frames. Cancel through
@@ -100,12 +134,28 @@ media job, and passes the resulting library filename to the renderer. An explici
 service choice still reports missing setup rather than silently changing methods. Shorter music beds loop to fill the video. A generation
 failure is reported instead of silently dropping the soundtrack.
 
-Dynamic motion graphics (`motionGraphics: true`, off by default) asks the agent for
-a beat-cut showreel instead of a paced walkthrough: palette color-field swaps,
-kinetic typography, easing showcases, generative geometry seeded from `t`, an
-optional HUD frame, and a name lockup endcard, with the recreated key flow kept
-as one or two beats. The same privacy and reading-time gates apply, so every
-kinetic word and HUD label is a storyboard line with a readable hold.
+**Motion style** (`motionStyle`) picks the film's grammar: `walkthrough` (the
+default: a paced tour of the key flow), `showreel` (beat-cut kinetic type,
+color-field swaps and generative geometry around the key flow) or `ui-morph`
+(one container that never cuts, morphing through the product's states on a
+120 BPM beat and looping seamlessly). The legacy `motionGraphics: true` means
+`showreel`. Every style carries house rules: springs instead of easing curves,
+a hook in the first two seconds, something new every two to four seconds, one
+accent color, and no centered-title-on-gradient, fade-everything, corner-label
+or frame-border defaults. The same privacy and reading-time gates apply, so
+every kinetic word is a storyboard line with a readable hold.
+
+**Critique rounds** (`critiqueRounds`, 0–4, default 2) make the agent render a
+proof contact sheet, score its own frames (hook, phone readability, variety,
+composition, brand accuracy, storyboard fidelity), log the three worst problems
+in `plan.md`, fix them and proof again before the final render, stopping early
+when every score reaches 8.
+
+**Consult motion skills** (`motionSkills: true`) is offered once
+`npm run setup:motion -- --skills` has installed any skill pack. The server
+resolves the installed skill names and refuses the option when none are
+present. Skills are technique references only: the run still produces the
+`portosComposition` contract and renders through PortOS.
 
 The task supplies the selected app repository and process ports separately from
 the PortOS media API origin. Product evidence comes from that repository; PortOS
@@ -158,3 +208,20 @@ are text-pattern and declared-storyboard checks, not proof that arbitrary code
 cannot construct private text or violate its declared timing. Producers must
 still avoid secrets and live records, use fictional content, and make the
 composition faithfully implement the storyboard. Nothing is uploaded or posted.
+
+## Motion studio setup
+
+`npm run setup:motion` reports and installs the optional motion toolkit:
+
+- **ffmpeg** — installed with Homebrew, winget, apt or dnf after confirmation
+  (`--yes` skips the prompt; non-interactive runs print the command instead).
+- **Skill packs** (`--skills` for all, or `--skills=hyperframes,remotion`) —
+  HyperFrames (`hyperframes-animation`, `hyperframes-creative`,
+  `motion-graphics`, `product-launch-video`), Remotion
+  (`remotion-best-practices`) and Claude Animation (`claude-animation`),
+  installed user-wide for Claude Code and Codex through the `skills` CLI.
+- `--status [--json]` prints what is installed. `GET
+  /api/html-composition/toolkit` returns the same view to the launch-video form.
+
+The seek(t) renderer, motion kit and proofs need nothing beyond ffmpeg and the
+managed browser (`npm run setup:browser`).

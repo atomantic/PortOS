@@ -9,6 +9,7 @@ import { errorMiddleware } from '../../lib/errorHandler.js';
 import { getAppById } from '../../services/apps.js';
 import { addTask, isRunning } from '../../services/cos.js';
 import { loadHistory } from '../../services/videoGen/history.js';
+import { detectMotionSkills } from '../../lib/motionSkills.js';
 import router from './launchVideos.js';
 
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-launch-publish-') }));
@@ -18,6 +19,7 @@ vi.mock('../../services/cos.js', () => ({ addTask: vi.fn(), isRunning: vi.fn() }
 vi.mock('../../services/instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance' }));
 vi.mock('../../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: async () => null }));
 vi.mock('../../services/videoGen/history.js', () => ({ loadHistory: vi.fn() }));
+vi.mock('../../lib/motionSkills.js', () => ({ detectMotionSkills: vi.fn(() => []) }));
 const app = express();
 app.use(express.json());
 app.use('/api/apps', router);
@@ -43,7 +45,11 @@ describe('user-triggered launch videos', () => {
     expect(task.prompt).toContain('"targetDurationSec":18');
     expect(task.prompt).toContain(`launch-videos/example/${response.body.runId}`);
     expect(task.prompt).toContain('Do not read .env*');
-    expect(task.prompt).toContain('"motionGraphics":false');
+    expect(task.prompt).toContain('"motionStyle":"walkthrough"');
+    expect(task.prompt).toContain('"critiqueRounds":2');
+    expect(task.prompt).toContain('Proof JSON');
+    // Every new run starts with the motion kit already in its composition.
+    expect(await readdir(join(PATHS.data, 'launch-videos', 'example', response.body.runId, 'composition'))).toEqual(['portos-motion.js']);
     expect(task.prompt).toContain('Only report success after complete');
     expect(task.provider).toBeUndefined();
     addTask.mockClear();
@@ -67,16 +73,30 @@ describe('user-triggered launch videos', () => {
     expect(task.prompt).toContain('"generateMusic":true');
     expect(task.prompt).toContain('"musicMethod":"agent"');
     expect(task.prompt).toContain('Never require a music engine for the agent method');
-    expect(task.prompt).toContain('"motionGraphics":true');
-    expect(task.prompt).toContain('When motionGraphics is true');
+    // The legacy boolean still selects the showreel grammar.
+    expect(task.prompt).toContain('"motionStyle":"showreel"');
+    expect(task.prompt).not.toContain('"motionGraphics"');
     expect(task.prompt).toContain('"targetDurationSec":120');
     expect(task.prompt).toContain('NOT the selected app');
     expect(task.prompt).toContain('/api/music/generate');
     expect(task.prompt).not.toContain('never-forward');
     expect((await submit({ targetDurationSec: 121 })).status).toBe(400);
     expect((await submit({ motionGraphics: 'yes' })).status).toBe(400);
+    expect((await submit({ motionStyle: 'slideshow' })).status).toBe(400);
+    expect((await submit({ critiqueRounds: 5 })).status).toBe(400);
     expect((await submit({ generateMusic: true, musicTrack: 'example.wav' })).status).toBe(400);
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('names only installed motion skills and refuses the option when none are installed', async () => {
+    const refused = await submit({ motionSkills: true });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe('MOTION_SKILLS_MISSING');
+    detectMotionSkills.mockReturnValue([{ id: 'hyperframes', found: ['motion-graphics'] }, { id: 'remotion', found: [] }]);
+    expect((await submit({ motionSkills: true, motionStyle: 'ui-morph' })).status).toBe(202);
+    const [task] = addTask.mock.calls[0];
+    expect(task.prompt).toContain('"motionStyle":"ui-morph"');
+    expect(task.prompt).toContain('"motionSkills":["motion-graphics"]');
   });
 
   it('preserves an explicit service choice and rejects unknown music methods', async () => {

@@ -302,6 +302,7 @@ export * from './homePath.js';
 export * from './jsonIo.js';
 export * from './settingsStore.js';
 export * from './mimeTypes.js';
+export * from './motionSkills.js';
 export * from './pathContainment.js';
 export * from './paths.js';
 export * from './pathSafety.js';

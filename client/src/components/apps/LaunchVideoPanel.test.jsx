@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import LaunchVideoPanel from './LaunchVideoPanel';
-import { createAppLaunchVideo, getAppLaunchVideos, publishAppLaunchVideo } from '../../services/apiApps';
-vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn() }));
+import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
+vi.mock('../../services/apiApps', () => ({ getAppLaunchVideos: vi.fn(async () => ({ videos: [] })), createAppLaunchVideo: vi.fn(), publishAppLaunchVideo: vi.fn(),
+  getMotionToolkit: vi.fn(async () => ({ ffmpeg: true, skillPacks: [] })) }));
 vi.mock('../../services/apiPipeline', () => ({ listPipelineMusicLibrary: async () => ({ tracks: [{ filename: 'track-1a2b.wav', label: 'Example track', sizeBytes: 2048, updatedAt: '2026-01-01T00:00:00.000Z' }] }) }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
@@ -36,7 +37,7 @@ describe('launch video drawer', () => {
     expect(screen.getByRole('button', { name: 'Queuing…' }).disabled).toBe(true);
     expect(createAppLaunchVideo).toHaveBeenCalledTimes(1);
     expect(createAppLaunchVideo).toHaveBeenCalledWith('example', {
-      tone: 'cinematic', direction: '', format: 'vertical', targetDurationSec: 22, motionGraphics: false, musicTrack: 'track-1a2b.wav',
+      tone: 'cinematic', direction: '', format: 'vertical', targetDurationSec: 22, motionStyle: 'walkthrough', critiqueRounds: 2, musicTrack: 'track-1a2b.wav',
       provider: 'example-provider', model: 'example-model',
     }, { silent: true });
     finish({ taskId: 'task-example' });
@@ -49,8 +50,12 @@ describe('launch video drawer', () => {
 
   it.each(['agent', 'service'])('queues %s music without requiring a library track or installed engine', async musicMethod => {
     createAppLaunchVideo.mockReset().mockResolvedValue({ taskId: 'task-generated' });
+    getMotionToolkit.mockResolvedValueOnce({ ffmpeg: true, skillPacks: [{ id: 'hyperframes', label: 'HyperFrames', found: ['motion-graphics'] }] });
     renderPanel('/?launchVideo=true');
-    fireEvent.click(screen.getByLabelText('Dynamic motion graphics'));
+    fireEvent.change(screen.getByLabelText('Motion style'), { target: { value: 'ui-morph' } });
+    fireEvent.change(screen.getByLabelText('Critique rounds'), { target: { value: '3' } });
+    await waitFor(() => expect(screen.getByLabelText('Consult motion skills').disabled).toBe(false));
+    fireEvent.click(screen.getByLabelText('Consult motion skills'));
     fireEvent.change(screen.getByLabelText('Duration (15–120 seconds)'), { target: { value: '90' } });
     fireEvent.click(screen.getByLabelText('Include music'));
     expect(screen.getByLabelText('Generate original music').checked).toBe(false);
@@ -58,7 +63,7 @@ describe('launch video drawer', () => {
     expect(screen.getByLabelText('Music creation').value).toBe('agent');
     fireEvent.change(screen.getByLabelText('Music creation'), { target: { value: musicMethod } });
     fireEvent.click(screen.getByRole('button', { name: 'Queue launch video' }));
-    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, musicMethod, motionGraphics: true }), { silent: true }));
+    await waitFor(() => expect(createAppLaunchVideo).toHaveBeenCalledWith('example', expect.objectContaining({ targetDurationSec: 90, generateMusic: true, musicMethod, motionStyle: 'ui-morph', critiqueRounds: 3, motionSkills: true }), { silent: true }));
     expect(createAppLaunchVideo.mock.calls[0][1].musicTrack).toBeUndefined();
   });
 

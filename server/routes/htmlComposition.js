@@ -5,6 +5,13 @@ import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueu
 
 const router = Router();
 
+// What the optional motion toolkit (`npm run setup:motion`) has installed, so
+// the launch-video form can offer only components that are actually present.
+router.get('/toolkit', asyncHandler(async (req, res) => {
+  const [{ findFfmpeg }, { detectMotionSkills }] = await Promise.all([import('../lib/ffmpeg.js'), import('../lib/motionSkills.js')]);
+  res.json({ ffmpeg: Boolean(await findFfmpeg()), skillPacks: detectMotionSkills(), setupCommand: 'npm run setup:motion -- --skills' });
+}));
+
 router.post('/render', asyncHandler(async (req, res) => {
   const params = validateRequest(htmlCompositionRenderSchema, req.body);
   if (params.launchVideo || params.directory.split('/')[0] === 'launch-videos') {

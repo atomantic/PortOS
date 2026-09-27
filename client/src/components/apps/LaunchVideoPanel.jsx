@@ -8,7 +8,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
 import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
-import { createAppLaunchVideo, getAppLaunchVideos, publishAppLaunchVideo } from '../../services/apiApps';
+import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
 import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
@@ -17,6 +17,11 @@ const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
 const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
 const posterUrl = video => `/data/video-thumbnails/${encodeURIComponent(video.thumbnail)}`;
+const MOTION_STYLES = [
+  ['walkthrough', 'Product walkthrough', 'A paced tour of the key flow, a cursor driving real actions on springs.'],
+  ['showreel', 'Motion-graphics showreel', 'Beat-cut kinetic type, color-field swaps and generative shapes around the key flow.'],
+  ['ui-morph', 'UI morph loop', 'One container that never cuts, morphing through the product flow on the beat and looping seamlessly.'],
+];
 
 // The run is an agent task, so it takes the same provider/model/effort pin as
 // every other manual CoS dispatch. Drawer mounts it only while open, so the
@@ -26,7 +31,10 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [direction, setDirection] = useState('');
   const [format, setFormat] = useState('landscape');
   const [duration, setDuration] = useState(20);
-  const [motionGraphics, setMotionGraphics] = useState(false);
+  const [motionStyle, setMotionStyle] = useState('walkthrough');
+  const [critiqueRounds, setCritiqueRounds] = useState(2);
+  const [motionSkills, setMotionSkills] = useState(false);
+  const [skillPacks, setSkillPacks] = useState(null);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
   const [musicMethod, setMusicMethod] = useState('agent');
@@ -41,14 +49,19 @@ function LaunchVideoForm({ appId, onQueued }) {
     listPipelineMusicLibrary({ silent: true }).then(result => {
       if (active) setTracks(result.tracks);
     }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
+    getMotionToolkit({ silent: true }).then(result => {
+      if (active) setSkillPacks(result.skillPacks);
+    }).catch(() => { if (active) setSkillPacks([]); });
     return () => { active = false; };
   }, []);
+  const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
 
   const [submit, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
     await createAppLaunchVideo(appId, {
-      tone, direction, format, targetDurationSec: duration, motionGraphics,
+      tone, direction, format, targetDurationSec: duration, motionStyle, critiqueRounds,
+      ...(motionSkills && installedSkills.length ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
@@ -64,7 +77,26 @@ function LaunchVideoForm({ appId, onQueued }) {
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
     <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-duration">Duration (15–120 seconds)</label><input id="launch-duration" type="number" min={15} max={120} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
-    <div><label htmlFor="launch-motion-graphics"><input id="launch-motion-graphics" type="checkbox" checked={motionGraphics} onChange={event => setMotionGraphics(event.target.checked)} /> Dynamic motion graphics</label><p className="text-sm text-port-text-muted">Beat-cut showreel style: kinetic type, color-field swaps and generative shapes around the key flow.</p></div>
+    <div>
+      <label htmlFor="launch-motion-style">Motion style</label>
+      <select id="launch-motion-style" className={inputClass} value={motionStyle} onChange={event => setMotionStyle(event.target.value)}>
+        {MOTION_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+      <p className="text-sm text-port-text-muted">{MOTION_STYLES.find(([value]) => value === motionStyle)[2]}</p>
+    </div>
+    <div>
+      <label htmlFor="launch-critique-rounds">Critique rounds</label>
+      <select id="launch-critique-rounds" className={inputClass} value={critiqueRounds} onChange={event => setCritiqueRounds(Number(event.target.value))}>
+        {[0, 1, 2, 3, 4].map(value => <option key={value} value={value}>{value === 0 ? 'None (render directly)' : value}</option>)}
+      </select>
+      <p className="text-sm text-port-text-muted">The agent renders a contact sheet, scores its own frames and fixes the worst problems before the final render.</p>
+    </div>
+    <div>
+      <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={motionSkills && installedSkills.length > 0} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
+      <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
+        ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
+        : 'Install HyperFrames, Remotion and Claude Animation skills with npm run setup:motion -- --skills.'}</p>
+    </div>
     <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
     {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">Choose how the original soundtrack is made.</p></div>}
     {music && generateMusic && <div>

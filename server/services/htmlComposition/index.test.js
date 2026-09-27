@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, realpath, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
@@ -11,6 +11,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { loadHistory } from '../videoGen/history.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { renderComposition, cancel } from './index.js';
+import { installMotionKit } from './motionKit.js';
 import { _cleanupTestBrowser } from './testBrowserCleanup.js';
 
 let endpoint;
@@ -126,6 +127,43 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
     expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
   }, 60000);
+
+  it('proofs a motion-kit launch composition as a contact sheet, then renders its synthesized cues', async () => {
+    const html = `<!doctype html><html><body><script src="portos-motion.js"></script><script>
+      const { spring, beats, renderCues } = globalThis.PortosMotion;
+      const grid = beats(120);
+      globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,
+        async seek(t) { document.body.style.background = \`rgb(\${Math.round(255 * spring(t - 10))},0,0)\`; },
+        async renderAudio({ sampleRate, durationSec }) {
+          return renderCues({ sampleRate, durationSec, cues: grid.list(durationSec).map(t => ({ t, type: 'click' })) });
+        },
+      };</script></body></html>`;
+    const runId = randomUUID();
+    const input = await composition(html, `launch-videos/example/${runId}/composition`);
+    await installMotionKit(join(PATHS.data, input.directory));
+    await writeFile(join(PATHS.data, input.directory, 'plan.md'), 'A fictional product demonstration.');
+    await writeFile(join(PATHS.data, input.directory, 'caption.txt'), 'Make a clear plan.');
+    await writeFile(join(PATHS.data, input.directory, 'storyboard.json'), JSON.stringify({ posterSec: 11, scenes: [{ durationSec: 15, lines: [] }] }));
+    const launchVideo = { targetDurationSec: 15, appId: 'example', runId };
+    const runRoot = join(PATHS.data, 'launch-videos', 'example', runId);
+    const proof = await renderComposition({ ...input, launchVideo, synthesizeMusic: true, proof: { everySec: 1 } });
+    expect(proof.proof).toMatchObject({ path: join(await realpath(runRoot), 'proofs', `contact-${input.jobId}.png`), columns: 6, width: 1280, height: 720 });
+    expect(proof.proof.times).toEqual(Array.from({ length: 15 }, (_, n) => n));
+    const png = await readFile(proof.proof.path);
+    // IHDR: six 360px tiles with 4px gutters, three rows of 202px.
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([6 * 360 + 5 * 4, 3 * 202 + 2 * 4]);
+    // A proof is a review pass: nothing is delivered or registered.
+    expect(await readdir(runRoot)).toEqual(expect.arrayContaining(['composition', 'proofs']));
+    expect(await readdir(runRoot)).not.toContain('video.mp4');
+    expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: input.jobId }));
+    const result = await renderComposition({ ...input, jobId: randomUUID(), launchVideo, synthesizeMusic: true });
+    const pcm = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-vn', '-f', 'f32le', '-ac', '1', '-ar', '24000', '-'], { maxBuffer: 8 * 1024 * 1024 });
+    const peak = (from, to) => Math.max(...Array.from({ length: (to - from) * 24 }, (_, n) => Math.abs(pcm.readFloatLE((from * 24 + n) * 4))));
+    // Clicks land on the 120 BPM grid (every 500ms) and decay well before the next beat.
+    expect(peak(0, 20)).toBeGreaterThan(0.1);
+    expect(peak(200, 450)).toBeLessThan(0.02);
+    expect(peak(500, 520)).toBeGreaterThan(0.1);
+  }, 90000);
 
   it('refuses a remote request by its full URL and removes partial artifacts', async () => {
     const url = 'https://example.com/forbidden.png';
