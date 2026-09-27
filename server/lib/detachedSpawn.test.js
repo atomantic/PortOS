@@ -380,8 +380,13 @@ describe('spawnDetached', () => {
       'setInterval(() => {}, 1000);',
     ].join('\n'));
 
+    // This is a standalone server surrogate, not a Vitest worker. Its real
+    // registry writes into the disposable install root above; inheriting
+    // VITEST would correctly trigger the test runner's real-data write guard.
+    const spawnerEnv = { ...process.env, PORTOS_DATA_ROOT: controlDir };
+    delete spawnerEnv.VITEST;
     const spawner = spawn(process.execPath, [spawnerPath], {
-      stdio: 'ignore', env: { ...process.env, PORTOS_DATA_ROOT: controlDir },
+      stdio: 'ignore', env: spawnerEnv,
     });
     const pidFile = join(controlDir, 'pid');
     const readPid = async () => Number.parseInt(await readFile(pidFile, 'utf8').catch(() => ''), 10);
