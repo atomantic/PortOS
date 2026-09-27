@@ -36,7 +36,7 @@ vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { getAccount, updateSyncStatus, updateSubcalendars } from './calendarAccounts.js';
-import { loadCache, saveCache } from './calendarSync.js';
+import { loadCache, saveCache, logCalendarTouchpoints } from './calendarSync.js';
 
 const ACCOUNT_ID = '22222222-2222-2222-2222-222222222222';
 const CAL_ID = 'work@example.com';
@@ -439,5 +439,50 @@ describe('Google batch identity reconciliation (#8635)', () => {
     expect(savedCache().events).toEqual([
       expect.objectContaining({ id: retained.id, title: 'Current' }), otherCalendar, omitted,
     ]);
+  });
+});
+
+
+describe('Google participant snapshot reconciliation (#8838)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAccount.mockResolvedValue(account());
+    loadCache.mockResolvedValue({ events: [] });
+  });
+
+  it('retains declined identity on legacy updates and clears it on explicit snapshots', async () => {
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [{
+      ...rawEvent('identity', 'Meeting'),
+      organizer: { email: 'alice@example.com', displayName: 'Example Organizer' },
+      attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined' }],
+    }]);
+    const retained = savedCache().events[0];
+    expect(retained.myStatus).toBe('declined');
+    expect(logCalendarTouchpoints.mock.calls.at(-1)[1][0]).toMatchObject({
+      organizer: { name: 'Example Organizer', email: 'alice@example.com' },
+      attendees: [{ email: 'alice@example.com', status: 'declined' }], myStatus: 'declined',
+    });
+    loadCache.mockResolvedValue({ events: [retained] });
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [rawEvent('identity', 'Updated')]);
+    expect(savedCache().events[0]).toMatchObject({ organizer: retained.organizer, attendees: retained.attendees, myStatus: 'declined' });
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [{ ...rawEvent('identity', 'Cleared'), organizer: null, attendees: [] }]);
+    expect(savedCache().events[0]).toMatchObject({ organizer: null, attendees: [] });
+    expect(savedCache().events[0].myStatus).toBeUndefined();
+  });
+
+  it('complete MCP snapshots clear omitted identities but partial snapshots preserve them', async () => {
+    await pushSyncEvents(ACCOUNT_ID, CAL_ID, 'Work', [{
+      ...rawEvent('identity', 'Meeting'), organizer: { email: 'alice@example.com' },
+      attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined' }],
+    }]);
+    loadCache.mockResolvedValue(savedCache());
+    const text = JSON.stringify({ calendars: [{ calendarId: CAL_ID, calendarName: 'Work', events: [rawEvent('identity', 'Updated')] }] });
+    runCliProviderPrompt.mockResolvedValue({ text, exitCode: 1, partial: true });
+    await mcpSyncAccount(ACCOUNT_ID, null);
+    expect(savedCache().events[0].myStatus).toBe('declined');
+    runCliProviderPrompt.mockResolvedValue({ text, exitCode: 0, partial: false });
+    await mcpSyncAccount(ACCOUNT_ID, null);
+    expect(savedCache().events[0]).toMatchObject({ organizer: null, attendees: [] });
+    expect(savedCache().events[0].myStatus).toBeUndefined();
   });
 });
