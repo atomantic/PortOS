@@ -1036,6 +1036,27 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"--draft-decoder-id must be a bare directory-safe name; got {args.draft_decoder_id!r}.")
 
 
+def place_keyframes_on_canvas(images: list, width: int, height: int) -> list:
+    """Put every keyframe onto the render canvas before the pipeline sees it.
+
+    The pinned FL2VA reference prepares keyframes onto the canvas in its setup
+    step, and BOTH consumers read those prepared images: the Qwen3-VL vision
+    tower (via the text encoder) and the video VAE. The pinned MLX port prepares
+    them only inside `_encode_keyframes`, so its text encoder receives the raw
+    upload — the vision tower then sees a different size, aspect and token grid
+    than the VAE rows it is paired with (#8867).
+
+    Uses the port's own `prepare_keyframe_image` (the reference algorithm:
+    stretch the first keyframe, cover-crop any follower), which returns an
+    already-canvas-sized image untouched, so the VAE path is unchanged.
+    """
+    if not images:
+        return images
+    from minimax_h3_mlx.packing import prepare_keyframe_image
+
+    return [prepare_keyframe_image(image, height, width, stretch=index == 0) for index, image in enumerate(images)]
+
+
 def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
     """Render one at a time, retaining weights and only this request's conditioning.
 
@@ -1043,6 +1064,7 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
     encoder's return in memory even when the optional disk cache is unavailable.
     The closed-over prompt and images never change inside this workflow.
     """
+    images = place_keyframes_on_canvas(images, args.width, args.height)
     preview = _install_h3_stepwise_preview(pipe, args)
     encode = pipe.text_encoder.encode
     encoded = None
