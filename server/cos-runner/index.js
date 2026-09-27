@@ -355,6 +355,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
       agent.sentinelWork = lifecycle.trackWork(async () => {
         const current = activeAgents.get(agentId);
         if (!current) return;
+        const sentinelSourcePath = sentinelAccess.resolvedPath?.();
         let sentinelReadSucceeded = true;
         const contents = await sentinelAccess.read().catch(err => {
           sentinelReadSucceeded = false;
@@ -362,18 +363,31 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
           return '';
         });
         let sentinelValidated = sentinelReadSucceeded;
+        let validatedContents = contents;
         if (sentinelReadSucceeded) {
           sentinelValidated = await sentinelAccess.promote(contents).catch(err => {
             console.error(`❌ TUI agent ${agentId} canonical sentinel promotion failed: ${err.message}`);
             return false;
           });
+          if (sentinelValidated && sentinelSourcePath && sentinelSourcePath !== sentinelAccess.path) {
+            let canonicalReadSucceeded = true;
+            validatedContents = await sentinelAccess.read().catch(err => {
+              canonicalReadSucceeded = false;
+              console.error(`❌ TUI agent ${agentId} canonical sentinel read failed: ${err.message}`);
+              return '';
+            });
+            sentinelValidated = canonicalReadSucceeded;
+          }
         }
         if (!sentinelValidated) {
-          if (activeAgents.get(agentId) === current) current.doneWatcher = sentinelAccess.watch(handleSentinel);
+          if (activeAgents.get(agentId) === current) {
+            current.doneWatcher?.();
+            current.doneWatcher = sentinelAccess.watch(handleSentinel);
+          }
           return;
         }
         current.completedBySentinel = true;
-        const { summary } = parseSentinelPayload(contents);
+        const { summary } = parseSentinelPayload(validatedContents);
         if (summary) {
           emitToServer('agent:output', {
             agentId,

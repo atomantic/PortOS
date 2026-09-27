@@ -54,12 +54,15 @@ describe('createAgentSentinelAccess', () => {
       expect(staleAccess.exists()).toBe(false);
 
       await writeFile(recoveredPath, 'sibling');
+      let activeIds = [AGENT_ID, 'agent-ded2dcc'];
       const siblingAccess = createAgentSentinelAccess({
         workspacePath: workspace,
         agentId: AGENT_ID,
         startedAt: Date.now() - 1000,
-        getActiveAgentIds: () => [AGENT_ID, 'agent-ded2dcc'],
+        getActiveAgentIds: () => activeIds,
       });
+      expect(siblingAccess.exists()).toBe(false);
+      activeIds = [AGENT_ID];
       expect(siblingAccess.exists()).toBe(false);
     } finally {
       await rm(workspace, { recursive: true, force: true });
@@ -127,6 +130,7 @@ describe('createAgentSentinelAccess', () => {
         detected,
         new Promise((_, reject) => setTimeout(() => reject(new Error('sentinel was not detected')), 1000)),
       ])).resolves.toBe(join(workspace, '.agent-done-agent-ded2dcc'));
+      await access.cleanup();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

@@ -147,7 +147,7 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
 
   it('keeps the run alive when a completion sentinel read fails, then retries it', async () => {
     let reads = 0;
-    const { controller, finalizeAgent, watch } = makeController({
+    const { controller, closers, finalizeAgent, watch } = makeController({
       sentinelSummary: 'Recovered completion.',
       sentinelRead: async () => {
         reads += 1;
@@ -162,6 +162,7 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     expect(finalizeAgent).not.toHaveBeenCalled();
     expect(controller.isTerminal()).toBe(false);
     await vi.advanceTimersByTimeAsync(250);
+    expect(closers[0]).toHaveBeenCalledTimes(1);
     expect(watch).toHaveBeenCalledTimes(2);
 
     await controller.finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });

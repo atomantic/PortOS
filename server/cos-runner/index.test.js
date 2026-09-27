@@ -173,7 +173,7 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     expect(RUNNER_SRC).toMatch(/prepareCliSpawn\(executable, args, childEnv\)/);
     expect(RUNNER_SRC).toMatch(/pty\.spawn\(ptyCommand,\s*ptyArgs/);
     expect(RUNNER_SRC).toMatch(/io\.emit\('tui:output'/);
-    expect(RUNNER_SRC).toMatch(/parseSentinelPayload\(contents\)/);
+    expect(RUNNER_SRC).toMatch(/parseSentinelPayload\(validatedContents\)/);
     expect(RUNNER_SRC).toMatch(/emitToServer\('agent:completed'/);
   });
 });

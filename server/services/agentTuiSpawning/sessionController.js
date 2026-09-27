@@ -702,8 +702,9 @@ export function createTuiSessionController({
     if (sentinelIngested) return null;
     if (!sentinelPresent()) return null;
     sentinelIngested = true;
+    const sentinelSourcePath = sentinel.resolvedPath?.();
     let sentinelReadSucceeded = true;
-    const contents = await sentinel.read().catch(err => {
+    let contents = await sentinel.read().catch(err => {
       sentinelReadSucceeded = false;
       console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
       return '';
@@ -712,7 +713,6 @@ export function createTuiSessionController({
     // sentinel access. Promote its contents to the canonical name before the
     // shared finalization/output-hook path reads the sentinel again, so a
     // structured completion has the same behavior as an exact write.
-    const sentinelSourcePath = sentinel.resolvedPath?.();
     let sentinelValidated = sentinelReadSucceeded;
     if (sentinelReadSucceeded && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
       if (typeof sentinel.promote !== 'function') {
@@ -722,6 +722,16 @@ export function createTuiSessionController({
           console.error(`❌ ingestDoneSentinel canonical promotion failed: ${err.message}`);
           return false;
         });
+        if (sentinelValidated) {
+          let canonicalReadSucceeded = true;
+          const canonicalContents = await sentinel.read().catch(err => {
+            canonicalReadSucceeded = false;
+            console.error(`❌ ingestDoneSentinel canonical read failed: ${err.message}`);
+            return '';
+          });
+          sentinelValidated = canonicalReadSucceeded;
+          if (sentinelValidated) contents = canonicalContents;
+        }
       }
     }
     if (!sentinelValidated) {
@@ -769,6 +779,7 @@ export function createTuiSessionController({
     sentinelRecoveryRetryTimer = setTimeout(() => {
       sentinelRecoveryRetryTimer = null;
       if (isTerminal()) return;
+      doneSentinelWatcher?.();
       doneSentinelWatcher = armSentinelWatcher();
     }, SENTINEL_RECOVERY_RETRY_MS);
   };

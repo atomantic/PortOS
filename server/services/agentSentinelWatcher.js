@@ -62,19 +62,28 @@ export function createAgentSentinelAccess({
       : [canonicalPath]
     : [];
   const fallbackPaths = candidatePaths.slice(1);
+  const rejectedFallbackIds = new Set();
   let detectedPath = null;
   let callbackDelivered = false;
+  let activeWatcherCloser = null;
   let recoveryPromoted = false;
 
   const fallbackIsUnambiguous = (filePath) => {
     const candidateId = doneSentinelAgentId(basename(filePath));
     if (!candidateId) return false;
+    if (rejectedFallbackIds.has(candidateId)) return false;
     const ids = activeIds(getActiveAgentIds);
     // Registry reads can fail transiently. Fail closed for this check, but do
     // not cache that answer: a sibling that is still active now may finish
     // before the next watcher poll, and then this recovery becomes safe.
     if (!ids) return false;
-    if (ids.some((activeId) => activeId !== agentId && activeId.startsWith(candidateId))) return false;
+    if (ids.some((activeId) => activeId !== agentId && activeId.startsWith(candidateId))) {
+      // Once a colliding run was observed, its sentinel name can no longer be
+      // attributed safely for the rest of this run. Do not reopen the race
+      // after that sibling exits and leaves its fresh file behind.
+      rejectedFallbackIds.add(candidateId);
+      return false;
+    }
     return isFreshFile(filePath, startedAt);
   };
 
@@ -105,19 +114,30 @@ export function createAgentSentinelAccess({
 
   const watch = (onDetected, watchOptions = {}) => {
     if (!canonicalPath || typeof onDetected !== 'function') return null;
+    activeWatcherCloser?.();
     // A failed read or promotion may re-arm the same access object. The prior
     // one-shot callback must not permanently suppress that retry.
     callbackDelivered = false;
-    if (candidatePaths.length === 1) return watchForFile(canonicalPath, onDetected, watchOptions);
-    const closers = candidatePaths.map((filePath) => watchForFile(
-      filePath,
-      () => notify(filePath, onDetected),
-      {
-        ...watchOptions,
-        shouldDetect: () => filePath === canonicalPath || fallbackIsUnambiguous(filePath),
-      },
-    ));
-    return () => closers.forEach((close) => close?.());
+    const rawCloser = candidatePaths.length === 1
+      ? watchForFile(canonicalPath, onDetected, watchOptions)
+      : (() => {
+        const closers = candidatePaths.map((filePath) => watchForFile(
+          filePath,
+          () => notify(filePath, onDetected),
+          {
+            ...watchOptions,
+            shouldDetect: () => filePath === canonicalPath || fallbackIsUnambiguous(filePath),
+          },
+        ));
+        return () => closers.forEach((close) => close?.());
+      })();
+    let wrappedCloser;
+    wrappedCloser = () => {
+      if (activeWatcherCloser === wrappedCloser) activeWatcherCloser = null;
+      rawCloser?.();
+    };
+    activeWatcherCloser = wrappedCloser;
+    return wrappedCloser;
   };
 
   const resolvedPath = () => {
@@ -138,6 +158,7 @@ export function createAgentSentinelAccess({
   };
 
   const remove = async () => {
+    activeWatcherCloser?.();
     const paths = new Set();
     if (canonicalPath) paths.add(canonicalPath);
     if (detectedPath && detectedPath !== canonicalPath) paths.add(detectedPath);
@@ -169,6 +190,7 @@ export function createAgentSentinelAccess({
   // recovery path this access object actually accepted; never glob or delete a
   // sibling's similarly-prefixed sentinel.
   const cleanup = async () => {
+    activeWatcherCloser?.();
     if (!recoveryPromoted) return false;
     if (detectedPath && detectedPath !== canonicalPath) {
       await rm(detectedPath, { force: true }).catch(() => {});
