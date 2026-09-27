@@ -7,7 +7,7 @@
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 export const PROMPT_VERSIONS = {
-  'app-launch-video': 5,
+  'app-launch-video': 6, // v6: measured composition/beats.json (bpm/beats/downbeats/hits from a real analysis of the chosen library track, #8958) is named next to the motion kit — place state changes on beats, big moments on downbeats, UI sounds on hits, instead of guessing a tempo.
   'model-comparison-refresh': 4, // v4: installed inventory, sourced composite estimates and authenticated import
   // Current claim-flow bumps retire the Copilot fallback, drive local reviewers
   // fail closed, verify the remote merge state, and clean up without force-delete.
