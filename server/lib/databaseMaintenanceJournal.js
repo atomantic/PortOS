@@ -241,6 +241,24 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return { state: 'exited', exitCode };
   };
 
+  // The fixed maintenance worker checks both ownership and the supervisor's
+  // one-use reservation. This grants no ordinary database/spawn admission.
+  const assertCoordinatorWorker = (id, token) => {
+    assertCoordinator(id, token);
+    if (coordinatorStatus(id).state !== 'awaiting-exit') throw databaseMaintenanceError();
+    return read();
+  };
+
+  const enterCoordinatorWorker = (id, token) => {
+    assertNotRealDataWrite(activeDir, 'database maintenance worker entry');
+    const current = assertCoordinatorWorker(id, token);
+    // A second invocation with copied arguments cannot become a second worker.
+    writeDurableExclusive(join(workerDirectory(token), 'started.json'), { id, token });
+    syncDirectory(workerDirectory(token));
+    assertCoordinatorWorker(id, token);
+    return current;
+  };
+
   // A durable CAS for EACH outgoing (owner, stage) state. Transition and
   // recovery compete on the SAME file, so a predecessor paused after checking
   // its token cannot publish a new stage after losing ownership. Interrupted
@@ -382,7 +400,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   };
 
   return { isFenced, assertAdmission, read, begin, cancel, acquireCoordinator, transition,
-    reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator };
+    reserveCoordinatorWorker, coordinatorStatus, recoverCoordinator, assertCoordinatorWorker, enterCoordinatorWorker };
 }
 
 const journal = createDatabaseMaintenanceJournal();

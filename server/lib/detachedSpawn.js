@@ -537,10 +537,36 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
  *   always the `taskkill /T /F` tree, group flag or not.
  * @returns {Promise<object>} ChildProcess-like handle (resolves once the PID is known)
  */
-export async function spawnDetached(bin, args = [], {
+export async function spawnDetached(bin, args = [], options = {}) {
+  return spawnDetachedWithReservation(bin, args, options, reserveDatabaseWriter);
+}
+
+/**
+ * Internal, one-use launch of the fixed maintenance inspection worker. There
+ * is no bin/argv/env/controlDir override and no ordinary-writer bypass option.
+ * It retains the supervisor receipt even when the caller exits. Transfer and
+ * PM2 lifecycle execution remain disabled pending proven writer quiescence.
+ */
+export async function spawnDatabaseMaintenanceWorker(id, token) {
+  const [{ createDatabaseMaintenanceJournal }, { PATHS }] = await Promise.all([
+    import('./databaseMaintenanceJournal.js'), import('./paths.js'),
+  ]);
+  const journal = createDatabaseMaintenanceJournal();
+  const controlDir = journal.reserveCoordinatorWorker(id, token);
+  return spawnDetachedWithReservation(process.execPath,
+    [join(PATHS.root, 'scripts', 'database-maintenance-worker.mjs'), id, token],
+    { controlDir, cleanup: false, cwd: PATHS.root,
+      env: { ...process.env, PORTOS_DATA_ROOT: PATHS.installRoot } },
+    () => {
+      journal.assertCoordinatorWorker(id, token);
+      return { assertLaunchAllowed: () => journal.assertCoordinatorWorker(id, token) };
+    });
+}
+
+async function spawnDetachedWithReservation(bin, args, {
   env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, pidTimeoutMs = PID_TIMEOUT_MS,
   cleanup = false, killProcessGroup = false,
-} = {}) {
+}, reserveWriter) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
 
   const isWindows = process.platform === 'win32';
@@ -551,12 +577,12 @@ export async function spawnDetached(bin, args = [], {
   // Publish before any await: a launch admitted immediately before maintenance
   // is visible even while async setup or the detached supervisor is pending.
   let writer;
-  try { writer = reserveDatabaseWriter(controlDir, killProcessGroup); } catch (err) {
+  try { writer = reserveWriter(controlDir, killProcessGroup); } catch (err) {
     setImmediate(() => handle.emit('error', err));
     return handle;
   }
   const recordCompletion = (code, signal) => {
-    try { writer.completed(code, signal); } catch {
+    try { writer.completed?.(code, signal); } catch {
       // Missing evidence is unresolved, never synthesized into quiescence.
       console.error('❌ Could not persist detached writer completion evidence');
     }
@@ -673,7 +699,7 @@ export async function spawnDetached(bin, args = [], {
 
   await awaitPid();
   if (handle.pid !== null) {
-    try { writer.launched(handle.pid); } catch {
+    try { writer.launched?.(handle.pid); } catch {
       // The child may already exist. Preserve the reservation and control
       // files; inventory cannot mistake this for a completed or absent writer.
       console.error('❌ Could not persist detached writer launch evidence');
