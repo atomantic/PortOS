@@ -28,10 +28,15 @@ class Engine:
 infer.AukMLX = Engine
 infer.GenerateOptions = lambda **kwargs: kwargs
 sys.modules["auk_mlx.infer"] = infer
+original_cwd = os.getcwd()
 with tempfile.TemporaryDirectory() as root:
     sys.argv = [sys.argv[1], root]
-    os.chdir(root)
-    worker.main()
+    try:
+        os.chdir(root)
+        worker.main()
+    finally:
+        # Windows cannot remove a directory while it is the process cwd.
+        os.chdir(original_cwd)
 `;
 
 describe.skipIf(!python)('AuK resident request protocol', () => {
@@ -41,7 +46,7 @@ describe.skipIf(!python)('AuK resident request protocol', () => {
       encoding: 'utf8',
       input: `{malformed private-fixture-token\n${JSON.stringify(request)}\n`,
     });
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr || result.error?.message).toBe(0);
     expect(result.stderr).toBe('');
     const responses = result.stdout.trim().split('\n').map(line => JSON.parse(line));
     expect(responses).toHaveLength(2);
