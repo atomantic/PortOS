@@ -77,6 +77,14 @@ const manifestCases = [
   ['runtime process entry retained', processManifestCase.diff.replace("-      { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },", "       { name: 'portos-ui', port: PORTS.UI, ports: { devUi: PORTS.UI } },").replace('@@ -57,7 +57,6 @@', '@@ -57,7 +57,7 @@'), 'fix-first'],
 ]
 
+// Reconstructed objective and selected production/test hunks from merged PR #8928.
+const launchMusicCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-launch-music.json', import.meta.url), 'utf8'))
+const launchMusicCases = [
+  ['agent synthesis with guarded service', launchMusicCase.diff, 'ship'],
+  ['missing renderer synthesis', launchMusicCase.diff.split(/(?=^diff --git )/m).filter(part => !part.startsWith('diff --git a/server/services/htmlComposition/')).join(''), 'fix-first'],
+  ['service readiness guard removed', launchMusicCase.diff.replace(/^(\+For the service method only:.*)$/m, line => line.replace('If none is ready, report the setup requirement and stop.', 'If none is ready, continue anyway with the unready engine.')), 'fix-first'],
+]
+
 // Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
 // callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
 // test exercises the resolver's own model-map assembly, not validation.js.
@@ -1069,6 +1077,37 @@ describe('codeReview helpers', () => {
       const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: processManifestCase.objective, diff })
       expect(result).toMatchObject({ ok: true, verdict })
     })
+
+    it('sends the quoted-failure calibration with its missing-path exclusions', async () => {
+      global.fetch = vi.fn(async (_url, init) => {
+        const { messages } = JSON.parse(init.body)
+        expect(messages[0].content).toContain('the quoted failure is the behavior to replace')
+        expect(messages[0].content).toContain('it does not necessarily select an engine')
+        expect(messages[0].content).toContain('A deleted old stop instruction cannot satisfy (3)')
+        expect(messages[0].content).toContain('return fix-first with the missing service readiness guard')
+        expect(messages[0].content).toContain('return fix-first with the missing renderer implementation')
+        expect(messages[0].content).toContain('missing synthesis/muxing implementation, removal of the service readiness guard')
+        expect(messages[0].content).toContain('those remain missing requirements and warrant fix-first or rethink')
+        expect(messages[1].content).toContain(launchMusicCase.objective)
+        expect(messages[1].content).toContain(launchMusicCase.diff.trim())
+        return completion(shipVerdict)
+      })
+      expect(await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', ...launchMusicCase }))
+        .toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+    })
+
+    // Real judgement regression, explicitly opt-in; no mocked verdict oracle.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each(launchMusicCases)('judges the launch-music fixture with a real local model: %s', async (name, diff, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: launchMusicCase.objective, diff, timeoutMs: 180_000,
+      })
+      console.log(`🔍 Launch music evaluation ${name}: ${result.verdict}; ${result.evidence || result.error}`)
+      expect(result.ok, result.error).toBe(true)
+      if (expected === 'ship') expect(result).toMatchObject({ verdict: 'ship', missing: [], unrequested: [] })
+      else expect(['fix-first', 'rethink'], JSON.stringify(result)).toContain(result.verdict)
+    }, 190_000)
 
     // A primary ship must not override contradictory surviving code.
     const incompleteRemoval = [
