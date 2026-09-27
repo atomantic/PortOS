@@ -108,11 +108,15 @@ describe('planShots', () => {
     const paced = planShots(VERSE, { ...GRID, clipCapacitySec: 10, pacing: { maxShotSec: 4 } }).shots;
     expect(paced.every((s) => s.endSec - s.startSec <= 4)).toBe(true);
     expectTiles(paced, 0, 24);
+    // A ceiling above the clip capacity cannot plan shots no clip can cover.
+    const over = planShots(VERSE, { ...GRID, clipCapacitySec: 5, pacing: { maxShotSec: 12 } });
+    expect(over.pacing.maxShotSec).toBe(5);
+    expect(over.shots.every((s) => s.endSec - s.startSec <= 5)).toBe(true);
   });
 
   it('holds the pacing floor at half the ceiling so any span can still be tiled', () => {
     const { shots, pacing } = planShots([{ label: 'Long', startSec: 0, endSec: 25 }], {
-      ...GRID, pacing: { minShotSec: 8, maxShotSec: 10 },
+      ...GRID, clipCapacitySec: 10, pacing: { minShotSec: 8, maxShotSec: 10 },
     });
     expect(pacing.minShotSec).toBe(5);
     expectTiles(shots, 0, 25);
@@ -176,7 +180,7 @@ describe('planShots', () => {
   // Section edges still come from snapSectionsToGrid (#4664). A ceiling wider
   // than every section keeps one shot per section so the edges are observable.
   describe('section edges', () => {
-    const WIDE = { pacing: { maxShotSec: 60, hookSec: 60 } };
+    const WIDE = { clipCapacitySec: 60, pacing: { hookSec: 60 } };
 
     it('snaps off-grid section boundaries onto the beat grid, keeping the timeline contiguous', () => {
       const { shots } = planShots([

@@ -6,8 +6,9 @@
  * generated clip. This module instead tiles every section with several
  * bounded shots:
  *
- *   - no shot is longer than the pacing ceiling (by default the renderer's
- *     clip capacity), so each shot can be covered by ONE generated clip;
+ *   - no shot is longer than the pacing ceiling (the renderer's clip
+ *     capacity, or a shorter project ceiling), so each shot can be covered by
+ *     ONE generated clip;
  *   - no shot is shorter than the pacing floor (a section shorter than the
  *     floor stays a single shot);
  *   - the very first shot is capped at the opening-hook length;
@@ -31,7 +32,7 @@ const LYRIC_TEXT_MAX = 2000;
 // An untimed-end cue lasts until the next cue, capped here.
 const OPEN_CUE_MAX_SEC = 8;
 // Grok renders fixed 6s/10s clips; a local model's default render is ~5s
-// (121 frames at 24fps). A project pacing ceiling overrides either.
+// (121 frames at 24fps). A project pacing ceiling can only shorten either.
 const DEFAULT_LOCAL_CLIP_CAPACITY_SEC = 5;
 const DEFAULT_MIN_SHOT_SEC = 2;
 const DEFAULT_HOOK_SEC = 3;
@@ -53,7 +54,9 @@ export function resolveClipCapacitySec(videoSettings) {
  * [floor, ceiling]; the hook is clamped into the same range.
  */
 function resolvePacing(pacing, clipCapacitySec) {
-  const maxShotSec = Math.max(1, pacing?.maxShotSec ?? clipCapacitySec);
+  // A project ceiling can shorten shots but never exceed one generated clip:
+  // a longer non-looping shot could only ever be refused at render time.
+  const maxShotSec = Math.max(1, Math.min(pacing?.maxShotSec ?? clipCapacitySec, clipCapacitySec));
   const minShotSec = Math.min(pacing?.minShotSec ?? DEFAULT_MIN_SHOT_SEC, maxShotSec / 2);
   const hookSec = Math.min(maxShotSec, Math.max(minShotSec, pacing?.hookSec ?? DEFAULT_HOOK_SEC));
   return { minShotSec, maxShotSec, hookSec };

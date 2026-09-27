@@ -63,8 +63,8 @@ export const musicVideoPhraseSchema = z.object({
   intent: z.string().max(2000).optional(),
 }).strict();
 
-// Shot pacing for the planner. `maxShotSec` defaults to the renderer's clip
-// capacity; `hookSec` bounds the opening shot so the video opens on a cut.
+// Shot pacing for the planner. `maxShotSec` is capped at the renderer's clip
+// capacity (one generated clip); `hookSec` bounds the opening shot so the video opens on a cut.
 export const musicVideoPacingSchema = z.object({
   minShotSec: z.number().min(0.5).max(60).optional(),
   maxShotSec: z.number().min(1).max(120).optional(),
