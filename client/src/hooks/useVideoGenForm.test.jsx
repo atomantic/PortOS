@@ -524,6 +524,9 @@ describe('useVideoGenForm', () => {
       expect(result.current.buildGeneratePayload()).toMatchObject({ width: 1344, height: 768 });
       act(() => pendingImages.at(-1).onload());
       expect(result.current.buildGeneratePayload()).toMatchObject({ width: 768, height: 1344 });
+      act(() => result.current.clearSourceImage());
+      expect(result.current.buildGeneratePayload()).toMatchObject({ width: 1344, height: 768 });
+      act(() => result.current.pickSourceImage('another-example-source.png'));
 
       // Explicit size choice survives both a model switch and its late image load.
       act(() => {

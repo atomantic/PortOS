@@ -493,7 +493,7 @@ export function useVideoGenForm({
     const next = defaultResolutionForModel(currentModel);
     setWidth(next.w);
     setHeight(next.h);
-  }, [currentModel]);
+  }, [currentModel, sourceImageFile, sourceUploadUrl]);
 
   // Remix/deep-link/resume paths set model + sampler fields independently.
   // Reconcile them once the model is known so a legacy LTX 8n+1 frame count
