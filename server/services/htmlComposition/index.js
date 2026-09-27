@@ -120,7 +120,9 @@ export async function renderComposition({ jobId, ...input }) {
     failure = error;
   } finally {
     await page?.close();
-    if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true });
+    if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true }).catch(() => {
+      console.warn('⚠️ Could not remove temporary composition audio');
+    });
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});
       await unlinkGuarded(outputPath).catch(() => {});
