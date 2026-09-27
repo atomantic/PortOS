@@ -35,7 +35,7 @@ const BOUNDARY_SNAP_SEC = 0.2;
 const OPEN_CUE_MAX_SEC = 8;
 // Grok renders fixed 6s/10s clips; a local model's default render is ~5s
 // (121 frames at 24fps). A project pacing ceiling overrides either.
-export const DEFAULT_LOCAL_CLIP_CAPACITY_SEC = 5;
+const DEFAULT_LOCAL_CLIP_CAPACITY_SEC = 5;
 const DEFAULT_MIN_SHOT_SEC = 2;
 const DEFAULT_HOOK_SEC = 3;
 
@@ -55,7 +55,7 @@ export function resolveClipCapacitySec(videoSettings) {
  * ceiling so any span longer than the ceiling can always be tiled within
  * [floor, ceiling]; the hook is clamped into the same range.
  */
-export function resolvePacing(pacing, clipCapacitySec) {
+function resolvePacing(pacing, clipCapacitySec) {
   const maxShotSec = Math.max(1, pacing?.maxShotSec ?? clipCapacitySec);
   const minShotSec = Math.min(pacing?.minShotSec ?? DEFAULT_MIN_SHOT_SEC, maxShotSec / 2);
   const hookSec = Math.min(maxShotSec, Math.max(minShotSec, pacing?.hookSec ?? DEFAULT_HOOK_SEC));
@@ -63,7 +63,7 @@ export function resolvePacing(pacing, clipCapacitySec) {
 }
 
 /** Timed cues sorted by start, each with a resolved end (explicit, next cue, or capped open end). */
-export function timedCues(cues) {
+function timedCues(cues) {
   const timed = (Array.isArray(cues) ? cues : [])
     .filter((c) => c && typeof c.text === 'string' && c.text.trim() && typeof c.startSec === 'number')
     .slice()

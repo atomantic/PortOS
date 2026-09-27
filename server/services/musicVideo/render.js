@@ -64,20 +64,20 @@ export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res)
 // `loop` key and keeps the legacy behavior — its clip repeats to fill the
 // authored span — so existing projects render exactly as they did. A scene
 // created since carries an explicit boolean, and only `loop: true` repeats.
-export const sceneLoops = (scene) => scene?.loop !== false;
+const sceneLoops = (scene) => scene?.loop !== false;
 
 // A non-looping shot may run this much past its source clip; the gap holds the
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
 // render until the director resolves them.
-export const COVERAGE_TOLERANCE_SEC = 0.25;
-export const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop']);
+const COVERAGE_TOLERANCE_SEC = 0.25;
+const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop']);
 
 /**
  * Pure: the snapped clips whose authored span needs more footage than their
  * non-looping source clip provides. Returns
  * `[{ sceneId, spanSec, clipSec, shortBySec }]` (empty when every shot is covered).
  */
-export function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
+function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
   const out = [];
   for (const clip of Array.isArray(clips) ? clips : []) {
     if (clip.loop !== false) continue;

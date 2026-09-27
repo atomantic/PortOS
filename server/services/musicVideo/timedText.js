@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { trimTo } from '../../lib/textUtils.js';
 
 const MAX_CUE_TEXT = 500;
 const MAX_SEC = 36000;
@@ -55,18 +56,16 @@ function normalizeList(list, prefix, shape) {
   return out;
 }
 
-const trimmed = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-
 /** Normalize an edited cue list: keep ids, trim text, drop empty lines. Order is kept (lyric order). */
 export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
-  const text = trimmed(cue.text, MAX_CUE_TEXT);
+  const text = trimTo(cue.text, MAX_CUE_TEXT);
   return text ? { text } : null;
 });
 
 /** Normalize an edited phrase list: keep ids, trim label/intent. */
 export const normalizePhrases = (phrases) => normalizeList(phrases, 'mp', (phrase) => ({
-  label: trimmed(phrase.label, 120),
-  intent: trimmed(phrase.intent, 2000),
+  label: trimTo(phrase.label, 120),
+  intent: trimTo(phrase.intent, 2000),
 }));
 
 /** Clear the audio-derived timings on every cue/phrase, keeping the authored text. */
@@ -148,7 +147,7 @@ function parsePlain(text) {
     .map((line) => ({ text: line, startSec: null, endSec: null }));
 }
 
-export function detectLyricsFormat(text) {
+function detectLyricsFormat(text) {
   if (/-->/.test(text)) return 'srt';
   if (/^\s*\[\d{1,3}:\d{1,2}/m.test(text)) return 'lrc';
   return 'text';

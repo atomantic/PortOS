@@ -82,7 +82,7 @@ export function validSections(sections) {
  * director to trim, continue, replace, or explicitly loop it (render.js).
  * The label keeps the section name and numbers the shots inside it.
  */
-export function sceneInputsFromShots(shots) {
+function sceneInputsFromShots(shots) {
   return shots.map((shot) => {
     const base = shot.sectionLabel || `Section ${shot.sectionIndex + 1}`;
     const label = (shot.shotCount > 1 ? `${base} · ${shot.shotIndex + 1}/${shot.shotCount}` : base).slice(0, SCENE_LABEL_MAX);
