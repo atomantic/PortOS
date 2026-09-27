@@ -258,11 +258,11 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               ) : (
                 <div role="table" aria-label={`${cat.label} contents`} className="w-full min-w-[460px] text-xs" tabIndex={-1}>
                   <div role="rowgroup">
-                    <div role="row" style={{ gridTemplateColumns: itemColumns }} className="grid text-gray-500 border-b border-port-border/30">
-                      <div role="columnheader" className="text-left p-2 pl-3 font-medium">Name</div>
-                      <div role="columnheader" className="text-right p-2 font-medium">Size</div>
-                      <div role="columnheader" className="text-right p-2 pr-3 font-medium">Files</div>
-                      {cat.deletable && <div role="columnheader" className="text-right p-2 pr-3 font-medium"><span className="sr-only">Delete</span></div>}
+                    <div role="row" tabIndex={-1} style={{ gridTemplateColumns: itemColumns }} className="grid text-gray-500 border-b border-port-border/30">
+                      <div role="columnheader" tabIndex={-1} className="text-left p-2 pl-3 font-medium">Name</div>
+                      <div role="columnheader" tabIndex={-1} className="text-right p-2 font-medium">Size</div>
+                      <div role="columnheader" tabIndex={-1} className="text-right p-2 pr-3 font-medium">Files</div>
+                      {cat.deletable && <div role="columnheader" tabIndex={-1} className="text-right p-2 pr-3 font-medium"><span className="sr-only">Delete</span></div>}
                     </div>
                   </div>
                   <div role="rowgroup">
@@ -271,7 +271,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                         onRemoveItem(cat.key, item.name);
                         setRemovingItems(prev => { const next = new Set(prev); next.delete(item.name); return next; });
                       }}>
-                        <div role="row" style={{ gridTemplateColumns: itemColumns }} className="grid border-b border-port-border/20 hover:bg-port-card/30">
+                        <div role="row" tabIndex={-1} style={{ gridTemplateColumns: itemColumns }} className="grid border-b border-port-border/20 hover:bg-port-card/30">
                           <div role="cell" className="p-2 pl-3 text-gray-300 flex items-center gap-1.5">
                             {item.type === 'directory' ? <FolderOpen size={11} className="text-port-accent shrink-0" /> : <File size={11} className="text-gray-500 shrink-0" />}
                             <div className="min-w-0">
