@@ -70,12 +70,21 @@ explicitly when either binary is unavailable; route and queue tests still run.
 This option is required for directories rooted at `launch-videos/` and can also
 be applied to other composition directories. An app's **Launch Video** tab
 (`/apps/<appId>/launch-video`, also linked from Overview) queues a user-triggered CoS task with
-tone, direction, format, duration, an optional existing Music-library track (each
-listed with its filename and an inline audio preview), and an optional
+tone, direction, format, duration (15–120 seconds), optional generated original
+music or an existing Music-library track (each listed with its filename and an
+inline audio preview), and an optional
 provider/model/effort pin (Auto uses the normal CoS provider selection).
 Closing its drawer does not cancel the run; use CoS agents to follow or cancel it.
 Overlapping submissions for the same app are refused until its task settles.
-No schedule or boot-time provider call is installed.
+No schedule or boot-time provider call is installed. Generated music is explicitly
+opted into for this run: the agent selects a ready music engine, writes an
+instrumental prompt, waits for its media job, and passes the resulting library
+filename to the renderer. Shorter music beds loop to fill the video. A generation
+failure is reported instead of silently dropping the soundtrack.
+
+The task supplies the selected app repository and process ports separately from
+the PortOS media API origin. Product evidence comes from that repository; PortOS
+serves only as the orchestration/rendering service unless it is the selected app.
 
 App runs pass `appId` and `runId` together in `launchVideo`, with directory exactly
 `launch-videos/<appId>/<runId>/composition`. The run is pinned to this instance.
@@ -104,8 +113,8 @@ Alongside `index.html`, put non-empty `plan.md`, `caption.txt`, and
 }
 ```
 
-Scene durations must total 15–25 seconds, within two seconds of the requested
-15–25 second target. Each line's actual whitespace-separated word count must
+Scene durations must total 15–120 seconds, within two seconds of the requested
+15–120 second target. Each line's actual whitespace-separated word count must
 match `wordCount`; its hold must be at least `max(0.8, 0.3 × words)` seconds and
 fit inside the scene. The composition's runtime duration must equal the total.
 `posterSec` must be inside that duration and selects the generated thumbnail.
