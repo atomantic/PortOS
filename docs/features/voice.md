@@ -368,6 +368,9 @@ streaming qualification. Without that opt-in, AuK remains studio-only and the
 existing interactive fallback is retained. The production planner checks the
 interactive route rather than treating every approved studio voice as live-ready.
 
-The separate Qwen runtime supports verified local inference but has no training adapter and is excluded from
+The separate Qwen runtime supports verified local inference but has no training adapter. Its probe reports
+`training_adapter: null`, so starting fine-tuning returns `503 QWEN3_TRAINING_UNAVAILABLE` before any job
+record or process exists, and checkpoints recorded by earlier placeholder runners (no producing adapter) are
+refused with `409 CHECKPOINT_UNVERIFIED` rather than promoted. The runtime is excluded from
 Voice Studio assignment until repaired (issue #8857). Voice Studio does not
 claim a Qwen runtime is working merely because its metadata exists.

@@ -4,17 +4,15 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
-import { PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../lib/testHelper.js';
 
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
-// Both overrides default to null = "use the real thing", so one suite can hold
-// the deterministic state-machine cases AND the single runner-boundary case
-// that must exercise actual spawn wiring (vi.mock is per-FILE and hoisted, so
-// a runtime switch is the only way to have both).
+// Both overrides default to null = "use the real thing". The runner itself
+// reports no training adapter today (scripts/qwen3_tts_runner.test.js), so the
+// lifecycle cases stand in a scripted adapter and child for a future one.
 let spawnOverride = null;
-let pythonOverride = null;
+let runtimeOverride = null;
 
 vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
 vi.mock('../../lib/paths.js', async () => {
@@ -27,7 +25,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 });
 vi.mock('./qwen3TtsRuntime.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, resolveQwen3Python: async () => pythonOverride ?? actual.resolveQwen3Python() };
+  return { ...actual, getQwen3RuntimeStatus: async () => runtimeOverride ?? actual.getQwen3RuntimeStatus() };
 });
 
 const {
@@ -63,7 +61,7 @@ beforeEach(async () => {
   voiceProfilesRoot = await mkdtemp(join(tmpdir(), 'portos-voice-profiles-'));
   queryMock.mockReset();
   spawnOverride = null;
-  pythonOverride = null;
+  runtimeOverride = null;
 });
 
 afterEach(async () => {
@@ -94,7 +92,7 @@ const createScriptedChild = ({ signal } = {}) => {
   child.stdout = new EventEmitter();
   child.kill = vi.fn();
   // Frames mirror the runner's stdout contract (scripts/qwen3_tts_runner.py);
-  // the runner-boundary case below is what keeps that mirror honest.
+  // they describe the contract a real training adapter must emit.
   child.emitFrames = (...frames) => {
     for (const frame of frames) {
       child.stdout.emit('data', Buffer.from(`${JSON.stringify(frame)}\n`));
@@ -124,7 +122,7 @@ const checkpointFrame = (step) => ({
 
 /** Install a scripted child and hand the test the handle spawn will return. */
 const useScriptedRunner = () => {
-  pythonOverride = '/scripted/python';
+  runtimeOverride = { ok: true, pythonPath: '/scripted/python', trainingAdapter: 'scripted-adapter' };
   let child = null;
   spawnOverride = (_command, _args, options) => {
     child = createScriptedChild(options);
@@ -378,33 +376,34 @@ describe('fineTuning', () => {
   });
 });
 
-// One boundary case keeps the scripted frames above honest: it runs the actual
-// Python runner through the real spawn, so a rename in either the runner's
-// stdout contract or the arguments it is handed fails here.
-describe.skipIf(!resolveTestPython())('fineTuning runner boundary', () => {
-  it('records unsupported training as failed without fabricated checkpoints', async () => {
+describe('fineTuning without a training adapter', () => {
+  it('refuses to start before creating a job or spawning when inference is ready but training is not', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();
-    // Windows ships a `python` Store-alias stub that resolves but cannot run, so
-    // take the interpreter the shared helper proved executable.
-    pythonOverride = resolveTestPython();
+    runtimeOverride = { ok: true, pythonPath: '/scripted/python', trainingAdapter: null };
+    spawnOverride = vi.fn();
 
-    const { jobId } = await startFineTuningJob({
+    await expect(startFineTuningJob({ profileId: PROFILE.id, epochs: 2 }))
+      .rejects.toMatchObject({ status: 503, code: 'QWEN3_TRAINING_UNAVAILABLE' });
+    expect(spawnOverride).not.toHaveBeenCalled();
+    await expect(readFile(join(voiceProfilesRoot, PROFILE.id, 'fine-tune'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('never promotes a legacy placeholder checkpoint that has no producing adapter', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    const jobId = '11111111-2222-4333-8444-555555555555';
+    await mkdir(join(voiceProfilesRoot, PROFILE.id, 'fine-tune', jobId), { recursive: true });
+    await writeFile(jobRecordPath(jobId), JSON.stringify({
+      id: jobId,
       profileId: PROFILE.id,
-      epochs: 2,
-      checkpointInterval: 20,
-    });
+      universeId: 'universe-1',
+      characterId: 'character-1',
+      status: 'completed',
+      checkpoints: [{ id: 'checkpoint-20.safetensors', step: 20, checkpointPath: '/legacy/checkpoint-20.safetensors' }],
+    }));
 
-    // A real interpreter's wall time tracks machine load, not the assertion, so
-    // both budgets come from the repository's Python-shelling allowance rather
-    // than a fixed inner deadline (#6268). The poll is strictly below the
-    // vitest budget so a genuinely stuck run reports the status it observed
-    // instead of producing a bare test timeout.
-    const record = await drainJobRecord(jobId, { timeout: Math.floor(PY_TEST_TIMEOUT_MS * 0.75) });
-    expect(record.status).toBe('failed');
-    expect(record.checkpoints).toEqual([]);
-    const status = await getFineTuningJobStatus(jobId, PROFILE.id);
-    expect(status.status).toBe('failed');
-    expect(status.progress).not.toBe(100);
-  }, PY_TEST_TIMEOUT_MS);
+    await expect(promoteCheckpoint({ profileId: PROFILE.id, jobId, checkpointId: 'checkpoint-20.safetensors' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHECKPOINT_UNVERIFIED' });
+    expect(queryMock.mock.calls.some(([sql]) => /insert|update/i.test(sql))).toBe(false);
+  });
 });

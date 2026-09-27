@@ -367,7 +367,7 @@ core.metal.is_available = lambda: False
 unavailable = runner.probe_runtime()
 print(json.dumps({"status": status, "unavailable": unavailable}))
 `);
-    expect(result.status).toMatchObject({ ok: true, device: 'mlx', error: null, torch_installed: false });
+    expect(result.status).toMatchObject({ ok: true, device: 'mlx', error: null, torch_installed: false, training_adapter: null });
     expect(result.unavailable).toMatchObject({ ok: false });
   });
 });
