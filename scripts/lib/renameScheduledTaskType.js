@@ -14,6 +14,10 @@ import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileCore.js';
 
 const SCHEDULE_PATH = join('data', 'cos', 'task-schedule.json');
+const LEARNING_PATH = join('data', 'cos', 'learning.json');
+// Learning maps keyed by the task-type bucket (`self-improve:<type>`,
+// `app-improve:<type>`), or by `<bucket>|provider|model|effort`.
+const LEARNING_KEYED_MAPS = ['byTaskType', 'routingAccuracy', 'byTaskTypeExecution'];
 const APPS_PATH = join('data', 'apps.json');
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -192,4 +196,33 @@ export async function renameScheduledTaskType({ rootDir, from, to }) {
   }
 
   return { schedules, pendingRequests, migratedApps };
+}
+
+/**
+ * Move a renamed task type's learning buckets to the new name, so the
+ * confidence gate keeps its history — without it the renamed type reads as
+ * "new" and auto-approves even when its record required approval. A bucket
+ * whose target already exists is left in place rather than guessed at.
+ */
+export async function renameLearningBuckets({ rootDir, from, to }) {
+  const stored = await readJson(rootDir, LEARNING_PATH);
+  if (!isObject(stored?.value)) return { learningBuckets: 0 };
+  const renameKey = (key) => {
+    const match = /^(self-improve|app-improve):([^|]+)(\|.*)?$/.exec(key);
+    return match && match[2] === from ? `${match[1]}:${to}${match[3] || ''}` : null;
+  };
+  let learningBuckets = 0;
+  for (const mapName of LEARNING_KEYED_MAPS) {
+    const map = stored.value[mapName];
+    if (!isObject(map)) continue;
+    for (const key of Object.keys(map)) {
+      const target = renameKey(key);
+      if (!target || hasOwn(map, target)) continue;
+      map[target] = map[key];
+      delete map[key];
+      learningBuckets += 1;
+    }
+  }
+  if (learningBuckets) await writeJson(stored.fullPath, stored.value);
+  return { learningBuckets };
 }

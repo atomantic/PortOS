@@ -38,7 +38,7 @@ describe('migration 417 — rename release-check to do-release', () => {
       apps: { 'app-a': { taskTypeOverrides: { 'release-check': { enabled: true, taskMetadata: { mergeDependencyUpdates: false } } } } },
     });
 
-    expect(await migration.up({ rootDir })).toEqual({ schedules: 1, pendingRequests: 1, migratedApps: 1 });
+    expect(await migration.up({ rootDir })).toEqual({ schedules: 1, pendingRequests: 1, migratedApps: 1, learningBuckets: 0 });
 
     const schedule = readJson(schedulePath);
     expect(schedule.tasks).not.toHaveProperty('release-check');
@@ -52,6 +52,24 @@ describe('migration 417 — rename release-check to do-release', () => {
       'do-release': { enabled: true, taskMetadata: { mergeDependencyUpdates: false } },
     });
 
-    expect(await migration.up({ rootDir })).toEqual({ schedules: 0, pendingRequests: 0, migratedApps: 0 });
+    expect(await migration.up({ rootDir })).toEqual({ schedules: 0, pendingRequests: 0, migratedApps: 0, learningBuckets: 0 });
+  });
+
+  it('moves the learning buckets so the confidence gate keeps its history', async () => {
+    const learningPath = join(rootDir, 'data', 'cos', 'learning.json');
+    const lowConfidence = { completed: 9, succeeded: 2 };
+    writeJson(learningPath, {
+      byTaskType: { 'self-improve:release-check': lowConfidence, 'self-improve:release-checker': { completed: 1 } },
+      routingAccuracy: { 'app-improve:release-check': { a: 1 } },
+      byTaskTypeExecution: { 'self-improve:release-check|codex|model-x|high': lowConfidence },
+    });
+
+    expect(await migration.up({ rootDir })).toMatchObject({ learningBuckets: 3 });
+    expect(readJson(learningPath)).toEqual({
+      byTaskType: { 'self-improve:do-release': lowConfidence, 'self-improve:release-checker': { completed: 1 } },
+      routingAccuracy: { 'app-improve:do-release': { a: 1 } },
+      byTaskTypeExecution: { 'self-improve:do-release|codex|model-x|high': lowConfidence },
+    });
+    expect(await migration.up({ rootDir })).toMatchObject({ learningBuckets: 0 });
   });
 });

@@ -557,6 +557,17 @@ describe('taskSchedule', () => {
       }
     })
 
+    it('carries pre-rename v1 task config onto the renamed task', async () => {
+      readJSONFile.mockResolvedValue({
+        selfImprovement: { 'release-check': { enabled: false, prompt: 'custom release prompt' } },
+        executions: { 'self-improve:release-check': { count: 2, lastRun: '2026-09-01T00:00:00.000Z' } },
+      })
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['do-release']).toMatchObject({ enabled: false, prompt: 'custom release prompt' })
+      expect(schedule.tasks).not.toHaveProperty('release-check')
+      expect(schedule.executions['task:do-release']).toMatchObject({ count: 2 })
+    })
+
     it('should load and return existing v2 schedule', async () => {
       mockSchedule({
         tasks: { 'security': { type: 'weekly', enabled: true, providerId: 'p1', model: 'm1', prompt: null } }
