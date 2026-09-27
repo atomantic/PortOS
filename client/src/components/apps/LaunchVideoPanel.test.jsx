@@ -88,10 +88,10 @@ it('publishes the URL-selected take once and exposes the queued workflow', async
   let finish;
   publishAppLaunchVideo.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   renderPanel('/?video=older');
-  fireEvent.click(await screen.findByRole('button', { name: 'Publish GIF to README and merge PR' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Publish to README and merge PR' }));
   expect(screen.getByRole('button', { name: 'Queuing publication…' }).disabled).toBe(true);
   expect(publishAppLaunchVideo).toHaveBeenCalledExactlyOnceWith('example', {
-    videoId: 'older', provider: 'example-provider', model: 'example-model',
+    videoId: 'older', format: 'mp4', provider: 'example-provider', model: 'example-model',
   }, { silent: true });
   finish({ taskId: 'task-publish' });
   expect((await screen.findByRole('status')).textContent).toContain('README publication queued');

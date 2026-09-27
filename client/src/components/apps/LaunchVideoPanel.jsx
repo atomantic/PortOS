@@ -126,22 +126,28 @@ function ReviseLaunchVideo({ appId, videoId }) {
 }
 
 function PublishLaunchVideo({ appId, videoId }) {
+  const [format, setFormat] = useState('mp4');
   const picker = useRunWithPicker();
   const submitting = useRef(false);
   const [taskId, setTaskId] = useState(null);
   const [publish, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
-    await publishAppLaunchVideo(appId, { videoId, ...picker.pin }, { silent: true })
+    await publishAppLaunchVideo(appId, { videoId, format, ...picker.pin }, { silent: true })
       .then(result => setTaskId(result.taskId))
       .finally(() => { submitting.current = false; });
   });
   return <div className="space-y-2 rounded border border-port-border p-3">
     <h3 className="font-medium">Publish to README</h3>
-    <p className="text-sm text-port-text-muted">Create a silent, looping GIF of this take for GitHub and GitHub Pages. The agent replaces any existing launch-video embed near the top of README.md, commits the GIF, opens a PR and merges after review and checks pass. This publishes the selected video to the app repository.</p>
+    <p className="text-sm text-port-text-muted">Publish an MP4 with sound and a clickable poster, or a silent looping GIF. MP4 playback or download opens from the poster; it is not an inline README player. The agent replaces any existing launch-video embed near the top of README.md, commits the selected assets, opens a PR and merges after review and checks pass. Assets inherit the repository’s visibility. Nothing is uploaded to YouTube or another video host.</p>
     {taskId ? <p role="status">README publication queued. <Link className="text-port-accent" to="/cos/agents">Follow the render and PR in CoS agents</Link></p> : <>
       <ProviderModelSelector {...picker.selectorProps} />
-      <button type="button" className={buttonClass} disabled={running} onClick={publish}>{running ? 'Queuing publication…' : 'Publish GIF to README and merge PR'}</button>
+      <label htmlFor="launch-publish-format">README media format</label>
+      <select id="launch-publish-format" className={inputClass} value={format} disabled={running} onChange={event => setFormat(event.target.value)}>
+        <option value="mp4">MP4 with sound (clickable poster)</option>
+        <option value="gif">GIF (silent, looping)</option>
+      </select>
+      <button type="button" className={buttonClass} disabled={running} onClick={publish}>{running ? 'Queuing publication…' : 'Publish to README and merge PR'}</button>
     </>}
   </div>;
 }
