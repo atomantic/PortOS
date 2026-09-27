@@ -215,7 +215,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               {cat.archivable && (
                 <button
                   onClick={() => onArchive(cat.key)}
-                  disabled={archiving}
+                  disabled={archiving || !!deletingItem || !!purging}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-accent/10 text-port-accent rounded hover:bg-port-accent/20 transition-colors disabled:opacity-50"
                 >
                   <Archive size={12} />
@@ -227,7 +227,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
               ) : (
                 <button
                   onClick={() => onPurge(cat.key)}
-                  disabled={purging || !!deletingItem}
+                  disabled={purging || !!deletingItem || !!archiving}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-error/10 text-port-error rounded hover:bg-port-error/20 transition-colors disabled:opacity-50"
                 >
                   <Trash2 size={12} />
@@ -294,7 +294,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                                 <ConfirmButtonPair
                                   className="justify-end flex-wrap"
                                   prompt={item.type === 'directory' ? "Delete folder and contents?" : "Delete?"}
-                                  busy={busy || !!deletingItem || !!purging}
+                                  busy={busy || !!deletingItem || !!purging || !!archiving || confirmingPurge}
                                   onConfirm={() => confirmDelete(async () => {
                                     if (await onDeleteItem(cat.key, item.name)) setRemovingItems(prev => new Set(prev).add(item.name));
                                   })}
@@ -304,7 +304,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                               ) : (
                                 <button
                                   onClick={() => requestDelete(item.name)}
-                                  disabled={busy || !!deletingItem || !!purging}
+                                  disabled={busy || !!deletingItem || !!purging || !!archiving || confirmingPurge}
                                   className="text-gray-500 hover:text-port-error transition-colors disabled:opacity-50"
                                   title={`Delete ${item.name}`}
                                   aria-label={`Delete ${item.name} from ${cat.label}`}
@@ -411,7 +411,7 @@ export default function DataManager() {
   const [deletingItem, setDeletingItem] = useState(null);
   // Ref, not state: two clicks in one render would both read a stale state value.
   const deletingBackupsRef = useRef(new Set());
-  const deletingItemRef = useRef(false);
+  const maintenanceInFlightRef = useRef(false);
 
   const overviewRequestRef = useRef(0);
   const overviewReadRef = useRef(null);
@@ -510,26 +510,32 @@ export default function DataManager() {
   }, []);
 
   const handleArchive = async (key) => {
+    if (maintenanceInFlightRef.current) return;
+    maintenanceInFlightRef.current = true;
     setArchiving(key);
     const result = await api.archiveDataCategory(key).catch(() => null);
+    maintenanceInFlightRef.current = false;
     setArchiving(null);
     if (result) refreshAfterAction(key);
   };
 
   const executePurge = async (key) => {
+    if (maintenanceInFlightRef.current) return;
+    maintenanceInFlightRef.current = true;
     setPurging(key);
     setConfirmPurge(null);
     await api.purgeDataCategory(key).catch(() => null);
+    maintenanceInFlightRef.current = false;
     setPurging(null);
     refreshAfterAction(key);
   };
 
   const handleDeleteItem = async (key, name) => {
-    if (deletingItemRef.current) return false;
-    deletingItemRef.current = true;
+    if (maintenanceInFlightRef.current) return false;
+    maintenanceInFlightRef.current = true;
     setDeletingItem(name);
     const result = await api.purgeDataCategory(key, { subPath: name }).catch(() => null);
-    deletingItemRef.current = false;
+    maintenanceInFlightRef.current = false;
     setDeletingItem(null);
     if (!result) return false;
     fetchOverview();

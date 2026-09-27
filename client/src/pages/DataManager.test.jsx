@@ -591,3 +591,24 @@ describe('DataManager training-run sources and individual cleanup', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' })).toBeDisabled());
   });
 });
+
+
+it('prevents overlapping item cleanup and an already-open bucket purge', async () => {
+  getDataOverview.mockResolvedValue({ ...busyOverview, categories: [{ ...busyOverview.categories[1] }] });
+  getDataCategory.mockResolvedValue({ key: 'messages', items: [{ name: 'example-account', type: 'directory', size: 100 }] });
+  purgeDataCategory.mockReset();
+  render(<DataManager />);
+  await screen.findAllByText('Messages');
+  expandRow('Messages');
+  const remove = await screen.findByRole('button', { name: 'Delete example-account from Messages' });
+  fireEvent.click(screen.getByRole('button', { name: 'Purge' }));
+  expect(remove).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  let finish;
+  purgeDataCategory.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  fireEvent.click(remove);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  expect(screen.getByRole('button', { name: 'Purge' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+  await act(async () => finish({ category: 'messages', subPath: 'example-account' }));
+});
