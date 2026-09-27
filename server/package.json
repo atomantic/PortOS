@@ -35,7 +35,7 @@
     "sharp": "0.35.4",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
-    "undici": "8.10.2",
+    "undici": "8.11.2",
     "ws": "8.21.3",
     "zod": "4.6.5"
   },
