@@ -18,7 +18,23 @@ import { formatTimecode } from '../../utils/formatters.js';
 const PX_PER_SEC = 80;
 const SNAP_TOLERANCE_SEC = 0.15;
 
-export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
+// Timed lyric lines (#8964) render as a read-only strip under the scene
+// blocks, so the director can see which words each cut spans. A cue with no
+// explicit end runs to the next cue (capped) — the same reading the planner uses.
+const OPEN_CUE_MAX_SEC = 8;
+function lyricSpans(cues) {
+  const timed = (Array.isArray(cues) ? cues : [])
+    .filter((c) => typeof c?.startSec === 'number' && c.text)
+    .slice()
+    .sort((a, b) => a.startSec - b.startSec);
+  return timed.map((c, i) => {
+    const next = timed[i + 1];
+    const openEnd = Math.min(c.startSec + OPEN_CUE_MAX_SEC, next ? next.startSec : Infinity);
+    return { id: c.id || `cue-${i}`, text: c.text, startSec: c.startSec, endSec: typeof c.endSec === 'number' && c.endSec > c.startSec ? c.endSec : openEnd };
+  });
+}
+
+export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, onCommit }) {
   const gridPoints = useMemo(() => buildBeatGridPoints(audioAnalysis), [audioAnalysis]);
   const baseSpans = useMemo(
     () => computeSceneSpans(scenes, audioAnalysis?.durationSec),
@@ -39,6 +55,7 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
   const totalDurationSec = Math.max(audioAnalysis?.durationSec || 0, ...spans.map((s) => s.endSec), 1);
   const widthPx = Math.ceil(totalDurationSec * PX_PER_SEC) + 40;
   const waveform = Array.isArray(audioAnalysis?.waveform) ? audioAnalysis.waveform : [];
+  const cueSpans = useMemo(() => lyricSpans(lyricCues), [lyricCues]);
   const timeMarks = useMemo(() => {
     const interval = totalDurationSec > 180 ? 30 : totalDurationSec > 60 ? 15 : 5;
     return Array.from({ length: Math.floor(totalDurationSec / interval) + 1 }, (_, i) => i * interval);
@@ -179,10 +196,11 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
         <span><i className="mr-1 inline-block h-3 w-px bg-port-border" />beat</span>
         <span><i className="mr-1 inline-block h-3 w-0.5 bg-port-accent" />downbeat</span>
         <span><i className="mr-1 inline-block h-2 w-3 bg-port-success/40" />scene start</span>
+        {cueSpans.length > 0 && <span><i className="mr-1 inline-block h-2 w-3 bg-port-warning/30" />lyric line</span>}
       </div>
 
       <div ref={scrollRef} className="overflow-x-auto border border-port-border rounded-lg bg-port-bg">
-        <div className="relative h-36" style={{ width: `${widthPx}px`, touchAction: 'none' }}>
+        <div className={`relative ${cueSpans.length > 0 ? 'h-44' : 'h-36'}`} style={{ width: `${widthPx}px`, touchAction: 'none' }}>
           {(audioAnalysis.sections || []).map((section, i) => (
             <div key={`sec-${i}`}
               className="absolute top-0 h-6 border-r border-port-border/60 overflow-hidden"
@@ -240,6 +258,14 @@ export default function BeatTimeline({ audioAnalysis, scenes, onCommit }) {
               </div>
             );
           })}
+          {cueSpans.map((cue) => (
+            <div key={cue.id}
+              className="pointer-events-none absolute top-[142px] h-6 overflow-hidden rounded border border-port-warning/40 bg-port-warning/15 px-1 text-[10px] leading-6 text-port-text truncate"
+              style={{ left: cue.startSec * PX_PER_SEC, width: Math.max(4, (cue.endSec - cue.startSec) * PX_PER_SEC) }}
+              title={cue.text}>
+              {cue.text}
+            </div>
+          ))}
         </div>
       </div>
     </div>

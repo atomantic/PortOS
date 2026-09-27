@@ -21,8 +21,9 @@ const h = vi.hoisted(() => {
       },
     };
   };
-  const spawn = () => {
+  const spawn = (_cmd, args) => {
     const p = makeEmitter();
+    p.args = args;
     p.stderr = makeEmitter();
     p.kill = () => {};
     procs.push(p);
@@ -260,4 +261,60 @@ it('chooses the loudest section midpoint within the rendered duration', async ()
   await tick();
   expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1.5 });
   expect(getRenderJobStatus(jobId).status).toBe('complete');
+});
+
+// #8964 — loop semantics at the render boundary. A pre-#8964 scene (no `loop`
+// key) keeps filling its authored span by repeating the clip; a planned shot
+// (`loop: false`) may never silently repeat, so a span its clip cannot cover
+// blocks the render with the shots to fix, and never spawns ffmpeg.
+describe('renderMusicVideo clip coverage (#8964)', () => {
+  const primeScene = (projectId, scene) => {
+    prime(projectId);
+    getProject.mockResolvedValue({
+      id: projectId, name: 'P', trackId: 't1', status: 'ready',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1', beatAligned: true, ...scene }],
+    });
+  };
+  const filterGraph = (args) => args[args.indexOf('-filter_complex') + 1];
+
+  it('keeps looping a legacy scene across a span longer than its clip', async () => {
+    primeScene('legacy-1', { startSec: 0, endSec: 20 });
+    await renderMusicVideo('legacy-1');
+    const { args } = lastProc();
+    expect(args.slice(0, 3)).toEqual(['-stream_loop', '-1', '-i']);
+    expect(filterGraph(args)).toContain('trim=start=0:end=20');
+  });
+
+  it('refuses a non-looping shot its clip cannot cover, naming the fix, without spawning', async () => {
+    primeScene('short-1', { startSec: 0, endSec: 20, loop: false });
+    const expected = {
+      status: 422,
+      code: 'INSUFFICIENT_CLIP_COVERAGE',
+      context: {
+        shortfalls: [{ sceneId: 's1', spanSec: 20, clipSec: 2, shortBySec: 18 }],
+        resolutions: ['trim', 'continue', 'replace', 'loop'],
+      },
+    };
+    await expect(renderMusicVideo('short-1')).rejects.toMatchObject(expected);
+    expect(h.procs).toHaveLength(0);
+    expect(updateProject).not.toHaveBeenCalled();
+    // The slot is released: a retry re-checks coverage instead of 409ing.
+    await expect(renderMusicVideo('short-1')).rejects.toMatchObject({ code: 'INSUFFICIENT_CLIP_COVERAGE' });
+  });
+
+  it('reads a covered non-looping shot once and holds its last frame over a sub-tolerance gap', async () => {
+    primeScene('fit-1', { startSec: 0, endSec: 2.2, loop: false });
+    await renderMusicVideo('fit-1');
+    const { args } = lastProc();
+    expect(args).not.toContain('-stream_loop');
+    expect(filterGraph(args)).toContain('tpad=stop_mode=clone:stop_duration=0.2,trim=start=0:end=2.2');
+  });
+
+  it('repeats a shot the director explicitly set to loop', async () => {
+    primeScene('loop-1', { startSec: 0, endSec: 20, loop: true });
+    await renderMusicVideo('loop-1');
+    const { args } = lastProc();
+    expect(args).toContain('-stream_loop');
+    expect(filterGraph(args)).not.toContain('tpad');
+  });
 });

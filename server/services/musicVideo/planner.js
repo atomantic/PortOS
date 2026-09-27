@@ -1,5 +1,14 @@
 /**
- * Music Video — autonomous shot planner (#1855).
+ * Music Video — autonomous shot planner (#1855; multi-shot + lyrics #8964).
+ *
+ * #8964: sections are no longer 1:1 with scenes. `shotPlan.js#planShots`
+ * tiles each analyzed section with several bounded shots (pacing ceiling =
+ * the renderer's clip capacity, an opening hook, cuts preferring lyric-line /
+ * phrase boundaries then downbeats then beats), and every shot carries its
+ * section identity plus the lyric lines and phrase intent it spans. The
+ * paragraphs below describe the original one-scene-per-section design; the
+ * energy segmentation and grid snapping they describe still decide the
+ * section edges each shot list is tiled inside.
  *
  * Part of #1760's secondary "autonomous mode" convenience path (the manual
  * director path shipped through Phase 2). Given a project's cached
@@ -31,16 +40,19 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
-import { snapSectionsToGrid } from './audioAnalysis.js';
+import { planShots, resolveClipCapacitySec } from './shotPlan.js';
 import { getProject, addProjectScenes } from './projects.js';
 
-const SECTION_LABEL_MAX = 120;
+const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;
-// A music video plan with more sections than this would blow the LLM prompt
-// budget for marginal value (typical analyses produce single-digit-to-low-
-// dozens of sections) — scenes are still seeded deterministically above the
-// cap, just without the optional first-pass prompt text.
-const MAX_SECTIONS_FOR_PROMPTS = 80;
+// Lyric text per shot quoted into the LLM prompt (the full text persists on
+// the scene); keeps a lyric-dense plan inside the prompt budget.
+const PROMPT_LYRIC_MAX = 240;
+// A plan with more shots than this would blow the LLM prompt budget for
+// marginal value (a 4-minute song at ~5s shots is ~50) — scenes are still
+// seeded deterministically above the cap, just without the optional
+// first-pass prompt text.
+const MAX_SHOTS_FOR_PROMPTS = 120;
 
 // Mirrors musicVideoSceneCreateSchema's startSec/endSec bounds (musicVideoValidation.js)
 // so a section just outside the downstream scene schema's range is dropped
@@ -64,64 +76,72 @@ export function validSections(sections) {
 }
 
 /**
- * Pure: derive one scene-create input per analyzed section, in section
- * order. `sections` must already be filtered via `validSections` — the
- * caller owns that so this stays a straight 1:1 map (no index drift between
- * this and the LLM prompt's section list).
- *
- * Section edges come out of energy-novelty segmentation on half-second window
- * boundaries — they have never touched the beat grid. So before seeding, snap
- * the internal boundaries onto the analysis's downbeats/beats and take
- * `beatAligned` from whether each scene's own edges actually landed there
- * (#4664). Stamping `beatAligned: true` unconditionally, as this used to,
- * told `render.js#beatSnapClips` to honor an arbitrary window edge exactly
- * and suppressed the live snap that would otherwise have corrected it.
- *
- * An edge that cannot snap reports `beatAligned: false`, handing that span back
- * to the live snap. A track with NO grid at all keeps its planned spans honored
- * — there is no live snap to hand them to, and dropping them would render every
- * scene at its raw source-clip length; see `snapSectionsToGrid`.
- *
- * @param {Array<object>} sections
- * @param {{ downbeats?: number[], beats?: number[], toleranceSec?: number, minSceneSec?: number }} [grid]
+ * Pure: turn the shot plan into scene-create inputs, in timeline order. Each
+ * shot is a new, non-looping scene (`loop: false`) — the render refuses to
+ * silently repeat its clip, so a shot longer than its generated clip asks the
+ * director to trim, continue, replace, or explicitly loop it (render.js).
+ * The label keeps the section name and numbers the shots inside it.
  */
-export function planScenesFromSections(sections, grid = {}) {
-  const { sections: snapped, beatAligned } = snapSectionsToGrid(sections, grid);
-  return snapped.map((s, i) => {
-    const label = typeof s.label === 'string' ? s.label.slice(0, SECTION_LABEL_MAX) : '';
+export function sceneInputsFromShots(shots) {
+  return shots.map((shot) => {
+    const base = shot.sectionLabel || `Section ${shot.sectionIndex + 1}`;
+    const label = (shot.shotCount > 1 ? `${base} · ${shot.shotIndex + 1}/${shot.shotCount}` : base).slice(0, SCENE_LABEL_MAX);
     return {
       label,
-      sectionLabel: label || null,
-      startSec: s.startSec,
-      endSec: s.endSec,
-      beatAligned: beatAligned[i],
+      sectionLabel: shot.sectionLabel,
+      sectionIndex: shot.sectionIndex,
+      startSec: shot.startSec,
+      endSec: shot.endSec,
+      beatAligned: shot.beatAligned,
+      loop: false,
+      lyricText: shot.lyricText,
+      visualIntent: shot.visualIntent,
     };
   });
 }
 
-/** Build the LLM prompt asking for a first-pass framePrompt/prompt per section. */
-export function buildScenePlanPrompt(project, sections) {
+const quote = (text, max) => {
+  const flat = String(text).replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/**
+ * Build the LLM prompt asking for a first-pass framePrompt/prompt per SHOT.
+ * Each line carries the shot's musical section (label, energy, position inside
+ * the section), its duration, the lyric lines it spans (or that it is
+ * instrumental — no lyrics are invented), and any phrase-level visual intent.
+ */
+export function buildScenePlanPrompt(project, shots) {
   const concept = project.concept || {};
   const conceptLine = concept.prompt ? `Concept: ${concept.prompt}` : '';
   const styleLine = concept.style ? `Visual style: ${concept.style}` : '';
-  const sectionLines = sections.map((s, i) => {
+  const hasLyrics = shots.some((s) => s.lyricText);
+  const shotLines = shots.map((s, i) => {
     const duration = (s.endSec - s.startSec).toFixed(1);
-    const energy = typeof s.energy === 'number' ? s.energy.toFixed(2) : 'unknown';
-    return `${i}. "${s.label || `Section ${i + 1}`}" — ${duration}s, normalized energy ${energy}`;
+    const energy = typeof s.sectionEnergy === 'number' ? s.sectionEnergy.toFixed(2) : 'unknown';
+    const section = `"${s.sectionLabel || `Section ${s.sectionIndex + 1}`}" shot ${s.shotIndex + 1}/${s.shotCount}`;
+    const parts = [`${i}. ${section} — ${duration}s, energy ${energy}`];
+    parts.push(s.lyricText ? `lyrics: "${quote(s.lyricText, PROMPT_LYRIC_MAX)}"` : 'instrumental');
+    if (s.visualIntent) parts.push(`intent: ${quote(s.visualIntent, PROMPT_LYRIC_MAX)}`);
+    if (s.hook) parts.push('OPENING HOOK');
+    return parts.join('; ');
   }).join('\n');
 
   return `You are directing a music video for "${project.name}".
 ${conceptLine}
 ${styleLine}
 
-The track has been split into these sections (index, label, duration, normalized 0..1 energy — higher energy means a louder/more intense part of the song):
-${sectionLines}
+The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):
+${shotLines}
 
-For EACH section above, propose ONE shot for a generative video model:
+For EACH shot above, propose the shot for a generative video model:
 - "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
-- "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections should read more kinetic; calmer sections more static/lingering.
+- "prompt": the motion for that shot — camera move, subject motion, mood — building on the frame. Higher-energy sections read more kinetic; calmer sections more static/lingering.
+- Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
+- The OPENING HOOK shot must grab attention immediately.
+${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text.\n' : ''}- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
-Respond with ONLY a JSON array, one object per section, in section-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
+Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
 [{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]`;
 }
 
@@ -170,9 +190,9 @@ function parseScenePlanResponse(text, count) {
  * provider disabled, LLM call failed, response didn't parse) so the caller
  * can fall back to plain scenes without the whole plan request failing.
  */
-async function tryProposeScenePrompts(project, sections, { providerId, model } = {}) {
-  if (sections.length > MAX_SECTIONS_FOR_PROMPTS) {
-    return { seeded: null, reason: 'too-many-sections' };
+async function tryProposeScenePrompts(project, shots, { providerId, model } = {}) {
+  if (shots.length > MAX_SHOTS_FOR_PROMPTS) {
+    return { seeded: null, reason: 'too-many-shots' };
   }
 
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model }).catch((err) => {
@@ -187,7 +207,7 @@ async function tryProposeScenePrompts(project, sections, { providerId, model } =
     ({ text } = await runPromptThroughProvider({
       provider,
       model: selectedModel,
-      prompt: buildScenePlanPrompt(project, sections),
+      prompt: buildScenePlanPrompt(project, shots),
       source: 'music-video-plan',
     }));
   } catch (err) {
@@ -195,7 +215,7 @@ async function tryProposeScenePrompts(project, sections, { providerId, model } =
     return { seeded: null, reason: 'llm-failed' };
   }
 
-  const seeded = parseScenePlanResponse(text, sections.length);
+  const seeded = parseScenePlanResponse(text, shots.length);
   if (!seeded) {
     console.warn(`⚠️ Music Video plan: unparsable scene-prompt response for ${project.id}`);
     return { seeded: null, reason: 'unparsable-response' };
@@ -213,7 +233,7 @@ async function tryProposeScenePrompts(project, sections, { providerId, model } =
  * @param {string} [options.providerId] — pin a specific provider instead of
  *   the active one.
  * @param {string} [options.model] — model override for the prompt-seeding call.
- * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null }>}
+ * @returns {Promise<{ project: object, scenesAdded: number, promptsSeeded: boolean, promptsSkippedReason: string|null, pacing: object }>}
  */
 export async function planProject(id, { seedPrompts = true, providerId, model } = {}) {
   const project = await getProject(id);
@@ -227,18 +247,22 @@ export async function planProject(id, { seedPrompts = true, providerId, model } 
     );
   }
 
-  // `buildScenePlanPrompt` below keeps listing the PRE-snap `sections`:
-  // indices still agree 1:1 with `sceneInputs`, and a sub-beat difference in a
-  // section's reported duration does not change the creative direction asked for.
-  const sceneInputs = planScenesFromSections(sections, {
+  // One shot list drives both the seeded scenes and the prompt, so prompt
+  // indices agree 1:1 with `sceneInputs`.
+  const { shots, pacing } = planShots(sections, {
     downbeats: project.audioAnalysis?.downbeats,
     beats: project.audioAnalysis?.beats,
+    lyricCues: project.lyricCues,
+    phrases: project.phrases,
+    pacing: project.pacing,
+    clipCapacitySec: resolveClipCapacitySec(project.videoSettings),
   });
+  const sceneInputs = sceneInputsFromShots(shots);
 
   let promptsSeeded = false;
   let promptsSkippedReason = seedPrompts ? null : 'not-requested';
   if (seedPrompts) {
-    const { seeded, reason } = await tryProposeScenePrompts(project, sections, { providerId, model });
+    const { seeded, reason } = await tryProposeScenePrompts(project, shots, { providerId, model });
     if (seeded) {
       promptsSeeded = true;
       for (const [idx, fields] of seeded) {
@@ -260,5 +284,5 @@ export async function planProject(id, { seedPrompts = true, providerId, model } 
   // second getProject round trip.
   const { project: updated, scenes } = await addProjectScenes(id, sceneInputs);
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
-  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason };
+  return { project: updated, scenesAdded: scenes.length, promptsSeeded, promptsSkippedReason, pacing };
 }

@@ -64,7 +64,7 @@ export default function ProjectToolbar({
           </>
         )}
         <button onClick={onPlan} disabled={busy.planning || !project.audioAnalysis}
-          title={!project.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}
+          title={!project.audioAnalysis ? 'Analyze the track first' : 'AI-plan bounded shots per song section, cut on timed lyrics, phrases and beats'}
           className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
           <Wand2 size={15} /> {busy.planning ? 'Planning…' : 'AI Plan'}
         </button>

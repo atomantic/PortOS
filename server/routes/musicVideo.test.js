@@ -168,6 +168,49 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).not.toHaveBeenCalled();
   });
 
+  it('PATCH /:id rejects an out-of-range pacing ceiling or an oversized lyric line', async () => {
+    const pacing = await request(app).patch('/api/music-video/mv-1').send({ pacing: { maxShotSec: 0 } });
+    expect(pacing.status).toBe(400);
+    const cue = await request(app).patch('/api/music-video/mv-1')
+      .send({ lyricCues: [{ text: 'x'.repeat(501), startSec: 1 }] });
+    expect(cue.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+  });
+
+  describe('POST /:id/lyrics/import (#8964)', () => {
+    it('replaces the cue list with the parsed LRC and reports the detected format', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'lc-old', text: 'old', startSec: 1, endSec: 2 }] });
+      const r = await request(app).post('/api/music-video/mv-1/lyrics/import')
+        .send({ text: '[00:01.00]one\n[00:03.00]two' });
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ imported: 2, format: 'lrc' });
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
+        lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
+      });
+    });
+
+    it('appends plain lines after the existing cues', async () => {
+      const existing = { id: 'lc-old', text: 'old', startSec: 1, endSec: 2 };
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [existing] });
+      const r = await request(app).post('/api/music-video/mv-1/lyrics/import')
+        .send({ text: 'new line', mode: 'append' });
+      expect(r.status).toBe(200);
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
+        lyricCues: [existing, { text: 'new line', startSec: null, endSec: null }],
+      });
+    });
+
+    it('422s when the text holds no lyric lines, and 404s for a missing project', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [] });
+      const empty = await request(app).post('/api/music-video/mv-1/lyrics/import').send({ text: '[Chorus]\n\n' });
+      expect(empty.status).toBe(422);
+      svc.getProject.mockResolvedValue(null);
+      const missing = await request(app).post('/api/music-video/mv-x/lyrics/import').send({ text: 'a' });
+      expect(missing.status).toBe(404);
+      expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
   it('DELETE /:id soft-deletes', async () => {
     const r = await request(app).delete('/api/music-video/mv-1');
     expect(r.status).toBe(200);
