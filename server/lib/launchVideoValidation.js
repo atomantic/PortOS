@@ -34,6 +34,14 @@ export function validateLaunchVideoAssets(assets, options, compositionMusic) {
         || bytes.readUInt16LE(32) !== bytes.readUInt16LE(22) * 2
         || bytes.readUInt32LE(28) !== bytes.readUInt32LE(24) * bytes.readUInt16LE(32)
         || (bytes.length - 44) % bytes.readUInt16LE(32)) fail('Invalid canonical PCM soundtrack.wav');
+      const duration = (bytes.length - 44) / bytes.readUInt32LE(28);
+      if (duration < 0.25 || duration > 120) fail('soundtrack.wav must contain 0.25–120 seconds of audio');
+      let peak = 0;
+      for (let offset = 44; offset < bytes.length; offset += 2) {
+        peak = Math.max(peak, Math.abs(bytes.readInt16LE(offset)));
+        if (peak >= 32767) fail('soundtrack.wav samples must not clip');
+      }
+      if (peak < 32) fail('soundtrack.wav must contain audible samples');
       continue;
     }
     if (!TEXT_TYPES.has(type)) fail(`Unsupported launch-video asset: ${filename}`);

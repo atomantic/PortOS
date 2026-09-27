@@ -93,7 +93,8 @@ Agent composition saves the original instrumental score/source and
 `composition/soundtrack.wav`, then submits `compositionMusic: "soundtrack.wav"`
 instead of `musicTrack`. The file must have a canonical 44-byte RIFF/WAVE header,
 a 16-byte PCM fmt chunk, mono or stereo 16-bit samples at 44100 or 48000 Hz, and
-one data chunk without metadata. The renderer muxes a private temporary copy of
+one data chunk without metadata. Admission requires 0.25–120 seconds of audio,
+a peak amplitude of at least 32 (16-bit scale), and no full-scale clipped samples. The renderer muxes a private temporary copy of
 the validated snapshot, then removes it. Browser audio playback alone is not
 captured. No Music-library write or music model is needed.
 
