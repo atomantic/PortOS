@@ -182,6 +182,12 @@ describe('user-triggered launch videos', () => {
     expect((await request(app).get('/api/apps/example/launch-videos')).body.videos.map(({ id, runId, format }) => ({ id, runId, format }))).toEqual([
       { id: 'run-a-vertical', runId: 'run-a', format: 'vertical' }, { id: 'run-a-square', runId: 'run-a', format: 'square' },
     ]);
+    // The limit never splits a run: a take at the boundary keeps every format.
+    loadHistory.mockResolvedValue(Array.from({ length: 52 }, (_, n) => ({ id: `video-${n}`, launchVideo: { appId: 'example', runId: n < 48 ? `run-${n}` : 'boundary-run' } })));
+    const bounded = (await request(app).get('/api/apps/example/launch-videos')).body.videos;
+    expect(bounded).toHaveLength(52);
+    loadHistory.mockResolvedValue(Array.from({ length: 53 }, (_, n) => ({ id: `video-${n}`, launchVideo: { appId: 'example', runId: n < 50 ? `run-${n}` : 'next-run' } })));
+    expect((await request(app).get('/api/apps/example/launch-videos')).body.videos).toHaveLength(50);
     loadHistory.mockRejectedValue(new Error('Storage unavailable'));
     expect((await request(app).get('/api/apps/example/launch-videos')).status).toBe(500);
   });
