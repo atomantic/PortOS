@@ -26,12 +26,12 @@ function outcome(result, label, successText) {
 }
 
 /** One per-account cycle joins manual HTTP and socket terminal notifications. */
-export function useAccountSyncStatus({ eventPrefix, label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion }) {
+export function useAccountSyncStatus({ eventPrefix, label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion, getAccountName }) {
   const [syncing, setSyncing] = useState({});
   const mounted = useMounted();
   const cycles = useRef(new Map());
   const callbacks = useRef({});
-  callbacks.current = { label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion };
+  callbacks.current = { label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion, getAccountName };
 
   const begin = useCallback((accountId, manual = false) => {
     const cycle = { awaitingStart: manual, settled: false };
@@ -58,7 +58,8 @@ export function useAccountSyncStatus({ eventPrefix, label, successText, onRefres
       setSyncing(prev => ({ ...prev, [accountId]: terminal.auth ? 'auth-required' : null }));
       current.onTerminal?.(accountId);
     }
-    toast[terminal.type](terminal.text);
+    const accountName = current.getAccountName?.(accountId);
+    toast[terminal.type](accountName ? `${accountName}: ${terminal.text}` : terminal.text);
     if (terminal.refresh) current.onRefresh?.();
   }, [mounted]);
 
