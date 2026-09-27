@@ -13,18 +13,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import sys
-import time
-import wave
 from pathlib import Path
 
 
 def probe_runtime(models_dir: Path | None = None) -> dict:
     """Probe hardware, PyTorch, Transformers, and cached model weights."""
     result = {
-        "ok": True,
+        "ok": False,
+        "error": "Qwen3-TTS model operations are unavailable until a real adapter is implemented",
         "torch_installed": False,
         "transformers_installed": False,
         "device": "cpu",
@@ -69,7 +66,7 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
             safe_name = model_id.replace("/", "--")
             model_path = models_dir / safe_name
             result["models"][model_id] = {
-                "downloaded": model_path.exists() and any(model_path.iterdir()),
+                "downloaded": False,
                 "path": str(model_path) if model_path.exists() else None,
             }
     else:
@@ -82,108 +79,22 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
     return result
 
 
-def generate_mock_speech_wav(output_file: Path, text: str, sample_rate: int = 24000, rate: float = 1.0) -> float:
-    """Generate a clean synthetic sine-modulated WAV for test/fallback/readiness execution."""
-    words = max(1, len(text.split()))
-    duration_s = max(0.5, (words * 0.25) / max(0.25, min(4.0, rate)))
-    total_samples = int(sample_rate * duration_s)
-
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(output_file), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        
-        base_freq = 180.0
-        frames = bytearray()
-        for i in range(total_samples):
-            t = float(i) / sample_rate
-            env = min(1.0, t * 20.0) * min(1.0, (duration_s - t) * 20.0)
-            if env < 0:
-                env = 0.0
-            sample_val = (
-                0.6 * math.sin(2.0 * math.pi * base_freq * t) +
-                0.3 * math.sin(2.0 * math.pi * (base_freq * 2) * t) +
-                0.1 * math.sin(2.0 * math.pi * (base_freq * 3) * t)
-            )
-            syllable_mod = 0.7 + 0.3 * math.sin(2.0 * math.pi * 4.0 * t)
-            val = int(sample_val * env * syllable_mod * 16000.0)
-            val = max(-32767, min(32767, val))
-            frames.extend(val.to_bytes(2, byteorder="little", signed=True))
-        wav.writeframes(frames)
-    return duration_s
+def unavailable(operation: str) -> int:
+    """Refuse unsupported operations without producing audio or checkpoints."""
+    print(json.dumps({
+        "ok": False,
+        "code": "QWEN3_RUNTIME_UNAVAILABLE",
+        "error": f"Qwen3-TTS {operation} is unavailable: no real model adapter is implemented",
+    }), file=sys.stderr)
+    return 1
 
 
 def run_synthesis(args: argparse.Namespace) -> int:
-    t0 = time.time()
-    out_path = Path(args.output_wav).resolve()
-    text = args.text or "Qwen3-TTS test audio."
-    rate = args.rate if args.rate is not None else 1.0
-
-    first_audio_ms = 45.0
-    duration_s = generate_mock_speech_wav(out_path, text, sample_rate=24000, rate=rate)
-    total_latency_ms = round((time.time() - t0) * 1000, 2)
-
-    meta = {
-        "ok": True,
-        "output_wav": str(out_path),
-        "duration_s": duration_s,
-        "latency_ms": total_latency_ms,
-        "first_audio_ms": first_audio_ms,
-        "rate": rate,
-        "mode": args.mode,
-        "seed": args.seed,
-        "instructions": args.instructions,
-        "model_id": args.model_id or "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-    }
-    print(json.dumps(meta))
-    return 0
+    return unavailable(args.mode)
 
 
 def run_fine_tuning(args: argparse.Namespace) -> int:
-    """Execute fine-tuning loop, emitting checkpoints and progress logs."""
-    dataset_dir = Path(args.dataset_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    epochs = args.epochs or 5
-    checkpoint_steps = args.checkpoint_interval or 50
-    total_steps = epochs * 50
-
-    print(json.dumps({"stage": "init", "total_steps": total_steps, "dataset": str(dataset_dir)}), flush=True)
-
-    for step in range(1, total_steps + 1):
-        time.sleep(0.001)
-        loss = round(2.5 * math.exp(-step / 40.0) + 0.15 * math.sin(step), 4)
-
-        if step % 10 == 0 or step == total_steps:
-            print(json.dumps({
-                "stage": "training",
-                "step": step,
-                "total_steps": total_steps,
-                "loss": loss,
-                "progress": round((step / total_steps) * 100, 1),
-            }), flush=True)
-
-        if step % checkpoint_steps == 0 or step == total_steps:
-            ckpt_name = f"checkpoint-{step}.safetensors"
-            ckpt_path = output_dir / ckpt_name
-            ckpt_path.write_text(f"portos_voice_checkpoint_step_{step}\n")
-            
-            sample_name = f"sample-step-{step}.wav"
-            sample_path = output_dir / sample_name
-            generate_mock_speech_wav(sample_path, "This is an evaluation sample from checkpoint step.", rate=1.0)
-            
-            print(json.dumps({
-                "stage": "checkpoint",
-                "step": step,
-                "checkpoint": ckpt_name,
-                "checkpoint_path": str(ckpt_path),
-                "sample_wav": str(sample_path),
-                "loss": loss,
-            }), flush=True)
-
-    print(json.dumps({"stage": "completed", "total_steps": total_steps, "output_dir": str(output_dir)}), flush=True)
-    return 0
+    return unavailable("fine-tuning")
 
 
 def main() -> int:

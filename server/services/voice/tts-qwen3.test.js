@@ -20,26 +20,9 @@ describe('tts-qwen3', () => {
     expect(voices.every((preset) => preset.id === `qwen3-tts:${preset.voice}`)).toBe(true);
   });
 
-  it.skipIf(!testPython)('synthesizes speech with voice design and rate controls', async () => {
-    const result = await synthesizeQwen3('This is a test of voice design synthesis.', {
-      mode: 'design',
-      voice: 'warm-narrator',
-      instructions: 'warm low alto',
-      seed: 42,
-      rate: 1.1,
-    });
-
-    expect(result).toMatchObject({
-      engine: 'qwen3-tts',
-      effectiveControls: {
-        rate: 1.1,
-        seed: 42,
-        instructions: 'warm low alto',
-        mode: 'design',
-      },
-    });
-    expect(result.wav).toBeInstanceOf(Buffer);
-    expect(result.wav.length).toBeGreaterThan(44); // standard WAV header + data
-    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+  it.skipIf(!testPython)('refuses synthesis instead of returning a synthetic tone', async () => {
+    await expect(synthesizeQwen3('An invented example sentence.', {
+      mode: 'design', instructions: 'warm low alto',
+    })).rejects.toThrow(/unavailable/);
   });
 });

@@ -382,7 +382,7 @@ describe('fineTuning', () => {
 // Python runner through the real spawn, so a rename in either the runner's
 // stdout contract or the arguments it is handed fails here.
 describe.skipIf(!resolveTestPython())('fineTuning runner boundary', () => {
-  it('drives the real Qwen3 runner from spawn to a terminal sidecar', async () => {
+  it('records unsupported training as failed without fabricated checkpoints', async () => {
     queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
     await seedSourceAudio();
     // Windows ships a `python` Store-alias stub that resolves but cannot run, so
@@ -401,19 +401,10 @@ describe.skipIf(!resolveTestPython())('fineTuning runner boundary', () => {
     // vitest budget so a genuinely stuck run reports the status it observed
     // instead of producing a bare test timeout.
     const record = await drainJobRecord(jobId, { timeout: Math.floor(PY_TEST_TIMEOUT_MS * 0.75) });
-    expect(record.status).toBe('completed');
-    expect(record.checkpoints.length).toBeGreaterThan(0);
-    // Same projection the scripted frames assert, mapped off the runner's own
-    // snake_case stdout keys.
-    expect(record.checkpoints[0]).toMatchObject({
-      id: expect.stringMatching(/^checkpoint-\d+\.safetensors$/),
-      step: expect.any(Number),
-      checkpointPath: expect.stringContaining('checkpoint-'),
-      sampleWav: expect.stringContaining('sample-step-'),
-    });
-
+    expect(record.status).toBe('failed');
+    expect(record.checkpoints).toEqual([]);
     const status = await getFineTuningJobStatus(jobId, PROFILE.id);
-    expect(status.status).toBe('completed');
-    expect(status.progress).toBe(100);
+    expect(status.status).toBe('failed');
+    expect(status.progress).not.toBe(100);
   }, PY_TEST_TIMEOUT_MS);
 });

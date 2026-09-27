@@ -85,7 +85,7 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
   const t0 = performance.now();
 
   try {
-    const { stdout, stderr } = await new Promise((resolve, reject) => {
+    await new Promise((resolve, reject) => {
       const child = spawn(python, args, safeChildProcessOptions({ timeout: 60000, signal }));
       let out = '';
       let err = '';
@@ -100,16 +100,10 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
       child.on('error', reject);
     });
 
-    const elapsedMs = Math.round(performance.now() - t0);
-    let parsedMeta = {};
-    try {
-      parsedMeta = JSON.parse(stdout.trim());
-    } catch {
-      // Ignored if output wasn't pure JSON
-    }
-
     const wavBuffer = await readFile(tempOut);
-    const firstAudioMs = parsedMeta.first_audio_ms || Math.min(elapsedMs, 120);
+    // This adapter buffers the whole WAV; audio cannot be played before this read.
+    const elapsedMs = Math.round(performance.now() - t0);
+    const firstAudioMs = elapsedMs;
 
     return {
       wav: wavBuffer,
