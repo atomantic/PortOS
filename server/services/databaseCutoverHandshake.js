@@ -32,7 +32,14 @@ export async function awaitDatabaseCutoverRelease({ releaseTimeoutMs = RELEASE_T
   await verifyDatabaseMaintenanceTarget(operation.id).catch(() => {
     throw refused('this process could not prove the recorded target backend');
   });
-  journal.recordTargetProof(operation.id, process.pid);
+  // Bind the proof to this process's start time so a reused pid cannot inherit it.
+  let startedAt = null;
+  if (process.platform !== 'win32') {
+    const { snapshotProcesses } = await import('../lib/detachedSpawn.js');
+    startedAt = (await snapshotProcesses().catch(() => [])).find(row => row.pid === process.pid)?.startedAt;
+    if (!Number.isSafeInteger(startedAt)) throw refused('this process\'s start time is unknown');
+  }
+  journal.recordTargetProof(operation.id, process.pid, startedAt);
   console.log(`🗄️ Database cutover target verified by pid ${process.pid}; waiting for admission release`);
 
   const deadline = Date.now() + releaseTimeoutMs;

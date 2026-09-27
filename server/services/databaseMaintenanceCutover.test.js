@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
 import { installCutoverStubs, restartedServerEndpoint } from '../test/fixtures/databaseCutoverStubs.js';
@@ -211,6 +212,27 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     expect(journal.read()).toBeNull();
     // Repeated recovery of a released operation has nothing to reopen.
     expect(() => journal.prepareRecovery(operation.id)).toThrow();
+  }, 60_000);
+
+  it('never accepts a proof written by an earlier process whose pid was reused', async () => {
+    begin();
+    cutover.setHealth('unhealthy');
+    await expect(run()).rejects.toThrow(/did not prove/);
+    // PM2 now reports a process that never verified anything, holding a pid for
+    // which an earlier (verified) process left a proof with its own start time.
+    const impostor = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+    impostor.unref();
+    try {
+      const server = rows.find(row => row.name === 'portos-server');
+      Object.assign(server, { pid: impostor.pid, status: 'online', surrogate: true });
+      journal.recordTargetProof(operation.id, impostor.pid, Date.now() - 3_600_000);
+      successor();
+      await expect(run()).rejects.toThrow(/did not prove the target backend/);
+      expect(journal.read().stage).toBe('verifying');
+      expect(() => journal.assertAdmission()).toThrow();
+    } finally {
+      impostor.kill('SIGKILL');
+    }
   }, 60_000);
 
   it('refuses to release onto a saved configuration edited away from the target', async () => {

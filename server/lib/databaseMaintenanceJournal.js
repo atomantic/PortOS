@@ -56,10 +56,13 @@ const transferImportSchema = z.object({
 }).strict();
 // A restarted ordinary server proved ITS OWN pool reaches the recorded target.
 // Evidence, not authority: the coordinator accepts it only for the PM2 pid it
-// reads back itself, and every booting process still proves its own pool.
+// reads back itself AND that process's start time (a reused pid cannot inherit
+// an earlier process's proof), and every booting process proves its own pool.
+// startedAt is null only on Windows, which has no process-table start time.
 const targetProofSchema = z.object({
   id: z.string().uuid(),
   pid: z.number().int().positive(),
+  startedAt: z.number().int().nullable(),
   target: databaseMaintenanceEndpointSchema,
 }).strict();
 const recoveryIntentSchema = z.object({
@@ -605,11 +608,11 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
 
   // Published by a booting ordinary server AFTER its own pool passed the
   // read-only target verification. Only verifying/verified may carry one.
-  const recordTargetProof = (id, pid) => {
+  const recordTargetProof = (id, pid, startedAt) => {
     assertNotRealDataWrite(activeDir, 'database maintenance target proof');
     const current = read();
     if (!current || current.id !== id || !['verifying', 'verified'].includes(current.stage)) throw databaseMaintenanceError();
-    publishImmutable(targetProofPath(pid), targetProofSchema.parse({ id, pid, target: current.target }));
+    publishImmutable(targetProofPath(pid), targetProofSchema.parse({ id, pid, startedAt, target: current.target }));
     return readTargetProof(id, pid);
   };
 

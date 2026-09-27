@@ -10,6 +10,7 @@ import { isDisposableRoot } from '../lib/dataRoot.js';
 import { runDatabaseTransfer } from './databaseMaintenanceTransfer.js';
 import { readRecordedProducers } from './databaseMaintenanceProducers.js';
 import { restartMaintenanceProducer } from './pm2.js';
+import { snapshotProcesses } from '../lib/detachedSpawn.js';
 
 const TRANSFER_STAGES = ['accepted', 'quiescing', 'exporting', 'importing'];
 const PROOF_TIMEOUT_MS = 180_000;
@@ -110,11 +111,20 @@ async function commitSavedMode(operation) {
   await assertSavedTarget(operation);
 }
 
+// A proof counts only for the process that wrote it: same pid AND the start
+// time the process table reports for that pid now.
+async function proofMatchesProcess(proof, pid) {
+  if (!proof) return false;
+  if (process.platform === 'win32') return proof.startedAt === null;
+  const row = (await snapshotProcesses().catch(() => [])).find(value => value.pid === pid);
+  return Number.isSafeInteger(proof.startedAt) && row?.startedAt === proof.startedAt;
+}
+
 /**
  * Restart the recorded server with the committed configuration and wait for
  * THAT restarted process — the one PM2 reports now — to publish proof that its
  * own pool reached the recorded target. PM2 `online`, the saved mode, or a
- * proof from an earlier pid is not success. The server is restarted at most
+ * proof from an earlier process (even one with a reused pid) is not success. The server is restarted at most
  * once per attempt; a crash-looping or wrong-pool server times out fenced.
  */
 async function awaitRestartedTarget(journal, operation, token, saved, { proofTimeoutMs = PROOF_TIMEOUT_MS, pollMs = POLL_MS }) {
@@ -124,7 +134,8 @@ async function awaitRestartedTarget(journal, operation, token, saved, { proofTim
   while (true) {
     journal.assertEnteredCoordinatorWorker(id, token);
     const server = (await readRecordedProducers(saved)).find(row => row.name === 'portos-server');
-    if (server.status === 'online' && server.pid > 0 && journal.readTargetProof(id, server.pid)) return server.pid;
+    if (server.status === 'online' && server.pid > 0
+      && await proofMatchesProcess(journal.readTargetProof(id, server.pid), server.pid)) return server.pid;
     if (server.status !== 'online' && !restarted) {
       journal.assertEnteredCoordinatorWorker(id, token);
       const result = await restartMaintenanceProducer('portos-server', recordedEndpointEnv(operation)).catch(() => null);
