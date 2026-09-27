@@ -1,0 +1,541 @@
+{
+  "date": "2026-09-27",
+  "hardware": {
+    "chip": "Apple M5 Max",
+    "unified_memory_gib": 128
+  },
+  "source_sha256": "3ad8536953318e5640992eb4158bb5f810b33c733445faa470488cc1a03faed4",
+  "runtime_revision": "fcd9e9b79a1d6018d91ac477c0968de1fa067e49",
+  "transformer_revision": "3ac52081470b0488921c3ec3ba84a39097bf2361",
+  "reference_checkpoint_revision": "6818f6c32d12b210915e44ad56a4228c2608f160",
+  "frames": 124,
+  "fps": 24,
+  "seed": 42,
+  "sigma_entries": 9,
+  "cases": [
+    {
+      "case": {
+        "id": "small-motion",
+        "width": 576,
+        "height": 1024,
+        "prompt": "The camera slowly moves forward. Objects remain stationary."
+      },
+      "status": "rendered",
+      "continuity": "not_assessed",
+      "timings": {
+        "setup_seconds": 30.05009924992919,
+        "decode_video_seconds": 100.01749629084952,
+        "decode_audio_seconds": 4.226935749873519,
+        "mux_seconds": 1.22965395799838,
+        "inference_and_conditioning_seconds": 900.8566145012155,
+        "total_seconds": 1036.3821530418936
+      },
+      "vision_conditioning": {
+        "embedding_shape": [
+          1,
+          594,
+          5120
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 578
+        }
+      },
+      "vision_processor": {
+        "class": "Qwen2VLImageProcessorPil",
+        "input_sizes": [
+          [
+            576,
+            1024
+          ]
+        ]
+      },
+      "vae_conditioning_shape": [
+        576,
+        96
+      ],
+      "packed_conditioning": {
+        "video_shape": [
+          1,
+          21888,
+          96
+        ],
+        "audio_shape": [
+          1,
+          414,
+          32
+        ],
+        "position_shape": [
+          22896,
+          3
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 22466,
+          "2": 414
+        },
+        "video_indices": 21888,
+        "audio_indices": 414,
+        "text_indices": 594
+      },
+      "assessment": {
+        "assessment": "synthetic scene preserved in all five sampled frames",
+        "sampled_frames": [
+          0,
+          1,
+          12,
+          60,
+          123
+        ],
+        "last_sample_seconds": 5.125,
+        "scene_score_frame_count": 124,
+        "max_adjacent_scene_score": 0.002499,
+        "scope": "one synthetic flat-color source, one seed, motion-only prompt; not a general guarantee",
+        "timing_note": "CPU-only parity checks overlapped this render; no competing GPU work detected"
+      }
+    },
+    {
+      "case": {
+        "id": "native-motion",
+        "width": 768,
+        "height": 1344,
+        "prompt": "The camera slowly moves forward. Objects remain stationary."
+      },
+      "status": "rendered",
+      "continuity": "not_assessed",
+      "timings": {
+        "setup_seconds": 23.242611082969233,
+        "decode_video_seconds": 136.38077312498353,
+        "decode_audio_seconds": 1.9117730830330402,
+        "mux_seconds": 4.415671749971807,
+        "inference_and_conditioning_seconds": 1800.1286432088818,
+        "total_seconds": 1966.0811641248874
+      },
+      "vision_conditioning": {
+        "embedding_shape": [
+          1,
+          1026,
+          5120
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 1010
+        }
+      },
+      "vision_processor": {
+        "class": "Qwen2VLImageProcessorPil",
+        "input_sizes": [
+          [
+            768,
+            1344
+          ]
+        ]
+      },
+      "vae_conditioning_shape": [
+        1008,
+        96
+      ],
+      "packed_conditioning": {
+        "video_shape": [
+          1,
+          38304,
+          96
+        ],
+        "audio_shape": [
+          1,
+          414,
+          32
+        ],
+        "position_shape": [
+          39744,
+          3
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 39314,
+          "2": 414
+        },
+        "video_indices": 38304,
+        "audio_indices": 414,
+        "text_indices": 1026
+      },
+      "assessment": {
+        "assessment": "synthetic scene preserved in all five sampled frames",
+        "sampled_frames": [
+          0,
+          1,
+          12,
+          60,
+          123
+        ],
+        "last_sample_seconds": 5.125,
+        "scene_score_frame_count": 124,
+        "max_adjacent_scene_score": 0.001892,
+        "scope": "one synthetic flat-color source, one seed, motion-only prompt; not a general guarantee",
+        "timing_note": "No competing GPU work; brief CPU-only rotary-index comparison overlapped this run"
+      }
+    },
+    {
+      "case": {
+        "id": "native-conflict",
+        "width": 768,
+        "height": 1344,
+        "prompt": "The camera slowly moves forward through a snowy pine forest at night."
+      },
+      "status": "rendered",
+      "continuity": "not_assessed",
+      "timings": {
+        "setup_seconds": 25.22124429210089,
+        "decode_video_seconds": 135.06349049997516,
+        "decode_audio_seconds": 1.4691117501351982,
+        "mux_seconds": 1.8167351251468062,
+        "inference_and_conditioning_seconds": 1936.5200263746083,
+        "total_seconds": 2100.092080875067
+      },
+      "vision_conditioning": {
+        "embedding_shape": [
+          1,
+          1029,
+          5120
+        ],
+        "token_tag_counts": {
+          "1": 19,
+          "0": 1010
+        }
+      },
+      "vision_processor": {
+        "class": "Qwen2VLImageProcessorPil",
+        "input_sizes": [
+          [
+            768,
+            1344
+          ]
+        ]
+      },
+      "vae_conditioning_shape": [
+        1008,
+        96
+      ],
+      "packed_conditioning": {
+        "video_shape": [
+          1,
+          38304,
+          96
+        ],
+        "audio_shape": [
+          1,
+          414,
+          32
+        ],
+        "position_shape": [
+          39747,
+          3
+        ],
+        "token_tag_counts": {
+          "1": 19,
+          "0": 39314,
+          "2": 414
+        },
+        "video_indices": 38304,
+        "audio_indices": 414,
+        "text_indices": 1029
+      },
+      "assessment": {
+        "assessment": "Source colored scene remains at sampled frame 12 (0.5s); snowy forest replaces it by sampled frame 60 (2.5s) and remains at frame 123. Onset between samples not established.",
+        "sampled_frames": [
+          0,
+          1,
+          12,
+          60,
+          123
+        ],
+        "scene_score_frames": 124,
+        "maximum_adjacent_scene_score": 0.027388,
+        "limitations": "One synthetic source and seed; does not establish original private-image root cause. Scene scores are not semantic continuity metrics."
+      }
+    },
+    {
+      "case": {
+        "id": "before-geometry",
+        "width": 576,
+        "height": 1024,
+        "prompt": "The camera slowly moves forward. Objects remain stationary."
+      },
+      "status": "rendered",
+      "continuity": "not_assessed",
+      "timings": {
+        "setup_seconds": 21.9472612910904,
+        "decode_video_seconds": 87.34187975013629,
+        "decode_audio_seconds": 3.517863875022158,
+        "mux_seconds": 2.2113041249103844,
+        "inference_and_conditioning_seconds": 803.5369179998524,
+        "total_seconds": 918.5559624580201
+      },
+      "vision_conditioning": {
+        "embedding_shape": [
+          1,
+          1026,
+          5120
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 1010
+        }
+      },
+      "vision_processor": {
+        "class": "Qwen2VLImageProcessorPil",
+        "input_sizes": [
+          [
+            768,
+            1344
+          ]
+        ]
+      },
+      "vae_conditioning_shape": [
+        576,
+        96
+      ],
+      "packed_conditioning": {
+        "video_shape": [
+          1,
+          21888,
+          96
+        ],
+        "audio_shape": [
+          1,
+          414,
+          32
+        ],
+        "position_shape": [
+          23328,
+          3
+        ],
+        "token_tag_counts": {
+          "1": 16,
+          "0": 22898,
+          "2": 414
+        },
+        "video_indices": 21888,
+        "audio_indices": 414,
+        "text_indices": 1026
+      },
+      "assessment": {
+        "assessment": "Synthetic colored scene remains in all five sampled frames with gradual motion; no environment replacement observed.",
+        "sampled_frames": [
+          0,
+          1,
+          12,
+          60,
+          123
+        ],
+        "limitations": "One source and seed; does not establish cause of original report or prove correction unnecessary."
+      }
+    }
+  ],
+  "numerical_comparisons": {
+    "vision": [
+      {
+        "output": "0",
+        "max_abs": 0.0014982223510742188,
+        "relative_rmse": 2.023839442699682e-05
+      },
+      {
+        "output": "1",
+        "max_abs": 9.250640869140625e-05,
+        "relative_rmse": 3.238409817640786e-06
+      },
+      {
+        "output": "2",
+        "max_abs": 0.00018334388732910156,
+        "relative_rmse": 8.40186567074852e-06
+      },
+      {
+        "output": "3",
+        "max_abs": 0.0001586228609085083,
+        "relative_rmse": 1.3319862773641944e-05
+      }
+    ],
+    "vae": [
+      {
+        "component": "moments",
+        "max_abs": 0.005196571350097656,
+        "relative_rmse": 2.1912352167419158e-05
+      },
+      {
+        "component": "mean",
+        "max_abs": 0.005196571350097656,
+        "relative_rmse": 6.197461334522814e-05
+      },
+      {
+        "component": "logvar",
+        "max_abs": 0.0007638931274414062,
+        "relative_rmse": 9.48718297877349e-06
+      }
+    ],
+    "posterior": {
+      "noise": "shared numpy seed 42, not a cross-runtime RNG equivalence claim",
+      "max_abs": 0.0030596256256103516,
+      "relative_rmse": 0.00012927301577292383
+    },
+    "rope": [
+      {
+        "canvas": [
+          576,
+          1024
+        ],
+        "tokens": 594,
+        "position_ids_equal": true,
+        "deltas_equal": true
+      },
+      {
+        "canvas": [
+          768,
+          1344
+        ],
+        "tokens": 1026,
+        "position_ids_equal": true,
+        "deltas_equal": true
+      }
+    ],
+    "metal": {
+      "metal_float32": [
+        {
+          "max_abs": 0.3889617919921875,
+          "relative_rms": 0.0069098739116641465
+        },
+        {
+          "max_abs": 0.04294848442077637,
+          "relative_rms": 0.002098090206525768
+        },
+        {
+          "max_abs": 0.08061069250106812,
+          "relative_rms": 0.0032742631563013893
+        },
+        {
+          "max_abs": 0.053698569536209106,
+          "relative_rms": 0.004997893632723004
+        }
+      ],
+      "metal_bfloat16": [
+        {
+          "max_abs": 7.328125,
+          "relative_rms": 0.13479805751930615
+        },
+        {
+          "max_abs": 0.21875,
+          "relative_rms": 0.02156601681498212
+        },
+        {
+          "max_abs": 1.56640625,
+          "relative_rms": 0.05828240321293385
+        },
+        {
+          "max_abs": 0.84375,
+          "relative_rms": 0.08963928003822243
+        }
+      ],
+      "mlx_precision": [
+        {
+          "max_abs": 8.266490936279297,
+          "relative_rms": 0.15616737397070132
+        },
+        {
+          "max_abs": 0.29004907608032227,
+          "relative_rms": 0.022790525684840923
+        },
+        {
+          "max_abs": 1.357074350118637,
+          "relative_rms": 0.06249168497483737
+        },
+        {
+          "max_abs": 0.8177890777587891,
+          "relative_rms": 0.09388500972561217
+        }
+      ],
+      "vae_metal_float32": {
+        "max_abs": 9.131431579589844e-05,
+        "relative_rms": 6.772480071158134e-07
+      },
+      "torch_precision": [
+        {
+          "max_abs": 6.10191535949707,
+          "relative_rms": 0.12328615186624371
+        },
+        {
+          "max_abs": 0.22001886367797852,
+          "relative_rms": 0.017396198896349118
+        },
+        {
+          "max_abs": 1.1477556228637695,
+          "relative_rms": 0.04867614398458959
+        },
+        {
+          "max_abs": 0.8314730525016785,
+          "relative_rms": 0.0753154150934945
+        }
+      ]
+    },
+    "definitions": {
+      "relative_rms": "norm(actual-reference)/norm(reference); ratios, not percentages",
+      "vision_outputs": [
+        "merged",
+        "deepstack0",
+        "deepstack1",
+        "deepstack2"
+      ],
+      "metal_float32": "MLX Metal float32 versus PyTorch CPU float32",
+      "metal_bfloat16": "MLX Metal bfloat16 versus PyTorch MPS bfloat16",
+      "mlx_precision": "MLX Metal bfloat16 versus MLX Metal float32",
+      "torch_precision": "PyTorch MPS bfloat16 versus PyTorch CPU float32",
+      "vae_metal_float32": "MLX Metal float32 versus PyTorch CPU float32",
+      "limitations": "Component measurements on one synthetic image. No assertion of full language-model equivalence or precision-related scene causality."
+    }
+  },
+  "ltx": {
+    "status": "rendered",
+    "model": "dgrauet/ltx-2.3-mlx-q8",
+    "model_revision": "6671a7572a530862d1d60ce393b5d93491e3f76b",
+    "encoder": "mlx-community/gemma-3-12b-it-4bit",
+    "encoder_revision": "86cc6a8dedbc456dd0e4af01a9d09f396f77e558",
+    "runtime_revision": "1192051fd380e0501adb5f3c0e9a216e679cb123",
+    "mlx_version": "0.31.1",
+    "pipeline_version": "0.14.19",
+    "canvas": [
+      768,
+      1344
+    ],
+    "frames": 121,
+    "fps": 24,
+    "steps": [
+      8,
+      3
+    ],
+    "cfg": 3,
+    "seed": 42,
+    "prompt": "The camera slowly moves forward. Objects remain stationary.",
+    "distilled_adapter": "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
+    "timings": {
+      "text_encoder_load_seconds": 2.3,
+      "prompt_encoding_seconds": 2.8,
+      "transformer_load_seconds": 1.7,
+      "stage1_denoise_seconds": 272,
+      "stage2_denoise_seconds": 156,
+      "decoders_load_seconds": 0.1,
+      "video_audio_decode_mux_seconds": 40.3,
+      "supervisor_wall_seconds": 480.68088041688316
+    },
+    "timing_provenance": "Rounded phase times from runtime log, including tqdm elapsed values. Supervisor wall time includes interpreter startup and up to five seconds of polling delay. Runner os._exit bypassed wrapper finally; no separate audio or mux duration is available.",
+    "assessment": {
+      "sampled_frames": [
+        0,
+        1,
+        12,
+        60,
+        120
+      ],
+      "observation": "Base colored layout remains but substantial new cartoon figures and markings appear by frame 60 (2.5s) and persist at frame 120. Motion-only prompt does not preserve source content faithfully.",
+      "limitations": "One source and seed at PortOS shipped eight-step setting; different denoiser and schedule from H3. No claim that thirty-step upstream defaults or another LTX variant behave identically."
+    }
+  },
+  "portos_revision": "585330fba8724f11daf6d5ea26876987ce7a9e0c"
+}
