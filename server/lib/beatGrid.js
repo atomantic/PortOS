@@ -374,7 +374,9 @@ export function __analyzeBeatGridPcm(samples, sampleRate, { hop = ONSET_HOP } = 
  * @param {{ signal?: AbortSignal, maxDurationSec?: number }} [opts]
  *   `maxDurationSec` overrides MAX_ANALYSIS_SEC — a test-only seam so the
  *   truncation path can be exercised against a short fixture rather than a
- *   real multi-minute file; real callers should not pass it.
+ *   real multi-minute file; real callers should not pass it. Clamped to
+ *   MAX_ANALYSIS_SEC — it can only shrink the decode window, never grow it,
+ *   so it can't be used to defeat the memory bound.
  * @returns {Promise<{ samples: Float32Array, sampleRate: number } | null>}
  */
 export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC } = {}) {
@@ -384,11 +386,15 @@ export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX
   if (!ffmpeg) return null;
   if (signal?.aborted) return null;
 
+  const boundedDurationSec = Number.isFinite(maxDurationSec) && maxDurationSec > 0
+    ? Math.min(maxDurationSec, MAX_ANALYSIS_SEC)
+    : MAX_ANALYSIS_SEC;
+
   return new Promise((resolve) => {
     const args = [
       '-v', 'error',
       '-i', audioPath,
-      '-t', String(maxDurationSec),
+      '-t', String(boundedDurationSec),
       '-ac', '1',
       '-ar', String(BEAT_GRID_SAMPLE_RATE),
       '-f', 'f32le',
