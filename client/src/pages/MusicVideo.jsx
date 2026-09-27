@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Plus, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -325,10 +325,15 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to save concept'));
   };
   // Lyric cues / phrases / pacing (#8964) — optimistic-local + silent PATCH on
-  // blur, like the scene editors. Lists are replaced whole server-side.
+  // blur, like the scene editors. Each PATCH replaces a whole list, so the
+  // saves are chained: two quick blurs can never land out of order and let an
+  // older snapshot of the list overwrite a newer one.
+  const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
   const saveProjectFields = (patch) => {
-    updateMusicVideoProject(selected.id, patch, { silent: true })
+    const projectId = selected.id;
+    timedTextSaveChain.current = timedTextSaveChain.current
+      .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
       .catch((err) => toast.error(err?.message || 'Failed to save lyrics'));
   };
   const handleImportLyrics = (body, onDone) => {
