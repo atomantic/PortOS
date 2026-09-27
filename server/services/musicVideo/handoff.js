@@ -30,7 +30,9 @@ function sceneFileTag(scene, index) {
   return `S${String(index + 1).padStart(2, '0')}-${sceneShortId(scene.sceneId)}`;
 }
 
-const FILE_TAG_RE = /(?:^|[^a-z0-9])s\d{1,3}[-_]([a-z0-9]{8})(?![a-z0-9])/gi;
+// Up to eight id characters: a normal `mvs-<uuid>` scene yields exactly eight,
+// but a short hand-authored id yields fewer and must still round-trip.
+const FILE_TAG_RE = /(?:^|[^a-z0-9])s\d{1,3}[-_]([a-z0-9]{1,8})(?![a-z0-9])/gi;
 
 /**
  * Resolve an imported file's original name to the scene whose tag it carries.

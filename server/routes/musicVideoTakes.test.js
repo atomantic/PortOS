@@ -186,4 +186,21 @@ describe('external-asset handoff', () => {
     });
     expect(a.referenceImageId).toBe('upload-0001.png');
   });
+
+  it('round-trips a short hand-authored scene id through its file tag', async () => {
+    const raw = await reload();
+    await projects.mergeProjectsFromSync([{
+      ...raw,
+      updatedAt: new Date(Date.now() + 1000).toISOString(),
+      scenes: [{ ...raw.scenes[0], sceneId: 'intro' }],
+    }]);
+    const { body: manifest } = await request(app).get(`${base()}/handoff`);
+    expect(manifest.scenes[0].fileTag).toBe('S01-intro');
+    seedImage('upload-short.png');
+    const imported = await request(app).post(`${base()}/handoff/import`).send({
+      provider: 'external',
+      items: [{ kind: 'image', assetId: 'upload-short.png', originalName: 'S01-intro final.png' }],
+    });
+    expect(imported.body.imported.map((i) => i.sceneId)).toEqual(['intro']);
+  });
 });
