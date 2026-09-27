@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { PATHS } from '../lib/paths.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { snapshotProcesses } from '../lib/detachedSpawn.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { quiesceDatabaseWriters } from './databaseMaintenanceQuiescence.js';
 
 const refused = (reason) => Object.assign(
@@ -63,7 +64,7 @@ function runDbScript(action, endpoint, argument, dumpDir) {
   const args = [join(PATHS.root, 'scripts', 'db.sh'), action, '--endpoint',
     endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, argument];
   return new Promise((resolve) => {
-    const child = spawn('bash', args, { cwd: PATHS.root, env, stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn('bash', args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root), stdio: ['ignore', 'pipe', 'ignore'] });
     let stdout = '';
     child.stdout.on('data', chunk => { if (stdout.length < 65536) stdout += chunk; });
     child.once('error', () => resolve({ code: null, stdout: '' }));
