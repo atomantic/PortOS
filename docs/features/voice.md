@@ -25,8 +25,8 @@ or failed verification returns an error; it never marks the model downloaded.
 Earlier versions produced test tones, placeholder checkpoints and download
 metadata; those artifacts are not evidence of model readiness. Runtime probes
 still report inference unavailable. Model download readiness is separate: it
-requires a verified snapshot marker and all required files at their verified
-sizes; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
+requires a verified snapshot marker and fresh size/digest verification of all
+required files; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
 adapter and an intelligibility smoke run. No model download runs automatically.
 
 Interactive profile benchmarks measure elapsed time until the buffered WAV is

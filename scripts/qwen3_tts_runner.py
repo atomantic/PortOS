@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 
 
+HUB_ENDPOINT = "https://huggingface.co"
+
 SUPPORTED_MODELS = (
     "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
     "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
@@ -35,6 +37,23 @@ REQUIRED_FILES = (
 )
 
 
+def verify_file(path: Path, metadata: dict) -> None:
+    """Verify bytes again on probe, including same-size local corruption."""
+    size, algorithm, digest = metadata["size"], metadata["algorithm"], metadata["digest"]
+    if not isinstance(size, int) or size <= 0 or path.stat().st_size != size:
+        raise ValueError(f"Incomplete model file: {path.name}")
+    if algorithm not in ("sha1", "sha256") or not isinstance(digest, str):
+        raise ValueError("Invalid model verification metadata")
+    checksum = hashlib.new(algorithm)
+    if algorithm == "sha1":
+        checksum.update(f"blob {size}\0".encode())
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            checksum.update(chunk)
+    if checksum.hexdigest() != digest:
+        raise ValueError(f"Model file checksum mismatch: {path.name}")
+
+
 def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
     """Read only a completely verified revision; never perform network access."""
     try:
@@ -43,13 +62,8 @@ def installed_snapshot(model_dir: Path, model_id: str) -> Path | None:
         if manifest["model_id"] != model_id or not re.fullmatch(r"[0-9a-f]{40}", revision):
             return None
         snapshot = model_dir / revision
-        sizes = manifest["files"]
         for filename in REQUIRED_FILES:
-            expected = sizes[filename]
-            if not isinstance(expected, int) or expected <= 0:
-                return None
-            if (snapshot / filename).stat().st_size != expected:
-                return None
+            verify_file(snapshot / filename, manifest["files"][filename])
         return snapshot
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -66,7 +80,7 @@ def download_model(model_id: str, models_dir: Path) -> dict:
         raise ValueError("Unsupported Qwen3-TTS model")
     from huggingface_hub import HfApi, hf_hub_download
 
-    info = HfApi().model_info(model_id, files_metadata=True)
+    info = HfApi(endpoint=HUB_ENDPOINT).model_info(model_id, files_metadata=True)
     revision = info.sha
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Model repository did not return an immutable revision")
@@ -75,7 +89,7 @@ def download_model(model_id: str, models_dir: Path) -> dict:
         raise ValueError("Model repository is missing required Qwen3-TTS files")
     model_dir = models_dir / model_id.replace("/", "--")
     snapshot = model_dir / revision
-    sizes = {}
+    verified_files = {}
     for filename in REQUIRED_FILES:
         entry = files[filename]
         if not isinstance(entry.size, int) or entry.size <= 0:
@@ -86,19 +100,11 @@ def download_model(model_id: str, models_dir: Path) -> dict:
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}" if lfs else r"[0-9a-f]{40}", digest):
             raise ValueError(f"Missing file digest: {filename}")
         # The explicit download operation is the only path allowed to fetch.
-        hf_hub_download(repo_id=model_id, filename=filename, revision=revision, local_dir=snapshot)
-        target = snapshot / filename
-        if target.stat().st_size != entry.size:
-            raise ValueError(f"Incomplete model file: {filename}")
-        checksum = hashlib.new(algorithm)
-        if not lfs:
-            checksum.update(f"blob {entry.size}\0".encode())
-        with target.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        if checksum.hexdigest() != digest:
-            raise ValueError(f"Model file checksum mismatch: {filename}")
-        sizes[filename] = entry.size
+        hf_hub_download(repo_id=model_id, filename=filename, revision=revision,
+                        local_dir=snapshot, endpoint=HUB_ENDPOINT)
+        metadata = {"size": entry.size, "algorithm": algorithm, "digest": digest}
+        verify_file(snapshot / filename, metadata)
+        verified_files[filename] = metadata
 
     marker = model_dir / "verified.json"
     # Unique temporary markers also make separate explicit CLI downloads safe.
@@ -106,7 +112,7 @@ def download_model(model_id: str, models_dir: Path) -> dict:
     descriptor, temporary = tempfile.mkstemp(prefix=".verified-", dir=model_dir)
     try:
         with os.fdopen(descriptor, "w") as output:
-            json.dump({"model_id": model_id, "revision": revision, "files": sizes}, output)
+            json.dump({"model_id": model_id, "revision": revision, "files": verified_files}, output)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, marker)

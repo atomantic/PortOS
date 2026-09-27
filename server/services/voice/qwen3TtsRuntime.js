@@ -92,7 +92,7 @@ export async function getQwen3RuntimeStatus() {
 
   try {
     const probeArgs = [QWEN3_TTS_RUNNER_SCRIPT, '--probe', '--models-dir', QWEN3_TTS_MODELS_DIR];
-    const { stdout } = await runRuntime(python, probeArgs);
+    const { stdout } = await runRuntime(python, probeArgs, 120000);
     const data = JSON.parse(stdout.trim());
 
     const modelsState = {};

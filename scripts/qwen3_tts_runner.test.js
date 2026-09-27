@@ -29,10 +29,11 @@ info = types.SimpleNamespace(sha=revision, siblings=entries)
 calls = []
 corrupt = None
 hub = types.ModuleType("huggingface_hub")
-hub.HfApi = lambda: types.SimpleNamespace(model_info=lambda *args, **kwargs: info)
+hub.HfApi = lambda **kwargs: types.SimpleNamespace(model_info=lambda *args, **kwargs: info)
 def download(**kwargs):
     calls.append(kwargs)
     assert kwargs["revision"] == revision
+    assert kwargs["endpoint"] == "https://huggingface.co"
     path = kwargs["local_dir"] / kwargs["filename"]
     path.parent.mkdir(parents=True, exist_ok=True)
     data = payloads[kwargs["filename"]]
@@ -58,6 +59,8 @@ with tempfile.TemporaryDirectory() as temp:
     assert len(calls) == len(runner.REQUIRED_FILES)
     # A metadata-only directory or incomplete codec must never report installed.
     codec = snapshot / "speech_tokenizer/model.safetensors"
+    codec.write_bytes(b"x" * codec.stat().st_size)
+    assert runner.installed_snapshot(model_dir, model_id) is None
     codec.write_bytes(b"truncated")
     assert runner.installed_snapshot(model_dir, model_id) is None
     codec.unlink()
