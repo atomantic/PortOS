@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getApiRouteCatalog } from './apiRouteGraph.js';
-import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
+import { HOST_CONTROL_ROUTES, hostControlBodyKeys, hostControlSettingsPathsIn, hostControlRouteFor, isHostControlRoute } from './hostControlRoutes.js';
 
 describe('HOST_CONTROL_ROUTES (#8716)', () => {
   it('names only mounted routes, so a rename cannot silently ungate one', () => {
@@ -12,9 +12,19 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(HOST_CONTROL_ROUTES.filter((route) => !reached.has(route))).toEqual([]);
   });
 
-  it('matches the spellings Express routes to the same handler, and nothing wider', () => {
+  it('covers Express spellings conservatively while preserving route boundaries', () => {
     expect(isHostControlRoute('post', '/API/Apps/example-app/START/')).toBe(true);
     expect(isHostControlRoute('POST', '/api/git/status')).toBe(true);
+    for (const suffix of ['//', '////']) {
+      expect(hostControlRouteFor('post', '/API/Runs' + suffix)).toBe('POST /api/runs');
+      expect(hostControlBodyKeys('put', '/API/Settings' + suffix, { harnesses: {} })).toEqual(['harnesses']);
+      expect(hostControlSettingsPathsIn('PUT', '/api/settings' + suffix, {
+        imageGen: { codex: { codexPath: '/example/codex' } },
+      })).toEqual(['imageGen.codex.codexPath']);
+    }
+    expect(isHostControlRoute('POST', '/api/runs-example//')).toBe(false);
+    expect(isHostControlRoute('POST', '/api//runs')).toBe(false);
+
     expect(isHostControlRoute('PUT', '/api/apps/example-app/documents/docs/example.md')).toBe(true);
     // Read-only GETs and neighbouring paths stay open.
     expect(isHostControlRoute('GET', '/api/apps/example-app/start')).toBe(false);

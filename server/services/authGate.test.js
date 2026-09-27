@@ -673,6 +673,85 @@ describe('host-control authority', () => {
   });
 });
 
+describe('mounted host-control trailing slashes (#8950)', () => {
+  const buildApp = async (remoteAddress = '192.0.2.10') => {
+    const { authGate, hostControlRouteGate, hostControlBodyGate } = await import('./authGate.js');
+    const { createRunsRoutes } = await import('../lib/aiToolkit/routes/runs.js');
+    const runner = {
+      createRun: vi.fn().mockResolvedValue({ runId: 'example-run', provider: { type: 'cli' }, metadata: {} }),
+      executeCliRun: vi.fn(),
+      listRuns: vi.fn().mockResolvedValue([]),
+    };
+    const persist = vi.fn();
+    const app = express();
+    app.use((req, res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress, configurable: true });
+      next();
+    });
+    app.use(authGate);
+    app.use(hostControlRouteGate);
+    app.use(express.json());
+    app.use(hostControlBodyGate);
+    app.use('/api/runs', createRunsRoutes(runner));
+    const settings = express.Router();
+    settings.put('/', (req, res) => {
+      persist(req.body);
+      res.json({ saved: true });
+    });
+    app.use('/api/settings', settings);
+    return { app, runner, persist };
+  };
+  const runBody = { providerId: 'example-cli', prompt: 'Example prompt' };
+  const protectedBodies = [
+    { harnesses: {} },
+    { imageGen: { codex: { codexPath: '/example/codex' } } },
+  ];
+
+  it('denies remote password-free dispatch and protected writes before either sink', async () => {
+    const { app, runner, persist } = await buildApp();
+    for (const suffix of ['', '/', '//']) {
+      const run = await request(app).post('/api/runs' + suffix).send(runBody);
+      expect(run.status).toBe(403);
+      expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      for (const body of protectedBodies) {
+        const write = await request(app).put('/api/settings' + suffix).send(body);
+        expect(write.status).toBe(403);
+        expect(write.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      }
+    }
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+    expect((await request(app).get('/api/runs//')).status).toBe(200);
+    expect((await request(app).put('/api/settings//').send({ location: {} })).status).toBe(200);
+    expect(persist).toHaveBeenCalledExactlyOnceWith({ location: {} });
+  });
+
+  it.each(['local', 'session', 'basic'])('preserves %s authority through mounted root handlers', async (authority) => {
+    let header = ['X-Example', 'local'];
+    if (authority !== 'local') {
+      const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
+      header = authority === 'session'
+        ? ['Cookie', `portos_auth=${token}`]
+        : ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
+    }
+    const { app, runner, persist } = await buildApp(authority === 'session' ? '192.0.2.10' : '127.0.0.1');
+    const allowed = authority !== 'basic';
+    for (const suffix of ['', '/', '//']) {
+      const run = await request(app).post('/api/runs' + suffix).set(...header).send(runBody);
+      expect(run.status).toBe(allowed ? 202 : 403);
+      for (const body of protectedBodies) {
+        const write = await request(app).put('/api/settings' + suffix).set(...header).send(body);
+        expect(write.status).toBe(allowed ? 200 : 403);
+        if (!allowed) expect(write.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+      }
+      if (!allowed) expect(run.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    }
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(allowed ? 3 : 0);
+    expect(persist).toHaveBeenCalledTimes(allowed ? 6 : 0);
+  });
+});
+
 describe('paired peer credential (#8356)', () => {
   const PAIR_SECRET = 'example-pair-secret-0123456789-abcdef';
   const PEER_ID = 'peer-example-instance';
