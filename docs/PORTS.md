@@ -180,7 +180,7 @@ The PortOS apps list (returned by `GET /api/apps`) shows registered PM2 processe
 - Single port: `process-name:5555`
 - Multiple ports: `process-name (cdp:5556,health:5557)`
 
-Note that `GET /api/apps` only returns PM2 processes defined in `server/services/apps.js` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser`). Infrastructure dependencies like `portos-db` (Docker container on port 5561, managed via `scripts/setup-db.js` / Docker Compose) are not PM2 processes and do not appear in `GET /api/apps`.
+Note that `GET /api/apps` only returns PM2 processes defined in `server/services/apps.js` (`portos-server`, `portos-cos`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser` for the default PortOS app). Development-only `portos-ui` is not an expected production process. Infrastructure dependencies like `portos-db` (Docker container on port 5561, managed via `scripts/setup-db.js` / Docker Compose) are not PM2 processes and do not appear in `GET /api/apps`.
 
 Use the API to get detailed port information for registered PM2 processes:
 ```bash

@@ -7,14 +7,15 @@
       "repoPath": "__PORTOS_ROOT__",
       "type": "express",
       "uiPort": 5555,
-      "apiPort": 5554,
+      "apiPort": 5555,
+      "devUiPort": 5554,
+      "buildCommand": "npm run build",
       "startCommands": [
-        "npm run dev"
+        "npm start"
       ],
       "pm2ProcessNames": [
         "portos-server",
         "portos-cos",
-        "portos-ui",
         "portos-autofixer",
         "portos-autofixer-ui",
         "portos-browser"
@@ -28,18 +29,13 @@
       "processes": [
         {
           "name": "portos-server",
-          "port": 5554,
-          "ports": { "api": 5554 }
+          "port": 5555,
+          "ports": { "api": 5555 }
         },
         {
           "name": "portos-cos",
           "port": 5558,
           "ports": { "api": 5558 }
-        },
-        {
-          "name": "portos-ui",
-          "port": 5555,
-          "ports": { "ui": 5555 }
         },
         {
           "name": "portos-autofixer",
