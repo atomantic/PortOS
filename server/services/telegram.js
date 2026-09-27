@@ -478,20 +478,30 @@ async function handleCheckinCommand(msg) {
 async function handleCheckinResponse(msg) {
   const chatId = String(msg.chat.id);
   cleanExpiredCheckins();
+  // Captured synchronously, at dispatch time — this is THIS message's
+  // outstanding question, independent of whatever else mutates
+  // pendingCheckins before the queued critical section below actually runs.
   const pending = pendingCheckins.get(chatId);
   if (!pending) return;
 
   // Serialize the load -> mutate -> save cycle on a single tail so two
-  // concurrent responses (or a response racing sendCheckin's own read) can't
-  // interleave and drop one's entry (createFileWriteQueue, matching
-  // voice/timers.js's use of the same helper for its single JSON state file).
-  const recorded = await queueCheckinsWrite(async () => {
+  // concurrent responses can't interleave and drop or duplicate a record
+  // (createFileWriteQueue, matching voice/timers.js's use of the same helper
+  // for its single JSON state file). The re-check below consumes `pending`
+  // exactly once: if a second message raced this one for the SAME question,
+  // whichever's critical section runs first deletes it, so the other finds it
+  // already gone and skips — otherwise both would append an answer to one
+  // prompt.
+  const status = await queueCheckinsWrite(async () => {
+    if (pendingCheckins.get(chatId) !== pending) return 'stale';
+
     const checkins = await loadCheckins();
     // Bail rather than write: pushing onto the empty default would atomicWrite a
     // one-entry log over the whole history. The pending check-in stays pending so
     // the answer can be re-sent once the file is readable again.
-    if (!checkins) return false;
+    if (!checkins) return 'unreadable';
 
+    pendingCheckins.delete(chatId);
     checkins.checkins.push({
       id: uuidv4(),
       question: pending.question,
@@ -507,15 +517,15 @@ async function handleCheckinResponse(msg) {
     }
 
     await saveCheckins(checkins);
-    return true;
+    return 'recorded';
   });
 
-  if (!recorded) {
+  if (status === 'stale') return; // another response already answered this question
+  if (status === 'unreadable') {
     await bot.sendMessage(chatId, "⚠️ Couldn't read your check-in history, so I didn't record that. Nothing was overwritten — send it again once it's readable.", { parse_mode: 'HTML' });
     return;
   }
 
-  pendingCheckins.delete(chatId);
   await bot.sendMessage(chatId, '✅ Check-in recorded. Thanks!', { parse_mode: 'HTML' });
 }
 

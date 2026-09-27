@@ -513,12 +513,16 @@ describe('telegram service', () => {
    * `handleCheckinResponse` is a `loadCheckins → push → atomicWrite` cycle. Two
    * concurrent invocations racing against the same on-disk state used to
    * interleave: both read the same pre-write snapshot, so whichever
-   * `atomicWrite` landed last silently discarded the other's entry. The fix
-   * routes the cycle through `createFileWriteQueue` so the second cycle only
-   * starts reading after the first has fully persisted.
+   * `atomicWrite` landed last silently discarded the OTHER entry (and any
+   * pre-existing history it had already read past). The fix routes the cycle
+   * through `createFileWriteQueue` so the second cycle only starts reading
+   * after the first has fully persisted, and re-checks the pending check-in is
+   * still the one it captured before consuming it — so a genuine race (two
+   * messages answering the SAME outstanding question) records the answer
+   * exactly once instead of duplicating it.
    */
   describe('checkins write queue (#8907)', () => {
-    it('persists both records when two check-in responses are processed concurrently', async () => {
+    it('preserves prior history and records exactly one answer when two responses race the same question', async () => {
       const telegram = await loadTelegramActive();
       const { getGoals } = await import('./identity.js');
       getGoals.mockResolvedValue({ goals: [{ id: 'g1', title: 'Example Goal', status: 'active', progress: 40 }] });
@@ -526,6 +530,10 @@ describe('telegram service', () => {
       await telegram.sendCheckin();
       h.sendMessage.mockClear();
       fu.writes = [];
+      // Seed pre-existing history so a clobbered (rather than serialized) RMW
+      // would be visible: the buggy version's stale read would drop this
+      // entry from whichever write "won".
+      fu.store = { checkins: [{ id: 'seed', question: 'Old Q', response: 'Old A', goalId: 'g0', askedAt: '2026-01-01T00:00:00.000Z', answeredAt: '2026-01-01T00:00:01.000Z' }] };
 
       const msgHandler = h.eventHandlers.message[0];
       // Fire both "responses" without awaiting between them, so both handler
@@ -535,9 +543,17 @@ describe('telegram service', () => {
       const second = msgHandler({ chat: { id: 42 }, text: 'second response' });
       await Promise.all([first, second]);
 
-      expect(fu.writes).toHaveLength(2);
-      const finalCheckins = fu.writes[fu.writes.length - 1].data.checkins;
-      expect(finalCheckins.map((c) => c.response)).toEqual(['first response', 'second response']);
+      // Only the winner of the race persists a write; the other finds the
+      // pending check-in already consumed and skips silently (no duplicate,
+      // no ack for the loser).
+      expect(fu.writes).toHaveLength(1);
+      expect(h.sendMessage).toHaveBeenCalledTimes(1);
+      expect(h.sendMessage).toHaveBeenCalledWith('42', expect.stringContaining('Check-in recorded'), expect.anything());
+
+      const finalCheckins = fu.writes[0].data.checkins;
+      expect(finalCheckins).toHaveLength(2);
+      expect(finalCheckins[0]).toMatchObject({ id: 'seed', response: 'Old A' });
+      expect(finalCheckins[1]).toMatchObject({ goalId: 'g1', response: 'first response' });
     });
   });
 });
