@@ -439,6 +439,22 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ constructor: 1 });
     });
 
+    it('disambiguates a configured exclude label that collides with a non-label structural cause', async () => {
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: 'reserved', assignees: [], labels: [{ name: 'in-flight' }] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any', issueExcludeLabels: ['in-flight'] });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      // A bare `in-flight` cause would be suppressed by both UI consumers
+      // (the toast and the picker exclude it because counts.inFlight carries
+      // the structural one) — the collision must stay distinguishable.
+      expect(out.skipCauses).toEqual({ 'excluded-label:in-flight': 1 });
+    });
+
     it('keeps an issue assigned to the authenticated account claimable', async () => {
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@ghe.example.com:acme/widget.git\n');

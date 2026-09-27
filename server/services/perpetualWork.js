@@ -56,6 +56,14 @@ export const NON_ACTIONABLE_ISSUE_LABELS = new Set([
   IN_PROGRESS_LABEL, 'blocked', 'needs-input', 'future', 'wontfix', 'question', 'discussion'
 ]);
 
+// Structural skip causes that are NOT label names. A configured exclude label
+// colliding with one of these (`in-flight` especially — both UI consumers
+// suppress that cause because counts.inFlight already carries it) would be
+// indistinguishable from the structural skip, so the cause is prefixed on
+// collision. Label-shaped structural names need no entry: the structural label
+// check runs first and shadows a same-named configured label by design.
+const STRUCTURAL_NON_LABEL_CAUSES = new Set(['assigned', 'in-flight', 'decomposed-epic', 'malformed']);
+
 // Exported so the timeout path is directly testable with fake timers rather
 // than a real 15s wait.
 export const CLI_TIMEOUT_MS = 15000;
@@ -290,7 +298,10 @@ function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null, curre
   if (structural) return structural;
   if (excludeLabels) {
     const excluded = labels.find((l) => excludeLabels.has(l));
-    if (excluded) return excluded;
+    // Prefix only on collision with a non-label structural cause so the two
+    // remain distinguishable in the park breakdown; every other configured
+    // label keeps its bare name.
+    if (excluded) return STRUCTURAL_NON_LABEL_CAUSES.has(excluded) ? `excluded-label:${excluded}` : excluded;
   }
   // Marker first: the label scan is a 2–5 element array walk, while isEpicIssue
   // lowercases and regex-tests the title. Only a decomposed issue needs the
