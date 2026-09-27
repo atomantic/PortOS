@@ -162,6 +162,7 @@ export default function ChiefOfStaff() {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [agentState, setAgentState] = useState('sleeping');
+  const [statusReadFailed, setStatusReadFailed] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   // Socket events and manual checks share one visible speaking window. Each
   // burst owns a generation so a stale timer or request completion cannot end
@@ -362,6 +363,7 @@ export default function ChiefOfStaff() {
       if (controller.signal.aborted || queryRef.current !== queryKey) return;
       const agentsData = agentResult || [];
       setStatus(statusData);
+      setStatusReadFailed(typeof statusData?.running !== 'boolean');
       // A queue refresh started later can still resolve first. Its task payload
       // must not be clobbered by this older, pre-flip read — otherwise the row
       // returns to the pending-AND-active state this guard exists to remove.
@@ -1092,10 +1094,26 @@ export default function ChiefOfStaff() {
     );
   }
 
+  const statusKnown = typeof status?.running === 'boolean';
+  const statusPlaceholder = statusReadFailed ? (
+    <div role="alert" className="p-3 text-sm text-gray-400">
+      Could not load CoS status.
+      <button type="button" onClick={fetchData} className="ml-2 text-port-accent">Retry CoS status</button>
+    </div>
+  ) : (
+    <div role="status" aria-label="Loading CoS status" className="p-3">
+      <BrailleSpinner text="Loading CoS status" />
+    </div>
+  );
+
   return (
     <div className={`relative flex flex-col lg:grid ${desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
       {/* Agent Panel */}
-      {avatarStyle === 'ascii' ? (
+      {!statusKnown ? (
+        <div className="min-w-0 overflow-hidden border-b lg:border-r border-port-border">
+          <div className={desktopPanelCollapsed ? 'lg:hidden' : ''}>{statusPlaceholder}</div>
+        </div>
+      ) : avatarStyle === 'ascii' ? (
         <>
           {/* Desktop: collapsed placeholder or full panel */}
           {desktopPanelCollapsed ? (
@@ -1317,8 +1335,10 @@ export default function ChiefOfStaff() {
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS
             </button>
-            <StatusIndicator running={status?.running} paused={status?.paused} />
-            <StateLabel state={agentState} compact />
+            {statusKnown ? <>
+              <StatusIndicator running={status.running} paused={status.paused} />
+              <StateLabel state={agentState} compact />
+            </> : statusPlaceholder}
           </div>
         )}
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
