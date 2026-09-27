@@ -26,8 +26,9 @@ environment, install `mlx-audio` at commit
 `soundfile` and `huggingface_hub`. The runtime probe checks MLX/Metal availability
 without loading weights. MLX cloning requires a reference transcript and a
 loaded speech-tokenizer encoder; otherwise it fails rather than generating an
-unconditioned voice. Training and custom checkpoints remain unavailable. Speech-rate changes and instruction-controlled Base cloning are
-refused rather than reported as applied controls. Explicit model
+unconditioned voice. Speech-rate changes and instruction-controlled Base cloning are
+refused rather than reported as applied controls. Fine-tuning is described
+under Voice Studio below. Explicit model
 downloads in Settings fetch the official Qwen snapshot at an immutable Hub
 revision and verify the size and digest of every required file, including the
 speech tokenizer weights, before publishing readiness. Downloads require
@@ -368,9 +369,25 @@ streaming qualification. Without that opt-in, AuK remains studio-only and the
 existing interactive fallback is retained. The production planner checks the
 interactive route rather than treating every approved studio voice as live-ready.
 
-The separate Qwen runtime supports verified local inference but has no training adapter. Its probe reports
-`training_adapter: null`, so starting fine-tuning returns `503 QWEN3_TRAINING_UNAVAILABLE` before any job
-record or process exists, and checkpoints recorded by earlier placeholder runners (no producing adapter) are
-refused with `409 CHECKPOINT_UNVERIFIED` rather than promoted. The runtime is excluded from
+The separate Qwen runtime can fine-tune one speaker with the official
+[Qwen3-TTS single-speaker recipe](https://github.com/QwenLM/Qwen3-TTS/tree/022e286b98fbec7e1e916cb940cdf532cd9f488e/finetuning)
+(adapter `qwen-tts-sft-12hz`). The runner ports that recipe rather than
+calling the upstream scripts. The probe names the adapter only on CUDA with
+bf16 support and `qwen-tts`, `librosa` and `safetensors` installed. CPU and Apple Silicon hosts report
+`training_adapter: null`, and starts return `503 QWEN3_TRAINING_UNAVAILABLE` before any job record or process
+exists. Training uses a verified, downloaded Base snapshot offline (`409 QWEN3_MODEL_NOT_INSTALLED`
+otherwise). It uses the profile's transcribed source recordings, with the first recording as the speaker
+reference. Full-parameter training needs substantial GPU memory. Each checkpoint is a full model copy
+(about the base snapshot's size), so the checkpoint interval (optimizer steps) bounds disk use.
+
+A checkpoint is published only after the runner records the SHA-256 of every file it loads. It must pass
+the same verification and loader used for synthesis and render a non-silent audition (`audition.wav`).
+Checkpoints that fail are deleted. The published revision is
+`<base-model>@<base-revision>+sha256.<weights-digest>`; promotion records it, and fine-tuned synthesis
+refuses a checkpoint whose files changed or whose revision differs. Checkpoints load only through
+qwen-tts on CPU/CUDA; MLX refuses them. Checkpoints recorded by earlier placeholder runners have no
+producing adapter or sealed revision and are refused with `409 CHECKPOINT_UNVERIFIED` rather than promoted.
+Fixture tests prove this publication contract, not training quality. A real training run on supported
+hardware is still pending in #8857. Operators should listen to each audition before promoting. The runtime is excluded from
 Voice Studio assignment until repaired (issue #8857). Voice Studio does not
 claim a Qwen runtime is working merely because its metadata exists.

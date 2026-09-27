@@ -8,9 +8,9 @@ import { SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
-// Both overrides default to null = "use the real thing". The runner itself
-// reports no training adapter today (scripts/qwen3_tts_runner.test.js), so the
-// lifecycle cases stand in a scripted adapter and child for a future one.
+// Both overrides default to null = "use the real thing". The runner's own
+// publication contract is covered in scripts/qwen3_tts_runner.test.js; these
+// lifecycle cases script its stdout frames instead of training a model.
 let spawnOverride = null;
 let runtimeOverride = null;
 
@@ -90,6 +90,7 @@ const jobRecordPath = (jobId) => join(voiceProfilesRoot, PROFILE.id, 'fine-tune'
 const createScriptedChild = ({ signal } = {}) => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   child.kill = vi.fn();
   // Frames mirror the runner's stdout contract (scripts/qwen3_tts_runner.py);
   // they describe the contract a real training adapter must emit.
@@ -111,21 +112,36 @@ const createScriptedChild = ({ signal } = {}) => {
   return child;
 };
 
-const checkpointFrame = (step) => ({
+const BASE_MODEL = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base';
+const jobDir = (jobId) => join(voiceProfilesRoot, PROFILE.id, 'fine-tune', jobId);
+const revisionFor = (step) => `${BASE_MODEL}@${'a'.repeat(40)}+sha256.${String(step).padStart(64, '0')}`;
+
+// A sealed, auditioned checkpoint as the runner publishes it: inside the job's
+// directory, with the digest-bound revision promotion records.
+const checkpointFrame = (jobId, step) => ({
   stage: 'checkpoint',
   step,
-  checkpoint: `checkpoint-${step}.safetensors`,
-  checkpoint_path: `/scripted/checkpoint-${step}.safetensors`,
-  sample_wav: `/scripted/sample-step-${step}.wav`,
+  checkpoint: `checkpoint-step-${step}`,
+  checkpoint_path: join(jobDir(jobId), `checkpoint-step-${step}`),
+  sample_wav: join(jobDir(jobId), `checkpoint-step-${step}`, 'audition.wav'),
   loss: 0.42,
+  model_revision: revisionFor(step),
+});
+
+const READY_RUNTIME = Object.freeze({
+  ok: true,
+  pythonPath: '/scripted/python',
+  trainingAdapter: 'qwen-tts-sft-12hz',
+  models: { [BASE_MODEL]: { downloaded: true } },
 });
 
 /** Install a scripted child and hand the test the handle spawn will return. */
 const useScriptedRunner = () => {
-  runtimeOverride = { ok: true, pythonPath: '/scripted/python', trainingAdapter: 'scripted-adapter' };
+  runtimeOverride = READY_RUNTIME;
   let child = null;
-  spawnOverride = (_command, _args, options) => {
+  spawnOverride = (_command, args, options) => {
     child = createScriptedChild(options);
+    child.args = args;
     return child;
   };
   // The job's spawn happens inside startFineTuningJob, so resolve lazily.
@@ -183,12 +199,24 @@ describe('fineTuning', () => {
     expect(startRes).toMatchObject({ jobId: expect.any(String), status: 'running' });
 
     const child = scripted();
+    // The runner receives the verified model root and a dataset manifest that
+    // pairs each transcribed recording with its text.
+    const argValue = (flag) => child.args[child.args.indexOf(flag) + 1];
+    expect(argValue('--model-id')).toBe(BASE_MODEL);
+    expect(argValue('--models-dir')).toEqual(expect.any(String));
+    expect(JSON.parse(await readFile(argValue('--dataset-manifest'), 'utf8'))).toEqual({
+      speaker: 'portos_voice',
+      reference_audio: join(voiceProfilesRoot, PROFILE.id, 'source', 'sample.wav'),
+      samples: [{ audio: join(voiceProfilesRoot, PROFILE.id, 'source', 'sample.wav'), text: 'Training transcription sample.' }],
+    });
     child.emitFrames(
-      { stage: 'init', total_steps: 100 },
       { stage: 'training', step: 20, total_steps: 100, loss: 1.2, progress: 20 },
-      checkpointFrame(20),
-      checkpointFrame(100),
-      { stage: 'completed', total_steps: 100 },
+      checkpointFrame(startRes.jobId, 20),
+      // Frames that were not sealed inside this job are never indexed.
+      { ...checkpointFrame(startRes.jobId, 40), checkpoint_path: '/elsewhere/checkpoint-step-40' },
+      { ...checkpointFrame(startRes.jobId, 60), model_revision: 'qwen3-tts:checkpoint-60' },
+      checkpointFrame(startRes.jobId, 100),
+      { stage: 'completed', checkpoints: 2 },
     );
     child.exit(0);
 
@@ -199,12 +227,14 @@ describe('fineTuning', () => {
     expect(status.status).toBe('completed');
     expect(status.progress).toBe(100);
     expect(status.step).toBe(20);
-    expect(status.checkpoints).toHaveLength(2);
+    expect(status.totalSteps).toBe(100);
+    expect(status.checkpoints.map((checkpoint) => checkpoint.step)).toEqual([20, 100]);
     expect(status.checkpoints[0]).toMatchObject({
-      id: 'checkpoint-20.safetensors',
+      id: 'checkpoint-step-20',
       step: 20,
-      checkpointPath: '/scripted/checkpoint-20.safetensors',
-      sampleWav: '/scripted/sample-step-20.wav',
+      checkpointPath: join(jobDir(startRes.jobId), 'checkpoint-step-20'),
+      sampleWav: join(jobDir(startRes.jobId), 'checkpoint-step-20', 'audition.wav'),
+      modelRevision: revisionFor(20),
     });
 
     const promoteRes = await promoteCheckpoint({
@@ -215,7 +245,8 @@ describe('fineTuning', () => {
     expect(promoteRes).toMatchObject({
       kind: 'fine-tuned',
       approval: { status: 'approved' },
-      inference: { checkpointPath: '/scripted/checkpoint-20.safetensors' },
+      modelRevision: revisionFor(20),
+      inference: { checkpointPath: join(jobDir(startRes.jobId), 'checkpoint-step-20') },
     });
   });
 
@@ -225,7 +256,7 @@ describe('fineTuning', () => {
     const scripted = useScriptedRunner();
 
     const startRes = await startFineTuningJob({ profileId: PROFILE.id, epochs: 50 });
-    scripted().emitFrames(checkpointFrame(50));
+    scripted().emitFrames(checkpointFrame(startRes.jobId, 50));
 
     const cancelRes = cancelFineTuningJob(startRes.jobId);
     expect(cancelRes).toMatchObject({ ok: true, jobId: startRes.jobId, status: 'cancelled' });
@@ -255,6 +286,17 @@ describe('fineTuning', () => {
       error: 'Process exited with code 3',
     });
 
+    // The runner's structured, path-free failure is what the operator sees.
+    const refused = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
+    scripted().stderr.emit('data', Buffer.from(`${JSON.stringify({
+      ok: false, code: 'QWEN3_TRAINING_FAILED', error: 'No fine-tuned checkpoint passed its reload audition',
+    })}\n`));
+    scripted().exit(1);
+    expect(await drainJobRecord(refused.jobId)).toMatchObject({
+      status: 'failed',
+      error: 'No fine-tuned checkpoint passed its reload audition',
+    });
+
     // A killed child reports a null code; "exited with code null" tells the
     // operator nothing about an OOM reap partway through a long run.
     const killed = await startFineTuningJob({ profileId: PROFILE.id, epochs: 2 });
@@ -275,7 +317,7 @@ describe('fineTuning', () => {
       epochs: 2,
       checkpointInterval: 20,
     });
-    scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+    scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
     scripted().exit(0);
 
     const record = await drainJobRecord(jobId);
@@ -300,7 +342,7 @@ describe('fineTuning', () => {
       epochs: 2,
       checkpointInterval: 20,
     });
-    scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+    scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
     scripted().exit(0);
     const record = await drainJobRecord(jobId);
     expect(record.checkpoints.length).toBeGreaterThan(0);
@@ -359,7 +401,7 @@ describe('fineTuning', () => {
         epochs: 2,
         checkpointInterval: 20,
       });
-      scripted().emitFrames(checkpointFrame(100), { stage: 'completed', total_steps: 100 });
+      scripted().emitFrames(checkpointFrame(jobId, 100), { stage: 'completed', total_steps: 100 });
       scripted().exit(0);
       await drainJobRecord(jobId);
 
@@ -373,6 +415,23 @@ describe('fineTuning', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('fineTuning without a trainable model', () => {
+  it('refuses non-Base or unverified base weights before creating a job or spawning', async () => {
+    queryMock.mockResolvedValue({ rows: [{ data: PROFILE }] });
+    await seedSourceAudio();
+    spawnOverride = vi.fn();
+    runtimeOverride = READY_RUNTIME;
+
+    await expect(startFineTuningJob({ profileId: PROFILE.id, baseModel: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' }))
+      .rejects.toMatchObject({ status: 400, code: 'QWEN3_TRAINING_UNSUPPORTED_MODEL' });
+    runtimeOverride = { ...READY_RUNTIME, models: { [BASE_MODEL]: { downloaded: false } } };
+    await expect(startFineTuningJob({ profileId: PROFILE.id }))
+      .rejects.toMatchObject({ status: 409, code: 'QWEN3_MODEL_NOT_INSTALLED' });
+    expect(spawnOverride).not.toHaveBeenCalled();
+    await expect(readFile(join(voiceProfilesRoot, PROFILE.id, 'fine-tune'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -402,6 +461,15 @@ describe('fineTuning without a training adapter', () => {
       checkpoints: [{ id: 'checkpoint-20.safetensors', step: 20, checkpointPath: '/legacy/checkpoint-20.safetensors' }],
     }));
 
+    await expect(promoteCheckpoint({ profileId: PROFILE.id, jobId, checkpointId: 'checkpoint-20.safetensors' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHECKPOINT_UNVERIFIED' });
+
+    // An adapter name alone is not enough: an unsealed checkpoint has no
+    // digest-bound revision for synthesis to verify against.
+    await writeFile(jobRecordPath(jobId), JSON.stringify({
+      ...JSON.parse(await readFile(jobRecordPath(jobId), 'utf8')),
+      trainingAdapter: 'qwen-tts-sft-12hz',
+    }));
     await expect(promoteCheckpoint({ profileId: PROFILE.id, jobId, checkpointId: 'checkpoint-20.safetensors' }))
       .rejects.toMatchObject({ status: 409, code: 'CHECKPOINT_UNVERIFIED' });
     expect(queryMock.mock.calls.some(([sql]) => /insert|update/i.test(sql))).toBe(false);

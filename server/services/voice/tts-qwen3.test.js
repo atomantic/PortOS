@@ -74,4 +74,24 @@ describe('tts-qwen3', () => {
     readFile.mockResolvedValue(Buffer.from('not a wav'));
     await expect(synthesizeQwen3('Example')).rejects.toMatchObject({ code: 'QWEN3_SYNTHESIS_INVALID_RESULT' });
   });
+
+  it('speaks a fine-tuned voice only from the exact promoted checkpoint revision', async () => {
+    const revision = `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}+sha256.${'b'.repeat(64)}`;
+    const opts = { mode: 'fine-tuned', checkpointPath: '/example/checkpoint-step-20', modelId: revision };
+    const fineTuned = { ok: true, modelRevision: revision, effectiveControls: { mode: 'fine-tuned', seed: 42, rate: 1, instructions: null } };
+    runnerResponse(fineTuned);
+    await expect(synthesizeQwen3('Example', opts)).resolves.toMatchObject({ modelRevision: revision });
+    const args = spawn.mock.calls[0][1];
+    expect(args[args.indexOf('--checkpoint-path') + 1]).toBe('/example/checkpoint-step-20');
+    expect(args[args.indexOf('--mode') + 1]).toBe('fine-tuned');
+
+    // Different trained weights under the same base revision are not this voice.
+    runnerResponse({ ...fineTuned, modelRevision: revision.replace(/b{64}$/, 'c'.repeat(64)) });
+    await expect(synthesizeQwen3('Example', opts)).rejects.toMatchObject({ code: 'QWEN3_SYNTHESIS_INVALID_RESULT' });
+
+    spawn.mockClear();
+    await expect(synthesizeQwen3('Example', { mode: 'fine-tuned', modelId: revision }))
+      .rejects.toMatchObject({ status: 503, code: 'QWEN3_RUNTIME_UNAVAILABLE' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
 });

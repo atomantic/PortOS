@@ -52,6 +52,14 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
   }
 
   const mode = opts.mode || (opts.referenceAudio ? 'clone' : (opts.instructions ? 'design' : 'synthesize'));
+  const fineTuned = mode === 'fine-tuned';
+  if (fineTuned && (!opts.checkpointPath || !opts.modelId)) {
+    throw new ServerError('Fine-tuned Qwen3-TTS voice has no promoted checkpoint', {
+      status: 503,
+      code: 'QWEN3_RUNTIME_UNAVAILABLE',
+    });
+  }
+  // A fine-tuned profile's modelId is the sealed checkpoint revision it promoted.
   const modelId = opts.modelId || (mode === 'clone' ? DEFAULT_CLONE_MODEL : DEFAULT_DESIGN_MODEL);
   const rate = typeof opts.rate === 'number' && Number.isFinite(opts.rate)
     ? Math.max(0.25, Math.min(4.0, opts.rate))
@@ -112,9 +120,13 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
 
     let result;
     try { result = JSON.parse(stdout.trim()); } catch { /* Invalid adapter output is never successful speech. */ }
-    if (result?.ok !== true || typeof result.modelRevision !== 'string' || !result.modelRevision.startsWith(`${modelId}@`)
-      || !/^[a-f0-9]{40}$/.test(result.modelRevision.slice(modelId.length + 1))
-      || !['design', 'clone'].includes(result.effectiveControls?.mode)
+    // Fine-tuned speech must come from exactly the promoted checkpoint bytes.
+    const revisionMatches = fineTuned
+      ? result?.modelRevision === modelId && result?.effectiveControls?.mode === 'fine-tuned'
+      : typeof result?.modelRevision === 'string' && result.modelRevision.startsWith(`${modelId}@`)
+        && /^[a-f0-9]{40}$/.test(result.modelRevision.slice(modelId.length + 1))
+        && ['design', 'clone'].includes(result.effectiveControls?.mode);
+    if (result?.ok !== true || !revisionMatches
       || result.effectiveControls?.rate !== rate || result.effectiveControls?.seed !== seed) {
       throw new ServerError('Qwen3-TTS returned invalid inference evidence', { status: 502, code: 'QWEN3_SYNTHESIS_INVALID_RESULT' });
     }
