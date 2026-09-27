@@ -1,12 +1,15 @@
 """
-Shared helpers for the PortOS local image-gen Python runners
-(`flux2_macos.py` and `z_image_turbo.py`).
+Shared helpers for the PortOS local image and music-generation Python runners.
 
-Both runners present the same CLI surface to `server/services/imageGen/local.js`
+The image runners present the same CLI surface to `server/services/imageGen/local.js`
 — STAGE: markers, USER_ERROR: lines, stepwise PNG previews, sidecar JSON — and
 the bits that own that contract live here. Keeping these in one module means a
 fix to the HF error mapping or the stepwise decode lands in both runners at
 once, instead of drifting.
+
+Music sidecars reuse the liveness portion of that contract: a long model load or
+inference call must emit periodic STAGE heartbeat markers so the media queue can
+distinguish a slow render from a wedged child.
 
 The runner-specific bits each script still owns:
   - argparse + which pipeline class / weight repo to load
@@ -61,14 +64,15 @@ def register_source_namespace(package_name: str, package_dir: "str | Path"):
 @contextmanager
 def heartbeat(stage: "str | Callable[[], str]", interval: float = 20.0):
     """Emit a periodic STAGE:<stage>:heartbeat:Ns marker so the JS idle
-    watchdog (default 5min) doesn't kill silent long pipeline loads.
+    watchdog doesn't kill a silent but active model load or inference call.
 
-    Diffusers' from_pretrained on a fully-cached 10-25 GB model is silent
-    for several minutes (mmap + weight assignment, no tqdm), which trips
-    the JS-side idle watchdog. `handleLine()` in imageGen/local.js sees
-    the heartbeat line and resets lastActivityAt. True hangs (GIL-pinned
-    C extension, no I/O) still trip the watchdog because the heartbeat
-    thread can't print either.
+    Diffusers' from_pretrained on a fully-cached 10-25 GB model, and music
+    inference calls, can be silent for several minutes (mmap + weight
+    assignment, no tqdm), which trips the JS-side idle watchdog.
+    `handleLine()` in imageGen/local.js and the audio sidecar bridge see the
+    heartbeat line and reset lastActivityAt. True hangs (GIL-pinned C
+    extension, no I/O) still trip the watchdog because the heartbeat thread
+    can't print either.
 
     `stage` may be a callable resolved per beat, for a runner that wraps a
     whole child process rather than one load step: generate_fastvideo.py scrapes

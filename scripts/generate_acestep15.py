@@ -16,6 +16,9 @@ import sys
 import tempfile
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import heartbeat  # noqa: E402
+
 
 MODEL_ID = "ACE-Step/Ace-Step1.5"
 MODEL_VARIANT = "acestep-v15-turbo"
@@ -58,7 +61,8 @@ def main():
 
     stage("resolve-model", args.model)
     try:
-        checkpoint_dir = cached_checkpoint_dir(args.model)
+        with heartbeat("resolve-model"):
+            checkpoint_dir = cached_checkpoint_dir(args.model)
     except Exception as exc:
         print(f"ERROR: ACE-Step 1.5 model weights are not installed: {exc}", file=sys.stderr, flush=True)
         return 1
@@ -73,13 +77,14 @@ def main():
 
     duration = max(1.0, min(float(args.duration or 60.0), 240.0))
     stage("load-model", MODEL_VARIANT)
-    dit_handler = AceStepHandler()
-    status, initialized = dit_handler.initialize_service(
-        project_root="",
-        config_path=MODEL_VARIANT,
-        device="auto",
-        offload_to_cpu=False,
-    )
+    with heartbeat("load-model"):
+        dit_handler = AceStepHandler()
+        status, initialized = dit_handler.initialize_service(
+            project_root="",
+            config_path=MODEL_VARIANT,
+            device="auto",
+            offload_to_cpu=False,
+        )
     if not initialized:
         print(f"ERROR: ACE-Step 1.5 could not initialize: {status}", file=sys.stderr, flush=True)
         return 1
@@ -104,13 +109,14 @@ def main():
     # failed/partial generation — is cleaned up automatically when the `with`
     # block exits, instead of lingering as a phantom track in the library.
     with tempfile.TemporaryDirectory(prefix="acestep15-") as tmp:
-        result = generate_music(
-            dit_handler=dit_handler,
-            llm_handler=None,
-            params=params,
-            config=GenerationConfig(batch_size=1, audio_format="wav"),
-            save_dir=tmp,
-        )
+        with heartbeat("generate"):
+            result = generate_music(
+                dit_handler=dit_handler,
+                llm_handler=None,
+                params=params,
+                config=GenerationConfig(batch_size=1, audio_format="wav"),
+                save_dir=tmp,
+            )
         if not result.success or not result.audios:
             reason = getattr(result, "error", None) or getattr(result, "status_message", "unknown error")
             print(f"ERROR: ACE-Step 1.5 generation failed: {reason}", file=sys.stderr, flush=True)

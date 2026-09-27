@@ -31,6 +31,9 @@ import os
 import sys
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import heartbeat  # noqa: E402
+
 
 # MusicGen decodes audio at 32 kHz; the EnCodec frame rate is 50 Hz, so one
 # second of audio is 50 decoder steps. Both are fixed by the model.
@@ -114,10 +117,12 @@ def main():
     MusicGen = _import_musicgen(args.runtime_dir)
 
     log_stage("load-model", args.model)
-    model = MusicGen.from_pretrained(args.model)
+    with heartbeat("load-model"):
+        model = MusicGen.from_pretrained(args.model)
 
     log_stage("generate", f"{duration:.1f}s/{max_steps}steps")
-    audio = model.generate(text, max_steps=max_steps)
+    with heartbeat("generate"):
+        audio = model.generate(text, max_steps=max_steps)
 
     log_stage("encode-wav")
     pcm = _to_int16_pcm(audio)

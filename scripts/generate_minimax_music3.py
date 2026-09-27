@@ -8,7 +8,8 @@ import sys
 import time
 import wave
 
-from _runner_common import choose_cuda_pipeline_placement
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import choose_cuda_pipeline_placement, heartbeat
 
 
 FULL_CUDA_PROFILE = 'cuda-bf16-full'
@@ -130,22 +131,24 @@ def main():
     if not torch.cuda.is_available():
         raise RuntimeError('MiniMax Music 3 requires CUDA')
     print('STAGE:load-model', file=sys.stderr, flush=True)
-    components_manager = ComponentsManager()
-    pipe = ModularPipeline.from_pretrained(args.model, components_manager=components_manager)
-    pipe.load_components(dtype=torch.bfloat16)
-    execution_profile = place_minimax_pipeline(pipe, components_manager, torch)
+    with heartbeat('load-model'):
+        components_manager = ComponentsManager()
+        pipe = ModularPipeline.from_pretrained(args.model, components_manager=components_manager)
+        pipe.load_components(dtype=torch.bfloat16)
+        execution_profile = place_minimax_pipeline(pipe, components_manager, torch)
     print('STAGE:generate', file=sys.stderr, flush=True)
     torch.cuda.reset_peak_memory_stats()
     generation_kwargs = seeded_generation_kwargs(pipe, torch, args.seed)
     if args.seed is not None and not generation_kwargs:
         raise RuntimeError('this Diffusers pipeline does not support deterministic --seed generation')
-    audio = to_numpy(pipe(
-        prompt=args.text,
-        lyrics=args.lyrics,
-        audio_duration=float(max(1, min(300, args.duration))),
-        output='audios',
-        **generation_kwargs,
-    )[0], np, torch)
+    with heartbeat('generate'):
+        audio = to_numpy(pipe(
+            prompt=args.text,
+            lyrics=args.lyrics,
+            audio_duration=float(max(1, min(300, args.duration))),
+            output='audios',
+            **generation_kwargs,
+        )[0], np, torch)
     audio = to_stereo(audio, np)
     torch.cuda.synchronize()
     peak_vram_allocated_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)

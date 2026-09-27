@@ -40,6 +40,9 @@ import sys
 import tempfile
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import heartbeat  # noqa: E402
+
 
 def log_stage(name, detail=""):
     """Emit a STAGE: line the JS sidecar tails for phase/progress display."""
@@ -130,12 +133,13 @@ def main():
     checkpoint_dir = os.environ.get("PORTOS_ACESTEP_CHECKPOINT_DIR", "") or None
 
     log_stage("load-model", args.model)
-    pipe = ACEStepPipeline(
-        checkpoint_dir=checkpoint_dir,
-        device_id=device_id,
-        dtype=dtype,
-        cpu_offload=is_cpu,
-    )
+    with heartbeat("load-model"):
+        pipe = ACEStepPipeline(
+            checkpoint_dir=checkpoint_dir,
+            device_id=device_id,
+            dtype=dtype,
+            cpu_offload=is_cpu,
+        )
 
     # ACE-Step's __call__ appends its OWN timestamped filename when save_path is a
     # directory, so we render into a temp dir and then move the single produced
@@ -147,16 +151,17 @@ def main():
     with tempfile.TemporaryDirectory(prefix="acestep-") as tmp:
         log_stage("generate", f"{duration:.1f}s/{steps}steps")
         manual_seeds = [int(args.seed)] if args.seed else None
-        pipe(
-            format="wav",
-            audio_duration=duration,
-            prompt=text,
-            lyrics=(args.lyrics or ""),
-            infer_step=steps,
-            guidance_scale=float(args.guidance or 15.0),
-            manual_seeds=manual_seeds,
-            save_path=tmp,
-        )
+        with heartbeat("generate"):
+            pipe(
+                format="wav",
+                audio_duration=duration,
+                prompt=text,
+                lyrics=(args.lyrics or ""),
+                infer_step=steps,
+                guidance_scale=float(args.guidance or 15.0),
+                manual_seeds=manual_seeds,
+                save_path=tmp,
+            )
 
         log_stage("encode-wav")
         produced = sorted(glob.glob(os.path.join(tmp, "*.wav")))

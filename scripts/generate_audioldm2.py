@@ -33,6 +33,9 @@ import os
 import sys
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _runner_common import heartbeat  # noqa: E402
+
 
 # AudioLDM2 decodes audio at 16 kHz (fixed by the model's VAE / vocoder).
 SAMPLE_RATE = 16000
@@ -180,8 +183,9 @@ def main():
     dtype = torch.float32 if device == "cpu" else torch.float16
 
     log_stage("load-model", args.model)
-    pipe = AudioLDM2Pipeline.from_pretrained(args.model, torch_dtype=dtype)
-    pipe = pipe.to(device)
+    with heartbeat("load-model"):
+        pipe = AudioLDM2Pipeline.from_pretrained(args.model, torch_dtype=dtype)
+        pipe = pipe.to(device)
     # transformers >=4.50 compatibility: restore the generation helpers the
     # pipeline's language-model loop relies on (see helper docstring).
     _patch_language_model_generation(pipe)
@@ -194,13 +198,14 @@ def main():
     generator = torch.Generator(device=generator_device).manual_seed(int(args.seed or 0))
 
     log_stage("generate", f"{duration:.1f}s/{steps}steps")
-    out = pipe(
-        text,
-        num_inference_steps=steps,
-        audio_length_in_s=duration,
-        guidance_scale=float(args.guidance or 3.5),
-        generator=generator,
-    )
+    with heartbeat("generate"):
+        out = pipe(
+            text,
+            num_inference_steps=steps,
+            audio_length_in_s=duration,
+            guidance_scale=float(args.guidance or 3.5),
+            generator=generator,
+        )
 
     log_stage("encode-wav")
     pcm = _to_int16_pcm(out.audios)
