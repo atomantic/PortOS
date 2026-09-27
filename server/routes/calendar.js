@@ -81,6 +81,18 @@ const pushSyncSchema = z.object({
     description: z.string().optional().default(''),
     status: z.string().optional().default('confirmed'),
     htmlLink: z.string().optional(),
+    // No defaults: legacy push clients omit identity; explicit null/[] clears it.
+    organizer: z.object({
+      displayName: z.string().optional(),
+      email: z.string().optional(),
+      self: z.boolean().optional()
+    }).nullable().optional(),
+    attendees: z.array(z.object({
+      displayName: z.string().optional(),
+      email: z.string().optional(),
+      self: z.boolean().optional(),
+      responseStatus: z.string().optional()
+    })).nullable().optional(),
     // Conference metadata feeds the cached `meetingUrl` join link (#6289).
     // OPTIONAL with no default, and nullable: `selectMeetingUrl` distinguishes
     // a producer that omitted them (preserve the cached link) from one that

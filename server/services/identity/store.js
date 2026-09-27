@@ -1,7 +1,7 @@
 import { meatspaceEvents } from '../meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFileStrict, readJSONFile } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 
@@ -142,17 +142,17 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
   // costs no goals, so reporting Strategist "unavailable" off it would be a lie in
   // the opposite direction: the goals were right there and readable.
   if (strict && !ok && !mlGoals) {
-    throw new Error(`Unreadable identity file: ${filePath}`);
+    throw Object.assign(new Error(`Unreadable identity file: ${filePath}`), { code: 'UNREADABLE_STORE' });
   }
   return data;
 }
 
-export async function saveJSON(filePath, data) {
+export async function saveJSON(filePath, data, { mirrorGoals = true } = {}) {
   await ensureIdentityDir();
   await atomicWrite(filePath, data);
   if (filePath === LONGEVITY_FILE) meatspaceEvents.emit('death-clock:changed', {});
   // Mirror goals array into MortalLoom.json so iOS/macOS app sees the change.
-  if (filePath === GOALS_FILE && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
+  if (filePath === GOALS_FILE && mirrorGoals && (await isMortalLoomEnabled()) && Array.isArray(data.goals)) {
     await mlReplace('goals', data.goals);
   }
   if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
@@ -173,13 +173,31 @@ const goalsQueue = createKeyCachedQueue();
  *   loaded goals document (post any earlier slow work in the caller) and returns
  *   the document to persist. Run serialized against every other `mutateGoals`
  *   call so two in-flight mutations can't race a load/save pair.
+ * Unchanged documents are not written or mirrored. `localOnly` is reserved for
+ * MortalLoom's explicit import: merge into the local mirror without sourcing
+ * from, or replacing, the imported iCloud store. It still shares the same queue.
  * @returns {Promise<object>} the saved goals document.
  */
-export function mutateGoals(fn) {
+export function mutateGoals(fn, { localOnly = false } = {}) {
   return goalsQueue('goals', async () => {
-    const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
+    const goals = localOnly
+      ? await readJSONFile(GOALS_FILE, structuredClone(DEFAULT_GOALS), { strict: true })
+      : await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
+    const before = JSON.stringify(goals);
     const next = await fn(goals);
-    await saveJSON(GOALS_FILE, next);
+    if (JSON.stringify(next) !== before) {
+      await saveJSON(GOALS_FILE, next, { mirrorGoals: !localOnly });
+    }
     return next;
   });
+}
+
+/** Edit the fresh document in place while returning a caller-specific result. */
+export async function editGoals(fn, options) {
+  let result;
+  await mutateGoals(async goals => {
+    result = await fn(goals);
+    return goals;
+  }, options);
+  return result;
 }

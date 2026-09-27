@@ -55,10 +55,10 @@ export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
     // all. Only the chosen URL is ever retained — never the surrounding
     // conference object, its passwords, or its dial-in codes (#6289).
     meetingUrl: selectMeetingUrl(event),
-    organizer: event.organizer
+    organizer: event.organizer === undefined ? undefined : event.organizer
       ? { name: event.organizer.displayName || '', email: event.organizer.email || '' }
       : null,
-    attendees,
+    attendees: event.attendees === undefined ? undefined : attendees,
     myStatus,
     subcalendarId,
     subcalendarName,
@@ -127,9 +127,11 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
         // Refresh the identity fields too so an event already in cache gains
         // organizer/attendees for Tribe touchpoint matching and an up-to-date
         // declined status (#2033) — not just newly-added events.
-        existing.organizer = event.organizer;
-        existing.attendees = event.attendees;
-        existing.myStatus = event.myStatus;
+        if (event.organizer !== undefined) existing.organizer = event.organizer;
+        if (event.attendees !== undefined) {
+          existing.attendees = event.attendees;
+          existing.myStatus = event.myStatus;
+        }
         // `undefined` means this producer never described the event's
         // conferencing — a legacy push, or an MCP payload predating the field —
         // so the cached link stands. Anything else is the current snapshot:
@@ -141,7 +143,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
       } else {
         // A newly cached event always carries the key, so `meetingUrl` is absent
         // from the cache only for records written before this shipped.
-        const retained = { ...event, meetingUrl: event.meetingUrl ?? null };
+        const retained = { ...event, organizer: event.organizer ?? null, attendees: event.attendees ?? [], meetingUrl: event.meetingUrl ?? null };
         cache.events.push(retained);
         existingMap.set(event.externalId, retained);
         newCount++;
@@ -207,7 +209,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
  * partial payload from driving a prune. Clearing a link is destructive too.
  */
 function withExplicitConferenceFields(event) {
-  return { ...event, hangoutLink: event?.hangoutLink ?? null, conferenceData: event?.conferenceData ?? null };
+  return { ...event, organizer: event?.organizer ?? null, attendees: event?.attendees ?? [], hangoutLink: event?.hangoutLink ?? null, conferenceData: event?.conferenceData ?? null };
 }
 
 const mcpSyncLock = new Map();

@@ -315,6 +315,27 @@ describe('Calendar Routes — push sync carries Google conference metadata (#628
     calendarGoogleSync.pushSyncEvents.mockResolvedValue({ newEvents: 1, updated: 0, pruned: 0, total: 1 });
   });
 
+  it('preserves participant projection and authoritative clears without accepting unrelated metadata', async () => {
+    const response = await push([{
+      ...baseEvent,
+      organizer: { email: 'alice@example.com', displayName: 'Example Organizer', self: true, privateNote: 'discard' },
+      attendees: [{ email: 'alice@example.com', self: true, responseStatus: 'declined', privateNote: 'discard' }],
+    }, { ...baseEvent, id: 'clear', organizer: null, attendees: [] }, baseEvent, { ...baseEvent, id: 'null-attendees', attendees: null }]);
+    expect(response.status).toBe(200);
+    expect(pushedEvents()[0].organizer).toEqual({ email: 'alice@example.com', displayName: 'Example Organizer', self: true });
+    expect(pushedEvents()[0].attendees).toEqual([{ email: 'alice@example.com', self: true, responseStatus: 'declined' }]);
+    expect(pushedEvents()[1]).toMatchObject({ organizer: null, attendees: [] });
+    expect(pushedEvents()[2]).not.toHaveProperty('organizer');
+    expect(pushedEvents()[2]).not.toHaveProperty('attendees');
+    expect(pushedEvents()[3].attendees).toBeNull();
+  });
+
+  it.each([{ organizer: 'invalid' }, { attendees: [{ self: 'yes' }] }])('rejects malformed participant types: %j', async fields => {
+    const response = await push([{ ...baseEvent, ...fields }]);
+    expect(response.status).toBe(400);
+    expect(calendarGoogleSync.pushSyncEvents).not.toHaveBeenCalled();
+  });
+
   it('forwards conferenceData entry points and hangoutLink to the service', async () => {
     const response = await push([{
       ...baseEvent,
