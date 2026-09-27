@@ -766,4 +766,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `messageBrowserIdentity.js` | Shared Outlook row extraction and identity-safe browser action scripts; exact unique targets and confirmed row removal. |
 
-| `databaseMaintenanceJournal.js` | Shared `databaseMaintenanceEndpointSchema` plus durable cross-process database admission fence and operation journal with exclusive coordinator ownership and durable forward-only stages; source-only cancellation archives an unowned accepted operation. |
+| `databaseMaintenanceJournal.js` | Shared `databaseMaintenanceEndpointSchema` plus durable cross-process database admission fence and operation journal with exclusive coordinator ownership, one-use detached worker reservations, exit-receipt-gated ownership recovery, and durable forward-only stages; source-only cancellation archives an unowned accepted operation. |
