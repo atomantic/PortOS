@@ -91,6 +91,7 @@ import {
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
 const PROVIDER_SIGNAL_POLL_MS = 5000;
+const SENTINEL_RECOVERY_RETRY_MS = 250;
 
 // Paste + submit-Enter retry machinery for the controller's prompt delivery.
 // Separated so retries don't re-run the liveness guard or re-set the outer
@@ -562,6 +563,11 @@ export function createTuiSessionController({
   // is itself guarded by `sessionPhase`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
   let sentinelIngested = false;
+  // A recovered sentinel is not completion until its contents have been read
+  // and promoted to the canonical path. If either step races the filesystem,
+  // keep the run alive and let the watcher retry instead of finalizing from a
+  // partial/ambiguous signal.
+  let sentinelRecoveryPending = false;
   let hasStartedWorking = false;
   // Guards the once-per-run `run.output` boundary (#4540). Kept separate from
   // `firstOutputAt` / `hasStartedWorking`: both of those are also set by paths
@@ -672,6 +678,7 @@ export function createTuiSessionController({
   let providerSignalTimer = null;
   let claudeLowPriorityResubmitTimer = null;
   let doneSentinelWatcher = null;
+  let sentinelRecoveryRetryTimer = null;
 
   const streamingStrip = createStreamingAnsiStripper();
 
@@ -706,10 +713,21 @@ export function createTuiSessionController({
     // shared finalization/output-hook path reads the sentinel again, so a
     // structured completion has the same behavior as an exact write.
     const sentinelSourcePath = sentinel.resolvedPath?.();
-    if (sentinelReadSucceeded && sentinel.promote && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
-      await sentinel.promote(contents).catch(err => {
-        console.error(`❌ ingestDoneSentinel canonical promotion failed: ${err.message}`);
-      });
+    let sentinelValidated = sentinelReadSucceeded;
+    if (sentinelReadSucceeded && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
+      if (typeof sentinel.promote !== 'function') {
+        sentinelValidated = false;
+      } else {
+        sentinelValidated = await sentinel.promote(contents).catch(err => {
+          console.error(`❌ ingestDoneSentinel canonical promotion failed: ${err.message}`);
+          return false;
+        });
+      }
+    }
+    if (!sentinelValidated) {
+      sentinelIngested = false;
+      sentinelRecoveryPending = true;
+      return null;
     }
     // A programmatic-I/O task type writes a JSON `{ summary, payload }` sentinel;
     // append only the human `summary` to the agent output (the structured
@@ -745,6 +763,15 @@ export function createTuiSessionController({
     if (isTerminal()) return;
     await finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
   });
+
+  const scheduleSentinelRecoveryRetry = () => {
+    if (sentinelRecoveryRetryTimer || isTerminal()) return;
+    sentinelRecoveryRetryTimer = setTimeout(() => {
+      sentinelRecoveryRetryTimer = null;
+      if (isTerminal()) return;
+      doneSentinelWatcher = armSentinelWatcher();
+    }, SENTINEL_RECOVERY_RETRY_MS);
+  };
 
   /**
    * Merge Gate contract check (#5876) — runs on a successful sentinel, before
@@ -794,6 +821,7 @@ export function createTuiSessionController({
     if (providerSignalTimer) { clearInterval(providerSignalTimer); providerSignalTimer = null; }
     if (promptTimer) { clearInterval(promptTimer); promptTimer = null; }
     if (claudeLowPriorityResubmitTimer) { clearTimeout(claudeLowPriorityResubmitTimer); claudeLowPriorityResubmitTimer = null; }
+    if (sentinelRecoveryRetryTimer) { clearTimeout(sentinelRecoveryRetryTimer); sentinelRecoveryRetryTimer = null; }
     doneSentinelWatcher?.();
     doneSentinelWatcher = null;
     // Cancels the paste-attempt timers and releases the post-paste accumulator
@@ -885,6 +913,19 @@ export function createTuiSessionController({
     // workflow writes the sentinel and stops; the 2s doneSentinelWatcher is
     // what normally calls finish(). Idempotent via `sentinelIngested`.
     const sentinelSummary = await ingestDoneSentinel();
+
+    if (sentinelRecoveryPending) {
+      sentinelRecoveryPending = false;
+      sessionPhase = 'running';
+      scheduleSentinelRecoveryRetry();
+      if (pendingFinish && !sentinelPresent()) {
+        const replay = pendingFinish;
+        pendingFinish = null;
+        return finish(replay);
+      }
+      pendingFinish = null;
+      return;
+    }
 
     // Merge Gate contract check (#5876): only for a run that actually
     // succeeded AND signaled that success via a real `.agent-done` summary —

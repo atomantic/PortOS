@@ -62,23 +62,19 @@ export function createAgentSentinelAccess({
       : [canonicalPath]
     : [];
   const fallbackPaths = candidatePaths.slice(1);
-  const blockedFallbacks = new Set();
   let detectedPath = null;
   let callbackDelivered = false;
+  let recoveryPromoted = false;
 
   const fallbackIsUnambiguous = (filePath) => {
-    if (blockedFallbacks.has(filePath)) return false;
     const candidateId = doneSentinelAgentId(basename(filePath));
     if (!candidateId) return false;
     const ids = activeIds(getActiveAgentIds);
-    if (!ids) {
-      blockedFallbacks.add(filePath);
-      return false;
-    }
-    if (ids.some((activeId) => activeId !== agentId && activeId.startsWith(candidateId))) {
-      blockedFallbacks.add(filePath);
-      return false;
-    }
+    // Registry reads can fail transiently. Fail closed for this check, but do
+    // not cache that answer: a sibling that is still active now may finish
+    // before the next watcher poll, and then this recovery becomes safe.
+    if (!ids) return false;
+    if (ids.some((activeId) => activeId !== agentId && activeId.startsWith(candidateId))) return false;
     return isFreshFile(filePath, startedAt);
   };
 
@@ -109,6 +105,9 @@ export function createAgentSentinelAccess({
 
   const watch = (onDetected, watchOptions = {}) => {
     if (!canonicalPath || typeof onDetected !== 'function') return null;
+    // A failed read or promotion may re-arm the same access object. The prior
+    // one-shot callback must not permanently suppress that retry.
+    callbackDelivered = false;
     if (candidatePaths.length === 1) return watchForFile(canonicalPath, onDetected, watchOptions);
     const closers = candidatePaths.map((filePath) => watchForFile(
       filePath,
@@ -145,24 +144,38 @@ export function createAgentSentinelAccess({
     await Promise.all([...paths].map((filePath) => rm(filePath, { force: true }).catch(() => {})));
     detectedPath = null;
     callbackDelivered = false;
+    recoveryPromoted = false;
   };
 
   const promote = async (contents) => {
     const sourcePath = resolvedPath();
-    if (!sourcePath || sourcePath === canonicalPath || fs.existsSync(canonicalPath)) return;
-    await writeFile(canonicalPath, contents, { flag: 'wx' }).catch((err) => {
+    if (!sourcePath) return false;
+    if (sourcePath === canonicalPath || fs.existsSync(canonicalPath)) {
+      recoveryPromoted = true;
+      return true;
+    }
+    try {
+      await writeFile(canonicalPath, contents, { flag: 'wx' });
+      recoveryPromoted = true;
+      return true;
+    } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
-    });
+      recoveryPromoted = fs.existsSync(canonicalPath);
+      return recoveryPromoted;
+    }
   };
 
   // Shared cleanup removes the canonical path by design. Remove only the
   // recovery path this access object actually accepted; never glob or delete a
   // sibling's similarly-prefixed sentinel.
   const cleanup = async () => {
+    if (!recoveryPromoted) return false;
     if (detectedPath && detectedPath !== canonicalPath) {
       await rm(detectedPath, { force: true }).catch(() => {});
     }
     detectedPath = null;
+    recoveryPromoted = false;
+    return true;
   };
 
   return {

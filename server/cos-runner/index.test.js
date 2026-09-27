@@ -119,6 +119,16 @@ describe('cos-runner termination', () => {
 });
 
 describe('cos-runner durable TUI ownership (#3202)', () => {
+  it('does not complete a TUI until sentinel read and recovery promotion both validate', () => {
+    const guard = RUNNER_SRC.indexOf('if (!sentinelValidated) {');
+    const completed = RUNNER_SRC.indexOf('current.completedBySentinel = true;');
+    const killed = RUNNER_SRC.indexOf('current.process.kill();');
+    expect(guard, 'sentinel failures must stay on the watch path').toBeGreaterThan(-1);
+    expect(completed, 'completion must be marked only after validation').toBeGreaterThan(guard);
+    expect(killed, 'the PTY must be killed only after validation').toBeGreaterThan(completed);
+    expect(RUNNER_SRC).toContain('current.doneWatcher = sentinelAccess.watch(handleSentinel);');
+  });
+
   it('checks the TUI executable against its child PATH before opening a PTY', () => {
     // node-pty otherwise turns a missing binary into exit 1 with no transcript,
     // which loses the real configuration error to a generic startup failure.

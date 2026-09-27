@@ -351,22 +351,28 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
   })));
 
   if (doneSentinelPath) {
-    agent.doneWatcher = sentinelAccess.watch(() => {
+    const handleSentinel = () => {
       agent.sentinelWork = lifecycle.trackWork(async () => {
         const current = activeAgents.get(agentId);
         if (!current) return;
-        current.completedBySentinel = true;
         let sentinelReadSucceeded = true;
         const contents = await sentinelAccess.read().catch(err => {
           sentinelReadSucceeded = false;
           console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
           return '';
         });
+        let sentinelValidated = sentinelReadSucceeded;
         if (sentinelReadSucceeded) {
-          await sentinelAccess.promote(contents).catch(err => {
+          sentinelValidated = await sentinelAccess.promote(contents).catch(err => {
             console.error(`❌ TUI agent ${agentId} canonical sentinel promotion failed: ${err.message}`);
+            return false;
           });
         }
+        if (!sentinelValidated) {
+          if (activeAgents.get(agentId) === current) current.doneWatcher = sentinelAccess.watch(handleSentinel);
+          return;
+        }
+        current.completedBySentinel = true;
         const { summary } = parseSentinelPayload(contents);
         if (summary) {
           emitToServer('agent:output', {
@@ -375,10 +381,11 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
           });
         }
         if (!current.exited) current.process.kill();
-        if (sentinelReadSucceeded) await sentinelAccess.cleanup();
+        await sentinelAccess.cleanup();
       });
       return agent.sentinelWork;
-    });
+    };
+    agent.doneWatcher = sentinelAccess.watch(handleSentinel);
   }
 
   await withState((state) => {

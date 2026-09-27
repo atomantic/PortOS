@@ -28,7 +28,7 @@ describe('createAgentSentinelAccess', () => {
       expect(access.resolvedPath()).toBe(recoveredPath);
       expect(await access.read()).toBe(contents);
 
-      await access.promote(contents);
+      expect(await access.promote(contents)).toBe(true);
       expect(await readFile(join(workspace, '.agent-done-agent-ded2dccb'), 'utf8')).toBe(contents);
       await access.cleanup();
       await expect(readFile(recoveredPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -82,6 +82,31 @@ describe('createAgentSentinelAccess', () => {
       await rm(recoveredPath);
       expect(access.exists()).toBe(false);
       expect(access.resolvedPath()).toBeNull();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('rechecks a fallback after a transient active-agent registry failure', async () => {
+    const workspace = await makeWorkspace();
+    try {
+      let registryAvailable = false;
+      const recoveredPath = join(workspace, '.agent-done-agent-ded2dcc');
+      await writeFile(recoveredPath, 'done');
+      const access = createAgentSentinelAccess({
+        workspacePath: workspace,
+        agentId: AGENT_ID,
+        startedAt: Date.now() - 1000,
+        getActiveAgentIds: () => {
+          if (!registryAvailable) throw new Error('registry temporarily unavailable');
+          return [AGENT_ID];
+        },
+      });
+
+      expect(access.exists()).toBe(false);
+      registryAvailable = true;
+      expect(access.exists()).toBe(true);
+      expect(access.resolvedPath()).toBe(recoveredPath);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }

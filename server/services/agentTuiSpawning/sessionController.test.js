@@ -44,6 +44,7 @@ function makeController({
   provider = { id: 'codex-tui', name: 'Codex' },
   tuiConfig = TUI_CONFIG,
   prompt = 'do the work',
+  sentinelRead = async () => sentinelSummary ?? '',
 } = {}) {
   // A DISTINCT closer per arm: the merge-gate case below has to tell the
   // re-armed watcher apart from the one it replaced, which one shared spy
@@ -106,7 +107,7 @@ function makeController({
     sentinel: {
       path: '/tmp/workspace/.agent-done-agent-8021',
       exists: () => sentinelSummary !== null,
-      read: async () => sentinelSummary ?? '',
+      read: sentinelRead,
       remove: seams.remove,
       watch,
     },
@@ -142,6 +143,30 @@ describe('TUI session controller — teardown owns its own machinery (#8021)', (
     // A run with no record still releases: `unregisterSpawnedAgent` is skipped
     // (no pid to unregister) but the map entry is deleted unconditionally.
     expect(releaseRunRecord).toHaveBeenCalledWith(null);
+  });
+
+  it('keeps the run alive when a completion sentinel read fails, then retries it', async () => {
+    let reads = 0;
+    const { controller, finalizeAgent, watch } = makeController({
+      sentinelSummary: 'Recovered completion.',
+      sentinelRead: async () => {
+        reads += 1;
+        if (reads === 1) throw new Error('sentinel is still being written');
+        return 'Recovered completion.';
+      },
+    });
+
+    controller.attachSession({ sessionId: 'session-abcdef12', pid: 4242 });
+    await controller.finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
+
+    expect(finalizeAgent).not.toHaveBeenCalled();
+    expect(controller.isTerminal()).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(watch).toHaveBeenCalledTimes(2);
+
+    await controller.finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
+    expect(finalizeAgent).toHaveBeenCalledTimes(1);
+    expect(controller.isTerminal()).toBe(true);
   });
 
   it('tears down the watcher the merge-gate nudge re-armed, not the one it replaced', async () => {
