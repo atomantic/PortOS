@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ImagePlus, Trash2, Plus, Palette, Sparkles } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
@@ -43,13 +43,20 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
   // characters/places/objects as references instead of re-picking every one
   // by hand through Add reference. Idempotent: images already present are
   // skipped, so a second click adds nothing new.
+  //
+  // The universe read is async, so an edit/remove/Add-reference the director
+  // makes WHILE it's in flight must not be clobbered by a stale `references`
+  // snapshot once it resolves. Read the base list through a ref that tracks
+  // every render instead of the click-time closure value.
+  const referencesRef = useRef(references);
+  referencesRef.current = references;
   const universeId = project.concept?.universeId || null;
   const handlePullFromUniverse = () => {
     if (!universeId || pulling) return;
     setPulling(true);
     getUniverse(universeId, { silent: true })
       .then((universe) => {
-        const { next, added, skipped } = pullUniverseCanonReferences(universe, references);
+        const { next, added, skipped } = pullUniverseCanonReferences(universe, referencesRef.current);
         if (added > 0) saveReferences(next);
         if (added > 0) {
           toast.success(`Pulled ${added} reference${added === 1 ? '' : 's'} from the universe${skipped ? ` (${skipped} skipped)` : ''}`);

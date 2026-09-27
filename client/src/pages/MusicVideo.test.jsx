@@ -1195,6 +1195,34 @@ describe('MusicVideo pull references from universe (#8978)', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Every canon image is already a reference'));
   });
 
+  it('applies the pull against the latest references, not a stale click-time snapshot (race guard)', async () => {
+    let resolveUniverse;
+    getUniverse.mockReturnValueOnce(new Promise((resolve) => { resolveUniverse = resolve; }));
+    await openProject(UNIVERSE_PROJECT);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
+    await waitFor(() => expect(getUniverse).toHaveBeenCalledTimes(1));
+
+    // While the universe fetch is still in flight, remove the existing
+    // reference — a stale click-time snapshot would resurrect it below.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
+      'mv-universe', { visualSpec: { references: [] } }, { silent: true },
+    ));
+
+    await act(async () => {
+      resolveUniverse({ characters: [{ id: 'c1', name: 'Nyra', primaryImageRef: 'nyra.png' }], places: [], objects: [] });
+    });
+
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith(
+      'mv-universe',
+      { visualSpec: { references: [
+        { id: expect.any(String), imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
+      ] } },
+      { silent: true },
+    ));
+  });
+
   it('does not offer Pull from universe when the project has no linked universe', async () => {
     await openProject(PROJECT_NO_CLIP);
     expect(screen.queryByRole('button', { name: /Pull from universe/i })).toBeNull();
