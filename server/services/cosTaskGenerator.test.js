@@ -1423,6 +1423,14 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     expect(sets.appsWithBlockedImprovement.get('app-1')).toBe('sys-t1');
   });
 
+  it('a task queued under a renamed type holds the current type slot', () => {
+    // A release-check task queued before migration 417 must dedupe against
+    // do-release, or the generator mints a duplicate next to it.
+    const sets = buildImprovementDedupSets([liTask({}, { analysisType: 'release-check' })]);
+    expect(sets.existingTaskTypes.has('app:app-1:do-release')).toBe(true);
+    expect(sets.existingTaskTypes.has('app:app-1:release-check')).toBe(false);
+  });
+
   it('a failure-blocked NON-improvement task never holds the per-app cap', () => {
     // Blocked tasks are not reaped, so a blocked investigation / review
     // follow-up (app-tagged but no derivable analysis type) holding the cap

@@ -32,6 +32,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
+import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
@@ -788,7 +789,9 @@ export async function resolveAutonomyBudget(state, runningAgentEntries) {
   return { cosAutonomyMode, autonomousActionsRemaining };
 }
 
-const analysisTypeForTask = (task) => task.metadata?.analysisType || task.metadata?.selfImprovementType;
+// Tasks queued before a task-type rename (TASK_TYPE_RENAMES) resolve to the
+// current schedule key, or they would read as disabled and never drain.
+const analysisTypeForTask = (task) => currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
 
 function isDisabledAnalysisType(task, taskSchedule) {
   const analysisType = analysisTypeForTask(task);
@@ -1423,9 +1426,9 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
     const isActive = task.status === 'pending' || task.status === 'in_progress';
     const isBlocked = task.status === 'blocked';
     const isFailureBlocked = isBlocked && task.metadata?.blockedCategory !== 'user-terminated';
-    const analysisType = task.metadata?.analysisType ||
+    const analysisType = currentTaskTypeName(task.metadata?.analysisType ||
       task.metadata?.selfImprovementType ||
-      task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1];
+      task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1]);
     const appId = task.metadata?.app;
     if ((isActive || isBlocked) && analysisType) {
       const taskKey = appId ? `app:${appId}:${analysisType}` : analysisType;
