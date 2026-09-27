@@ -224,6 +224,8 @@ describe('feedback revisions', () => {
     expect(response.status).toBe(202);
     const destination = join(PATHS.data, 'launch-videos/example', response.body.runId, 'composition');
     expect(await readFile(join(destination, 'assets/score.js'), 'utf8')).toBe('const score = [1, 2, 3];');
+    // A take that predates the motion kit gets it added to the revision copy.
+    expect(await readdir(destination)).toContain('portos-motion.js');
     await writeFile(join(destination, 'index.html'), 'Revised');
     expect(await readFile(join(source, 'index.html'), 'utf8')).toBe('<html>Original composition</html>');
     const task = addTask.mock.calls[0][0];
