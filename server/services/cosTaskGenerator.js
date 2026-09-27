@@ -2963,7 +2963,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
       planConstraint: planConstraintBlock
     }
   });
-  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app, taskMetadata: metadata, taskType: promptTaskType });
+  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
+    app, taskMetadata: metadata, taskType: promptTaskType,
+    trustedPullRequestData: prDataBlock,
+  });
   const description = scopeDescriptionToPullRequest(
     appendTaskDataInputs(baseDescription, taskDataInputs),
     metadata

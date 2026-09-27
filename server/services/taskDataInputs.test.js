@@ -50,6 +50,29 @@ describe('taskDataInputs', () => {
     }));
   });
 
+  it('reuses the screened maintenance scope instead of reintroducing external PRs through preload', async () => {
+    const listPullRequests = vi.fn().mockResolvedValue({
+      ok: true, items: [{ number: 99, title: 'External change', author: { login: 'external' } }],
+    });
+    const resolveTracker = vi.fn();
+    const trustedPullRequestData = 'Trusted maintenance scope only.\n- **#7**\n  - by owner';
+    const options = {
+      app: APP, taskType: 'pr-watcher', taskMetadata: { prAuthorFilter: 'any' },
+      trustedPullRequestData, dependencies: { listPullRequests, resolveTracker },
+    };
+    const sections = await resolveTaskDataInputs(['open-pull-requests'], options);
+    expect(sections[0].content).toBe(trustedPullRequestData);
+    expect(appendTaskDataInputs('Maintain listed PRs.', sections)).not.toContain('External change');
+    expect(listPullRequests).not.toHaveBeenCalled();
+    expect(resolveTracker).not.toHaveBeenCalled();
+
+    const missing = await resolveTaskDataInputs(['open-pull-requests'], {
+      ...options, trustedPullRequestData: undefined,
+    });
+    expect(missing[0].content).toContain('Do not fetch an unfiltered PR list');
+    expect(listPullRequests).not.toHaveBeenCalled();
+  });
+
   it('preserves failed versus legitimately empty tracker reads', async () => {
     const common = {
       app: APP,
