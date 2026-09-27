@@ -66,7 +66,7 @@ import { POOL_CONFIG, query, checkHealth } from '../lib/db.js';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough, Readable } from 'stream';
-import { writeFileSync, mkdtempSync, readFileSync, createReadStream } from 'fs';
+import { writeFileSync, mkdtempSync, readFileSync, createReadStream, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 import databaseRoutes from './database.js';
@@ -164,6 +164,62 @@ describe('database admin maintenance admission', () => {
     mockExecFile([{ exitCode: 0, stdout: 'started' }]);
     expect((await request(makeApp()).post('/api/database/start').send({ backend: 'docker' })).status).toBe(200);
     expect(execFile).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A fenced operation must remain inspectable without pool/shell admission,
+// while endpoint identities and damaged on-disk bytes never reach the API.
+describe('database maintenance status', () => {
+  afterEach(() => {
+    rmSync(pathJoin(PATHS.data, 'database-maintenance'), { recursive: true, force: true });
+  });
+
+  it('reports idle and current durable progress without exposing endpoints or reopening admission', async () => {
+    vi.clearAllMocks();
+    const app = makeApp();
+    const idle = await request(app).get('/api/database/maintenance/status');
+    expect(idle.status).toBe(200);
+    expect(idle.body).toEqual({ stage: 'idle', fenced: false });
+    expect(idle.headers['cache-control']).toBe('no-store');
+
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example_role' };
+    const operation = journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
+    const accepted = await request(app).get('/api/database/maintenance/status');
+    expect(accepted.body).toEqual({
+      id: operation.id, stage: 'accepted', source: 'native', target: 'docker', fenced: true,
+    });
+    const owner = journal.acquireCoordinator(operation.id);
+    const stages = ['accepted', 'quiescing', 'exporting', 'importing', 'committing', 'verifying', 'verified'];
+    for (let i = 1; i < stages.length; i++) {
+      journal.transition(operation.id, owner, stages[i - 1], stages[i]);
+    }
+    const verified = await request(app).get('/api/database/maintenance/status');
+    expect(verified.status).toBe(200);
+    expect(verified.body).toEqual({ ...accepted.body, stage: 'verified' });
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it('returns a non-cacheable maintenance error for damaged state instead of reporting idle', async () => {
+    vi.clearAllMocks();
+    const journal = createDatabaseMaintenanceJournal(PATHS.data);
+    const source = { mode: 'docker', host: 'localhost', port: 5561, database: 'example_test', user: 'example_role' };
+    journal.begin({ source, target: { ...source, mode: 'native', port: 5432 } });
+    writeFileSync(pathJoin(PATHS.data, 'database-maintenance', 'operation.json'), 'example damaged private bytes');
+    const response = await request(makeApp()).get('/api/database/maintenance/status');
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('DATABASE_MAINTENANCE');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.text).not.toContain('example damaged private bytes');
+    expect(() => journal.assertAdmission()).toThrow();
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(checkHealth).not.toHaveBeenCalled();
   });
 });
 

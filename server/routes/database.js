@@ -10,6 +10,13 @@ import * as dbAdmin from '../services/dbAdmin.js';
 
 const router = Router();
 
+// GET /api/database/maintenance/status — local journal, no pool/shell probes.
+// The ordinary instance auth gate applies; this is not a public health route.
+router.get('/maintenance/status', asyncHandler(async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(dbAdmin.getMaintenanceStatus());
+}));
+
 // GET /api/database/status — current mode, connectivity, row counts, resource stats
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await dbAdmin.getStatus());
