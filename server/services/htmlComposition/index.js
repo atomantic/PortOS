@@ -122,7 +122,7 @@ export async function renderComposition({ jobId, ...input }) {
     failure = error;
   } finally {
     await page?.close().catch(error => { failure ??= error; });
-    if (audioTemp) await rm(audioTemp, { recursive: true, force: true });
+    if (audioTemp) await rm(audioTemp, { recursive: true, force: true }).catch(error => { failure ??= error; });
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});
       await unlinkGuarded(outputPath).catch(() => {});
