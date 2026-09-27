@@ -2454,6 +2454,7 @@ export const appLaunchVideoRequestSchema = z.object({
   format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
   targetDurationSec: z.number().int().min(15).max(120).default(20),
   generateMusic: z.boolean().default(false),
+  musicMethod: z.enum(['agent', 'service']).default('agent'),
   motionGraphics: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
 }).strict();
@@ -2479,9 +2480,10 @@ export const launchVideoStoryboardSchema = z.object({
 // HTML composition inputs are local, editable assets, never provider prompts.
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
+  synthesizeMusic: z.boolean().optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-});
+}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both');
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),

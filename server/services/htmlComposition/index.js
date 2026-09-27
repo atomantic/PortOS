@@ -1,5 +1,6 @@
 import { join, resolve } from 'node:path';
-import { open, realpath } from 'node:fs/promises';
+import { mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { PATHS, ensureDir, unlinkGuarded } from '../../lib/fileUtils.js';
@@ -9,7 +10,7 @@ import { videoGenEvents } from '../videoGen/events.js';
 import { mutateVideoHistory } from '../videoGen/history.js';
 import { resolveMusicTrackPath } from '../pipeline/audioMux.js';
 import { openComposition } from './browser.js';
-import { encodeComposition } from './encode.js';
+import { encodeComposition, synthesizeCompositionMusic } from './encode.js';
 import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
 
 const active = new Map();
@@ -28,6 +29,7 @@ export async function renderComposition({ jobId, ...input }) {
   const filename = `composition-${jobId}.mp4`;
   const outputPath = join(PATHS.videos, filename);
   let page;
+  let audioDirectory;
   let success = false;
   let result;
   let failure;
@@ -39,8 +41,8 @@ export async function renderComposition({ jobId, ...input }) {
     try { await write(handle); } finally { await handle.close(); }
   };
   try {
-    const { directory, musicTrack, launchVideo } = validateRequest(htmlCompositionRenderSchema, input);
-    const musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
+    const { directory, musicTrack, launchVideo, synthesizeMusic } = validateRequest(htmlCompositionRenderSchema, input);
+    let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     signal.throwIfAborted();
     let launchPlan;
@@ -67,6 +69,13 @@ export async function renderComposition({ jobId, ...input }) {
     const contract = parsed.data;
     if (launchPlan && Math.abs(contract.durationSec - launchPlan.durationSec) > 1e-8) {
       throw new Error('Composition durationSec must match storyboard.json');
+    }
+    if (synthesizeMusic) {
+      const wav = await synthesizeCompositionMusic(page, contract.durationSec);
+      page.check();
+      audioDirectory = await mkdtemp(join(tmpdir(), 'portos-composition-audio-'));
+      musicPath = join(audioDirectory, 'score.wav');
+      await writeFile(musicPath, wav, { flag: 'wx' });
     }
     await ensureDir(PATHS.videos);
     await encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress: progress => {
@@ -111,6 +120,7 @@ export async function renderComposition({ jobId, ...input }) {
     failure = error;
   } finally {
     await page?.close();
+    if (audioDirectory) await rm(audioDirectory, { recursive: true, force: true });
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});
       await unlinkGuarded(outputPath).catch(() => {});

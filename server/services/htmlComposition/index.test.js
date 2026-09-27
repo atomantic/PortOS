@@ -135,6 +135,17 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: input.jobId }));
   });
 
+  it('muxes agent-composed PCM without a music engine and refuses missing or invalid scores', async () => {
+    const input = await composition(fixture('', `renderAudio: async ({ sampleRate, durationSec }) =>
+      Array.from({ length: Math.round(sampleRate * durationSec) }, (_, n) => 0.2 * Math.sin(2 * Math.PI * 440 * n / sampleRate)),`));
+    const result = await renderComposition({ ...input, synthesizeMusic: true });
+    const pcm = execFileSync(ffmpeg, ['-v', 'error', '-i', join(PATHS.videos, result.filename), '-vn', '-f', 'f32le', '-ac', '1', '-ar', '24000', '-']);
+    expect(pcm.length).toBeGreaterThanOrEqual(24000 * 4);
+    expect(Array.from({ length: 1000 }, (_, n) => Math.abs(pcm.readFloatLE(n * 4))).some(value => value > 0.05)).toBe(true);
+    await expect(renderComposition({ ...await composition(), synthesizeMusic: true })).rejects.toThrow('renderAudio is required');
+    await expect(renderComposition({ ...await composition(fixture('', 'renderAudio: async () => Array(24000).fill(2),')), synthesizeMusic: true })).rejects.toThrow('finite mono PCM');
+  }, 30000);
+
   it('loops and trims library music to the video with a half-second tail fade', async () => {
     await mkdir(PATHS.music, { recursive: true });
     execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.3', '-y', join(PATHS.music, 'example.wav')]);

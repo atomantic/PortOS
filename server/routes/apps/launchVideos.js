@@ -76,6 +76,7 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   const runId = `${Date.now()}-${randomUUID()}`;
   const directory = `launch-videos/${app.id}/${runId}/composition`;
   const payload = { directory, musicTrack: options.musicTrack,
+    ...(options.generateMusic && options.musicMethod === 'agent' ? { synthesizeMusic: true } : {}),
     launchVideo: { appId: app.id, runId, targetDurationSec: options.targetDurationSec } };
   // addTask's state lock makes the stable description + app identity atomic
   // across overlapping requests, including requests with different options.
