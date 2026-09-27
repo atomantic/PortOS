@@ -160,6 +160,22 @@ export const protectedAgentIds = (agents = []) => {
 // let a stray runner `agent:completed` event double-finalize them.
 export const isAgentOwnedLocally = (agentId) => activeAgents.has(agentId) || runnerAgents.has(agentId);
 
+/**
+ * Keep task ownership through the whole run, including completion bookkeeping.
+ * Durable running records protect restart survivors; local maps protect the
+ * gap between agent completion and task completion. Age alone never releases
+ * ownership: orphan/zombie recovery must retire a dead run first.
+ */
+export const hasActiveTaskOwner = (taskId, agents = {}) => {
+  if (Object.values(agents).some(agent => agent.taskId === taskId && agent.status === 'running')) return true;
+  for (const entries of [activeAgents, runnerAgents]) {
+    for (const agent of entries.values()) {
+      if ((agent.taskId || agent.task?.id) === taskId) return true;
+    }
+  }
+  return false;
+};
+
 // Metadata booleans may arrive as true/'true' or false/'false' (JSON vs TASKS.md string round-trip)
 export const isTruthyMeta = (value) => value === true || value === 'true';
 export const isFalsyMeta = (value) => value === false || value === 'false';

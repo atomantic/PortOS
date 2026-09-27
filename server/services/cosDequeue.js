@@ -1,9 +1,9 @@
 /**
- * CoS Dequeue — pure priority/capacity helpers (issue #2530)
+ * CoS Dequeue — priority/capacity helpers (issue #2530)
  *
  * The spawn-side scheduler `dequeueNextTask` (in cos.js) fills open agent slots
- * by draining four priority tiers in order. This module holds the *pure*,
- * side-effect-free pieces of that decision — the per-cycle capacity tracker and
+ * by draining four priority tiers in order. This module holds the capacity and
+ * ownership decisions — the per-cycle capacity tracker and
  * the idle tier-eligibility predicate — so the scheduler and its unit
  * tests share ONE implementation instead of the tests re-deriving a local
  * replica of the guards.
@@ -17,6 +17,8 @@
  * cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved →
  * 3 idle review.
  */
+
+import { hasActiveTaskOwner } from './agentState.js';
 
 /**
  * Per-cycle spawn-capacity tracker. Owns the running `spawned` count and the
@@ -82,6 +84,7 @@ export function createDequeueCapacity(state, {
   let spawned = 0;
 
   const admit = (task, ceiling, gateLocalEndpoint) => {
+    if (hasActiveTaskOwner(task.id, state.agents)) return false;
     if (spawned >= ceiling) return false;
     const project = task.metadata?.app || '_self';
     if ((spawnProjectCounts[project] || 0) >= perProjectLimit) return false;

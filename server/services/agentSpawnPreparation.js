@@ -1,4 +1,6 @@
 import { cosEvents, emitLog } from './cosEvents.js';
+import { loadState } from './cosState.js';
+import { hasActiveTaskOwner } from './agentState.js';
 import { getTaskById, updateTask } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -88,6 +90,14 @@ export function createAgentSpawnContext(task) {
 export async function prepareAgentSpawn(task, context = createAgentSpawnContext(task)) {
   if (task && !task.taskType) {
     task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
+  }
+
+  // The spawn lock only covers dispatch. A prior run can own this task long
+  // after that lock and the presentation-only spawn grace window end.
+  const state = await loadState();
+  if (hasActiveTaskOwner(task.id, state.agents)) {
+    console.warn(`⚠️ Task ${task.id} already has an active owner — skipping duplicate dispatch`);
+    return null;
   }
 
   let instanceId;
