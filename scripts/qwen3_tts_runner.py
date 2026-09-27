@@ -12,10 +12,12 @@ Provides CLI entry points for:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import os
 import re
 import json
+import platform
 import sys
 import tempfile
 from pathlib import Path
@@ -164,7 +166,7 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
     """Probe hardware, PyTorch, Transformers, and cached model weights."""
     result = {
         "ok": False,
-        "error": "Qwen3-TTS model operations are unavailable until a real adapter is implemented",
+        "error": "Qwen3-TTS inference requires qwen-tts, torch and soundfile on CPU/CUDA",
         "torch_installed": False,
         "transformers_installed": False,
         "device": "cpu",
@@ -198,6 +200,19 @@ def probe_runtime(models_dir: Path | None = None) -> dict:
     except ImportError:
         pass
 
+    # Apple Silicon is deliberately unavailable until the MLX adapter exists;
+    # the presence of a Torch MPS device must not advertise supported inference.
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        result["error"] = "Qwen3-TTS MLX inference is unavailable on Apple Silicon"
+    elif result["torch_installed"] and result["transformers_installed"]:
+        try:
+            from qwen_tts import Qwen3TTSModel
+            import soundfile
+            result["ok"] = True
+            result["error"] = None
+        except ImportError:
+            pass
+
     for model_id in SUPPORTED_MODELS:
         model_path = models_dir / model_id.replace("/", "--") if models_dir else None
         snapshot = installed_snapshot(model_path, model_id) if model_path else None
@@ -220,7 +235,84 @@ def unavailable(operation: str) -> int:
 
 
 def run_synthesis(args: argparse.Namespace) -> int:
-    return unavailable(args.mode)
+    # Resolve the verified immutable snapshot ourselves. Never let a model ID,
+    # arbitrary checkpoint, or missing local file trigger an implicit download.
+    if args.checkpoint_path or args.model_path:
+        return unavailable("custom checkpoints/model paths")
+    if args.rate != 1.0:
+        return unavailable("speech-rate control")
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return unavailable("MLX inference on Apple Silicon")
+    if args.model_id not in SUPPORTED_MODELS or not args.models_dir:
+        return unavailable("inference without a supported verified local model")
+    model_dir = Path(args.models_dir) / args.model_id.replace("/", "--")
+    snapshot = installed_snapshot(model_dir, args.model_id)
+    if snapshot is None:
+        return unavailable("inference without downloaded and verified weights")
+    if not args.text or not args.text.strip():
+        return unavailable("inference without text")
+    design = args.model_id.endswith("-VoiceDesign")
+    if (args.mode == "clone" and design) or (args.mode == "design" and not design):
+        return unavailable("the requested mode for this model variant")
+    if not design and (not args.reference_audio or not Path(args.reference_audio).is_file()):
+        return unavailable("cloning without a local reference recording")
+    if not design and args.instructions:
+        return unavailable("instruction-controlled reference cloning")
+
+    # qwen-tts loads its processor/codec independently. Offline flags cover those
+    # nested loads too; status and inference cannot acquire unrequested weights.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            import numpy as np
+            import soundfile as sf
+            import torch
+            from qwen_tts import Qwen3TTSModel
+
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            dtype = (torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16) if device != "cpu" else torch.float32
+            torch.manual_seed(args.seed)
+            model = Qwen3TTSModel.from_pretrained(
+                str(snapshot), device_map=device, dtype=dtype,
+                attn_implementation="eager", local_files_only=True,
+            )
+            with torch.inference_mode():
+                if design:
+                    wavs, sample_rate = model.generate_voice_design(
+                        text=args.text, language="Auto",
+                        instruct=args.instructions or "A clear natural speaking voice.",
+                    )
+                else:
+                    wavs, sample_rate = model.generate_voice_clone(
+                        text=args.text, language="Auto",
+                        ref_audio=str(Path(args.reference_audio).resolve()),
+                        ref_text=args.reference_transcript or None,
+                        x_vector_only_mode=not bool(args.reference_transcript),
+                    )
+            if len(wavs) != 1 or not isinstance(sample_rate, int) or sample_rate <= 0:
+                raise ValueError("Invalid model audio result")
+            audio = np.asarray(wavs[0])
+            if audio.ndim != 1 or not audio.size or not np.isfinite(audio).all() or not np.any(audio):
+                raise ValueError("Model returned empty, silent or invalid audio")
+            # Publish only the completed PCM WAV; the JS transport buffers it.
+            sf.write(args.output_wav, audio, sample_rate, format="WAV", subtype="PCM_16")
+        print(json.dumps({
+            "ok": True, "modelRevision": f"{args.model_id}@{snapshot.name}",
+            "effectiveControls": {"rate": 1.0, "seed": args.seed,
+                                  "instructions": (args.instructions or "A clear natural speaking voice.") if design else None,
+                                  "mode": "design" if design else "clone"},
+        }))
+        return 0
+    except ImportError:
+        return unavailable("inference dependencies (install qwen-tts in the isolated environment)")
+    except Exception:
+        # Provider exceptions may contain private reference paths/transcripts.
+        # Return a bounded error instead of publishing their raw exception text.
+        Path(args.output_wav).unlink(missing_ok=True)
+        print(json.dumps({"ok": False, "code": "QWEN3_SYNTHESIS_FAILED",
+                          "error": "Qwen3-TTS model inference failed; no audio was published"}), file=sys.stderr)
+        return 1
 
 
 def run_fine_tuning(args: argparse.Namespace) -> int:
@@ -263,7 +355,9 @@ def main() -> int:
 
     if args.probe:
         models_dir = Path(args.models_dir) if args.models_dir else None
-        print(json.dumps(probe_runtime(models_dir)))
+        with contextlib.redirect_stdout(sys.stderr):
+            status = probe_runtime(models_dir)
+        print(json.dumps(status))
         return 0
 
     if args.mode == "fine-tune":

@@ -44,6 +44,60 @@ sys.modules["huggingface_hub"] = hub
 `;
 const run = (source) => JSON.parse(execFileSync(python, ['-c', fixture + source, script], { encoding: 'utf8' }));
 
+// Test doubles exercise the verified snapshot -> official adapter -> PCM WAV
+// boundary. These fixture samples are deliberately not claimed to be speech.
+const inferenceFixture = String.raw`
+import contextlib, io, wave
+runner.platform.system = lambda: "Linux"
+runner.platform.machine = lambda: "x86_64"
+events = []
+class Array:
+    ndim, size = 1, 240
+numpy = types.ModuleType("numpy")
+numpy.asarray = lambda values: Array()
+numpy.isfinite = lambda values: types.SimpleNamespace(all=lambda: True)
+numpy.any = lambda values: True
+sys.modules["numpy"] = numpy
+torch = types.ModuleType("torch")
+torch.cuda = types.SimpleNamespace(is_available=lambda: False, is_bf16_supported=lambda: False)
+torch.float32, torch.float16, torch.bfloat16 = "float32", "float16", "bfloat16"
+torch.manual_seed = lambda seed: events.append({"seed": seed})
+torch.inference_mode = contextlib.nullcontext
+sys.modules["torch"] = torch
+def write_wav(path, audio, sample_rate, **kwargs):
+    assert kwargs == {"format": "WAV", "subtype": "PCM_16"}
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(b"\x01\x00" * 240)
+soundfile = types.ModuleType("soundfile")
+soundfile.write = write_wav
+sys.modules["soundfile"] = soundfile
+class Model:
+    @classmethod
+    def from_pretrained(cls, path, **kwargs):
+        assert os.environ["HF_HUB_OFFLINE"] == "1"
+        assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
+        events.append({"path": path, **kwargs})
+        return cls()
+    def generate_voice_design(self, **kwargs):
+        events.append({"design": kwargs})
+        return [[1]], 24000
+    def generate_voice_clone(self, **kwargs):
+        events.append({"clone": kwargs})
+        return [[1]], 24000
+qwen = types.ModuleType("qwen_tts")
+qwen.Qwen3TTSModel = Model
+sys.modules["qwen_tts"] = qwen
+def args_for(root, **kwargs):
+    return types.SimpleNamespace(checkpoint_path=None, model_path=None, rate=1.0,
+        models_dir=str(root), model_id=model_id, text="An invented sentence.",
+        reference_audio=kwargs.get("reference"), reference_transcript=kwargs.get("transcript"),
+        mode=kwargs.get("mode", "design"), instructions=kwargs.get("instructions"),
+        seed=42, output_wav=str(root / "output.wav"))
+`;
+
 describe.skipIf(!python)('Qwen3 explicit model acquisition', () => {
   it('publishes only complete immutable snapshots and detects missing/truncated required weights', () => {
     const result = run(String.raw`
@@ -115,5 +169,96 @@ with tempfile.TemporaryDirectory() as temp:
       'Model file checksum mismatch: model.safetensors',
       'Model repository is missing required Qwen3-TTS files',
     ]);
+  });
+});
+
+describe.skipIf(!python)('Qwen3 verified local inference', () => {
+  it('loads the immutable local snapshot and invokes design/clone with accurate revision evidence', () => {
+    const result = run(inferenceFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    runner.download_model(model_id, root)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert runner.run_synthesis(args_for(root, instructions="Warm natural alto")) == 0
+    design_result = json.loads(output.getvalue())
+    assert events[1]["local_files_only"] is True
+    assert events[1]["device_map"] == "cpu"
+    assert events[1]["dtype"] == "float32"
+    assert Path(events[1]["path"]).name == revision
+    assert events[2]["design"]["instruct"] == "Warm natural alto"
+    with wave.open(str(root / "output.wav")) as audio:
+        assert audio.getnframes() == 240 and audio.getframerate() == 24000
+    reference = root / "reference.wav"
+    reference.write_bytes(b"explicit test fixture")
+    model_id = runner.SUPPORTED_MODELS[1]
+    runner.download_model(model_id, root)
+    events.clear()
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert runner.run_synthesis(args_for(root, mode="clone", reference=str(reference), transcript="Reference words.")) == 0
+    clone_result = json.loads(output.getvalue())
+    assert events[2]["clone"]["ref_audio"] == str(reference.resolve())
+    assert events[2]["clone"]["ref_text"] == "Reference words."
+    assert events[2]["clone"]["x_vector_only_mode"] is False
+    print(json.dumps({"design": design_result, "clone": clone_result}))
+`);
+    expect(result.design).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign@${'a'.repeat(40)}`, effectiveControls: { mode: 'design', rate: 1 } });
+    expect(result.clone).toMatchObject({ ok: true, modelRevision: `Qwen/Qwen3-TTS-12Hz-1.7B-Base@${'a'.repeat(40)}`, effectiveControls: { mode: 'clone' } });
+  });
+
+  it('refuses missing weights, unsupported controls/variants and Apple Silicon without calling the model', () => {
+    const result = run(inferenceFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    args = args_for(root)
+    with contextlib.redirect_stderr(io.StringIO()):
+        assert runner.run_synthesis(args) == 1
+        runner.download_model(model_id, root)
+        args.rate = 1.2
+        assert runner.run_synthesis(args) == 1
+        args.rate = 1.0
+        args.mode = "clone"
+        assert runner.run_synthesis(args) == 1
+        args.mode = "design"
+        args.checkpoint_path = str(root / "bogus.safetensors")
+        assert runner.run_synthesis(args) == 1
+        args.checkpoint_path = None
+        runner.platform.system = lambda: "Darwin"
+        runner.platform.machine = lambda: "arm64"
+        assert runner.run_synthesis(args) == 1
+        assert runner.run_fine_tuning(args) == 1
+    assert events == []
+    assert not (root / "output.wav").exists()
+    print(json.dumps({"noModelCalls": True}))
+`);
+    expect(result).toEqual({ noModelCalls: true });
+  });
+
+  it('fails instead of publishing invalid model audio or exposing a private inference error', () => {
+    const result = run(inferenceFixture + String.raw`
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    runner.download_model(model_id, root)
+    args = args_for(root)
+    failures = []
+    numpy.any = lambda values: False
+    error = io.StringIO()
+    with contextlib.redirect_stderr(error):
+        assert runner.run_synthesis(args) == 1
+    failures.append(json.loads(error.getvalue()))
+    numpy.any = lambda values: True
+    def private_failure(*args, **kwargs):
+        raise RuntimeError("private reference transcript")
+    Model.generate_voice_design = private_failure
+    error = io.StringIO()
+    with contextlib.redirect_stderr(error):
+        assert runner.run_synthesis(args) == 1
+    assert "private reference transcript" not in error.getvalue()
+    failures.append(json.loads(error.getvalue()))
+    assert not (root / "output.wav").exists()
+    print(json.dumps(failures))
+`);
+    expect(result.every((failure) => failure.code === 'QWEN3_SYNTHESIS_FAILED')).toBe(true);
   });
 });

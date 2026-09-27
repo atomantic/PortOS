@@ -10,13 +10,18 @@ PortOS includes an optional voice assistant with support for fully local operati
 |-------|----------------|--------------|--------|
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
-| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (currently unavailable) | ✅ |
+| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS (CPU/CUDA; MLX pending) | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
 
-**Qwen3-TTS status:** the bundled adapter currently refuses synthesis, design,
-cloning, and training with an explicit unavailable error. Explicit model
+**Qwen3-TTS status:** the bundled runner calls the official
+[qwen-tts inference API](https://github.com/QwenLM/Qwen3-TTS#python-package-usage)
+for voice design and reference cloning on CPU/CUDA. Install `qwen-tts` in the
+isolated Qwen Python environment; the package supplies Torch, NumPy and
+SoundFile. Apple Silicon MLX, training and custom checkpoints are still
+unavailable. Speech-rate changes and instruction-controlled Base cloning are
+refused rather than reported as applied controls. Explicit model
 downloads in Settings fetch the official Qwen snapshot at an immutable Hub
 revision and verify the size and digest of every required file, including the
 speech tokenizer weights, before publishing readiness. Downloads require
@@ -24,12 +29,37 @@ speech tokenizer weights, before publishing readiness. Downloads require
 or failed verification returns an error; it never marks the model downloaded.
 Earlier versions produced test tones, placeholder checkpoints and download
 metadata; those artifacts are not evidence of model readiness. Runtime probes
-still report inference unavailable. Model download readiness is separate: it
+report dependency/hardware availability without loading weights. Model download readiness is separate: it
 requires a verified snapshot marker and all required files. Unchanged verified
 files use their size, change timestamps, and filesystem identity; changed files
 are rehashed before they can report ready. Windows probes rehash all files because
-Python does not expose a reliable change timestamp there; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
-adapter and an intelligibility smoke run. No model download runs automatically.
+Python does not expose a reliable change timestamp there; old metadata-only model folders remain unavailable.
+Inference loads only these verified snapshots with Hub/Transformers offline
+mode enabled, never a repository ID that might trigger an implicit download.
+The returned model revision includes the immutable commit hash. No model
+download runs automatically. Audio is buffered, not streamed.
+
+A real-model intelligibility smoke run is still pending in #8857; fixture tests
+prove the adapter contract, not speech quality. On a CPU/CUDA host with the
+isolated environment and verified weights, run the following manually from
+the repository root (substitute the isolated Python executable and model root):
+
+```sh
+python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+  --mode design --model-id Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --text 'The example garden gate is open.' --instructions 'A clear warm alto.' \
+  --output-wav <scratch-dir>/design.wav
+python scripts/qwen3_tts_runner.py --models-dir <model-root> \
+  --mode clone --model-id Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --reference-audio <scratch-dir>/design.wav \
+  --reference-transcript 'The example garden gate is open.' \
+  --text 'Please close the gate after you enter.' --output-wav <scratch-dir>/clone.wav
+```
+
+Listen to both files and record intelligibility and voice continuity with the
+reported revisions before treating this as a validated speech runtime. The
+reference is generated, so no personal recording or consent is needed for this
+smoke. A successful command or non-silent WAV alone does not establish quality.
 
 Interactive profile benchmarks measure elapsed time until the buffered WAV is
 available at the synthesis service boundary. This includes model startup and
