@@ -16,6 +16,7 @@ import {
   DEFAULT_CLONE_MODEL,
   DEFAULT_DESIGN_MODEL,
   QWEN3_TTS_RUNNER_SCRIPT,
+  QWEN3_TTS_MODELS_DIR,
   resolveQwen3Python,
 } from './qwen3TtsRuntime.js';
 
@@ -66,6 +67,7 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
     '--rate', String(rate),
     '--seed', String(seed),
     '--model-id', modelId,
+    '--models-dir', QWEN3_TTS_MODELS_DIR,
     '--output-wav', tempOut,
   ];
 
@@ -85,22 +87,43 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
   const t0 = performance.now();
 
   try {
-    await new Promise((resolve, reject) => {
-      const child = spawn(python, args, safeChildProcessOptions({ timeout: 60000, signal }));
+    const { stdout } = await new Promise((resolve, reject) => {
+      const child = spawn(python, args, safeChildProcessOptions({ timeout: 5 * 60 * 1000, signal }));
       let out = '';
       let err = '';
 
-      child.stdout.on('data', (d) => { out += d.toString(); });
-      child.stderr.on('data', (d) => { err += d.toString(); });
+      child.stdout.on('data', (d) => { out = (out + d.toString()).slice(-8192); });
+      child.stderr.on('data', (d) => { err = (err + d.toString()).slice(-8192); });
 
       child.on('close', (code) => {
         if (code === 0) resolve({ stdout: out, stderr: err });
-        else reject(new ServerError(`Qwen3-TTS synthesis failed (code ${code}): ${err || out}`, { status: 500 }));
+        else {
+          let failure;
+          try { failure = JSON.parse(err.trim().split(/\r?\n/).at(-1)); } catch { /* Process failure without structured output. */ }
+          const unavailable = failure?.code === 'QWEN3_RUNTIME_UNAVAILABLE';
+          reject(new ServerError(unavailable ? 'Qwen3-TTS operation is unavailable for this runtime, model or control' : 'Qwen3-TTS model inference failed', {
+            status: unavailable ? 503 : 502,
+            code: unavailable ? 'QWEN3_RUNTIME_UNAVAILABLE' : 'QWEN3_SYNTHESIS_FAILED',
+          }));
+        }
       });
       child.on('error', reject);
     });
 
+    let result;
+    try { result = JSON.parse(stdout.trim()); } catch { /* Invalid adapter output is never successful speech. */ }
+    if (result?.ok !== true || typeof result.modelRevision !== 'string' || !result.modelRevision.startsWith(`${modelId}@`)
+      || !/^[a-f0-9]{40}$/.test(result.modelRevision.slice(modelId.length + 1))
+      || !['design', 'clone'].includes(result.effectiveControls?.mode)
+      || result.effectiveControls?.rate !== rate || result.effectiveControls?.seed !== seed) {
+      throw new ServerError('Qwen3-TTS returned invalid inference evidence', { status: 502, code: 'QWEN3_SYNTHESIS_INVALID_RESULT' });
+    }
+
     const wavBuffer = await readFile(tempOut);
+    const { wavDurationMs } = await import('../../lib/wavAudioFile.js');
+    if (wavDurationMs(wavBuffer) <= 0) {
+      throw new ServerError('Qwen3-TTS returned no playable WAV', { status: 502, code: 'QWEN3_SYNTHESIS_INVALID_RESULT' });
+    }
     // This adapter buffers the whole WAV; audio cannot be played before this read.
     const elapsedMs = Math.round(performance.now() - t0);
     const firstAudioMs = elapsedMs;
@@ -110,13 +133,8 @@ export async function synthesizeQwen3(text, opts = {}, signal) {
       latencyMs: elapsedMs,
       firstAudioMs,
       engine: 'qwen3-tts',
-      modelRevision: modelId,
-      effectiveControls: {
-        rate,
-        seed,
-        instructions: opts.instructions || null,
-        mode,
-      },
+      modelRevision: result.modelRevision,
+      effectiveControls: result.effectiveControls,
     };
   } finally {
     await unlink(tempOut).catch(() => {});
