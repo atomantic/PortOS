@@ -216,6 +216,7 @@ export * from './videoStreamingMode.js';
 export * from './videoTextEncoders.js';
 export * from './promptFencing.js';
 export * from './promptPartials.js';
+export * from './promptSectionRenderer.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
 export * from './credentialBootstrap.js';
