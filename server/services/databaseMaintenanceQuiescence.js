@@ -8,6 +8,7 @@ import { stopOwnedDatabaseProducers } from './databaseMaintenanceProducers.js';
 
 const TERMINATE_GRACE_MS = 12000;
 const POLL_MS = 100;
+const PREDECESSOR_GRACE_MS = 5000;
 const refused = (reason) => Object.assign(
   new Error(`Database writer quiescence refused: ${reason}. Maintenance remains fenced.`),
   { code: 'DATABASE_WRITER_QUIESCENCE' },
@@ -48,7 +49,7 @@ export async function reconcileDetachedWriters(id, token, { graceMs = TERMINATE_
   const journal = createDatabaseMaintenanceJournal();
   const registry = createDatabaseWriterRegistry();
   const operation = journal.assertCoordinatorWorker(id, token);
-  if (operation.stage !== 'quiescing' || !journal.readProducerSnapshot(id, token)) {
+  if (!['quiescing', 'exporting', 'importing'].includes(operation.stage) || !journal.readProducerSnapshot(id, token)) {
     throw refused('producer shutdown has not been recorded for this operation');
   }
   // Windows has no process-group proof and its completions are compacted into
@@ -94,16 +95,49 @@ export async function reconcileDetachedWriters(id, token, { graceMs = TERMINATE_
   journal.assertCoordinatorWorker(id, token);
   for (const { row } of results) registry.retire(row.id, journal.reconciledWritersDirectory);
   if (registry.read().length !== 0) throw refused('the writer inventory is not empty after retirement');
-  return { id, stage: 'quiescing', writersReconciled: rows.length, writersTerminated: terminated,
+  return { id, stage: journal.read().stage, writersReconciled: rows.length, writersTerminated: terminated,
     quiescenceVerified: true, transferReady: false };
 }
 
 /**
- * The full internal quiescence stage: stop owned PM2 producers, then reconcile
- * detached writers. Not wired to any public entrypoint; export/import (#8871)
- * and verified restart (#8851) must re-run it before relying on its result.
+ * Earlier coordinator workers of this operation ran dump/import children in
+ * their own process group. Their supervisor's exit receipt (which recovery
+ * requires) does not prove those children stopped: a killed worker can leave
+ * an import running. Refuse while any recorded predecessor group has members.
+ * Nothing is signalled: the group may have emptied and its ID been reused, so
+ * the operator must inspect and stop it. Windows has no group proof at all.
  */
-export async function quiesceDatabaseWriters(id, token, options) {
-  await stopOwnedDatabaseProducers(id, token);
+export async function assertPredecessorCoordinatorsStopped(id, token, { graceMs = PREDECESSOR_GRACE_MS, pollMs = POLL_MS } = {}) {
+  const journal = createDatabaseMaintenanceJournal();
+  const predecessors = journal.readPredecessorWorkers(id, token);
+  if (!predecessors.some(worker => worker.started)) return { predecessorsVerified: predecessors.length };
+  if (process.platform === 'win32') throw refused('a previous coordinator\'s children cannot be proven stopped on Windows');
+  const groups = new Set(predecessors.filter(worker => worker.pgid !== null).map(worker => worker.pgid));
+  const deadline = Date.now() + graceMs;
+  let consecutive = 0;
+  // Two consecutive empty snapshots; the predecessor supervisor may still be
+  // exiting just after publishing its receipt.
+  while (consecutive < 2) {
+    journal.assertCoordinatorWorker(id, token);
+    const processes = await snapshotProcesses();
+    const own = processes.find(proc => proc.pid === process.pid)?.pgid;
+    // A recorded ID equal to our own group was empty when ours was created.
+    const occupied = processes.some(proc => proc.pgid !== own && groups.has(proc.pgid));
+    consecutive = occupied ? 0 : consecutive + 1;
+    if (occupied && Date.now() >= deadline) throw refused('a previous coordinator\'s dump or import process is still running');
+    if (consecutive < 2) await sleep(pollMs);
+  }
+  return { predecessorsVerified: predecessors.length };
+}
+
+/**
+ * The full internal quiescence stage for the entered transfer worker: stop
+ * owned PM2 producers, prove earlier coordinator children stopped, then
+ * reconcile detached writers. Every transfer attempt repeats it before any
+ * dump or import; a recovered worker never relies on a predecessor's result.
+ */
+export async function quiesceDatabaseWriters(id, token, options = {}) {
+  await stopOwnedDatabaseProducers(id, token, { entered: true });
+  await assertPredecessorCoordinatorsStopped(id, token, options);
   return reconcileDetachedWriters(id, token, options);
 }

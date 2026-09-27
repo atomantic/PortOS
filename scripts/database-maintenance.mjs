@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Operator interface for the admission boundary. This does NOT transfer data,
 // stop existing writers, change mode, or authorize invoking db.sh migrate.
+// Transfer runs only inside the owned internal worker; there is no command
+// here that starts, resumes, forces, or skips it.
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { PATHS } from '../server/lib/paths.js';
@@ -31,7 +33,8 @@ function main() {
     if (!record) return { stage: 'idle' };
     const coordinator = journal.coordinatorStatus(record.id);
     return { id: record.id, stage: record.stage, source: record.source.mode, target: record.target.mode,
-      ...(coordinator.state === 'unclaimed' ? {} : { coordinator }) };
+      ...(coordinator.state === 'unclaimed' ? {} : { coordinator }),
+      ...(['accepted', 'quiescing'].includes(record.stage) ? {} : { transfer: journal.transferStatus(record.id) }) };
   }
   if (command === 'begin' && args.length === 2) {
     const [sourceMode, targetMode] = args;
