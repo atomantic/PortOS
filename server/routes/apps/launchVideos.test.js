@@ -10,6 +10,8 @@ import { getAppById } from '../../services/apps.js';
 import { addTask, isRunning } from '../../services/cos.js';
 import { loadHistory } from '../../services/videoGen/history.js';
 import { detectMotionSkills } from '../../lib/motionSkills.js';
+import { resolveMusicTrackPath } from '../../services/pipeline/audioMux.js';
+import { getBeatGrid } from '../../lib/beatGrid.js';
 import router from './launchVideos.js';
 
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-launch-publish-') }));
@@ -17,7 +19,8 @@ afterAll(cleanupTempDataRoots);
 vi.mock('../../services/apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('../../services/cos.js', () => ({ addTask: vi.fn(), isRunning: vi.fn() }));
 vi.mock('../../services/instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance' }));
-vi.mock('../../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: async () => null }));
+vi.mock('../../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async () => null) }));
+vi.mock('../../lib/beatGrid.js', () => ({ getBeatGrid: vi.fn(async () => null) }));
 vi.mock('../../services/videoGen/history.js', () => ({ loadHistory: vi.fn() }));
 vi.mock('../../lib/motionSkills.js', () => ({ detectMotionSkills: vi.fn(() => []) }));
 const app = express();
@@ -104,6 +107,29 @@ describe('user-triggered launch videos', () => {
     expect((await submit({ generateMusic: true, musicMethod: 'service' })).status).toBe(202);
     expect(addTask.mock.calls[0][0].prompt).toContain('"musicMethod":"service"');
     expect((await submit({ generateMusic: true, musicMethod: 'unknown' })).status).toBe(400);
+  });
+
+  it('writes a measured beat grid for a resolved library track (#8958)', async () => {
+    resolveMusicTrackPath.mockResolvedValueOnce('/data/music/example.mp3');
+    getBeatGrid.mockResolvedValueOnce({ bpm: 120, beats: [0, 0.5], downbeats: [0], hits: [0, 0.25, 0.5] });
+    const response = await submit({ musicTrack: 'example.mp3' });
+    expect(response.status).toBe(202);
+    expect(getBeatGrid).toHaveBeenCalledWith('/data/music/example.mp3');
+    const beats = JSON.parse(await readFile(
+      join(PATHS.data, 'launch-videos', 'example', response.body.runId, 'composition', 'beats.json'), 'utf8',
+    ));
+    expect(beats).toEqual({ bpm: 120, beats: [0, 0.5], downbeats: [0], hits: [0, 0.25, 0.5] });
+    expect((await readdir(join(PATHS.data, 'launch-videos', 'example', response.body.runId, 'composition'))).sort())
+      .toEqual(['beats.json', 'portos-motion.js']);
+  });
+
+  it('queues successfully without a beats.json when the track cannot be measured', async () => {
+    resolveMusicTrackPath.mockResolvedValueOnce('/data/music/example.mp3');
+    getBeatGrid.mockResolvedValueOnce(null);
+    const response = await submit({ musicTrack: 'example.mp3' });
+    expect(response.status).toBe(202);
+    expect(await readdir(join(PATHS.data, 'launch-videos', 'example', response.body.runId, 'composition')))
+      .toEqual(['portos-motion.js']);
   });
 
   it('refuses invalid options, missing music, and unavailable CoS before queuing', async () => {
@@ -235,6 +261,16 @@ describe('feedback revisions', () => {
     expect(task.prompt).toContain('"targetDurationSec":18');
     expect(task.prompt).toContain('"format":"vertical"');
     expect(task.prompt).toContain('"synthesizeMusic":true');
+  });
+  it('drops a stale beats.json copied from the source take when this revision has no musicTrack (#8958)', async () => {
+    // Simulates a source composition carrying a leftover beats.json from an
+    // earlier run whose musicTrack this revision no longer uses.
+    await writeFile(join(source, 'beats.json'), JSON.stringify({ bpm: 90, beats: [0], downbeats: [0], hits: [0] }));
+    const response = await submit({ sourceVideoId: video.id, feedback: 'Drop the soundtrack' });
+    expect(response.status).toBe(202);
+    const destination = join(PATHS.data, 'launch-videos/example', response.body.runId, 'composition');
+    expect(await readdir(destination)).not.toContain('beats.json');
+    expect(getBeatGrid).not.toHaveBeenCalled();
   });
   it('rejects invalid feedback, cross-app selections and missing editable source before dispatch', async () => {
     expect((await submit({ sourceVideoId: video.id, feedback: '  ' })).status).toBe(400);

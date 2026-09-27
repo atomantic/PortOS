@@ -2500,6 +2500,13 @@ export const htmlCompositionRenderSchema = z.object({
 }).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
   .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack');
 
+// GET /api/html-composition/beats — a Music-library filename, same shape as
+// htmlCompositionRenderSchema's musicTrack but required (this endpoint exists
+// only to measure one).
+export const htmlCompositionBeatsQuerySchema = z.object({
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
+}).strict();
+
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),
   fps: z.number().int().min(12).max(60),
