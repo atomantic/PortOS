@@ -2,7 +2,7 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
-    "app-launch-video": "f1aee8c3de778663a5ba44a4f3486ce5",
+    "app-launch-video": "c5f125ac04d41921030f7cd36a3ff3ee",
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
@@ -64,7 +64,7 @@
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
-    "app-launch-video": 4,
+    "app-launch-video": 5,
     "better-cognitive-load": 1,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
@@ -133,7 +133,8 @@
     "app-launch-video": [
       "fa15ea11b4cf49f31ae17513ff780421",
       "0247e82d4ae6e812dbd666d3bd75ad62",
-      "71962a1f6f902d93f2c8840e3281301b"
+      "71962a1f6f902d93f2c8840e3281301b",
+      "f1aee8c3de778663a5ba44a4f3486ce5"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"

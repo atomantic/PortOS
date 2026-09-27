@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
@@ -10,7 +10,7 @@ import { videoGenEvents } from '../videoGen/events.js';
 import { mutateVideoHistory } from '../videoGen/history.js';
 import { resolveMusicTrackPath } from '../pipeline/audioMux.js';
 import { openComposition } from './browser.js';
-import { encodeComposition, synthesizeCompositionMusic } from './encode.js';
+import { encodeComposition, encodeContactSheet, proofTimes, synthesizeCompositionMusic } from './encode.js';
 import { validateLaunchVideoAssets } from '../../lib/launchVideoValidation.js';
 
 const active = new Map();
@@ -33,6 +33,7 @@ export async function renderComposition({ jobId, ...input }) {
   let success = false;
   let result;
   let failure;
+  let proofPath;
   const deliveredPaths = [];
   const deliver = async (target, write) => {
     const handle = await open(target, 'wx');
@@ -41,7 +42,7 @@ export async function renderComposition({ jobId, ...input }) {
     try { await write(handle); } finally { await handle.close(); }
   };
   try {
-    const { directory, musicTrack, launchVideo, synthesizeMusic } = validateRequest(htmlCompositionRenderSchema, input);
+    const { directory, musicTrack, launchVideo, synthesizeMusic, proof } = validateRequest(htmlCompositionRenderSchema, input);
     let musicPath = musicTrack ? await resolveMusicTrackPath(musicTrack) : null;
     if (musicTrack && !musicPath) throw new Error('musicTrack is missing from the Music library');
     signal.throwIfAborted();
@@ -70,54 +71,73 @@ export async function renderComposition({ jobId, ...input }) {
     if (launchPlan && Math.abs(contract.durationSec - launchPlan.durationSec) > 1e-8) {
       throw new Error('Composition durationSec must match storyboard.json');
     }
-    if (synthesizeMusic) {
-      const wav = await synthesizeCompositionMusic(page, contract.durationSec);
+    if (proof) {
+      // Launch runs keep their proofs beside the run so the iteration history
+      // stays with the take; other compositions share one proofs directory.
+      // The result names the sheet relative to the data directory, never an
+      // absolute host path: job results are visible to API and SSE clients.
+      const proofName = `contact-${jobId}.png`;
+      const proofFile = deliveryRoot ? `launch-videos/${launchVideo.appId}/${launchVideo.runId}/proofs/${proofName}` : `composition-proofs/${proofName}`;
+      proofPath = deliveryRoot ? join(deliveryRoot, 'proofs', proofName) : join(PATHS.data, proofFile);
+      await ensureDir(dirname(proofPath));
+      const times = proofTimes(contract.durationSec, proof.everySec);
+      const { columns } = await encodeContactSheet(page, contract, proofPath, { times, signal });
       page.check();
-      audioDirectory = await mkdtemp(join(tmpdir(), 'portos-composition-audio-'));
-      musicPath = join(audioDirectory, 'score.wav');
-      await writeFile(musicPath, wav, { flag: 'wx' });
-    }
-    await ensureDir(PATHS.videos);
-    await encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress: progress => {
-      videoGenEvents.emit('progress', { generationId: jobId, progress: progress * 0.95 });
-    } });
-    // End script execution before post-processing and publishing the result.
-    page.check();
-    await page.close({ verify: true });
-    page = null;
-    signal.throwIfAborted();
-    const thumbnail = await generateThumbnail(outputPath, jobId, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
-    if (!thumbnail) throw new Error('Composition thumbnail generation failed');
-    signal.throwIfAborted();
-    let launchMetadata;
-    if (deliveryRoot) {
-      // Exclusive creation refuses pre-existing files/symlinks. Publish only the
-      // validated snapshot, never re-read source prose after rendering.
-      for (const name of ['plan.md', 'storyboard.json', 'caption.txt']) {
-        const target = join(deliveryRoot, name);
-        await deliver(target, handle => handle.writeFile(launchAssets.get(`/${name}`)));
+      await page.close({ verify: true });
+      page = null;
+      signal.throwIfAborted();
+      success = true;
+      result = { generationId: jobId, id: jobId, proof: { file: proofFile, url: `/data/${proofFile}`, times, columns, ...contract } };
+    } else {
+      if (synthesizeMusic) {
+        const wav = await synthesizeCompositionMusic(page, contract.durationSec);
+        page.check();
+        audioDirectory = await mkdtemp(join(tmpdir(), 'portos-composition-audio-'));
+        musicPath = join(audioDirectory, 'score.wav');
+        await writeFile(musicPath, wav, { flag: 'wx' });
       }
-      for (const [source, name] of [[outputPath, 'video.mp4'], [join(PATHS.videoThumbnails, thumbnail), 'poster.jpg']]) {
-        const target = join(deliveryRoot, name);
-        await deliver(target, handle => pipeline(createReadStream(source), handle.createWriteStream()));
+      await ensureDir(PATHS.videos);
+      await encodeComposition(page, contract, outputPath, { musicPath, signal, onProgress: progress => {
+        videoGenEvents.emit('progress', { generationId: jobId, progress: progress * 0.95 });
+      } });
+      // End script execution before post-processing and publishing the result.
+      page.check();
+      await page.close({ verify: true });
+      page = null;
+      signal.throwIfAborted();
+      const thumbnail = await generateThumbnail(outputPath, jobId, launchPlan ? { atSec: launchPlan.posterSec } : undefined);
+      if (!thumbnail) throw new Error('Composition thumbnail generation failed');
+      signal.throwIfAborted();
+      let launchMetadata;
+      if (deliveryRoot) {
+        // Exclusive creation refuses pre-existing files/symlinks. Publish only the
+        // validated snapshot, never re-read source prose after rendering.
+        for (const name of ['plan.md', 'storyboard.json', 'caption.txt']) {
+          const target = join(deliveryRoot, name);
+          await deliver(target, handle => handle.writeFile(launchAssets.get(`/${name}`)));
+        }
+        for (const [source, name] of [[outputPath, 'video.mp4'], [join(PATHS.videoThumbnails, thumbnail), 'poster.jpg']]) {
+          const target = join(deliveryRoot, name);
+          await deliver(target, handle => pipeline(createReadStream(source), handle.createWriteStream()));
+        }
+        launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
+          ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
+          musicTrack: musicTrack ?? null, synthesizeMusic: Boolean(synthesizeMusic),
+          caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };
       }
-      launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
-        ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
-        musicTrack: musicTrack ?? null, synthesizeMusic: Boolean(synthesizeMusic),
-        caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };
+      signal.throwIfAborted();
+      // Once the shared history write starts, cancellation must be refused.
+      job.committing = true;
+      const meta = {
+        id: jobId, prompt: `HTML composition: ${directory}`, modelId: 'html-composition', seed: 0,
+        ...contract, numFrames: Math.round(contract.durationSec * contract.fps),
+        ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
+        filename, thumbnail, createdAt: new Date().toISOString(),
+      };
+      await mutateVideoHistory(history => { history.unshift(meta); return history; });
+      success = true;
+      result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, id: jobId, filename, thumbnail, path: `/data/videos/${filename}` };
     }
-    signal.throwIfAborted();
-    // Once the shared history write starts, cancellation must be refused.
-    job.committing = true;
-    const meta = {
-      id: jobId, prompt: `HTML composition: ${directory}`, modelId: 'html-composition', seed: 0,
-      ...contract, numFrames: Math.round(contract.durationSec * contract.fps),
-      ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
-      filename, thumbnail, createdAt: new Date().toISOString(),
-    };
-    await mutateVideoHistory(history => { history.unshift(meta); return history; });
-    success = true;
-    result = { ...(launchMetadata ? { appId: launchMetadata.appId } : {}), generationId: jobId, id: jobId, filename, thumbnail, path: `/data/videos/${filename}` };
   } catch (error) {
     failure = error;
   } finally {
@@ -128,6 +148,7 @@ export async function renderComposition({ jobId, ...input }) {
     if (!success) {
       for (const path of deliveredPaths) await unlinkGuarded(path).catch(() => {});
       await unlinkGuarded(outputPath).catch(() => {});
+      if (proofPath) await unlinkGuarded(proofPath).catch(() => {});
       await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(() => {});
     }
     active.delete(jobId);

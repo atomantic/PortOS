@@ -2449,6 +2449,8 @@ export const appLaunchVideoPublishSchema = z.object({
   videoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),
 }).strict();
 
+export const LAUNCH_VIDEO_MOTION_STYLES = Object.freeze(['walkthrough', 'showreel', 'ui-morph']);
+
 export const appLaunchVideoRequestSchema = z.object({
   sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   feedback: z.string().trim().min(1).max(4000).optional(),
@@ -2458,7 +2460,13 @@ export const appLaunchVideoRequestSchema = z.object({
   targetDurationSec: z.number().int().min(15).max(120).default(20),
   generateMusic: z.boolean().default(false),
   musicMethod: z.enum(['agent', 'service']).default('agent'),
-  motionGraphics: z.boolean().default(false),
+  // Legacy boolean for older callers; true means motionStyle "showreel".
+  motionGraphics: z.boolean().optional(),
+  motionStyle: z.enum(LAUNCH_VIDEO_MOTION_STYLES).optional(),
+  // Contact-sheet proof → critique → fix passes before the final render.
+  critiqueRounds: z.number().int().min(0).max(4).default(2),
+  // Ask the agent to consult installed motion-design skills (npm run setup:motion).
+  motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
 }).strict();
 
@@ -2487,7 +2495,10 @@ export const htmlCompositionRenderSchema = z.object({
   synthesizeMusic: z.boolean().optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both');
+  // A proof renders a silent contact sheet for review instead of the video.
+  proof: z.object({ everySec: z.number().min(0.25).max(10).default(1) }).strict().optional(),
+}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
+  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack');
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),

@@ -63,6 +63,70 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   }
 }
 
+// A proof holds at most this many frames so one contact sheet stays readable.
+const PROOF_MAX_FRAMES = 60;
+const PROOF_COLUMNS = 6;
+
+/** Sample times for a contact sheet: every `everySec`, widened to fit the frame cap. */
+export function proofTimes(durationSec, everySec) {
+  const step = Math.max(everySec, durationSec / PROOF_MAX_FRAMES);
+  const times = [];
+  for (let n = 0; n * step < durationSec - 1e-9 && times.length < PROOF_MAX_FRAMES; n++) {
+    times.push(Math.round(n * step * 1000) / 1000);
+  }
+  return times;
+}
+
+// Seek each sample time and tile the frames into one PNG, six across; resolves
+// with the column count used. Tiles are
+// phone-sized (360px wide, 240px for vertical) so the sheet doubles as the
+// readability check a reviewer runs before committing to a full render.
+export async function encodeContactSheet(page, contract, outputPath, { times, signal } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  signal?.throwIfAborted();
+  const { width, height } = contract;
+  const tileWidth = width < height ? 240 : 360;
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png', '-i', 'pipe:0',
+    '-vf', `scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
+    '-frames:v', '1', '-y', outputPath], safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  let stderr = '';
+  let exited = false;
+  proc.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-2000); });
+  const finished = new Promise((resolve, reject) => {
+    proc.on('error', reject);
+    proc.stdin.on('error', reject);
+    proc.once('close', code => { exited = true; code === 0 ? resolve() : reject(new Error(`ffmpeg contact sheet failed (${code}): ${stderr}`)); });
+  });
+  finished.catch(() => {});
+  try {
+    for (const t of times) {
+      page.check();
+      await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+      page.check();
+      // Chrome downscales to tile size, so full-resolution PNGs never cross CDP.
+      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false,
+        clip: { x: 0, y: 0, width, height, scale: tileWidth / width } });
+      signal?.throwIfAborted();
+      await Promise.race([
+        new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
+        finished.then(() => { throw new Error('ffmpeg exited before the contact sheet was complete'); }),
+      ]);
+    }
+    proc.stdin.end();
+    await finished;
+    return { columns };
+  } finally {
+    if (!exited) {
+      killWithEscalation(proc, { label: 'HTML composition proof', stillRunning: () => !exited, delayMs: 1000 });
+      await new Promise(resolve => proc.once('close', resolve));
+    }
+  }
+}
+
 // Source remains subject to the composition sandbox and launch privacy gate;
 // only bounded PCM leaves the browser, never arbitrary paths or encoded files.
 export async function synthesizeCompositionMusic(page, durationSec) {
