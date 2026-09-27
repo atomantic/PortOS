@@ -134,6 +134,8 @@ describe('README publication admission', () => {
     expect(prompt).toContain('<!-- portos-launch-video:start -->');
     expect(prompt).toContain('Replace an existing marked block in place');
     expect(prompt).toContain('at most 8 MiB');
+    expect(prompt).toContain('for mp4 remove docs/assets/launch-video.gif');
+    expect(prompt).toContain('for gif remove docs/assets/launch-video.mp4 and docs/assets/launch-video-poster.jpg');
     expect(prompt).toContain('"format":"gif"');
     addTask.mockResolvedValue({ id: 'task-example', duplicate: true });
     expect((await publish({ videoId: video.id })).body.code).toBe('LAUNCH_VIDEO_PUBLISH_ACTIVE');
