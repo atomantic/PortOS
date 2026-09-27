@@ -47,8 +47,8 @@ The returned model revision includes the immutable commit hash. No model
 download runs automatically. Audio is buffered, not streamed.
 
 Apple Silicon real-model generation and an independent transcript check passed
-on 2026-09-27 (evidence below); listening confirmation of naturalness and speaker
-continuity remains pending in #8857. Fixture tests prove the adapter contract,
+on 2026-09-27 (evidence below). The operator confirmed clear, natural design
+speech and clear cloned speech with the same speaker identity. Fixture tests prove the adapter contract,
 not speech quality. On a supported host with the
 isolated environment and verified weights, run the following manually from
 the repository root (substitute the isolated Python executable and model root):
@@ -105,10 +105,15 @@ design.wav c05344914d4c81b7099c427483f44d620edfe743f7b17af1f08cdb93044ace29
 clone.wav  7ff72e5745adb753b36f318f567cddceaf13e42c37f5e7d21e6a9969492dee0e
 ```
 
+After listening to both files, the operator confirmed that the design sample
+was clear and natural, and that the clone clearly spoke the requested sentence
+and sounded like the same speaker. These are listening observations for the
+two samples, not a numerical similarity score or general quality benchmark.
+
 A real `--mode fine-tune` invocation on this host exited 1 with
 `QWEN3_RUNTIME_UNAVAILABLE` (requires CUDA with bf16), creating no checkpoint
-directory. Listening review of both WAVs and a real CUDA training/checkpoint
-audition remain open in #8857; these MLX results do not close that issue.
+directory. A real CUDA training run and an intelligible checkpoint audition
+remain open in #8857; these MLX results do not close that issue.
 
 Interactive profile qualification plays a fresh buffered WAV in the browser.
 The first click renders and transfers the probe. A second explicit playback
