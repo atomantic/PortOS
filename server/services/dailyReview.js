@@ -10,7 +10,14 @@ const reviewQueue = createKeyCachedQueue();
 
 async function loadReview(date) {
   await ensureDir(REVIEW_DIR);
-  return readJSONFile(join(REVIEW_DIR, `${date}.json`), null, { strict: true });
+  const review = await readJSONFile(join(REVIEW_DIR, `${date}.json`), null, { strict: true });
+  if (!review) return null;
+  // Provider event IDs are arbitrary strings, including object prototype names.
+  review.confirmations = Object.assign(Object.create(null), review.confirmations);
+  if (review.pendingOperations) {
+    review.pendingOperations = Object.assign(Object.create(null), review.pendingOperations);
+  }
+  return review;
 }
 
 async function saveReview(date, data) {
@@ -20,7 +27,7 @@ async function saveReview(date, data) {
 export async function getDailyReview(date) {
   // Recover a durable intent before projecting confirmations or goal progress.
   const existing = await reviewQueue(date, async () => {
-    const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
+    const review = await loadReview(date) || { confirmations: Object.create(null), updatedAt: null };
     for (const eventId of Object.keys(review.pendingOperations || {})) {
       await finishPendingReview(date, review, eventId).catch(error => {
         // A deleted goal needs an operator correction, not a day-wide outage.
@@ -133,10 +140,10 @@ async function finishPendingReview(date, review, eventId) {
 
 export function confirmEvent(date, { eventId, happened, goalId, durationMinutes, note }) {
   return reviewQueue(date, async () => {
-    const review = await loadReview(date) || { confirmations: {}, updatedAt: null };
+    const review = await loadReview(date) || { confirmations: Object.create(null), updatedAt: null };
     // A new desired state supersedes this event's interrupted intent, including
     // a deleted goal. Independent events retain their own recoverable intents.
-    review.pendingOperations ||= {};
+    review.pendingOperations ||= Object.create(null);
     const sourceKey = `calendar-review:${date}:${eventId}`;
     review.pendingOperations[eventId] = {
       eventId,

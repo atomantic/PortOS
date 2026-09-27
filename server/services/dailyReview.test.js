@@ -26,11 +26,15 @@ vi.mock('./calendarSync.js', () => ({ getEvents: async () => ({ events: [{ id: '
 vi.mock('./calendarAccounts.js', () => ({ listAccounts: async () => [] }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: vi.fn() }));
 vi.mock('./meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
-vi.mock('./identity.js', async () => {
-  const goals = await import('./identity/goals.js');
-  const store = await import('./identity/store.js');
-  return { ...goals, getGoals: () => store.loadJSON(store.GOALS_FILE, store.DEFAULT_GOALS, { strict: true }) };
-});
+vi.mock('./identity.js', () => ({
+  // Dynamic forwarding matters after resetModules: the real store queue and the
+  // manual progress writer must come from the same fresh module instance.
+  reconcileCalendarProgress: async (...args) => (await import('./identity/goals.js')).reconcileCalendarProgress(...args),
+  getGoals: async () => {
+    const store = await import('./identity/store.js');
+    return store.loadJSON(store.GOALS_FILE, store.DEFAULT_GOALS, { strict: true });
+  }
+}));
 
 import { PATHS } from '../lib/fileUtils.js';
 const date = '2026-01-02';
@@ -71,6 +75,19 @@ describe('calendar confirmation persistence workflow', () => {
     await review.confirmEvent(date, { ...input, goalId: 'goal-b', happened: false });
     expect(await allProgress()).toEqual([expect.objectContaining({ id: 'manual' })]);
     expect((await read(reviewPath)).confirmations['event-a'].happened).toBe(false);
+  });
+
+  it('persists provider event IDs that coincide with object prototype properties', async () => {
+    for (const eventId of ['__proto__', 'constructor', 'toString']) {
+      const confirmation = await review.confirmEvent(date, { ...input, eventId });
+      expect((await read(reviewPath)).confirmations[eventId]).toEqual(confirmation.confirmation);
+      await review.confirmEvent(date, { ...input, eventId });
+    }
+    expect((await allProgress()).filter(entry => entry.sourceKey)).toHaveLength(3);
+    for (const eventId of ['__proto__', 'constructor', 'toString']) {
+      await review.confirmEvent(date, { ...input, eventId, happened: false });
+    }
+    expect(await allProgress()).toEqual([expect.objectContaining({ id: 'manual' })]);
   });
 
   it('serializes different events, different dates and manual writes against the shared goal store', async () => {
