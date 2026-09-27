@@ -115,6 +115,24 @@ describe('music-video scene completion hooks → takes', () => {
     expect(stored.takes.map((t) => t.assetId)).toEqual(['first.png', 'second.png', 'third.png']);
   });
 
+  it('a completion racing a director selection loses neither (one write tail on the file store)', async () => {
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'one.png'));
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'two.png'));
+    await waitFor(() => emitted.length === 2);
+    const two = (await sceneOf(project.id, scene.sceneId)).takes.find((t) => t.assetId === 'two.png');
+    // Same tick: a third render lands while the director picks take two.
+    mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'three.png'));
+    await Promise.all([
+      projects.selectSceneTake(project.id, scene.sceneId, two.takeId),
+      projects.updateScene(project.id, scene.sceneId, { prompt: 'edited while rendering' }),
+    ]);
+    await waitFor(() => emitted.length === 3);
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.referenceImageId).toBe('two.png');
+    expect(stored.prompt).toBe('edited while rendering');
+    expect(stored.takes.map((t) => t.assetId)).toEqual(['one.png', 'two.png', 'three.png']);
+  });
+
   it('records a clip take with its source frame as a basename, filling only an empty video slot', async () => {
     mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-1'));
     mediaJobEvents.emit('completed', videoJob(project.id, scene.sceneId, 'clip-2'));
