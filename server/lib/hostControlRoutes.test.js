@@ -60,3 +60,21 @@ describe('browser/runtime mutation inventory (#8798)', () => {
     expect([...new Set(open)].sort()).toEqual([...dataOrInference].sort());
   });
 });
+
+// Database mutation inventory (#8897): every /api/database/* mutation must be gated
+// as host control or explicitly reviewed as data-only. New mutations fail closed.
+describe('database mutation inventory (#8897)', () => {
+  const reviewedOpen = [
+    // POST /maintenance/preflight is advisory only — validates preconditions without side effects.
+    'POST /api/database/maintenance/preflight',
+  ];
+
+  it('classifies every mounted mutation and keeps reviewed data-only operations open', () => {
+    const mutations = getApiRouteCatalog().routes.filter(({ method, path }) =>
+      /^(POST|PUT|PATCH|DELETE)$/.test(method)
+      && /^\/api\/database(\/|$)/.test(path));
+    const open = mutations.filter(({ method, path }) => !isHostControlRoute(method, path))
+      .map(({ method, path }) => `${method} ${path}`);
+    expect([...new Set(open)].sort()).toEqual([...reviewedOpen].sort());
+  });
+});

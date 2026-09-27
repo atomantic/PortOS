@@ -768,3 +768,49 @@ describe('POST /api/database/sync endpoint safety', () => {
     expect(res.status).toBe(200);
   });
 });
+
+// Host-control gating (#8897): database admin routes require operator authority.
+describe('database admin routes host-control gating', () => {
+  it.each([
+    ['start', { backend: 'docker' }],
+    ['stop', { backend: 'native' }],
+    ['destroy', { backend: 'docker' }],
+    ['setup-native', {}],
+    ['export', {}],
+    ['sync', {}],
+    ['fix', {}],
+    ['switch', { target: 'docker', migrate: false }],
+  ])('requires host-control authority for POST /api/database/%s', async (route, body) => {
+    const gated = express();
+    gated.use((req, _res, next) => {
+      req.portosAuthContext = { enabled: true, authenticated: false };
+      next();
+    });
+    const { hostControlRouteGate } = await import('../services/authGate.js');
+    gated.use(hostControlRouteGate);
+    gated.use(express.json());
+    gated.use('/api/database', databaseRoutes);
+    const res = await request(gated).post(`/api/database/${route}`).send(body);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(execFile).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('allows preflight without host-control authority (advisory only)', async () => {
+    const gated = express();
+    gated.use((req, _res, next) => {
+      req.portosAuthContext = { enabled: true, authenticated: false };
+      next();
+    });
+    const { hostControlRouteGate } = await import('../services/authGate.js');
+    gated.use(hostControlRouteGate);
+    gated.use(express.json());
+    gated.use('/api/database', databaseRoutes);
+    const res = await request(gated).post('/api/database/maintenance/preflight').send({ source: 'native', target: 'docker' });
+    // preflight is read-only advisory, but returns 400 for this test input
+    // (no actual system idle) rather than 403.
+    expect(res.status).not.toBe(403);
+  });
+});
