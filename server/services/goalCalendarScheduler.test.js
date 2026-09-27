@@ -7,7 +7,7 @@
  * shared `mutateGoals` serializer.
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -29,15 +29,18 @@ vi.mock('./mortalLoomStore.js', () => ({
 }));
 
 const insertedEvents = [];
+let duringInsert;
+const deleteEvent = vi.fn(async () => ({}));
 vi.mock('@googleapis/calendar', () => ({
   calendar: () => ({
     events: {
       insert: vi.fn(async ({ requestBody }) => {
         const id = `evt-${insertedEvents.length + 1}`;
         insertedEvents.push({ id, requestBody });
+        await duringInsert?.();
         return { data: { id } };
       }),
-      delete: vi.fn(async () => ({})),
+      delete: deleteEvent,
     },
   }),
 }));
@@ -49,7 +52,7 @@ vi.mock('./googleAuth.js', () => ({
 }));
 
 import { scheduleTimeBlocks, removeScheduledEvents } from './goalCalendarScheduler.js';
-import { addProgressEntry } from './identity/goals.js';
+import { addProgressEntry, deleteGoal } from './identity/goals.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
 
@@ -78,24 +81,57 @@ describe('goalCalendarScheduler write serialization (#8755)', () => {
     mkdirSync(join(getTempRoot(), 'digital-twin'), { recursive: true });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     insertedEvents.length = 0;
+    duringInsert = undefined;
+    deleteEvent.mockReset().mockResolvedValue({});
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-20T12:00:00Z'));
   });
+
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('applies scheduledEvents onto a goal edited while Calendar calls were in flight, without dropping the edit', async () => {
     writeFileSync(goalsFile(), JSON.stringify({ goals: [baseGoal()] }));
 
+    let progressWrite;
+    duringInsert = () => (progressWrite ??= addProgressEntry('g1', {
+      date: '2026-06-01', note: 'logged during scheduling', durationMinutes: 15
+    }));
     const result = await scheduleTimeBlocks('g1');
     expect(result.count).toBeGreaterThan(0);
-
-    // Concurrent edit lands AFTER the read scheduleTimeBlocks used to build its
-    // calendar batch — simulated here by adding a progress entry once the
-    // calendar insert calls (mocked, synchronous-ish) have already run.
-    await addProgressEntry('g1', { date: '2026-06-01', note: 'logged during scheduling', durationMinutes: 15 });
 
     const written = JSON.parse(readFileSync(goalsFile(), 'utf8'));
     const goal = written.goals[0];
     expect(goal.scheduledEvents.length).toBe(result.count);
     expect(goal.progressLog).toHaveLength(1);
     expect(goal.progressLog[0].note).toBe('logged during scheduling');
+  });
+
+  it('removes newly created calendar events and fails if the goal is deleted during insertion', async () => {
+    const goal = baseGoal();
+    goal.timeBlockConfig.subcalendarId = 'example-calendar';
+    writeFileSync(goalsFile(), JSON.stringify({ goals: [goal] }));
+    const deletion = { promise: null };
+    duringInsert = () => (deletion.promise ??= deleteGoal('g1'));
+
+    await expect(scheduleTimeBlocks('g1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(insertedEvents.length).toBeGreaterThan(0);
+    expect(deleteEvent).toHaveBeenCalledTimes(insertedEvents.length);
+    for (const event of insertedEvents) {
+      expect(deleteEvent).toHaveBeenCalledWith({ calendarId: 'example-calendar', eventId: event.id });
+    }
+    expect(JSON.parse(readFileSync(goalsFile(), 'utf8')).goals).toEqual([]);
+  });
+
+  it('reports incomplete compensation while attempting every created event', async () => {
+    writeFileSync(goalsFile(), JSON.stringify({ goals: [baseGoal()] }));
+    const deletion = { promise: null };
+    duringInsert = () => (deletion.promise ??= deleteGoal('g1'));
+    deleteEvent.mockRejectedValueOnce(Object.assign(new Error('Unavailable'), { code: 503 }));
+
+    await expect(scheduleTimeBlocks('g1')).rejects.toMatchObject({ code: 'CALENDAR_CLEANUP_FAILED' });
+    expect(deleteEvent).toHaveBeenCalledTimes(insertedEvents.length);
+    expect(JSON.parse(readFileSync(goalsFile(), 'utf8')).goals).toEqual([]);
   });
 
   it('removeScheduledEvents clears events on a freshly re-read goal', async () => {
