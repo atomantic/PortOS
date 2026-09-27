@@ -503,9 +503,23 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
     // silently skipping every future job's executeJob() call. The recovery
     // catch is attached in the same expression that starts the job — not
     // deferred until the next job is queued — so an idle queue never leaves a
-    // rejected `runTail` unhandled either.
+    // rejected `runTail` unhandled either. It also finishes the job record
+    // itself: without this, a job that escaped executeJob()'s own failure
+    // handling would stay 'queued'/'running' forever, permanently blocking
+    // this scene from ever starting a new job (see ACTIVE_STATUSES above).
     runTail = runTail.then(() => executeJob(job)).catch((error) => {
-      console.error(`❌ fal.ai video automation job failed to complete: ${error?.message || error}`);
+      try {
+        console.error(`❌ fal.ai video automation job failed to complete: ${error?.message || error}`);
+      } catch {
+        console.error('❌ fal.ai video automation job failed to complete (error details unreadable)');
+      }
+      if (ACTIVE_STATUSES.has(job.status)) {
+        job.status = 'failed';
+        job.statusMsg = 'fal.ai video failed';
+        job.error = 'fal.ai browser automation failed unexpectedly. Inspect the PortOS Browser tab, then retry.';
+        job.completedAt = new Date().toISOString();
+        emitJob(job);
+      }
     });
     // Snapshot the queued state before the serialized runner can advance it;
     // both same-scene callers receive the same initial API contract.

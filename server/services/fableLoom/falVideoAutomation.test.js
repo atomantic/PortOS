@@ -476,8 +476,12 @@ describe('FableLoom fal.ai browser automation', () => {
     });
     expect(firstJob.status).toBe('queued');
     // Let the queue actually attempt (and reject on) the first job before
-    // enqueuing the second, so the rejection is in place first.
-    await vi.waitFor(() => expect(mocks.getLoom.mock.calls.length).toBeGreaterThanOrEqual(2));
+    // enqueuing the second, so the rejection is in place first. The first
+    // job must itself reach a terminal 'failed' state rather than staying
+    // 'queued'/'running' forever, or it would permanently block this scene
+    // from ever starting a new job (see ACTIVE_STATUSES).
+    const firstResult = await waitForTerminalJob(firstJob);
+    expect(firstResult.status).toBe('failed');
 
     makeBrowser();
     const secondJob = await startFalVideoAutomation('loom-1', 'ep-1', 'node-2', {
