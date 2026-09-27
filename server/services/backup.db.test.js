@@ -15,6 +15,11 @@ import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.
 const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn(async () => 0));
 vi.mock('./syncOrchestrator.js', () => ({ rewindPostgresSyncCursors }));
 
+// Load the service before timing restore assertions, as other integration
+// suites do. A cold module graph is setup, not database replay time.
+const { restorePostgres } = await import('./backup.js');
+const pendingRestores = new Set();
+
 const feedSequenceValues = async () => Object.fromEntries((await query(
   'SELECT sequencename, last_value::text AS v FROM pg_sequences WHERE sequencename = ANY($1::text[])',
   [syncFeedTables.map(syncFeedSequenceName)],
@@ -35,6 +40,9 @@ const childEnv = { ...process.env, PGPASSWORD: POOL_CONFIG.password };
 const DUMP_COMPLETE = '\n--\n-- PostgreSQL database dump complete';
 
 afterAll(async () => {
+  // Vitest timing out an assertion does not cancel the real restore. Drain it
+  // before cleanup queries, which otherwise race its maintenance fence.
+  await Promise.allSettled([...pendingRestores]);
   if (ready) {
     await query('DROP SCHEMA IF EXISTS restore_external CASCADE');
     await query('DROP TABLE IF EXISTS public.unexpected_restore_record');
@@ -50,8 +58,13 @@ afterAll(async () => {
 });
 
 async function restore(dryRun = false, snapshotId = 'old-schema') {
-  const { restorePostgres } = await import('./backup.js');
-  return restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
+  const pending = restorePostgres(dest, snapshotId, { source: 'fixture-source', dryRun });
+  pendingRestores.add(pending);
+  try {
+    return await pending;
+  } finally {
+    pendingRestores.delete(pending);
+  }
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
