@@ -622,6 +622,7 @@ export * from './eidoverseControllers.js';
 export * from './eidoverseFoundationSandbox.js';
 export * from './eidoverseFoundations.js';
 export * from './eidoverseObservation.js';
+export * from './eidoversePort.js';
 export * from './federationSafety.js';
 export * from './secretKeys.js';
 export * from './eidoverseWorldDesign.js';
