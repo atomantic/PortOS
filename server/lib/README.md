@@ -768,4 +768,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `databaseMaintenanceJournal.js` | Shared `databaseMaintenanceEndpointSchema` plus durable cross-process database admission fence and operation journal with exclusive coordinator ownership, one-use detached worker reservations, exit-receipt-gated ownership recovery, and durable forward-only stages; source-only cancellation archives an unowned accepted operation. |
 
-| `databaseWriterRegistry.js` | `createDatabaseWriterRegistry(dataDir?)` supplies durable detached launch reservations and inventory observations; `reserveDatabaseWriter` is the mandatory `spawnDetached` admission boundary. Completion is evidence, never descendant-quiescence authority. |
+| `databaseWriterRegistry.js` | `createDatabaseWriterRegistry(dataDir?)` supplies durable detached launch reservations and inventory observations with completed launches compacted into a durable unresolved-history marker; `reserveDatabaseWriter` is the mandatory `spawnDetached` admission boundary. Completion is evidence, never descendant-quiescence authority. |
