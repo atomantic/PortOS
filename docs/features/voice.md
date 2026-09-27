@@ -16,11 +16,19 @@ PortOS includes an optional voice assistant with support for fully local operati
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
 
 **Qwen3-TTS status:** the bundled adapter currently refuses synthesis, design,
-cloning, training, and model acquisition with an explicit unavailable error.
+cloning, and training with an explicit unavailable error. Explicit model
+downloads in Settings fetch the official Qwen snapshot at an immutable Hub
+revision and verify the size and digest of every required file, including the
+speech tokenizer weights, before publishing readiness. Downloads require
+`huggingface_hub` in the isolated Qwen Python environment. A missing dependency
+or failed verification returns an error; it never marks the model downloaded.
 Earlier versions produced test tones, placeholder checkpoints and download
 metadata; those artifacts are not evidence of model readiness. Runtime probes
-therefore report unavailable and do not treat existing model folders as verified
-installations. Use Piper for working local speech until #8857 delivers a real
+still report inference unavailable. Model download readiness is separate: it
+requires a verified snapshot marker and all required files. Unchanged verified
+files use their size, change timestamps, and filesystem identity; changed files
+are rehashed before they can report ready. Windows probes rehash all files because
+Python does not expose a reliable change timestamp there; old metadata-only model folders remain unavailable. Use Piper for working local speech until #8857 delivers a real
 adapter and an intelligibility smoke run. No model download runs automatically.
 
 Interactive profile benchmarks measure elapsed time until the buffered WAV is

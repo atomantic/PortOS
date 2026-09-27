@@ -92,7 +92,7 @@ export async function getQwen3RuntimeStatus() {
 
   try {
     const probeArgs = [QWEN3_TTS_RUNNER_SCRIPT, '--probe', '--models-dir', QWEN3_TTS_MODELS_DIR];
-    const { stdout } = await spawnProbe(python, probeArgs);
+    const { stdout } = await runRuntime(python, probeArgs, 120000);
     const data = JSON.parse(stdout.trim());
 
     const modelsState = {};
@@ -135,23 +135,35 @@ export async function getQwen3RuntimeStatus() {
   }
 }
 
-function spawnProbe(pythonPath, args) {
+function runRuntime(pythonPath, args, timeout = 10000) {
   return new Promise((resolve, reject) => {
-    const child = spawn(pythonPath, args, safeChildProcessOptions({ timeout: 10000 }));
+    const child = spawn(pythonPath, args, safeChildProcessOptions({ timeout }));
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => { stdout += d.toString(); });
-    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.stdout.on('data', (d) => { stdout = (stdout + d.toString()).slice(-65536); });
+    child.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-8192); });
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Probe failed (code ${code}): ${stderr || stdout}`));
+      if (code === 0) return resolve({ stdout, stderr });
+      // Hub progress may precede the runner's final structured error line.
+      let failure = null;
+      try { failure = JSON.parse(stderr.trim().split(/\r?\n/).at(-1)); } catch { /* Non-JSON process failure. */ }
+      if (['QWEN3_DOWNLOAD_UNAVAILABLE', 'QWEN3_DOWNLOAD_FAILED'].includes(failure?.code)) {
+        return reject(new ServerError(failure.error || 'Qwen3 model download failed', {
+          status: failure.code === 'QWEN3_DOWNLOAD_UNAVAILABLE' ? 503 : 502,
+          code: failure.code,
+        }));
+      }
+      reject(new Error(`Qwen3 runtime failed (code ${code}): ${stderr || stdout}`));
     });
     child.on('error', reject);
   });
 }
 
+const downloads = new Map();
+
 /**
- * Explicit user-triggered model download.
+ * Explicit user-triggered model download. Coalesce overlapping requests for one
+ * model; readiness is published by the runner only after checksum verification.
  */
 export async function downloadQwen3Model(modelId) {
   const modelSpec = SUPPORTED_QWEN3_MODELS.find((m) => m.id === modelId);
@@ -162,8 +174,30 @@ export async function downloadQwen3Model(modelId) {
     });
   }
 
-  throw new ServerError('Qwen3-TTS model acquisition is unavailable: no verified download adapter is implemented', {
-    status: 503,
-    code: 'QWEN3_DOWNLOAD_UNAVAILABLE',
-  });
+  if (downloads.has(modelId)) return downloads.get(modelId);
+  const download = (async () => {
+    const python = await resolveQwen3Python();
+    if (!python) {
+      throw new ServerError('Python with huggingface_hub is required to download Qwen3-TTS models', {
+        status: 503, code: 'QWEN3_DOWNLOAD_UNAVAILABLE',
+      });
+    }
+    const { stdout } = await runRuntime(python, [
+      QWEN3_TTS_RUNNER_SCRIPT, '--download', '--model-id', modelId,
+      '--models-dir', QWEN3_TTS_MODELS_DIR,
+    ], 30 * 60 * 1000);
+    const result = JSON.parse(stdout.trim());
+    if (result.ok !== true || result.modelId !== modelId || !/^[a-f0-9]{40}$/.test(result.revision)) {
+      throw new ServerError('Qwen3-TTS download did not return a verified snapshot', {
+        status: 502, code: 'QWEN3_DOWNLOAD_INVALID_RESULT',
+      });
+    }
+    return result;
+  })();
+  downloads.set(modelId, download);
+  try {
+    return await download;
+  } finally {
+    downloads.delete(modelId);
+  }
 }
