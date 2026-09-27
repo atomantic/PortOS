@@ -139,6 +139,10 @@ export async function runDatabaseTransfer(id, token, options = {}) {
   const dump = journal.readTransferDump(id);
   if (!dump) throw refused('no complete recovery dump is recorded');
   let imported = false;
+  // A crash after the target commits but before the receipt publishes makes the
+  // next attempt import the same --clean dump again. That retry is idempotent:
+  // nothing can write the target before verified restart (#8851), which needs
+  // this receipt, so it reproduces the identical committed state.
   if (!journal.readTransferImport(id)) {
     const path = await assertRecordedDump(journal, id, dump);
     journal.assertCoordinatorWorker(id, token);
