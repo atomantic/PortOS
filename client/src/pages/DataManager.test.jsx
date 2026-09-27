@@ -552,3 +552,42 @@ describe('DataManager backup deletion (#8922)', () => {
     expect(screen.getByText('backup-2025-01-02.tar.gz')).toBeInTheDocument();
   });
 });
+
+describe('DataManager training-run sources and individual cleanup', () => {
+  const runItem = { name: 'example-run', label: 'Example portrait study', sourceHref: '/models/training/example-dataset', description: 'example-model · completed', type: 'directory', size: 1200, fileCount: 3 };
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue({ ...busyOverview, categories: [{ ...busyOverview.categories[0], busy: false }] });
+    getDataCategory.mockReset().mockResolvedValue({ key: 'training-runs', busy: false, items: [runItem, { name: 'another-run', type: 'directory', size: 800, fileCount: 2 }] });
+    purgeDataCategory.mockReset().mockResolvedValue({ category: 'training-runs', subPath: 'example-run' });
+  });
+
+  it('links the named source and deletes only the selected run after confirmation', async () => {
+    render(<DataManager />);
+    await screen.findAllByText('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    expect(await screen.findByRole('link', { name: 'Example portrait study' })).toHaveAttribute('href', '/models/training/example-dataset');
+    expect(screen.getByRole('link', { name: 'Open source: Example portrait study' })).toHaveAttribute('href', '/models/training/example-dataset');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' }));
+    expect(purgeDataCategory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Example portrait study' })).not.toBeInTheDocument());
+    expect(purgeDataCategory).toHaveBeenCalledWith('training-runs', { subPath: 'example-run' });
+    expect(screen.getByRole('button', { name: 'Delete another-run from LoRA Training Runs' })).toBeInTheDocument();
+    expect(getDataCategory).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the row on failure and disables individual deletion while busy', async () => {
+    purgeDataCategory.mockRejectedValue(new Error('busy'));
+    render(<DataManager />);
+    await screen.findAllByText('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete example-run from LoRA Training Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' })).toBeEnabled());
+    expect(screen.getByRole('link', { name: 'Example portrait study' })).toBeInTheDocument();
+    getDataCategory.mockResolvedValue({ key: 'training-runs', busy: true, items: [runItem] });
+    expandRow('LoRA Training Runs');
+    expandRow('LoRA Training Runs');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Delete example-run from LoRA Training Runs' })).toBeDisabled());
+  });
+});
