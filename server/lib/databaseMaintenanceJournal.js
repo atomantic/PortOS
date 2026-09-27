@@ -135,7 +135,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
   const read = () => {
     if (!isFenced()) return null;
     try {
-      if (!lstatSync(activeDir).isDirectory() || !lstatSync(recordPath).isFile()) {
+      const fence = lstatSync(activeDir);
+      if (!fence.isDirectory() || !lstatSync(recordPath).isFile()) {
         throw databaseMaintenanceError();
       }
       let current = journalSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
@@ -152,6 +153,13 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
         if (JSON.stringify(next) !== JSON.stringify({ ...current, stage })) throw databaseMaintenanceError();
         current = next;
       }
+      // The walk ends at the first missing publication, and a release or
+      // cancellation that moves the fence mid-walk makes every later one look
+      // missing. The history is complete only if the SAME fence is still in
+      // place afterward: a moved fence (ENOENT) reports no operation below; a
+      // different one at this path fails closed.
+      const after = lstatSync(activeDir);
+      if (after.ino !== fence.ino || after.dev !== fence.dev) throw databaseMaintenanceError();
       return current;
     } catch {
       // The fence check and the record reads are separate syscalls. A release

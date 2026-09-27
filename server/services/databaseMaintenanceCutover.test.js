@@ -115,7 +115,34 @@ function successor() {
 const run = () => runDatabaseCutover(operation.id, token, fast);
 const savedMode = () => /^PGMODE=(\S+)/m.exec(readFileSync(join(root, '.env'), 'utf8'))?.[1];
 const serverEvents = () => stubs.events().filter(line => line.startsWith('server '));
-const waitForEvent = (line) => vi.waitFor(() => expect(stubs.events()).toContain(line), { timeout: 15_000, interval: 20 });
+// Bounded, synthetic-only failure evidence, read BEFORE afterEach removes the
+// disposable root (#8929): every fixture event, the operation's stage and
+// coordinator state, the authority record's operation, each surrogate
+// server's liveness, and the tail of their timestamped stderr trace — enough
+// to tell a refused boot from one still waiting (or never started).
+const bounded = read => { try { return read(); } catch (err) { return 'unreadable (' + (err.code ?? 'error') + ')'; } };
+function evidence() {
+  const log = join(stubs.dir, 'surrogate-stderr.log');
+  return [
+    `events: ${JSON.stringify(stubs.events())}`,
+    `fenced: ${bounded(() => journal.isFenced())}; stage: ${bounded(() => journal.read()?.stage ?? 'none')}`,
+    `coordinator: ${bounded(() => JSON.stringify(journal.coordinatorStatus(operation.id)))}`,
+    `authority for this operation: ${bounded(() => createDatabaseAuthority(join(root, 'data')).read()?.operationId === operation.id)}`,
+    `surrogates: ${JSON.stringify((cutover?.surrogatePids() ?? []).map(pid => ({ pid, alive: alive(pid) })))}`,
+    `surrogate stderr: ${existsSync(log) ? readFileSync(log, 'utf8').slice(-3_000) : ''}`,
+  ].join('\n');
+}
+// vi.waitFor that appends the evidence above when its deadline expires.
+async function waitWithEvidence(assertion) {
+  try {
+    await vi.waitFor(assertion, { timeout: 15_000, interval: 20 });
+  } catch (err) {
+    err.message += `\n--- cutover evidence ---\n${evidence()}`;
+    throw err;
+  }
+}
+const waitForEvent = (line) => waitWithEvidence(() => expect(stubs.events()).toContain(line));
+const waitForProof = (pid) => waitWithEvidence(async () => expect(journal.readTargetProof(operation.id, pid, await processStart(pid))).not.toBeNull());
 
 describe.skipIf(process.platform === 'win32')('offline database cutover', () => {
   it.each([[native, docker], [docker, native]])('commits mode and releases only after the restarted server proves the target (%#)', async (source, target) => {
@@ -200,7 +227,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     // A healthy restarted server proves the target and waits at the fence.
     const pid = cutover.launchServer(docker);
     rows.find(row => row.name === 'portos-server').pid = pid;
-    await vi.waitFor(async () => expect(journal.readTargetProof(operation.id, pid, await processStart(pid))).not.toBeNull(), { timeout: 15_000, interval: 20 });
+    await waitForProof(pid);
     // A worker crashes between verification and release.
     successor();
     journal.enterCoordinatorWorker(operation.id, token);
@@ -250,7 +277,7 @@ describe.skipIf(process.platform === 'win32')('offline database cutover', () => 
     cutover.setHealth('healthy');
     const pid = cutover.launchServer(docker);
     rows.find(row => row.name === 'portos-server').pid = pid;
-    await vi.waitFor(async () => expect(journal.readTargetProof(operation.id, pid, await processStart(pid))).not.toBeNull(), { timeout: 15_000, interval: 20 });
+    await waitForProof(pid);
     successor();
     journal.enterCoordinatorWorker(operation.id, token);
     journal.transition(operation.id, token, 'verifying', 'verified');
