@@ -102,6 +102,8 @@ export async function renderComposition({ jobId, ...input }) {
         await deliver(target, handle => pipeline(createReadStream(source), handle.createWriteStream()));
       }
       launchMetadata = { appId: launchVideo.appId, runId: launchVideo.runId,
+        ...(launchVideo.sourceVideoId ? { sourceVideoId: launchVideo.sourceVideoId } : {}),
+        musicTrack: musicTrack ?? null, synthesizeMusic: Boolean(synthesizeMusic),
         caption: launchAssets.get('/caption.txt').toString('utf8').trim(), posterSec: launchPlan.posterSec };
     }
     signal.throwIfAborted();

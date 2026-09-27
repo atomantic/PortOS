@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -168,5 +168,59 @@ describe('README publication admission', () => {
     getAppById.mockResolvedValue({ id: 'example' });
     expect((await publish({ videoId: video.id })).status).toBe(400);
     expect(addTask).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('feedback revisions', () => {
+  let source;
+  const video = { id: 'selected-take', durationSec: 18, width: 1080, height: 1920,
+    launchVideo: { appId: 'example', runId: 'source-run', synthesizeMusic: true } };
+  beforeEach(async () => {
+    source = join(PATHS.data, 'launch-videos/example/source-run/composition');
+    await mkdir(join(source, 'assets'), { recursive: true });
+    await writeFile(join(source, 'index.html'), '<html>Original composition</html>');
+    await writeFile(join(source, 'assets/score.js'), 'const score = [1, 2, 3];');
+    await writeFile(join(source, 'plan.md'), 'Original plan');
+    await writeFile(join(source, 'caption.txt'), 'Original caption');
+    await writeFile(join(source, 'storyboard.json'), JSON.stringify({ posterSec: 5, scenes: [{ durationSec: 18, lines: [{ text: 'Example product', wordCount: 2, holdSec: 2 }] }] }));
+    loadHistory.mockResolvedValue([video]);
+  });
+  it('copies the selected source, inherits timing and music, and pins the revision agent', async () => {
+    const response = await submit({ sourceVideoId: video.id, feedback: 'Make the final headline larger', provider: 'example-provider', model: 'example-model' });
+    expect(response.status).toBe(202);
+    const destination = join(PATHS.data, 'launch-videos/example', response.body.runId, 'composition');
+    expect(await readFile(join(destination, 'assets/score.js'), 'utf8')).toBe('const score = [1, 2, 3];');
+    await writeFile(join(destination, 'index.html'), 'Revised');
+    expect(await readFile(join(source, 'index.html'), 'utf8')).toBe('<html>Original composition</html>');
+    const task = addTask.mock.calls[0][0];
+    expect(task).toMatchObject({ provider: 'example-provider', model: 'example-model', metadata: { sourceVideoId: video.id } });
+    expect(task.prompt).toContain('Make the final headline larger');
+    expect(task.prompt).toContain('do not rebuild from scratch');
+    expect(task.prompt).toContain('"targetDurationSec":18');
+    expect(task.prompt).toContain('"format":"vertical"');
+    expect(task.prompt).toContain('"synthesizeMusic":true');
+  });
+  it('rejects invalid feedback, cross-app selections and missing editable source before dispatch', async () => {
+    expect((await submit({ sourceVideoId: video.id, feedback: '  ' })).status).toBe(400);
+    expect((await submit({ sourceVideoId: video.id })).status).toBe(400);
+    expect((await submit({ feedback: 'Edit' })).status).toBe(400);
+    expect((await submit({ sourceVideoId: 'unknown', feedback: 'Edit' })).status).toBe(404);
+    loadHistory.mockResolvedValue([{ ...video, launchVideo: { ...video.launchVideo, appId: 'other' } }]);
+    expect((await submit({ sourceVideoId: video.id, feedback: 'Edit' })).status).toBe(404);
+    loadHistory.mockResolvedValue([video]);
+    await rm(source, { recursive: true });
+    expect((await submit({ sourceVideoId: video.id, feedback: 'Edit' })).status).toBe(409);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+  it('removes an unused copy when dispatch fails or deduplicates, preserving prior takes', async () => {
+    const root = join(PATHS.data, 'launch-videos/example');
+    const before = await readdir(root);
+    addTask.mockResolvedValueOnce({ duplicate: true });
+    expect((await submit({ sourceVideoId: video.id, feedback: 'Edit' })).status).toBe(409);
+    expect(await readdir(root)).toEqual(before);
+    addTask.mockRejectedValueOnce(new Error('Queue unavailable'));
+    expect((await submit({ sourceVideoId: video.id, feedback: 'Edit' })).status).toBe(500);
+    expect(await readdir(root)).toEqual(before);
   });
 });

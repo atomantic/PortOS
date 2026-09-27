@@ -97,3 +97,25 @@ it('publishes the URL-selected take once and exposes the queued workflow', async
   expect((await screen.findByRole('status')).textContent).toContain('README publication queued');
   expect(screen.getByRole('link', { name: /Follow the render/ }).getAttribute('href')).toBe('/cos/agents');
 });
+
+
+it('revises the selected older take with feedback and a model pin, without duplicate submission', async () => {
+  getAppLaunchVideos.mockResolvedValueOnce({ videos: [
+    { id: 'newest', filename: 'newest.mp4', createdAt: '2026-01-02' },
+    { id: 'older', filename: 'older.mp4', createdAt: '2026-01-01' },
+  ] });
+  let finish;
+  createAppLaunchVideo.mockReset().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  renderPanel('/?video=older');
+  const feedback = await screen.findByLabelText('Feedback');
+  expect(screen.getByRole('button', { name: 'Revise as new version' }).disabled).toBe(true);
+  fireEvent.change(feedback, { target: { value: '  Enlarge the closing headline  ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Revise as new version' }));
+  expect(screen.getByRole('button', { name: 'Queuing revision…' }).disabled).toBe(true);
+  expect(createAppLaunchVideo).toHaveBeenCalledExactlyOnceWith('example', {
+    sourceVideoId: 'older', feedback: 'Enlarge the closing headline', provider: 'example-provider', model: 'example-model',
+  }, { silent: true });
+  finish({ taskId: 'task-revise' });
+  expect((await screen.findByRole('status')).textContent).toContain('Revision queued');
+  expect(screen.getByLabelText('Selected launch video').getAttribute('src')).toBe('/data/videos/older.mp4');
+});
