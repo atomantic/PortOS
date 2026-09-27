@@ -37,10 +37,7 @@ function readConfiguration() {
   // a failed .env read, which cannot be treated as evidence for a cutover.
   const envPath = join(PATHS.installRoot, '.env');
   let content;
-  try { content = readFileSync(envPath, 'utf8'); } catch (err) {
-    if (err.code !== 'ENOENT') throw unavailable();
-    content = null;
-  }
+  try { content = readFileSync(envPath, 'utf8'); } catch { throw unavailable(); }
   const configPath = join(PATHS.installRoot, 'ecosystem.config.cjs');
   let configuration;
   try {

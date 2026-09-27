@@ -153,6 +153,15 @@ describe('database maintenance preflight HTTP contract', () => {
     rmSync(join(PATHS.installRoot, '.env'), { recursive: true });
   });
 
+  it('refuses missing saved configuration rather than assuming the default direction', async () => {
+    rmSync(join(PATHS.installRoot, '.env'));
+    POOL_CONFIG.port = 5561;
+    const result = await preflight({ source: 'docker', target: 'native' });
+    expect(result.status).toBe(409);
+    expect(result.body.code).toBe('DATABASE_PREFLIGHT_UNTRUSTED');
+    expect(getSystemActivity).not.toHaveBeenCalled();
+  });
+
   it('re-reads saved settings after asynchronous work inspection', async () => {
     getSystemActivity.mockImplementation(async () => { saveMode('docker'); return idle(); });
     expect((await preflight()).body.code).toBe('DATABASE_PREFLIGHT_STALE');
