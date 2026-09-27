@@ -80,6 +80,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // and rotation must already hold operator authority (#8771).
   'POST /api/auth/password',
 
+  // Generic runs accept arbitrary prompts/workspaces, including API-to-CLI fallback.
+  'POST /api/runs',
+
   // Apps: create/edit choose the repo path and the start/build commands; the
   // lifecycle and launch routes run them under PM2 or the native launcher.
   'POST /api/apps',

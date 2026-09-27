@@ -388,7 +388,7 @@ const shortId = () => Math.random().toString(36).slice(2, 7);
 // of that conversation and a runaway caller would blow the model's window.
 const MAX_SYSTEM_CONTEXT_CHARS = 4000;
 
-export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null }) => {
+export const runTurn = async ({ audio, text, mimeType, source, history = [], emit, signal, state, systemContext = null, hasHostControl }) => {
   const cfg = await getVoiceConfig();
   if (signal?.aborted) return { transcript: '', reply: '' };
 
@@ -737,6 +737,7 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       // so the tool just calls ctx.requestUiText() with no plumbing.
       const ctx = {
         sideEffects: [],
+        hasHostControl,
         state,
         signal,
         // ui_describe_visually: capture the active tab (client round-trip) and
@@ -757,6 +758,9 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       } catch (err) {
         const ms = Date.now() - t0;
         result = { ok: false, error: err.message };
+        if (err.code === 'HOST_CONTROL_FORBIDDEN') {
+          emit('voice:error', { stage: 'tool', code: err.code, message: err.message });
+        }
         toolRuns.push({ name: tc.function.name, ok: false, ms, error: err.message });
         tlog(`tool.fail  ${tc.function.name} ${ms}ms err="${err.message}"`);
       }

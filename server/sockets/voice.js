@@ -16,6 +16,7 @@
 // Inbound:  voice:capture:start | voice:call:audio | voice:capture:stop
 // Outbound: voice:capture:state
 
+import { socketHasCurrentHostControl } from '../services/authGate.js';
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
@@ -179,6 +180,7 @@ export const registerVoiceHandlers = (socket) => {
     try {
       const { transcript, reply } = await runTurn({
         audio, mimeType, text, source, history: state.history, emit, signal, state,
+        hasHostControl: () => socketHasCurrentHostControl(socket),
       });
       // Don't persist transcript/reply when the turn was aborted or superseded
       // by a newer turn — the user interrupted, and that output shouldn't
@@ -494,6 +496,7 @@ export const registerVoiceHandlers = (socket) => {
         // A mind-placed call carries the mind's own briefing, so the voice on
         // the phone continues that conversation instead of answering cold.
         systemContext: getCallContext(),
+        hasHostControl: () => socketHasCurrentHostControl(socket),
         // The pipeline speaks the widget's event vocabulary; only the audio is
         // re-addressed, so persona, tools, and the confirm gate are unchanged.
         emit: (event, data) => {

@@ -181,7 +181,7 @@ export const getAllToolNames = () => TOOLS.map((t) => t.name);
 export const getToolMetadata = (id) => {
   const tool = TOOLS.find((t) => t.name === id);
   if (!tool) return null;
-  return { id: tool.name, description: tool.description, parameters: tool.parameters };
+  return { id: tool.name, description: tool.description, parameters: tool.parameters, hostControl: tool.hostControl === true };
 };
 
 // Intent-filtered spec list. Pass the user's current utterance; returns the
@@ -228,5 +228,13 @@ export const getToolSpecsForIntent = (userText) => {
 export const dispatchTool = async (name, args, ctx) => {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) throw new Error(`Unknown tool: ${name}`);
+  // A function supplied by our HTTP/socket/internal adapter cannot be forged
+  // in JSON tool arguments. Missing context fails closed, even when enabled.
+  if (tool.hostControl && (typeof ctx?.hasHostControl !== 'function' || await ctx.hasHostControl() !== true)) {
+    const [{ HOST_CONTROL_FORBIDDEN_MESSAGE }, { ServerError }] = await Promise.all([
+      import('../authGate.js'), import('../../lib/errorHandler.js'),
+    ]);
+    throw new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+  }
   return tool.execute(args || {}, ctx || { sideEffects: [] });
 };
