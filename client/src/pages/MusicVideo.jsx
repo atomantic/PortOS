@@ -41,6 +41,7 @@ import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
+import TypographyPanel from '../components/musicVideo/TypographyPanel.jsx';
 import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
 import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
@@ -346,8 +347,8 @@ export default function MusicVideo() {
     updateMusicVideoProject(selected.id, { concept: patch }, { silent: true })
       .catch((err) => toast.error(err?.message || 'Failed to save concept'));
   };
-  // Lyric cues / phrases / pacing (#8964) — optimistic-local + silent PATCH on
-  // blur, like the scene editors. Each PATCH replaces a whole list, so the
+  // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)
+  // — optimistic-local + silent PATCH on blur, like the scene editors. Each PATCH replaces a whole list, so the
   // saves are chained: two quick blurs can never land out of order and let an
   // older snapshot of the list overwrite a newer one.
   const timedTextSaveChain = useRef(Promise.resolve());
@@ -356,7 +357,7 @@ export default function MusicVideo() {
     const projectId = selected.id;
     timedTextSaveChain.current = timedTextSaveChain.current
       .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
-      .catch((err) => toast.error(err?.message || 'Failed to save lyrics'));
+      .catch((err) => toast.error(err?.message || 'Failed to save changes'));
   };
   const handleImportLyrics = (body, onDone) => {
     const projectId = selected.id;
@@ -680,6 +681,11 @@ export default function MusicVideo() {
                 onSave={saveProjectFields}
                 onImport={handleImportLyrics}
                 importing={importingLyrics}
+              />
+              <TypographyPanel
+                project={selected}
+                onEditLocal={editProjectLocal}
+                onSave={saveProjectFields}
               />
               <AnalysisPanel
                 audioAnalysis={selected.audioAnalysis}
