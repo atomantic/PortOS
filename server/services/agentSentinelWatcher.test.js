@@ -66,6 +66,27 @@ describe('createAgentSentinelAccess', () => {
     }
   });
 
+  it('revalidates a cached recovery path after it disappears', async () => {
+    const workspace = await makeWorkspace();
+    try {
+      const recoveredPath = join(workspace, '.agent-done-agent-ded2dcc');
+      const access = createAgentSentinelAccess({
+        workspacePath: workspace,
+        agentId: AGENT_ID,
+        startedAt: Date.now() - 1000,
+        getActiveAgentIds: () => [AGENT_ID],
+      });
+      await writeFile(recoveredPath, 'first');
+      expect(access.resolvedPath()).toBe(recoveredPath);
+
+      await rm(recoveredPath);
+      expect(access.exists()).toBe(false);
+      expect(access.resolvedPath()).toBeNull();
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('watches for a recovery file written after the run starts', async () => {
     const workspace = await makeWorkspace();
     try {
@@ -86,4 +107,3 @@ describe('createAgentSentinelAccess', () => {
     }
   });
 });
-

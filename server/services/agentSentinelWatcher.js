@@ -121,7 +121,16 @@ export function createAgentSentinelAccess({
     return () => closers.forEach((close) => close?.());
   };
 
-  const resolvedPath = () => detectedPath || resolvePath();
+  const resolvedPath = () => {
+    if (detectedPath) {
+      const stillPresent = detectedPath === canonicalPath
+        ? fs.existsSync(detectedPath)
+        : fs.existsSync(detectedPath) && fallbackIsUnambiguous(detectedPath);
+      if (stillPresent) return detectedPath;
+      detectedPath = null;
+    }
+    return resolvePath();
+  };
 
   const read = async () => {
     const filePath = resolvedPath() || canonicalPath;
@@ -159,7 +168,7 @@ export function createAgentSentinelAccess({
   return {
     path: canonicalPath,
     candidatePaths,
-    exists: () => !!resolvePath(),
+    exists: () => !!resolvedPath(),
     resolvedPath,
     read,
     remove,

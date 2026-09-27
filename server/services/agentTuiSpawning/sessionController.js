@@ -695,7 +695,9 @@ export function createTuiSessionController({
     if (sentinelIngested) return null;
     if (!sentinelPresent()) return null;
     sentinelIngested = true;
+    let sentinelReadSucceeded = true;
     const contents = await sentinel.read().catch(err => {
+      sentinelReadSucceeded = false;
       console.error(`❌ ingestDoneSentinel readFile failed: ${err.message}`);
       return '';
     });
@@ -704,7 +706,7 @@ export function createTuiSessionController({
     // shared finalization/output-hook path reads the sentinel again, so a
     // structured completion has the same behavior as an exact write.
     const sentinelSourcePath = sentinel.resolvedPath?.();
-    if (sentinel.promote && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
+    if (sentinelReadSucceeded && sentinel.promote && sentinelSourcePath && sentinelSourcePath !== sentinel.path) {
       await sentinel.promote(contents).catch(err => {
         console.error(`❌ ingestDoneSentinel canonical promotion failed: ${err.message}`);
       });

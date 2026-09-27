@@ -356,10 +356,17 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
         const current = activeAgents.get(agentId);
         if (!current) return;
         current.completedBySentinel = true;
+        let sentinelReadSucceeded = true;
         const contents = await sentinelAccess.read().catch(err => {
+          sentinelReadSucceeded = false;
           console.error(`❌ TUI agent ${agentId} sentinel read failed: ${err.message}`);
           return '';
         });
+        if (sentinelReadSucceeded) {
+          await sentinelAccess.promote(contents).catch(err => {
+            console.error(`❌ TUI agent ${agentId} canonical sentinel promotion failed: ${err.message}`);
+          });
+        }
         const { summary } = parseSentinelPayload(contents);
         if (summary) {
           emitToServer('agent:output', {
@@ -368,6 +375,7 @@ app.post('/spawn-tui', lifecycle.spawnRoute(async (req, res) => {
           });
         }
         if (!current.exited) current.process.kill();
+        if (sentinelReadSucceeded) await sentinelAccess.cleanup();
       });
       return agent.sentinelWork;
     });
