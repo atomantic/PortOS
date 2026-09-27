@@ -27,8 +27,15 @@ export function makeEmitterFaultIsolating(emitter) {
       try {
         listener.apply(emitter, args);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`❌ Listener for '${String(eventName)}' threw: ${message}`);
+        // Formatting itself must not throw (a hostile `.message` getter, a
+        // Symbol, a value whose `String()` throws) — that would defeat the
+        // isolation this loop exists to provide.
+        try {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`❌ Listener for '${String(eventName)}' threw: ${message}`);
+        } catch {
+          console.error(`❌ Listener for '${String(eventName)}' threw (unformattable error)`);
+        }
       }
     }
     return listeners.length > 0;

@@ -52,6 +52,27 @@ describe('makeEmitterFaultIsolating', () => {
     expect(secondListener).toHaveBeenCalled();
   });
 
+  it('does not itself throw when formatting a thrown error explodes (hostile message getter)', () => {
+    const emitter = makeEmitterFaultIsolating(new EventEmitter());
+    const secondListener = vi.fn();
+    const hostile = Object.create(Error.prototype);
+    Object.defineProperty(hostile, 'message', {
+      get() {
+        throw new Error('cannot read message');
+      },
+    });
+    emitter.on('completed', () => {
+      throw hostile;
+    });
+    emitter.on('completed', secondListener);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => emitter.emit('completed')).not.toThrow();
+    errorSpy.mockRestore();
+
+    expect(secondListener).toHaveBeenCalled();
+  });
+
   it('returns true when listeners existed, false otherwise', () => {
     const emitter = makeEmitterFaultIsolating(new EventEmitter());
     expect(emitter.emit('unheard')).toBe(false);
