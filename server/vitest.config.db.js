@@ -86,7 +86,8 @@ export const DB_TEST_INCLUDE = [
 export default defineConfig({
   test: {
     testTimeout: process.platform === 'win32' ? 30000 : 15000,
-    globals: true,
+    // Explicit 'vitest' imports only, matching vitest.config.js (#9049).
+    globals: false,
     setupFiles: ['./vitest.setup.js'],
     // One file at a time — these suites assume exclusive access to their tables.
     fileParallelism: false,
