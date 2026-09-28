@@ -170,7 +170,7 @@ export function buildTypographyDocument({ cues, style = {}, width, height, durat
 html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
 #safe { position: absolute; }
 .cue { position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 0.25em; text-align: center; color: ${color}; font-family: ${fontStack};
-  font-weight: 700; line-height: 1.15; overflow-wrap: break-word; visibility: hidden; will-change: transform, opacity;
+  font-weight: 700; line-height: 1.15; overflow-wrap: break-word; overflow: hidden; visibility: hidden; will-change: transform, opacity;
   /* The padding keeps this legibility shadow inside the cue box, and so inside the safe area. */
   text-shadow: 0 0 0.12em rgba(0,0,0,0.85), 0 0.04em 0.18em rgba(0,0,0,0.7); }
 .cue .rest { visibility: hidden; }
@@ -210,13 +210,15 @@ function layout({ width, height }) {
       size = Math.max(floor, Math.floor(size * 0.92));
       node.el.style.fontSize = size + 'px';
     }
-    const boxH = Math.min(node.el.scrollHeight, safeH);
     // A lower cue that rises in starts below its resting place: rest it high
     // enough that its first frame is still inside the safe area.
     const reserve = node.cue.template === 'rise' ? Math.ceil(0.04 * height) : 0;
-    const top = node.cue.placement === 'upper' ? 0 : node.cue.placement === 'center' ? (safeH - boxH) / 2 : safeH - boxH - reserve;
+    // Text still too tall at the minimum size is clipped to the box (overflow:
+    // hidden), and the box — plus any rise travel — never exceeds the safe area.
+    const boxH = Math.min(node.el.scrollHeight, safeH - reserve);
+    const top = node.cue.placement === 'upper' ? 0 : node.cue.placement === 'center' ? (safeH - reserve - boxH) / 2 : safeH - boxH - reserve;
     node.el.style.top = Math.round(top) + 'px';
-    node.el.style.maxHeight = safeH + 'px';
+    node.el.style.maxHeight = boxH + 'px';
   }
 }
 function draw(t) {

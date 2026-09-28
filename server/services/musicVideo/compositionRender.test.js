@@ -125,14 +125,16 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
     expect(await readdir(join(PATHS.data, COMPOSITION_SCRATCH_DIR))).toEqual([]);
   }, 60000);
 
-  it.each([['16:9', 480, 270], ['9:16', 270, 480]])('keeps every motion template inside the title-safe area at %s', async (_label, width, height) => {
+  it.each([['16:9', 480, 270], ['9:16', 270, 480], ['a small 16:9 frame', 160, 90]])('keeps every motion template inside the title-safe area at %s', async (_label, width, height) => {
     const long = 'A deliberately long lyric line that has to wrap and shrink to stay inside the frame';
     const cues = [
       { id: 'hero', text: long, startSec: 0, endSec: 0.75, template: 'pop', placement: 'center', emphasis: 'hero' },
       { id: 'low', text: long, startSec: 1, endSec: 1.75, template: 'rise', placement: 'lower', emphasis: 'subtitle' },
       { id: 'up', text: long, startSec: 2, endSec: 2.75, template: 'typewriter', placement: 'upper', emphasis: 'subtitle' },
+      // Worst case: a maximum-length hero line that cannot fit even at the minimum size.
+      { id: 'max', text: 'W'.repeat(500), startSec: 3, endSec: 3.75, template: 'rise', placement: 'lower', emphasis: 'hero' },
     ];
-    const overlays = await renderTypographyOverlays({ jobId: `safe-${width}`, cues, style: { font: 'serif' }, width, height, fps: 12, durationSec: 3 });
+    const overlays = await renderTypographyOverlays({ jobId: `safe-${width}`, cues, style: { font: 'serif' }, width, height, fps: 12, durationSec: 4 });
     let drawn = 0;
     for (const overlay of overlays) drawn += assertInsideSafeArea(overlay.path, width, height);
     expect(drawn).toBeGreaterThan(1000);
