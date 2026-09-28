@@ -287,7 +287,7 @@
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null,
-      "notes": "OpenAI published standard-tier list price for gpt-6-sol ($2.00/M uncached input, $10.00/M output; cached input $0.20/M is a separate class). The page documents long-context requests at 2x the standard rates and separate Batch/Flex ($1/$5) and Fast ($4/$20) tiers \u2014 each a different configuration, not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. No quality, throughput or latency on this source."
+      "notes": "OpenAI published standard-tier list price for gpt-6-sol ($2.00/M uncached input, $10.00/M output; cached input $0.20/M is a separate class). The page documents long-context requests at 2x the standard rates and separate Batch/Flex ($1/$5) and Fast ($4/$20) tiers — each a different configuration, not recorded here. Reasoning-token billing is not separately documented, so reasoningPerMillion is null. No quality, throughput or latency on this source."
     },
     {
       "id": "nim-free-2026-09-google-gemma-4-31b-it",
@@ -39453,7 +39453,7 @@
       "provider": "OpenRouter",
       "model": "deepseek-v4.1-flash",
       "effort": "unspecified",
-      "configuration": "OpenRouter routed model deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00\u201304:00 pricing tier",
+      "configuration": "OpenRouter routed model deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00–04:00 pricing tier",
       "billing": "api",
       "benchmark": "OpenRouter routed API pricing",
       "quality": null,
@@ -39463,7 +39463,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00\u201304:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00–04:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
         }
       },
       "outputPerMillion": {
@@ -39471,7 +39471,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00\u201304:00. Rates are USD per million tokens. Completion price is the output rate."
+          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 01:00–04:00. Rates are USD per million tokens. Completion price is the output rate."
         }
       },
       "reasoningPerMillion": null,
@@ -39485,7 +39485,7 @@
       "provider": "OpenRouter",
       "model": "deepseek-v4.1-flash",
       "effort": "unspecified",
-      "configuration": "OpenRouter routed model deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00\u201310:00 pricing tier",
+      "configuration": "OpenRouter routed model deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00–10:00 pricing tier",
       "billing": "api",
       "benchmark": "OpenRouter routed API pricing",
       "quality": null,
@@ -39495,7 +39495,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00\u201310:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00–10:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
         }
       },
       "outputPerMillion": {
@@ -39503,7 +39503,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00\u201310:00. Rates are USD per million tokens. Completion price is the output rate."
+          "methodology": "OpenRouter published routed price for deepseek/deepseek-v4.1-flash; friday, monday, thursday, tuesday, wednesday 06:00–10:00. Rates are USD per million tokens. Completion price is the output rate."
         }
       },
       "reasoningPerMillion": null,
@@ -43061,7 +43061,7 @@
       "provider": "OpenRouter",
       "model": "hy3",
       "effort": "unspecified",
-      "configuration": "OpenRouter routed model tencent/hy3; every UTC day 16:00\u201300:00 pricing tier",
+      "configuration": "OpenRouter routed model tencent/hy3; every UTC day 16:00–00:00 pricing tier",
       "billing": "api",
       "benchmark": "OpenRouter routed API pricing",
       "quality": null,
@@ -43071,7 +43071,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for tencent/hy3; every UTC day 16:00\u201300:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+          "methodology": "OpenRouter published routed price for tencent/hy3; every UTC day 16:00–00:00. Rates are USD per million tokens. Prompt price is the uncached-input rate."
         }
       },
       "outputPerMillion": {
@@ -43079,7 +43079,7 @@
         "source": {
           "url": "https://openrouter.ai/api/v1/models",
           "retrievedAt": "2026-09-24T15:36:53.403Z",
-          "methodology": "OpenRouter published routed price for tencent/hy3; every UTC day 16:00\u201300:00. Rates are USD per million tokens. Completion price is the output rate."
+          "methodology": "OpenRouter published routed price for tencent/hy3; every UTC day 16:00–00:00. Rates are USD per million tokens. Completion price is the output rate."
         }
       },
       "reasoningPerMillion": null,
@@ -55315,6 +55315,756 @@
       "responseSeconds": null,
       "tokensPerSecond": null,
       "quota": null
+    },
+    {
+      "id": "anthropic-claude-sonnet-5.5-pricing-2026-09-28-standard",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) standard global endpoint; base input / output tokens, inference_geo=global",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-28)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Publisher list price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Publisher list price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published list price for Claude Sonnet 5.5 (/MTok base input, /MTok output). Cache writes (.50/MTok 5m, /MTok 1h) and cache reads (zsh.20/MTok, 0.1x base) are separate token classes not represented by this schema. Reasoning tokens are not separately priced by Anthropic; reasoningPerMillion stays null rather than assuming output-rate billing. No quality, latency, throughput or benchmark task cost is published on this page."
+    },
+    {
+      "id": "anthropic-claude-sonnet-5.5-pricing-2026-09-28-batch",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "unspecified",
+      "configuration": "Claude API (first-party) Message Batches endpoint (50% discount across token classes); inference_geo=global",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-28)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Publisher batch price, USD per million uncached input tokens, read from the official pricing page."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Publisher batch price, USD per million output tokens, read from the official pricing page."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Anthropic published Message Batches pricing for Claude Sonnet 5.5 (/MTok base input, /MTok output). 24h turnaround window."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-max",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Published API model; Adaptive Reasoning, Max Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 56,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 7.6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 353.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median end-to-end response time (500 answer tokens)."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 141.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Sonnet 5.5 (max with fallback)). Coding benchmark evaluations in Intelligence Index v4.3.2 include Terminal-Bench 4.0 (63.6% on AA, 70.6% on Anthropic eval) and SciCode (61.0%)."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Published API model; Adaptive Reasoning, Xhigh Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 52,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 2.74,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 94.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median end-to-end response time (500 answer tokens)."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 142.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Sonnet 5.5 (xhigh with fallback)). Coding benchmark evaluations in Intelligence Index v4.3.2 include Terminal-Bench 4.0 and SciCode."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "Published API model; Adaptive Reasoning, High Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 47,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 1.08,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 14.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median end-to-end response time (500 answer tokens)."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 95.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Sonnet 5.5 (high with fallback)). Coding benchmark evaluations in Intelligence Index v4.3.2 include Terminal-Bench 4.0 and SciCode."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Published API model; Adaptive Reasoning, Medium Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.59,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 2.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median end-to-end response time (500 answer tokens)."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 110.6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Sonnet 5.5 (medium with fallback)). Coding benchmark evaluations in Intelligence Index v4.3.2 include Terminal-Bench 4.0 and SciCode."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Published API model; Adaptive Reasoning, Low Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 36,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 composite score."
+        }
+      },
+      "costPerTask": {
+        "value": 0.41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; cost per task evaluation."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 1.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median end-to-end response time (500 answer tokens)."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 88.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Sourced from Artificial Analysis (Claude Sonnet 5.5 (low with fallback)). Coding benchmark evaluations in Intelligence Index v4.3.2 include Terminal-Bench 4.0 and SciCode."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-terminal-bench",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Terminal-Bench 4.0 agentic coding evaluation (66 tasks, containerized CLI)",
+      "billing": "api",
+      "benchmark": "Terminal-Bench 4.0 (agentic coding, pass@1)",
+      "quality": {
+        "value": 63.6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Terminal-Bench 4.0 agentic coding evaluation pass rate, measured by Artificial Analysis in Intelligence Index v4.3.2 suite."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 141.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "Terminal-Bench 4.0 agentic coding evaluation (63.6% measured by Artificial Analysis; 70.6% on Anthropic release evaluation vs Sonnet 5 10.3%)."
+    },
+    {
+      "id": "aa-v4.3.2-anthropic-claude-sonnet-5.5-scicode",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "SciCode scientific research coding evaluation (288 subproblems, 16 disciplines)",
+      "billing": "api",
+      "benchmark": "SciCode (scientific coding, pass@1)",
+      "quality": {
+        "value": 61,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "SciCode scientific coding evaluation pass rate, measured by Artificial Analysis in Intelligence Index v4.3.2 suite."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million uncached input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per million output tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": {
+        "value": 141.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis median output tokens per second."
+        }
+      },
+      "quota": null,
+      "notes": "SciCode scientific coding evaluation (61.0% measured by Artificial Analysis in Intelligence Index v4.3.2 suite)."
+    },
+    {
+      "id": "aa-web-v4.3.2-claude-sonnet-5-5",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Adaptive Reasoning, Max Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 56,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; exact value from public chart data. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5."
+        }
+      },
+      "costPerTask": {
+        "value": 7.6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v4.3.2-claude-sonnet-5-5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Adaptive Reasoning, Xhigh Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 52,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; exact value from public chart data. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "costPerTask": {
+        "value": 2.74,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v4.3.2-claude-sonnet-5-5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "Adaptive Reasoning, High Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 47,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; exact value from public chart data. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "costPerTask": {
+        "value": 1.08,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v4.3.2-claude-sonnet-5-5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Adaptive Reasoning, Medium Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; exact value from public chart data. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "costPerTask": {
+        "value": 0.59,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v4.3.2-claude-sonnet-5-5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Adaptive Reasoning, Low Effort, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
+      "quality": {
+        "value": 36,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2; exact value from public chart data. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "costPerTask": {
+        "value": 0.41,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Artificial Analysis Intelligence Index v4.3.2 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public comparison chart embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "openrouter-price-b73c942482fcdf15a84ec5bb",
+      "provider": "OpenRouter",
+      "model": "claude-sonnet-5.5",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed model anthropic/claude-sonnet-5.5; standard pricing tier",
+      "billing": "api",
+      "benchmark": "OpenRouter routed API pricing",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-sonnet-5.5; standard. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-sonnet-5.5; standard. Rates are USD per million tokens. Completion price is the output rate."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
+    },
+    {
+      "id": "openrouter-price-561c6ef08315fbe30c06c28b",
+      "provider": "OpenRouter",
+      "model": "claude-sonnet-5.5",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed model anthropic/claude-sonnet-5.5:batch; standard pricing tier",
+      "billing": "api",
+      "benchmark": "OpenRouter routed API pricing",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-sonnet-5.5:batch; standard. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-09-28T00:00:00Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-sonnet-5.5:batch; standard. Rates are USD per million tokens. Completion price is the output rate."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
     }
   ]
 }

@@ -34,6 +34,7 @@ export const PRICING_AS_OF = '2026-09-01';
 // Newer model launch rates are tracked separately so the baseline date above
 // does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
+  'claude-sonnet-5-5': '2026-09-28',
   'claude-opus-5-5': '2026-09-23',
   'gpt-6-sol': '2026-09-22',
   'gpt-6-luna': '2026-09-22',
@@ -86,6 +87,7 @@ const EXACT_RATES = {
   ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, [...OPUS_TIER_RATES]])),
   // The scheduled 2026-09-01 bump to $3/$15 was cancelled — Anthropic confirmed
   // 2026-08-10 that the $2/$10 intro rate is now the permanent standard rate.
+  'claude-sonnet-5-5': [2.0, 10.0],
   'claude-sonnet-5': [2.0, 10.0],
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
