@@ -473,7 +473,7 @@ export async function renderMusicVideo(projectId) {
     const stale = await findStalePerformanceTakes(project, audioPath);
     if (stale.length > 0) {
       throw new ServerError(
-        `${stale.length} performance shot${stale.length === 1 ? ' was' : 's were'} generated against a different song interval or recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
+        `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
         { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
       );
     }

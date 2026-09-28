@@ -83,18 +83,25 @@ const refuse = (message, code, status = 400) => new ServerError(message, { statu
 const SAME_TIME_SEC = 0.001;
 
 /**
- * Performance scenes whose SELECTED take was generated against a different song
- * interval (the scene was re-timed) or a different recording (the song was
- * replaced). Returns `[{ sceneId, reason: 'retimed' | 'audio-changed' }]`;
+ * Performance scenes whose SELECTED clip cannot be rendered as a lip-synced
+ * shot: a take with no performance instruction (a cutaway render or an import
+ * made before the scene became a performance), or one generated against a
+ * different song interval (the scene was re-timed) or a different recording
+ * (the song was replaced). Returns
+ * `[{ sceneId, reason: 'not-lip-synced' | 'retimed' | 'audio-changed' }]`;
  * the master is hashed only when there is a performance take to check.
  */
 export async function findStalePerformanceTakes(project, masterPath) {
-  const selected = (Array.isArray(project?.scenes) ? project.scenes : [])
-    .map((scene) => ({ scene, instruction: selectedPerformanceInstruction(scene) }))
-    .filter(({ instruction }) => instruction);
-  if (selected.length === 0) return [];
-  const sha256 = await hashFile(masterPath);
   const stale = [];
+  const selected = [];
+  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
+    if (!isPerformanceScene(scene) || !scene.videoHistoryId) continue;
+    const instruction = selectedPerformanceInstruction(scene);
+    if (instruction) selected.push({ scene, instruction });
+    else stale.push({ sceneId: scene.sceneId, reason: 'not-lip-synced' });
+  }
+  if (selected.length === 0) return stale;
+  const sha256 = await hashFile(masterPath);
   for (const { scene, instruction } of selected) {
     const interval = instruction.songInterval || {};
     if (instruction.audio?.sha256 !== sha256) stale.push({ sceneId: scene.sceneId, reason: 'audio-changed' });

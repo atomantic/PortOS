@@ -184,6 +184,9 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await writeFile(songPath, replaced);
     expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath))
       .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
+    // A performance scene whose selected clip is not a lip-sync take is refused too.
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, takes: [] }] }, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'not-lip-synced' }]);
     // Switched back to a cutaway, the old take is an ordinary clip again.
     expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, shotMode: 'cutaway' }] }, songPath)).toEqual([]);
     const [asCutaway] = await resolveSceneClips({ scenes: [{ ...withTake, shotMode: 'cutaway' }] });
