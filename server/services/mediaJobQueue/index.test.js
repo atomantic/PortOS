@@ -219,6 +219,12 @@ afterEach(async () => {
   if (tempDataDir && existsSync(tempDataDir)) {
     rmSync(tempDataDir, { recursive: true, force: true });
   }
+  // Windows holds file handles on terminating child processes longer than
+  // macOS/Linux, so a single rmSync above may not catch all temp dirs yet.
+  // Sweep the run's real tmpdir for any remaining mediaJobQueue-test-* dirs
+  // with retry delays. See #9046, #9032.
+  const { sweepStrayTempRoots } = await import('../../lib/mockPathsDataRoot.js');
+  await sweepStrayTempRoots('mediaJobQueue-test-');
 });
 
 describe('mediaJobQueue', () => {
