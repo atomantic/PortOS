@@ -109,20 +109,15 @@ export function cleanupTempDataRoots() {
  * `server/services/musicVideo/compositionRender.test.js` and
  * `server/routes/musicVideoVocalStem.test.js` are the worked examples.
  *
- * On macOS and Linux, runs the sweep twice, ~300ms apart: a single pass right
- * after `cleanupTempDataRoots()` can still race a background job that has not
+ * Runs the sweep twice, ~300ms apart: a single pass right after
+ * `cleanupTempDataRoots()` can still race a background job that has not
  * started writing yet (observed on CI's slower/more contended runners, not
  * reproduced in ~10 local runs) — the second pass catches what the first
- * one was too early for. On Windows, where process teardown is slower and
- * file handles persist longer, runs additional sweeps with longer delays
- * to accommodate lingering ffprobe/ffmpeg handles (#9045).
- * `await` this call as the LAST statement of the suite's `afterAll`.
+ * one was too early for. `await` this call as the LAST statement of the
+ * suite's `afterAll`.
  */
 export async function sweepStrayTempRoots(prefix) {
-  // Node's own rm retry (EBUSY/EPERM/ENOTEMPTY with linear backoff) covers a
-  // handle that is released moments later; an earlier pass may still hit a
-  // locked file, so only the final pass is allowed to throw.
-  const sweepOnce = (isFinal) => {
+  const sweepOnce = () => {
     const root = tmpdir();
     let entries;
     try {
@@ -131,20 +126,12 @@ export async function sweepStrayTempRoots(prefix) {
       return;
     }
     for (const name of entries) {
-      if (!name.startsWith(prefix)) continue;
-      try {
-        rmSync(join(root, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      } catch (err) {
-        if (isFinal) throw err;
-      }
+      if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
     }
   };
-  const delays = process.platform === 'win32' ? [300, 500, 800] : [300];
-  sweepOnce(false);
-  for (const [i, delayMs] of delays.entries()) {
-    await new Promise((resolve) => { setTimeout(resolve, delayMs); });
-    sweepOnce(i === delays.length - 1);
-  }
+  sweepOnce();
+  await new Promise((resolve) => { setTimeout(resolve, 300); });
+  sweepOnce();
 }
 
 /**

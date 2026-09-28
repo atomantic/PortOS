@@ -52,6 +52,10 @@ async function uploadStem(projectId, seconds) {
 }
 
 const ffmpeg = await findFfmpeg();
+// Vitest runs no hooks for a file whose every test is skipped, so on a runner
+// without ffmpeg the afterAll below never fires — yet importing the router
+// above already minted the lazy root (#9045).
+if (!ffmpeg) cleanupTempDataRoots();
 
 let project;
 beforeEach(async () => {
