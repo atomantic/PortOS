@@ -137,6 +137,12 @@ describe('lyric alignment audio', () => {
     const wav = encodePcm16Wav(16000 * 4);
     expect(wavDurationSec(wav)).toBeCloseTo(4, 3);
     expect(wavDurationSec(sliceWav(wav, 1, 2.5))).toBeCloseTo(1.5, 3);
+    const truncated = encodePcm16Wav(16000);
+    truncated.writeUInt32LE(999999, 40);
+    expect(wavDurationSec(sliceWav(truncated, 0, 2))).toBeCloseTo(1, 3);
+    const stereo = encodePcm16Wav(100);
+    stereo.writeUInt16LE(4, 32);
+    expect(() => sliceWav(stereo, 0, 0.01)).toThrow(/16-bit mono/);
   });
 
   it('uses the vocal stem when one is attached, and does not fall back when that file is missing', async () => {

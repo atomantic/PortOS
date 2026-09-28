@@ -72,6 +72,7 @@ function WordTimingRow({ cue, onPreview, onCommit }) {
               drag.current = null;
               onCommit(nudgeWordBoundary(base, index, delta));
             }}
+            onPointerCancel={() => { drag.current = null; }}
           />
           <button type="button" aria-label={`Nudge the end of ${word.w} later`}
             onClick={() => onCommit(nudgeWordBoundary(words, index, 0.05))}
@@ -235,6 +236,8 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                   <input type="text" maxLength={500} aria-label={`Line ${i + 1} text`}
                     value={cue.text} onChange={(e) => {
                       const text = e.target.value;
+                      // Omit words. null would fail the cue schema, and a whole-list
+                      // save without the key drops timings that no longer match the text.
                       editCue(cue.id, cue.words && text !== cue.text ? { text, words: undefined } : { text });
                     }}
                     onBlur={() => saveCues()} className={`${inputCls} min-w-0 flex-1 basis-40`} />

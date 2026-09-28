@@ -355,11 +355,15 @@ export function wavDurationSec(buf) {
 
 export function sliceWav(buf, startSec, endSec) {
   const info = wavInfo(buf);
-  if (!info) throw new ServerError('Decoded audio was not a PCM WAV.', { status: 422, code: 'LYRIC_ALIGN_DECODE_FAILED' });
+  if (!info || info.blockAlign !== 2) {
+    throw new ServerError('Decoded audio was not 16-bit mono PCM.', { status: 422, code: 'LYRIC_ALIGN_DECODE_FAILED' });
+  }
   const start = Math.max(0, Math.min(info.sampleCount, Math.round(startSec * info.sampleRate)));
   const end = Math.max(start, Math.min(info.sampleCount, Math.round(endSec * info.sampleRate)));
   const out = encodePcm16Wav(end - start, info.sampleRate);
-  buf.copy(out, 44, info.dataOffset + start * info.blockAlign, info.dataOffset + end * info.blockAlign);
+  const byteStart = info.dataOffset + start * info.blockAlign;
+  const byteEnd = Math.min(buf.length, info.dataOffset + end * info.blockAlign);
+  buf.copy(out, 44, byteStart, byteEnd);
   return out;
 }
 
