@@ -39,6 +39,7 @@ const github = vi.hoisted(() => ({
   setRepoArchived: vi.fn(),
   setSecret: vi.fn(),
   syncSecretToRepos: vi.fn(),
+  syncRepos: vi.fn(),
 }));
 vi.mock('../services/github.js', () => github);
 
@@ -135,6 +136,7 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     github.setRepoArchived.mockResolvedValue({ archived: true });
     github.setSecret.mockResolvedValue({ success: true });
     github.syncSecretToRepos.mockResolvedValue({ synced: true });
+    github.syncRepos.mockResolvedValue({ repos: [] });
   });
 
   it('refuses a remote password-free caller, direct or proxied, before anything runs or is written', async () => {
@@ -165,8 +167,10 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
       ['post', '/api/loops/loop-1/stop'],
       ['put', '/api/settings', { location: { lat: null, lon: null } }],
       ['put', '/api/cos/config', { avatarStyle: 'svg' }],
+      ['post', '/api/github/repos/sync'],
     ]) statuses.push((await call(remote(), write)).status);
-    expect(statuses).toEqual([200, 200, 200, 200]);
+    expect(statuses).toEqual([200, 200, 200, 200, 200]);
+    expect(github.syncRepos).toHaveBeenCalledTimes(1);
     expect(featureAgents.stopFeatureAgent).toHaveBeenCalledTimes(1);
     expect(loops.stopLoop).toHaveBeenCalledTimes(1);
     expect([settingsWrite, cosConfigWrite].map((write) => write.mock.calls.length)).toEqual([1, 1]);
@@ -180,11 +184,13 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
         ['post', '/api/loops/loop-1/trigger'],
         ['post', '/api/voice/studio/setup'],
         ['post', '/api/apps/example-app/launch-videos/publish'],
+        ['post', '/api/github/repos/example%2Fexample/archive'],
         ['put', '/api/settings', { codeReview: { reviewers: ['claude'] } }],
         ['put', '/api/cos/config', { maxConcurrentAgents: 2 }],
       ]) statuses.push((await call(local(), write, proxyClient)).status);
-      expect(statuses).toEqual([200, 200, 200, 200, 200, 200]);
+      expect(statuses).toEqual([200, 200, 200, 200, 200, 200, 200]);
     }
+    expect(github.setRepoArchived).toHaveBeenCalledWith('example/example', true);
     expect(featureAgents.activateFeatureAgent).toHaveBeenCalledTimes(2);
     expect(loops.triggerLoop).toHaveBeenCalledTimes(2);
     expect([settingsWrite, cosConfigWrite].map((write) => write.mock.calls.length)).toEqual([2, 2]);

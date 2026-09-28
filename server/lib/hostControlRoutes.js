@@ -83,6 +83,7 @@
  * other read-only GET route. Mutable routes (`PUT` flags/secrets, `POST`
  * archive/unarchive, `POST` secret sync) execute `gh` with the user's GitHub
  * account and change external state; they require operator authority.
+ */
 
 import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
