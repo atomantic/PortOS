@@ -45,7 +45,9 @@ import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from 
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 
-/** Stand-in for `findCommandOnPath` when a real PATH scan is skipped (below) — always "not found". */
+// Stand-in for `findCommandOnPath` OR `commandOutput` when a real PATH scan /
+// spawn is skipped (below) — both answer "nothing to report" (`null`) on any
+// argv, matching what a genuinely missing/unrunnable binary would answer.
 const NEVER_FOUND = () => null;
 
 const IS_WIN = process.platform === 'win32';
@@ -362,10 +364,15 @@ export async function getProviderRuntimeStatus(id, { findCommand, probeCommand, 
   // case already does, and stays completely unaffected by this gate).
   const usingDefaults = skipRealSpawn === undefined && !findCommand && !probeCommand;
   const skip = skipRealSpawn ?? (usingDefaults && isTestRunner());
+  // Both fallbacks gate on `skip` the same way: an explicit `findCommand`/
+  // `probeCommand` still wins (a test that wants the real probe gets it by
+  // injecting its own), but a caller that combines an explicit
+  // `skipRealSpawn: true` with only ONE override must not still spawn a real
+  // `--version` process through the other one's default.
   const status = await probeRuntimeStatus(
     runtime,
     findCommand || (skip ? NEVER_FOUND : findCommandOnPath),
-    probeCommand || commandOutput,
+    probeCommand || (skip ? NEVER_FOUND : commandOutput),
     skip,
   );
   statusCache.set(runtime.id, { at: Date.now(), status });
