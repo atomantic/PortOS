@@ -15,6 +15,7 @@ const SHIPPED = JSON.parse(readFileSync(resolve(__dirname, '../../../../data.ref
 // failure mode is silent in both directions (a button that 404s, or a feature
 // that vanishes with no error at all).
 const SHIPPED_REFRESHABLE = [
+  'claude-code-tui',
   'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
@@ -52,7 +53,7 @@ const SHIPPED_REFRESHABLE = [
   'claude-sglang', 'claude-sglang-tui',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
-  'claude-code-tui', 'claude-code-tui-bedrock',
+  'claude-code-tui-bedrock',
   // #8034 moved this one OUT of the refreshable set on purpose. It is
   // `command: 'claude'` like the subscription record, so it matched the
   // anthropic row and a refresh overwrote its `global.anthropic.*` /
@@ -264,7 +265,7 @@ describe('resolveModelFetcher — the TUI arm never consults the display name', 
 
   it('ignores a vendor name on a TUI — the asymmetry with the CLI arm is deliberate', () => {
     expect(resolveModelFetcher({ id: 'x', type: 'tui', command: '/usr/bin/weird', name: 'Antigravity Nightly' })).toBeNull();
-    expect(resolveModelFetcher({ id: 'x', type: 'tui', command: 'claude', name: 'Claude Code TUI' })).toBeNull();
+    expect(resolveModelFetcher({ id: 'x', type: 'tui', command: 'example-tui', name: 'Claude Code TUI' })).toBeNull();
   });
 });
 
@@ -376,10 +377,10 @@ describe('claude records pointed at a third-party backend', () => {
   // record, so it matched the anthropic row and a Refresh overwrote its
   // `global.anthropic.*` / `us.anthropic.*` ids with first-party ones its
   // endpoint rejects — stranding its own `defaultModel` outside its model list.
-  it('resolves to NO fetcher so the card offers no Refresh button', () => {
+  it.each(['cli', 'tui'])('resolves a third-party %s to NO fetcher', (type) => {
     const bedrock = {
       id: 'claude-code-bedrock',
-      type: 'cli',
+      type,
       command: 'claude',
       name: 'Claude Code CLI: Bedrock',
       envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
