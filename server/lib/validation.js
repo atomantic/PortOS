@@ -2536,32 +2536,40 @@ export const htmlCompositionBeatsQuerySchema = z.object({
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
 }).strict();
 
-export const htmlCompositionContractSchema = z.object({
-  durationSec: z.number().min(1).max(120),
-  fps: z.number().int().min(12).max(60),
-  width: z.number().int(),
-  height: z.number().int(),
-  // Subframes averaged per output frame to fake motion blur on fast moves.
-  // The integer form (1 default) keeps the existing tmix path byte for byte;
-  // the object form (#9077) samples a centred shutter in linear light, with a
-  // fixed count or 'auto' refinement that stops once the average converges.
-  motionBlur: z.union([
-    z.number().int().min(1).max(4),
-    z.object({
-      shutter: z.number().min(0.05).max(1).default(0.5),
-      samples: z.union([z.literal('auto'), z.number().int().min(4).max(64)]).default('auto'),
-      tolerance: z.number().min(1).max(8).default(2),
-    }).strict(),
-  ]).default(1),
-  // Extra sizes this one timeline can render (#8960), reframed by the optional
-  // layout({ width, height }) hook before each format's first seek.
-  formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
-  layout: z.boolean().default(false),
-}).superRefine((value, ctx) => {
-  if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
-    ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
-  }
-  if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
-    ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
-  }
-});
+// Public renders stay capped at 120s. A music-video owner passes a higher
+// ceiling (the song length, hard-capped by the caller at 900s) and gets the
+// same frame rules. superRefine lives on this factory because the exported
+// schema is a ZodEffects and cannot be extended in place.
+export function htmlCompositionContractSchemaFor(maxDurationSec = 120) {
+  return z.object({
+    durationSec: z.number().min(1).max(maxDurationSec),
+    fps: z.number().int().min(12).max(60),
+    width: z.number().int(),
+    height: z.number().int(),
+    // Subframes averaged per output frame to fake motion blur on fast moves.
+    // The integer form (1 default) keeps the existing tmix path byte for byte;
+    // the object form (#9077) samples a centred shutter in linear light, with a
+    // fixed count or 'auto' refinement that stops once the average converges.
+    motionBlur: z.union([
+      z.number().int().min(1).max(4),
+      z.object({
+        shutter: z.number().min(0.05).max(1).default(0.5),
+        samples: z.union([z.literal('auto'), z.number().int().min(4).max(64)]).default('auto'),
+        tolerance: z.number().min(1).max(8).default(2),
+      }).strict(),
+    ]).default(1),
+    // Extra sizes this one timeline can render (#8960), reframed by the optional
+    // layout({ width, height }) hook before each format's first seek.
+    formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
+    layout: z.boolean().default(false),
+  }).superRefine((value, ctx) => {
+    if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
+      ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });
+    }
+    if (Math.abs(value.durationSec * value.fps - Math.round(value.durationSec * value.fps)) > 1e-8) {
+      ctx.addIssue({ code: 'custom', path: ['durationSec'], message: 'durationSec × fps must be a whole number of frames' });
+    }
+  });
+}
+
+export const htmlCompositionContractSchema = htmlCompositionContractSchemaFor(120);
