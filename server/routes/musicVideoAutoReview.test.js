@@ -335,7 +335,10 @@ describe('opt-in automatic review/retries (#8988)', () => {
     h.verdicts.push(PASS);
     await start(p.id, { maxAttempts: 1, maxGenerations: 0 });
     await finishDraft(p.id, 1);
-    const current = await settled(p.id, (x) => expect(run(x).attempts[0].review).toBeTruthy());
+    // A recorded review is an intermediate checkpoint: the background run
+    // still opens its revision and persists the spend-limit stop afterward.
+    // Wait for that terminal write before afterAll removes the data root.
+    const current = await settled(p.id, (x) => expect(run(x).status).toBe('limit-reached'));
     const { review } = run(current).attempts[0];
     expect(review.checks.motion).toBe('fail');
     expect(review.findings).toEqual([expect.objectContaining({ atSec: 6, check: 'motion', source: 'analysis' })]);
