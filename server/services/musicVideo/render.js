@@ -35,6 +35,7 @@ import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject } from './projects.js';
+import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 
@@ -68,6 +69,8 @@ export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res)
 // created since carries an explicit boolean, and only `loop: true` repeats.
 const sceneLoops = (scene) => scene?.loop !== false;
 
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
 // A non-looping shot may run this much past its source clip; the gap holds the
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
 // render until the director resolves them.
@@ -82,7 +85,7 @@ const COVERAGE_RESOLUTIONS = Object.freeze(['trim', 'continue', 'replace', 'loop
 function findCoverageShortfalls(clips, { toleranceSec = COVERAGE_TOLERANCE_SEC } = {}) {
   const out = [];
   for (const clip of Array.isArray(clips) ? clips : []) {
-    if (clip.loop !== false) continue;
+    if (clip.layer || clip.loop !== false) continue;
     const spanSec = clip.outSec - clip.inSec;
     const clipSec = clip.sourceSec ?? clip.duration;
     if (spanSec - clipSec > toleranceSec) {
@@ -135,25 +138,50 @@ export async function resolveMasterAudioPath(project) {
   return safe;
 }
 
+// A still/card section has no source clip to measure, so its authored span IS
+// its length. Null when the scene is not timed.
+const authoredSpan = (scene) => (sceneHasAuthoredSpan(scene) ? round3(scene.endSec - scene.startSec) : null);
+
 // Resolve every scene that has a generated i2v clip (`videoHistoryId`) to a
 // verified on-disk path + dims, in scene order. Scenes without a clip yet are
 // skipped (not an error — they're just not rendered). A scene whose clip id
 // references a missing history entry/file IS an error (404, listed).
-export async function resolveSceneClips(project) {
+//
+// `layered` (a composed render, #8985) also resolves still and card sections
+// in scene order. Neither needs footage: a still needs its selected reference
+// frame (404 MISSING_STILLS when it is gone), and both need an authored span
+// (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
+export async function resolveSceneClips(project, { layered = false } = {}) {
   const scenes = (Array.isArray(project.scenes) ? project.scenes : [])
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .filter((s) => s && s.videoHistoryId);
+    .filter((s) => s && (s.videoHistoryId || sceneVisualLayer(s, { layered }) !== 'footage'));
   if (scenes.length === 0) {
     throw new ServerError('No scene videos to render — generate at least one scene clip first', {
       status: 400, code: 'NO_SCENE_CLIPS',
     });
   }
-  const history = await loadHistory();
+  const history = scenes.some((s) => sceneVisualLayer(s, { layered }) === 'footage') ? await loadHistory() : [];
   const historyMap = new Map((Array.isArray(history) ? history : []).map((h) => [h.id, h]));
   const missing = [];
+  const missingStills = [];
+  const untimed = [];
   const clips = [];
   for (const scene of scenes) {
+    const layer = sceneVisualLayer(scene, { layered });
+    if (layer !== 'footage') {
+      const spanSec = authoredSpan(scene);
+      if (spanSec == null) { untimed.push(scene.sceneId); continue; }
+      const section = { sceneId: scene.sceneId, layer, inSec: 0, outSec: spanSec, duration: spanSec, sourceSec: spanSec };
+      if (layer === 'card') {
+        clips.push({ ...section, cardText: typeof scene.cardText === 'string' ? scene.cardText.trim() : '', cardColor: /^#[0-9a-f]{6}$/i.test(scene.cardColor || '') ? scene.cardColor : '#000000' });
+        continue;
+      }
+      const imagePath = scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+      if (!imagePath || !existsSync(imagePath)) { missingStills.push(scene.sceneId); continue; }
+      clips.push({ ...section, imagePath, move: scene.stillMove || 'hold' });
+      continue;
+    }
     const entry = historyMap.get(scene.videoHistoryId);
     const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); continue; }
@@ -181,6 +209,16 @@ export async function resolveSceneClips(project) {
   if (missing.length > 0) {
     throw new ServerError(`Missing source clips for ${missing.length} scene(s)`, {
       status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missing },
+    });
+  }
+  if (missingStills.length > 0) {
+    throw new ServerError(`${missingStills.length} still section(s) have no reference frame — generate or pick one first`, {
+      status: 404, code: 'MISSING_STILLS', context: { sceneIds: missingStills },
+    });
+  }
+  if (untimed.length > 0) {
+    throw new ServerError(`${untimed.length} still or card section(s) need a start and end time`, {
+      status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds: untimed },
     });
   }
   return clips;
@@ -212,6 +250,11 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
   if (grid.length === 0 && !scenesById) return clips.map((c) => ({ ...c }));
   let running = 0;
   return clips.map((clip) => {
+    // A still/card section (#8985) is exactly its authored span.
+    if (clip.layer) {
+      running += clip.duration;
+      return { ...clip };
+    }
     const scene = scenesById?.get(clip.sceneId);
     if (scene?.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec) {
       // inSec stays 0 here deliberately: this only ever trims how much of the
@@ -249,6 +292,45 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
   });
 }
 
+// The frame for a composed render with no footage to take dimensions from.
+const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
+// A still's push-in ends this much closer; a pan crosses this much extra width.
+const STILL_PUSH_ZOOM = 0.12;
+const STILL_PAN_TRAVEL = 0.15;
+const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
+
+// One section's video chain (without its output label). A footage clip is
+// fitted, letterboxed and trimmed; a still (#8985) is cover-cropped and moved
+// deterministically (every frame is a pure function of its frame number); a
+// card is a solid colour the typography layer writes its text over. On the
+// frame grid every section is cut to an exact frame count.
+function sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid }) {
+  const trim = frameGrid ? `trim=end_frame=${frames}` : `trim=start=${c.inSec}:end=${c.outSec}`;
+  if (c.layer === 'card') {
+    return `color=c=0x${c.cardColor.slice(1)}:s=${canonW}x${canonH}:r=${fps},setsar=1,format=yuv420p,${trim},setpts=PTS-STARTPTS`;
+  }
+  if (c.layer === 'still') {
+    const scale = c.move === 'push' ? 2 : c.move === 'pan' ? 1 + STILL_PAN_TRAVEL : 1;
+    const coverW = evenPx(canonW * scale);
+    const coverH = evenPx(canonH * scale);
+    const move = c.move === 'push'
+      // Rendered from a 2x cover so the slow zoom does not step pixel by pixel.
+      ? `zoompan=z='1+${STILL_PUSH_ZOOM}*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${canonW}x${canonH}:fps=${fps},setsar=1,`
+      : c.move === 'pan' ? `crop=${canonW}:${canonH}:x='(iw-ow)*n/${Math.max(1, frames - 1)}':y='(ih-oh)/2',` : '';
+    return `[${input}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
+      + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
+  }
+  // A non-looping shot a hair longer than its source holds the last frame for
+  // the remainder instead of ending early and drifting every later cut. On the
+  // frame grid it also pads the rounding frame, so it always fills its count.
+  const holdSec = c.loop === false ? (c.outSec - c.inSec) - (c.sourceSec ?? c.duration) : 0;
+  const padSec = c.loop === false && frameGrid ? Math.max(0, holdSec) + 2 / fps : holdSec;
+  const hold = padSec > 0 ? `tpad=stop_mode=clone:stop_duration=${round3(padSec)},` : '';
+  return `[${input}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,`
+    + `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},`
+    + `${hold}${trim},setpts=PTS-STARTPTS`;
+}
+
 // Pure: build the ffmpeg args for the master-bed render. Concats the clips
 // video-only (each scaled/padded to the canonical dims + fps and trimmed to its
 // snapped out-point) and maps ONE external audio input as the sole output audio.
@@ -256,51 +338,73 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
 // `overlays` (a composed render, #8984) are transparent typography clips, each
 // offset to its song time and laid over the cut footage — the footage passes
 // through untouched outside them, and the master audio is never re-cut.
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [] } = {}) {
+//
+// `frameGrid` (a composed render, #8985 — implied by any still/card section)
+// cuts every section to a whole number of frames derived from its cumulative
+// song-time boundary, so the edit never drifts more than half a frame from the
+// authored timeline however many sections it has. Returns `sections`, each
+// section's `[startSec, endSec)` on the output timebase.
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [], frameGrid: gridOption = false } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
-  const canonW = clips[0].width;
-  const canonH = clips[0].height;
-  const fps = clips[0].fps || 24;
+  const frameGrid = gridOption || clips.some((c) => c.layer);
+  // Stills and cards have no dimensions of their own: the first footage clip
+  // sets the frame, or a default one when the render has no footage at all.
+  const lead = clips.find((c) => !c.layer) || DEFAULT_CANVAS;
+  const canonW = lead.width;
+  const canonH = lead.height;
+  const fps = lead.fps || 24;
+
+  let cursorSec = 0;
+  let cursorFrame = 0;
+  const plan = [];
+  for (const c of clips) {
+    const startSec = cursorSec;
+    cursorSec += c.outSec - c.inSec;
+    const endFrame = Math.round(cursorSec * fps);
+    const frames = endFrame - cursorFrame;
+    const section = frameGrid
+      ? { c, frames, startSec: cursorFrame / fps, endSec: endFrame / fps }
+      : { c, frames, startSec, endSec: cursorSec };
+    cursorFrame = endFrame;
+    // A section shorter than half a frame has no frame of its own on the grid.
+    if (!frameGrid || frames > 0) plan.push(section);
+  }
+  if (plan.length === 0) throw new Error('buildMusicVideoFfmpegArgs: no section spans a frame');
 
   const inputs = [];
+  const inputOf = [];
   // A generated scene clip is a reusable shot source, while the director's
   // timeline owns how long that shot appears in the music video. A LOOPING
   // clip input repeats so a 6–10s Grok/local result can fill a longer verse or
   // chorus span; the per-input trim below still makes every loop finite. A
   // non-looping clip (#8964, `loop: false`) is read once — the render preflight
-  // guarantees its span fits, within COVERAGE_TOLERANCE_SEC.
-  for (const c of clips) {
-    if (c.loop !== false) inputs.push('-stream_loop', '-1');
-    inputs.push('-i', c.videoPath);
+  // guarantees its span fits, within COVERAGE_TOLERANCE_SEC. A still loops its
+  // single image; a card needs no input (its colour is a filter source).
+  let nextInput = 0;
+  for (const { c } of plan) {
+    if (c.layer === 'card') { inputOf.push(null); continue; }
+    inputOf.push(nextInput++);
+    if (c.layer === 'still') inputs.push('-loop', '1', '-framerate', String(fps), '-i', c.imagePath);
+    else {
+      if (c.loop !== false) inputs.push('-stream_loop', '-1');
+      inputs.push('-i', c.videoPath);
+    }
   }
-  const audioIdx = clips.length; // master audio follows the clips
+  const audioIdx = nextInput; // master audio follows the section inputs
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
-  const filters = [];
-  const vStreams = [];
-  for (let i = 0; i < clips.length; i++) {
-    const c = clips[i];
-    // A non-looping shot a hair longer than its source holds the last frame for
-    // the remainder instead of ending early and drifting every later cut.
-    const holdSec = c.loop === false ? (c.outSec - c.inSec) - (c.sourceSec ?? c.duration) : 0;
-    const hold = holdSec > 0 ? `tpad=stop_mode=clone:stop_duration=${Math.round(holdSec * 1000) / 1000},` : '';
-    filters.push(
-      `[${i}:v]scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,`
-      + `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},`
-      + `${hold}trim=start=${c.inSec}:end=${c.outSec},setpts=PTS-STARTPTS[v${i}]`,
-    );
-    vStreams.push(`[v${i}]`);
-  }
+  const filters = plan.map(({ c, frames }, i) => `${sectionChain(c, inputOf[i], { canonW, canonH, fps, frames, frameGrid })}[v${i}]`);
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
-  filters.push(`${vStreams.join('')}concat=n=${clips.length}:v=1:a=0[${cutLabel}]`);
+  filters.push(`${plan.map((_, i) => `[v${i}]`).join('')}concat=n=${plan.length}:v=1:a=0[${cutLabel}]`);
   overlays.forEach((_, k) => {
     const out = k === overlays.length - 1 ? 'outv' : `cut${k + 1}`;
     filters.push(`[cut${k}][${audioIdx + 1 + k}:v]overlay=eof_action=pass:format=auto[${out}]`);
   });
 
-  const videoTotal = clips.reduce((s, c) => s + (c.outSec - c.inSec), 0);
+  const videoTotal = plan[plan.length - 1].endSec;
   const totalDuration = audioDurationSec != null ? Math.min(videoTotal, audioDurationSec) : videoTotal;
+  const sections = plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, layer: c.layer || 'footage', startSec, endSec }));
 
   const args = [
     ...inputs,
@@ -319,7 +423,20 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     '-y',
     outputPath,
   ];
-  return { args, totalDuration, canonW, canonH, fps };
+  return { args, totalDuration, canonW, canonH, fps, sections };
+}
+
+// A title card's text (#8985) is drawn by the typography layer for exactly
+// its section on the output timebase, clipped to the rendered video.
+export function sectionCardCues(clips, sections, durationSec) {
+  const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText).map((c) => [c.sceneId, c.cardText]));
+  return sections
+    .filter((section) => textBySceneId.has(section.sceneId) && section.startSec < durationSec)
+    .map((section) => ({
+      id: `card-${section.sceneId}`, text: textBySceneId.get(section.sceneId),
+      startSec: section.startSec, endSec: Math.min(section.endSec, durationSec),
+      template: 'fade', placement: 'center', emphasis: 'hero',
+    }));
 }
 
 export async function renderMusicVideo(projectId) {
@@ -343,7 +460,10 @@ export async function renderMusicVideo(projectId) {
     if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
     const audioPath = await resolveMasterAudioPath(project);
-    const rawClips = await resolveSceneClips(project);
+    // #8985: a composed render cuts still and card sections into the same
+    // timebase as the footage; plain concat renders footage only, as before.
+    const composed = project.composition?.mode === 'composed';
+    const rawClips = await resolveSceneClips(project, { layered: composed });
     const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
     const beats = project.audioAnalysis?.beats;
     const clips = beatSnapClips(rawClips, beats, { scenes: project.scenes });
@@ -363,10 +483,12 @@ export async function renderMusicVideo(projectId) {
     const jobId = randomUUID();
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
-    const { args, totalDuration, canonW, canonH, fps } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec });
-    // #8984: a composed project lays its timed text cues over the cut. No
-    // renderable cue (plain mode, or nothing timed) renders exactly as before.
-    const cues = renderableCues(project.composition, totalDuration);
+    const { args, totalDuration, canonW, canonH, fps, sections } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed });
+    // #8984: a composed project lays its timed text cues over the cut, and a
+    // title card's text (#8985) joins them over its own section. No renderable
+    // cue (plain mode, or nothing timed) skips the overlay capture entirely.
+    const cues = [...renderableCues(project.composition, totalDuration), ...sectionCardCues(clips, sections, totalDuration)]
+      .sort((a, b) => a.startSec - b.startSec);
     const composition = cues.length > 0 ? project.composition : null;
 
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
@@ -540,8 +662,8 @@ export async function renderMusicVideo(projectId) {
       signal.throwIfAborted();
       // Capture is over: from here a cancel kills the encode (job.process).
       job.overlayAbort = null;
-      const composed = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays });
-      startEncode(composed.args, 0.5);
+      const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true });
+      startEncode(layered.args, 0.5);
     }).catch(async (err) => {
       const canceled = signal.aborted;
       job.status = canceled ? 'canceled' : 'error';

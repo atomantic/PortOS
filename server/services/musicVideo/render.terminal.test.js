@@ -45,7 +45,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
 vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
 vi.mock('../../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(async () => {}),
-  PATHS: { videos: '/data/videos', videoThumbnails: '/data/thumbs', music: '/data/music', data: '/data' },
+  PATHS: { videos: '/data/videos', videoThumbnails: '/data/thumbs', music: '/data/music', images: '/data/images', data: '/data' },
 }));
 vi.mock('../../lib/sseUtils.js', () => ({
   broadcastSse: vi.fn(),
@@ -390,5 +390,61 @@ describe('composed render lifecycle (#8984)', () => {
     expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
     // Nothing is left to cancel once the render has finished.
     expect(cancelRender(jobId)).toBe(false);
+  });
+});
+
+// #8985 — per-scene visual layers. A composed render cuts a still (its
+// reference frame, moved deterministically) and a code-rendered title card
+// into the footage timebase without needing footage for either; a plain
+// concat render ignores the layer choice entirely.
+describe('layered sections (#8985)', () => {
+  const layeredScenes = [
+    { sceneId: 's1', order: 0, videoHistoryId: 'h1' },
+    { sceneId: 's2', order: 1, visualLayer: 'still', stillMove: 'pan', referenceImageId: 'frame.png', videoHistoryId: 'h1', startSec: 2, endSec: 4 },
+    { sceneId: 's3', order: 2, visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233', videoHistoryId: null, startSec: 4, endSec: 5.01 },
+  ];
+  const primeLayered = (projectId, mode, scenes = layeredScenes) => {
+    prime(projectId);
+    getProject.mockResolvedValue({
+      id: projectId, name: 'P', trackId: 't1', status: 'ready', scenes,
+      composition: { version: 1, mode, textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null },
+    });
+  };
+  const filterGraph = (args) => args[args.indexOf('-filter_complex') + 1];
+
+  it('keeps a concat render on footage only: the still scene plays its clip and the footage-less card is skipped', async () => {
+    primeLayered('plain-layers', 'concat');
+    await renderMusicVideo('plain-layers');
+    const { args } = lastProc();
+    expect(args).not.toContain('/data/images/frame.png');
+    expect(filterGraph(args)).not.toContain('color=');
+    expect(filterGraph(args)).toContain('concat=n=2:v=1:a=0[outv]');
+    expect(h.overlays.calls).toHaveLength(0);
+  });
+
+  it('cuts footage, a still and a titled card on one frame grid and draws the card text over its section', async () => {
+    primeLayered('layers-1', 'composed');
+    const { jobId } = await renderMusicVideo('layers-1');
+    // The card's title is captured for exactly its section: [2s clip][2s still][1.01s card → 24 frames].
+    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 768, height: 512,
+      cues: [{ id: 'card-s3', text: 'Verse two', startSec: 4, endSec: 5, placement: 'center', emphasis: 'hero' }] });
+    h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 4, durationSec: 1 }]);
+    await tick();
+    const { args } = lastProc();
+    expect(args.slice(args.indexOf('-loop'), args.indexOf('-loop') + 6)).toEqual(['-loop', '1', '-framerate', '24', '-i', '/data/images/frame.png']);
+    const graph = filterGraph(args);
+    expect(graph).toContain('trim=end_frame=48,setpts=PTS-STARTPTS[v0]');
+    expect(graph).toMatch(/crop=768:512:x='\(iw-ow\)\*n\/47'.*trim=end_frame=48,setpts=PTS-STARTPTS\[v1\]/);
+    expect(graph).toContain('color=c=0x112233:s=768x512:r=24,setsar=1,format=yuv420p,trim=end_frame=24,setpts=PTS-STARTPTS[v2]');
+    // The song is still the one and only audio: two section inputs, then the master.
+    expect(args[args.lastIndexOf('-map') + 1]).toBe('2:a');
+  });
+
+  it('refuses a still with no reference frame and an untimed card, without spawning', async () => {
+    primeLayered('no-frame', 'composed', [{ sceneId: 's1', order: 0, visualLayer: 'still', referenceImageId: null, startSec: 0, endSec: 2 }]);
+    await expect(renderMusicVideo('no-frame')).rejects.toMatchObject({ status: 404, code: 'MISSING_STILLS', context: { sceneIds: ['s1'] } });
+    primeLayered('untimed', 'composed', [{ sceneId: 's1', order: 0, visualLayer: 'card', cardText: 'Hi', startSec: null, endSec: null }]);
+    await expect(renderMusicVideo('untimed')).rejects.toMatchObject({ status: 422, code: 'UNTIMED_SECTIONS', context: { sceneIds: ['s1'] } });
+    expect(h.procs).toHaveLength(0);
   });
 });

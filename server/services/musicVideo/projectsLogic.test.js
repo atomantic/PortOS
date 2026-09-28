@@ -432,6 +432,15 @@ describe('scene board operations', () => {
     expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2]);
   });
 
+  it('defaults a new scene to its footage and persists a chosen still or card layer (#8985)', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a' });
+    expect(scene).toMatchObject({ visualLayer: 'footage', stillMove: 'hold', cardText: null, cardColor: null });
+    const { updated } = applySceneUpdate(project, scene.sceneId, { visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233' });
+    expect(updated).toMatchObject({ visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233' });
+    expect(() => applySceneUpdate(project, scene.sceneId, { visualLayer: 'hologram' })).toThrow();
+    expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
+  });
+
   it('rejects a reorder that is not an exact permutation', () => {
     let p = baseProject();
     const r = addScene(p, { prompt: 'a' }); p = r.project;
