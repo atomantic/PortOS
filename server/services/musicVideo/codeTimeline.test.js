@@ -46,6 +46,32 @@ describe('buildCodeTimeline (#9076)', () => {
     ]);
   });
 
+  it('snaps to the aligned word, which is stored as w', () => {
+    const aligned = {
+      ...project,
+      audioAnalysis: {
+        ...project.audioAnalysis,
+        sections: [
+          { label: 'Verse', startSec: 0, endSec: 1.2 },
+          { label: 'Chorus', startSec: 1.2, endSec: 4 },
+        ],
+      },
+      lyricCues: [{
+        id: 'l2', text: 'second line', startSec: 1.25, endSec: 3.2,
+        words: [
+          { w: 'second', startSec: 1.8, endSec: 2.1, conf: 'matched' },
+          { w: 'line', startSec: 2.2, endSec: 2.8, conf: 'matched' },
+        ],
+      }],
+    };
+    const timeline = buildCodeTimeline(aligned);
+    // The line starts at 1.25 (beat 1). The first sung word is at 1.8, so the
+    // cut is the beat at or before that word.
+    expect(timeline.sections[1].startSec).toBe(1.5);
+    const song = buildSongDocument(aligned, timeline);
+    expect(song.lyrics[0].words.map((word) => word.text)).toEqual(['second', 'line']);
+  });
+
   it('uses the nearest downbeat when a section has no lyric', () => {
     const instrumental = {
       ...project,

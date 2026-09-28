@@ -6,8 +6,8 @@
  * starts at song time 0 — the same timebase as a footage render. Each later
  * boundary snaps to the beat at or before the first word of that section's
  * first lyric line, or to the nearest downbeat when the section has no lyric.
- * Word timings are used when a line carries them; otherwise the line start is
- * the only cue (#9074 may add words later).
+ * Word timings are used when a line carries them (`w` from alignment, or
+ * `text` on an already-normalized cue); otherwise the line start is the only cue.
  */
 
 import { CODE_FPS } from './codeFrame.js';
@@ -101,15 +101,21 @@ function lyricLines(project) {
     .sort((a, b) => a.startSec - b.startSec);
 }
 
+function wordLabel(word) {
+  if (typeof word?.text === 'string' && word.text.trim()) return word.text.trim();
+  if (typeof word?.w === 'string' && word.w.trim()) return word.w.trim();
+  return null;
+}
+
 function wordsOf(line) {
-  const words = Array.isArray(line.words) ? line.words.filter((word) => word && typeof word.text === 'string' && word.text.trim() && finite(word.startSec) != null) : [];
-  if (words.length) {
-    return words.map((word) => ({
-      text: word.text.trim(),
-      startSec: word.startSec,
-      endSec: finite(word.endSec) != null && word.endSec > word.startSec ? word.endSec : null,
-    }));
-  }
+  const words = Array.isArray(line.words) ? line.words.flatMap((word) => {
+    const text = wordLabel(word);
+    const startSec = finite(word?.startSec);
+    if (!text || startSec == null) return [];
+    const endSec = finite(word.endSec) != null && word.endSec > startSec ? word.endSec : null;
+    return [{ text, startSec, endSec }];
+  }) : [];
+  if (words.length) return words;
   const startSec = line.startSec;
   const endSec = finite(line.endSec) != null && line.endSec > startSec ? line.endSec : null;
   return [{ text: line.text, startSec, endSec }];
