@@ -136,7 +136,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
       try {
         const times = excerptBoundaryTimes(probe.sections, cues, startSec, endClamped, { fps: probe.fps });
         const sheetFilename = `${filename.replace(/\.mp4$/, '')}-sheet.png`;
-        await encodeFileContactSheetAtTimes(outputPath, join(PATHS.videoThumbnails, sheetFilename), times, { width: probe.canonW, height: probe.canonH });
+        await encodeFileContactSheetAtTimes(outputPath, join(PATHS.videoThumbnails, sheetFilename), times, { width: probe.canonW, height: probe.canonH, fps: probe.fps });
         return sheetFilename;
       } catch (err) {
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] contact sheet failed: ${err.message}`);
@@ -183,8 +183,11 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
           const reason = `Failed to spawn ffmpeg: ${err.message}`;
           job.lastError = reason;
           console.error(`❌ Music-video excerpt render spawn error [${jobId.slice(4, 12)}]: ${reason}`);
-          broadcastSse(job, { type: 'error', error: reason });
+          // Persist before broadcasting: a client that reloads the instant it
+          // sees the terminal frame must not race ahead of the write and read
+          // back a stale `status: 'rendering'`.
           await finalize({ status: 'error', error: reason, filename: null, jobId: null });
+          broadcastSse(job, { type: 'error', error: reason });
         },
         onClose: async (code, signal) => {
           job.process = null;
@@ -197,8 +200,8 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
             logClose(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
             // #8986 acceptance: cancelling an excerpt removes its partial output.
             await unlink(outputPath).catch(() => {});
-            broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
             await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
+            broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
             return;
           }
           try {
@@ -251,8 +254,8 @@ export async function startExcerptRender(projectId, { startSec, endSec }) {
       job.lastError = reason;
       const log = canceled ? console.log : console.error;
       log(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
-      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
       await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     });
 
     return { jobId, excerptId };

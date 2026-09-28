@@ -65,8 +65,12 @@ function ExcerptCard({ excerpt, deleting, noteBusy, onDelete, onCancel, onAddNot
   const seek = (t) => { if (videoRef.current) { videoRef.current.currentTime = t; videoRef.current.play?.().catch(() => {}); } };
   const addNoteHere = () => {
     if (!draft.trim()) return;
-    onAddNote(excerpt.id, { atSec: videoRef.current?.currentTime ?? 0, note: draft.trim() });
-    setDraft('');
+    // Only clear the draft once the note actually saved — `addNote` resolves
+    // null on failure — so a transient request error doesn't silently discard
+    // what the reviewer typed.
+    onAddNote(excerpt.id, { atSec: videoRef.current?.currentTime ?? 0, note: draft.trim() }).then((result) => {
+      if (result) setDraft('');
+    });
   };
   return (
     <li className="rounded border border-port-border p-2 space-y-2">

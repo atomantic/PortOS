@@ -34,9 +34,13 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   const [noteBusyId, setNoteBusyId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
-  const reload = () => {
-    if (!projectId) return;
-    getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
+  // Reload the project the render was STARTED for, not whichever one is
+  // currently selected — `job.start` below captures `projectId` as the slot's
+  // `context`, handed back here on every terminal frame, so switching to a
+  // different project mid-render can't reload/overwrite the wrong record.
+  const reload = (id) => {
+    if (!id) return;
+    getMusicVideoProject(id, { silent: true }).then(replaceProject).catch(() => {});
   };
 
   const job = useSseJobSlot({
@@ -44,8 +48,8 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     eventsUrl: musicVideoExcerptRenderEventsUrl,
     cancelRequest: cancelMusicVideoExcerptRender,
     readPercent,
-    onComplete: reload,
-    onErrorFrame: () => { reload(); return true; }, // reload already surfaces the persisted `error` field; skip the generic toast
+    onComplete: (_frame, id) => reload(id),
+    onErrorFrame: (_frame, id) => { reload(id); return true; }, // reload already surfaces the persisted `error` field; skip the generic toast
     onKickoffError: (err) => {
       if (err?.status === 409) { toast.error(err.message || 'An excerpt render is already in progress'); return true; }
       return false;

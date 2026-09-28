@@ -180,18 +180,25 @@ export async function encodeReferenceContactSheet(videoPath, outputPath, { every
 // sampling a REAL rendered video file at explicit `times` (seconds, relative
 // to the file's own start) rather than a browser composition or a uniform
 // step (#8986 — the excerpt render's cut/cue contact sheet from
-// `excerptBoundaryTimes` in services/musicVideo/render.js). `between(t,…)`
-// selects a small window around each target time rather than an exact frame
-// timestamp match, which floating-point frame times almost never hit exactly.
-export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height } = {}) {
+// `excerptBoundaryTimes` in services/musicVideo/render.js). Each time is
+// converted to an exact frame INDEX and selected with `eq(n,…)` — the same
+// technique `extractEvaluationFrames` (lib/ffmpeg.js) uses for multi-frame
+// selection — rather than a `between(t,…)` time window: at 30/60fps a time
+// window can match several consecutive frames, overfilling the tile before
+// later boundary times are ever reached.
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps } = {}) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
+  if (!(fps > 0)) throw new Error('encodeFileContactSheetAtTimes: fps is required');
   const tileWidth = width && height && width < height ? 240 : 360;
   const columns = Math.min(PROOF_COLUMNS, times.length);
   const rows = Math.ceil(times.length / columns);
-  const eps = 0.05;
-  const selectExpr = times.map((t) => `between(t,${Math.max(0, t).toFixed(3)},${(t + eps).toFixed(3)})`).join('+');
+  // Two very close boundary times can round to the same frame index — the
+  // dedup means the tile gets one fewer real frame than requested (a padded
+  // cell), never a duplicate or an out-of-order one.
+  const indices = [...new Set(times.map((t) => Math.max(0, Math.round(t * fps))))];
+  const selectExpr = indices.map((i) => `eq(n,${i})`).join('+');
   const result = await runFfmpegProcess({
     bin: ffmpeg,
     args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
