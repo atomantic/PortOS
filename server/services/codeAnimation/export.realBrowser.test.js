@@ -49,7 +49,7 @@ const FRAME_BYTES = WIDTH * HEIGHT * 3;
 // export must hide it, while the reference screenshot below hides it the same way.
 const FIXTURE = `<!doctype html><html><head><style>
 body { margin: 0; background: #222; } canvas { display: block; }
-#controls { position: fixed; left: 0; top: 0; width: 400px; height: 200px; background: rgb(0,255,0); z-index: 10; }
+#controls { position: fixed; left: 0; top: 0; width: 400px; height: 200px; background: rgb(0,255,0); z-index: 2147483647; }
 </style></head><body>
 <canvas id="film" width="${WIDTH}" height="${HEIGHT}"></canvas>
 <div id="controls">controls</div>
