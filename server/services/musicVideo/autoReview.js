@@ -122,7 +122,7 @@ const touchRun = (run, patch, now) => ({ ...run, ...patch, updatedAt: now });
  * Start a run over `[startSec, endSec)`. Refuses while another run is live or
  * a manual revision is open (the run needs the revision slot for its own).
  */
-export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {} }, now = new Date().toISOString()) {
+export function startAutoReviewOnProject(project, { startSec, endSec, limits, reviewer = {}, productionRunId = null }, now = new Date().toISOString()) {
   const live = activeAutoReview(project);
   if (live) throw autoReviewError(409, 'AUTO_REVIEW_IN_PROGRESS', 'Finish, cancel or resume the existing auto-review run first', { runId: live.id });
   const openRevision = projectRevisions(project).find((r) => r.status === 'open' || r.status === 'rendering');
@@ -139,6 +139,10 @@ export function startAutoReviewOnProject(project, { startSec, endSec, limits, re
       model: isNonBlankStr(reviewer.model) ? reviewer.model : null,
     },
     usage: { reviews: 0, generations: 0 },
+    // #9066: a production run that handed this run its draft dispatches the
+    // run's revised sections server-side (productionService.js), so the board
+    // must not also submit them.
+    ...(isNonBlankStr(productionRunId) ? { productionRunId } : {}),
     attempts: [{ n: 1, excerptId: null, renderFailures: 0, reviewStartedAt: null, review: null, revisionId: null }],
     stopReason: null,
     error: null,

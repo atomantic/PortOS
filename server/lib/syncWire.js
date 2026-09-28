@@ -42,13 +42,15 @@ export function sanitizeSoftDeleteFields(raw) {
 
 /**
  * Remove Music Video render choices that belong to the receiving install.
+ * The production-run checkpoint (#9066) is always stripped: it names this
+ * install's providers and jobs, and a peer must never execute (or hash) it.
  * Transport keeps the legacy `videoSettings.backend` by default so an older
  * receiver is not regressed; upgraded receivers and content hashing opt into
  * stripping it as well.
  */
 export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = true } = {}) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return record;
-  const { imageMode: _imageMode, imageModelId: _imageModelId, ...shared } = record;
+  const { imageMode: _imageMode, imageModelId: _imageModelId, productionRuns: _productionRuns, ...shared } = record;
   if (stripVideoBackend && shared.videoSettings
     && typeof shared.videoSettings === 'object' && !Array.isArray(shared.videoSettings)) {
     const { backend: _backend, ...sharedVideoSettings } = shared.videoSettings;

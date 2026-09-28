@@ -219,6 +219,8 @@ export function cloneProjectRecord(source, {
     // A revision is in-progress work against the SOURCE's takes; the clone
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
+    // #9066: a production run executes against the SOURCE's scenes and jobs.
+    ...(Array.isArray(source.productionRuns) ? { productionRuns: [] } : {}),
     renderHistoryId: null,
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
@@ -614,6 +616,8 @@ export function mergeProjectRecord(local, remoteRaw) {
   remote = { ...remote };
   if (Object.hasOwn(local, 'imageMode')) remote.imageMode = local.imageMode;
   if (Object.hasOwn(local, 'imageModelId')) remote.imageModelId = local.imageModelId;
+  // #9066: this install's production-run checkpoint survives a newer remote.
+  if (Object.hasOwn(local, 'productionRuns')) remote.productionRuns = local.productionRuns;
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && Object.hasOwn(local.videoSettings, 'backend')) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

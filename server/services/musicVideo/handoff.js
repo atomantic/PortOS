@@ -92,6 +92,12 @@ function composePrompt(primary, fallback, project, clause) {
   ].filter(Boolean).join(', ');
 }
 
+/** A scene's composed reference-frame prompt (also the server-owned production run's, #9066). */
+export const sceneFramePrompt = (project, scene) => composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause);
+
+/** A scene's composed shot (motion) prompt. */
+export const sceneShotPrompt = (project, scene) => composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause);
+
 /** Build the export manifest for a project. */
 export function buildHandoffManifest(project, { now = new Date().toISOString() } = {}) {
   const spec = project.visualSpec || null;
@@ -128,8 +134,8 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
       endSec: scene.endSec ?? null,
       lyricText: scene.lyricText || '',
       visualIntent: scene.visualIntent || '',
-      framePrompt: composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause),
-      shotPrompt: composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause),
+      framePrompt: sceneFramePrompt(project, scene),
+      shotPrompt: sceneShotPrompt(project, scene),
       referenceFiles: conditioning,
       selected: {
         referenceImageId: scene.referenceImageId || null,

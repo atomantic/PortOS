@@ -442,6 +442,11 @@ function setupMusicVideoEventForwarding() {
   musicVideoEvents.on('auto-review', (data) => {
     if (ioInstance) ioInstance.emit('music-video:auto-review', data);
   });
+  // A server-owned production run advanced (#9066): progress, route choices,
+  // spend and Stop/Resume state, without a refetch.
+  musicVideoEvents.on('production', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:production', data);
+  });
 }
 
 let aiStatusForwardingSetup = false;
