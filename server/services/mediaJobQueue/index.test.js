@@ -2124,6 +2124,31 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.getJob(retained)).toMatchObject({ status: 'queued', hold: { cause: 'shader failed' } });
   });
 
+  // #9029: a started job reaches its provider — and attaches the listeners a
+  // terminal event needs — only after async pre-dispatch work (a cold settings
+  // read is real I/O). A drain that skipped that window let `finish` emit into
+  // nothing, stranding the lane so the retained job above never saw its hold.
+  it('drains a started job through its pre-dispatch window', async () => {
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    assertVideoAttemptDispatch.mockImplementationOnce(() => gate);
+    const id = await submit('example-mlx', { videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(mediaJobQueue.getJob(id).status).toBe('running');
+    let drained = false;
+    const drain = flush().then(() => { drained = true; });
+    // Every snapshot write and terminal transition has landed; only dispatch is open.
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+    expect(drained).toBe(false);
+    release();
+    await drain;
+    expect(stubs.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ jobId: id }));
+    await finish(id, null);
+    expect(mediaJobQueue.getJob(id).status).toBe('completed');
+  });
+
   it('counts pre-dispatch rejection once and resumes with a cleared streak', async () => {
     stubs.generateVideo.mockRejectedValue(Object.assign(new Error("Example runtime is not installed. Install or repair it from Video Gen's model setup panel."), { code: 'EXAMPLE_VENV_MISSING' }));
     const ids = await submitMany(4);
