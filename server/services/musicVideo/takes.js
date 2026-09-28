@@ -39,7 +39,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, now }) {
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -53,6 +53,10 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     status: 'candidate',
     note: null,
     createdAt: now,
+    // #8977: the immutable record of what a performance take was generated
+    // against (audio revision, song interval, edit in/out, cues, capability).
+    // Present only on takes that carry one, so other takes keep their shape.
+    ...(shotInstruction && typeof shotInstruction === 'object' ? { shotInstruction: structuredClone(shotInstruction) } : {}),
   };
 }
 

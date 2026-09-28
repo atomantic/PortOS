@@ -595,7 +595,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Gating makes a v2 receiver reject the ahead-version transfer until it
   // upgrades; pre-#8965 records need no rewrite (a selected slot with no take
   // is materialized as a `legacy` take on first use).
-  musicVideoProjects: 3,
+  // v4 = performance shots (#8977): `scene.shotMode` and a video take's
+  // immutable `shotInstruction`. A v3 receiver stores both verbatim but
+  // mis-executes them: it renders a performance take from frame 0 instead of
+  // its edit in-point (and may loop it), desyncing the singer from the song,
+  // and submits performance scenes to a cutaway-only lane — edits that then win
+  // LWW onto the upgraded peer. Pre-#8977 records need no rewrite (absent
+  // `shotMode` = cutaway; takes without an instruction render as before).
+  musicVideoProjects: 4,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

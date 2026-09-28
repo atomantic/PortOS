@@ -8,6 +8,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   probeVideoDuration: vi.fn(async () => 30),
+  probeVideoGeometry: vi.fn(async () => null),
 }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(), saveHistory: vi.fn(async () => {}) }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
@@ -21,7 +22,7 @@ import {
   resolveMasterAudioPath,
   renderMusicVideo,
 } from './render.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject } from './projects.js';
@@ -199,6 +200,37 @@ describe('resolveSceneClips', () => {
     loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', fps: 24, numFrames: 48 }]); // no width/height
     await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] }))
       .rejects.toMatchObject({ status: 404, code: 'MISSING_CLIPS' });
+  });
+
+  it('measures a hosted clip whose history entry records no frame count (#8977)', async () => {
+    // Grok/fal entries carry only the requested duration; the renderer probes the file.
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', modelId: 'grok', duration: 6 }]);
+    probeVideoGeometry.mockResolvedValueOnce({ width: 1280, height: 720, fps: 24, numFrames: 145, durationSec: 6.04 });
+    const [c] = await resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] });
+    expect(c).toMatchObject({ width: 1280, height: 720, inSec: 0 });
+    expect(c.duration).toBeCloseTo(145 / 24, 6);
+  });
+
+  it('places a performance take at its edit in-point and never loops it (#8977)', async () => {
+    // A 1.5s shot at song 20.0–21.5 generated from a padded 5.05s window
+    // starting at 18.225: the shot occupies clip time 1.775–3.275.
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 121 }]);
+    const scene = {
+      sceneId: 's1', order: 0, videoHistoryId: 'h1', loop: true, shotMode: 'performance',
+      startSec: 20, endSec: 21.5, beatAligned: true,
+      takes: [{ takeId: 't1', kind: 'video', assetId: 'h1', shotInstruction: { shotMode: 'performance', edit: { inSec: 1.775, outSec: 3.275, targetSec: 1.5 } } }],
+    };
+    const [c] = await resolveSceneClips({ scenes: [scene] });
+    expect(c).toMatchObject({ inSec: 1.775, outSec: 3.275, loop: false });
+    // The authored span keeps the in-point through the beat-aligned snap, so
+    // the ffmpeg trim cuts the exact sung frames.
+    const [snapped] = beatSnapClips([c], [], { scenes: [scene] });
+    expect(snapped.inSec).toBe(1.775);
+    expect(snapped.outSec).toBeCloseTo(3.275, 9);
+    const { args } = buildMusicVideoFfmpegArgs([snapped], '/music/song.wav', '/o.mp4');
+    const fc = args[args.indexOf('-filter_complex') + 1];
+    expect(fc).toContain('trim=start=1.775:end=3.275');
+    expect(args).not.toContain('-stream_loop');
   });
 });
 

@@ -315,6 +315,9 @@ function buildScene(input, { order }) {
     stillMove: input.stillMove ?? 'hold',
     cardText: input.cardText ?? null,
     cardColor: input.cardColor ?? null,
+    // #8977: cutaway (any image-to-video lane) unless the director asks for a
+    // lip-synced performance shot, which only a source-audio provider renders.
+    shotMode: input.shotMode ?? 'cutaway',
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the

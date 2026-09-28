@@ -5,6 +5,9 @@ import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { sceneVisualLayer } from '../lib/musicVideoLayers.js';
+import {
+  approximateMotionCues, grokCoverage, isPerformanceScene, performanceBlockedReason,
+} from '../lib/musicVideoShotTiming.js';
 
 // Audio-reactive generation conditions motion on the song itself, so the prompt
 // has to rule out anything that reads as a performance of it.
@@ -44,6 +47,11 @@ export function visualDirection(spec) {
 export function conditioningReferences(spec) {
   return (spec?.references || []).filter((ref) => ref.condition).slice(0, MAX_CONDITIONING_REFERENCES);
 }
+
+// A scene's authored span on the song, or null while it is untimed.
+const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
+  ? scene.endSec - scene.startSec
+  : null);
 
 /**
  * Per-scene media generation for a music-video project: the reference-frame
@@ -186,20 +194,36 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     if (!basePrompt) { toast.error('Add a shot prompt first'); return; }
     const { settings, audioReactiveSelected, detectedAudioReactiveLora, videoBlockedReason } = videoSettings;
     if (videoBlockedReason) { toast.error(videoBlockedReason); return; }
+    // #8977: a performance shot lip-syncs to the master recording, which only a
+    // verified source-audio provider can do — never a cutaway lane with an
+    // invented voice. The server slices the song and re-checks the capability.
+    const performance = isPerformanceScene(scene);
+    const performanceBlocked = performance
+      ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
+      : null;
+    if (performanceBlocked) { toast.error(performanceBlocked); return; }
+    const spanSec = sceneSpanSec(scene);
+    // Grok's CLI lane takes no timed controls: phrase intents ride as prose
+    // whose timing is explicitly approximate. The environmental-motion guard
+    // stays exclusive to the audio-reactive lane.
+    const motionCues = settings.backend === 'grok' ? approximateMotionCues(project?.phrases, scene.startSec, scene.endSec) : '';
     const prompt = audioReactiveSelected
       ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
-      : basePrompt;
+      : [basePrompt, motionCues].filter(Boolean).join('. ');
     videoLane.startScene(scene.sceneId);
     generateVideo({
       prompt,
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
-        ? { grokDuration: settings.grokDuration }
+        // Request the 6/10s clip that COVERS this shot; the saved pin is only
+        // the fallback for a scene not yet timed on the song.
+        ? { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings); an
         // absent falDuration lets the server fall back to the resolved
         // model's own default rather than forcing a value.
         : settings.backend === 'fal'
-          ? { falDuration: settings.falDuration || undefined }
+          // A performance clip's length follows its song slice (server-side).
+          ? (performance ? {} : { falDuration: settings.falDuration || undefined })
           : settings.backend === 'local'
             ? { modelId: settings.modelId || undefined, disableAudio: true }
             // A named model is local-only machinery at the server boundary and
@@ -266,8 +290,16 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   };
 
   const generateMissingVideos = () => {
-    const pending = footageScenes.filter((scene) =>
+    const candidates = footageScenes.filter((scene) =>
       scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
+    // Performance shots the current lane cannot lip-sync are skipped with one
+    // notice rather than a toast per scene (#8977).
+    const { settings, audioReactiveSelected } = videoSettings;
+    const lipSyncBlocked = performanceBlockedReason(audioReactiveSelected ? 'local' : settings.backend);
+    const pending = lipSyncBlocked ? candidates.filter((scene) => !isPerformanceScene(scene)) : candidates;
+    const skipped = candidates.length - pending.length;
+    if (skipped > 0) toast.info(`Skipped ${skipped} performance shot${skipped === 1 ? '' : 's'}: ${lipSyncBlocked}`);
+    if (pending.length === 0 && skipped > 0) return;
     if (pending.length === 0) {
       const referenceFrameCount = footageScenes.filter((scene) => scene.referenceImageId).length;
       toast.info(referenceFrameCount < footageScenes.length

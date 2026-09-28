@@ -31,7 +31,9 @@ export default function VideoRenderSettings({ videoSettings, generating }) {
       >
         <option value="">Install default</option>
         <option value="local">Local video</option>
-        <option value="grok">Grok video</option>
+        {/* Grok's CLI lane takes no audio, so it renders cutaways only —
+            performance (lip-sync) shots need fal.ai (#8977). */}
+        <option value="grok">Grok video (cutaway only)</option>
         <option value="fal">fal.ai video</option>
       </select>
       {settings.backend === 'local' && (

@@ -58,6 +58,7 @@ vi.mock('../../lib/systemCapabilities.js', async (importOriginal) => ({
 const stubs = {
   generateVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateVideoGrok: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -106,6 +107,11 @@ vi.mock('../videoGen/upscaleJob.js', () => ({
 
 vi.mock('../videoGen/grok.js', () => ({
   generateVideo: (...args) => stubs.generateVideoGrok(...args),
+  cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../videoGen/fal.js', () => ({
+  generateVideo: (...args) => stubs.generateVideoFal(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
@@ -890,6 +896,31 @@ describe('mediaJobQueue', () => {
     expect(recovered).toBeTruthy();
     expect(recovered.status).toBe('failed');
     expect(recovered.error).toMatch(/interrupted by restart/);
+  });
+
+  it('boot recovery (#8977): an interrupted paid fal performance render is failed, never resubmitted, and its song slice released', async () => {
+    const interruptedId = '00000000-0000-4000-8000-000000000003';
+    const slice = join(tempDataDir, 'uploads', 'mv-performance-example.wav');
+    mkdirSync(join(tempDataDir, 'uploads'), { recursive: true });
+    writeFileSync(slice, 'wav');
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({
+      jobs: [{
+        id: interruptedId, kind: 'video', status: 'running',
+        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+        params: {
+          mode: 'fal', videoMode: 'image', prompt: 'singer', audioFilePath: slice,
+          musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' },
+          shotInstruction: { version: 1, shotMode: 'performance', edit: { inSec: 1, outSec: 2 } },
+        },
+      }],
+    }));
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    expect(mediaJobQueue.getJob(interruptedId)).toMatchObject({ status: 'failed', error: expect.stringMatching(/interrupted by restart/) });
+    await waitFor(() => !existsSync(slice));
+    expect(stubs.generateVideoFal).not.toHaveBeenCalled();
   });
 
   it('boot recovery (#1332): a "running" training job whose trainer survived is re-enqueued for re-attach', async () => {

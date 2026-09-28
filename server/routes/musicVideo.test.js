@@ -173,6 +173,15 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).not.toHaveBeenCalled();
   });
 
+  it('PATCH /:id/scenes/:sceneId sets a scene to a performance shot and rejects an unknown shot mode (#8977)', async () => {
+    const ok = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'performance' });
+    expect(ok.status).toBe(200);
+    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' });
+    const bad = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'karaoke' });
+    expect(bad.status).toBe(400);
+    expect(svc.updateScene).toHaveBeenCalledTimes(1);
+  });
+
   it('PATCH /:id accepts null to clear the project video-backend pin', async () => {
     const videoSettings = { backend: null };
     const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });

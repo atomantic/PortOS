@@ -8,6 +8,9 @@ import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/music
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
+import {
+  grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow,
+} from '../../lib/musicVideoShotTiming.js';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
 const SCENE_TIME_FIELDS = [['Start', 'startSec'], ['End', 'endSec']];
@@ -34,6 +37,12 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * The layer picker (#8985) chooses what a composed render (`layered`) shows
  * for the scene's span: its footage, its selected frame with a camera move, or
  * a title card. A plain render always plays footage, and says so.
+ * The shot mode (#8977) picks Cutaway (any image-to-video lane) or Performance
+ * (a singer lip-synced to the master recording). `lipSyncBackend` is the lane a
+ * render would use ('' = install default); a performance shot on a lane without
+ * verified source-audio conditioning is blocked here with the reason, and a
+ * capable one names the provider, model, song window and cost before the
+ * director spends anything. `songDurationSec` bounds the planned window.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
@@ -41,6 +50,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
+  lipSyncBackend = '', songDurationSec = null,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -69,6 +79,19 @@ export default function SceneCard({
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
+  const performance = isPerformanceScene(scene);
+  const capability = performance ? performanceCapability(lipSyncBackend) : null;
+  const timedSpan = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
+    ? scene.endSec - scene.startSec
+    : null;
+  const plan = capability
+    ? planPerformanceWindow({ startSec: scene.startSec, endSec: scene.endSec, songDurationSec: songDurationSec ?? Infinity, capability })
+    : null;
+  const performanceBlocked = performance
+    ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
+    : null;
+  const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
+  const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -123,9 +146,17 @@ export default function SceneCard({
           Beat-aligned
         </label>
         <label className="flex items-center gap-1" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
-          <input type="checkbox" checked={loops} onChange={(e) => applyPatch({ loop: e.target.checked })} />
+          <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
           Loop clip
         </label>
+        <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
+        <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
+          onChange={(e) => applyPatch({ shotMode: e.target.value })}
+          className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+          title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
+          <option value="cutaway">Cutaway</option>
+          <option value="performance">Performance (lip-sync)</option>
+        </select>
       </div>
       <div className="flex flex-wrap gap-2 items-center text-xs">
         <label htmlFor={fieldId('layer')}>Layer</label>
@@ -166,6 +197,24 @@ export default function SceneCard({
       {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
         <p role="alert" className="text-[11px] text-port-warning">
           Set a start and end — a {layer === 'card' ? 'title card' : 'still'} runs for exactly its span.
+        </p>
+      )}
+      {performance && performanceBlocked && (
+        <div role="alert" className="flex items-start gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+          <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+          <span className="min-w-0 break-words">{performanceBlocked}</span>
+        </div>
+      )}
+      {performance && !performanceBlocked && (
+        <p className="text-[11px] text-port-text-muted break-words" data-testid="performance-plan">
+          Lip-sync via {capability.label} ({capability.modelId}) · song {formatDurationSec(plan.windowStartSec)}–{formatDurationSec(plan.windowEndSec)}
+          {plan.editInSec > 0 ? ` · shot starts ${plan.editInSec.toFixed(2)}s into the take` : ''} · {capability.costLabel}
+        </p>
+      )}
+      {grokPlan && (
+        <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
+          Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
+          {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
         </p>
       )}
       {underCovered && (
@@ -266,10 +315,12 @@ export default function SceneCard({
           </div>
         )}
         <button onClick={() => onGenerateVideo(scene)}
-          disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason}
+          disabled={settingsSaving || !scene.referenceImageId || !!generatingVideo || !!videoBlockedReason || !!performanceBlocked}
           className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap"
-          title={videoBlockedReason
-            || (scene.referenceImageId ? "Generate this scene's video from its reference frame (i2v)" : 'Generate a reference frame first')}>
+          title={videoBlockedReason || performanceBlocked
+            || (!scene.referenceImageId ? 'Generate a reference frame first'
+              : performance ? `Lip-sync this scene's frame to the song via ${capability.label} — ${capability.costLabel}`
+                : "Generate this scene's video from its reference frame (i2v)")}>
           {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
           {generatingVideo ? 'Generating video…' : (scene.videoHistoryId ? 'New video take' : 'Generate video')}
         </button>
