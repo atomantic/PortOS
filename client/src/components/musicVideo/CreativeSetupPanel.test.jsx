@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CreativeSetupPanel from './CreativeSetupPanel.jsx';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -45,7 +45,7 @@ describe('creative setup', () => {
       ] }, visualSpec: { moodBoardId: 'b1' },
     });
   });
-  it('discards an unsaved cast when the director cancels setup', () => {
+  it('discards an unsaved cast when the director cancels setup', async () => {
     const onSave = open();
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved singer' } });
     fireEvent.click(screen.getByText('Add to production'));
@@ -53,7 +53,24 @@ describe('creative setup', () => {
     expect(screen.queryByText(/Unsaved singer/)).toBeNull();
     expect(onSave).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Set up creative direction'));
+    await act(async () => {});
     expect(screen.queryByText(/Unsaved singer/)).toBeNull();
+  });
+
+  it('cannot save a pending universe under the previously loaded style and clears style on deselection', async () => {
+    let resolveNext;
+    getUniverse.mockResolvedValueOnce({ id: 'u1', name: 'Example universe', styleNotes: 'Old style', characters: [] })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
+    const onSave = open();
+    await screen.findByText('Example universe');
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    await waitFor(() => expect(screen.getByText('Save creative setup').disabled).toBe(false));
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u2' } });
+    expect(screen.getByText('Save creative setup').disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ concept: expect.objectContaining({ universeId: null, universeStyle: '' }) })));
+    await act(async () => { resolveNext({ id: 'u2', name: 'Other universe', styleNotes: 'Wrong style' }); });
   });
 
   it('ignores stale universe responses and retains the draft when saving fails', async () => {

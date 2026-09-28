@@ -25,6 +25,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
+  const universeReady = !universeId || (!loading && universe?.id === universeId);
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
   const idFor = (name) => `mv-creative-${project.id}-${name}`;
 
@@ -69,11 +70,12 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     if (canon) setSelectedCanon((items) => [...items, { subjectId: subject.id, kind, entry: canon }]);
   };
   const save = async () => {
+    if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
     setSaving(true);
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
     if (draft.universeId !== (project.concept?.universeId || '') || project.concept?.universeStyle == null) {
-      concept.universeStyle = universe ? [universe.name, universe.styleNotes, universe.influences?.embrace?.length ? `Embrace: ${universe.influences.embrace.join(', ')}` : '', universe.influences?.avoid?.length ? `Avoid: ${universe.influences.avoid.join(', ')}` : ''].filter(Boolean).join('\n').slice(0, 4000) : '';
+      concept.universeStyle = draft.universeId && universe?.id === draft.universeId ? [universe.name, universe.styleNotes, universe.influences?.embrace?.length ? `Embrace: ${universe.influences.embrace.join(', ')}` : '', universe.influences?.avoid?.length ? `Avoid: ${universe.influences.avoid.join(', ')}` : ''].filter(Boolean).join('\n').slice(0, 4000) : '';
     }
     const visualSpec = { moodBoardId: draft.moodBoardId || null };
     const canon = { characters: [], places: [], objects: [] };
@@ -103,7 +105,14 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Canon and style are copied into this project; source records stay independent.</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label htmlFor={idFor('universe')} className="text-xs">Universe</label>
-          <select id={idFor('universe')} className={inputClass} value={universeId} onChange={(e) => { setDraft((d) => ({ ...d, universeId: e.target.value })); setError(''); }}>
+          <select id={idFor('universe')} className={inputClass} value={universeId} onChange={(e) => {
+            const nextId = e.target.value;
+            if (nextId === universeId) return;
+            setUniverse(null);
+            setLoading(!!nextId);
+            setDraft((d) => ({ ...d, universeId: nextId }));
+            setError('');
+          }}>
             <option value="">No universe</option>
             {universeId && !lists.universes.some((u) => u.id === universeId) && <option value={universeId}>Selected universe</option>}
             {lists.universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -116,7 +125,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
         </div>
       </div>
       {loading && <p className="text-xs">Loading canon…</p>}
-      {universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
+      {universeReady && universe && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">{kinds.map(([kind, label]) => <div key={kind}>
         <label htmlFor={idFor(`pick-${kind}`)} className="text-xs">Select {label.toLowerCase()}</label>
         <select id={idFor(`pick-${kind}`)} value="" className={inputClass} disabled={subjects.length >= 24} onChange={(e) => {
           const entry = (universe[fields[kind]] || []).find((item) => item.id === e.target.value);
@@ -139,7 +148,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
       <label htmlFor={idFor('description')} className="block text-xs">Appearance / description</label><textarea id={idFor('description')} rows={2} maxLength={1000} className={inputClass} value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
       <button type="button" className="text-port-accent text-sm min-h-[44px]" disabled={!newName.trim() || subjects.length >= 24} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
-      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={loading || (!!universeId && !universe) || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
   </section>;
