@@ -171,6 +171,24 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/maintenance-runs/:id/resume',
   'POST /api/cos/tools/call',
 
+  // Quota Burn (#9030): PUT accepts the legacy agent-prompt compatibility shape
+  // and converts it into an enabled, autonomyLevel-yolo custom CoS job — the
+  // same "arbitrary prompt becomes unattended work" shape as `POST /api/cos/jobs`
+  // above, just reached through a different entry point. `run` dispatches a
+  // family or a named job immediately, past the master switch and (with
+  // `force`) the family's own quota gates. `rearm` re-arms an already-configured
+  // one-shot step for another cycle — it queues no new prompt, but it puts spent
+  // work back into rotation the operator meant to run once.
+  'PUT /api/quota-burn',
+  'POST /api/quota-burn/run',
+  'POST /api/quota-burn/rearm',
+
+  // Shell image drop (#9030): the HTTP twin of the gated `shell:input` socket
+  // event (HOST_CONTROL_SOCKET_EVENTS in services/socket.js) — it pastes the
+  // caller's message into a live PTY and submits it, driving whatever agent or
+  // shell that session is running.
+  'POST /api/shell/sessions/:sessionId/image',
+
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
