@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Recommendation composition (issue #2100). The pure functions
 // (composePostRecommendations / weakestSkillFromStats / stalledProgressions)

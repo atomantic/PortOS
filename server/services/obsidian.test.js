@@ -8,7 +8,7 @@
  * one), and a test that stubs both would only re-assert the order it was handed.
  */
 
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';

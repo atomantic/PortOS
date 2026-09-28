@@ -242,7 +242,13 @@ export default defineConfig({
     // proves only that the CURRENT test did not call it, never that no earlier
     // test in the file did. Assert a cross-test claim inside the test that
     // makes it.
-    globals: true,
+    //
+    // Vitest APIs (`vi`, `describe`, `afterEach`, …) are NOT injected as
+    // globals: every suite imports what it uses from 'vitest'. A file leaning
+    // on injected globals passed here but threw `vi is not defined` whenever it
+    // ran outside this config — e.g. `vitest run server/…` from the repo root,
+    // where no config applies (#9049). Off, a missing import fails in every run.
+    globals: false,
     // Global setup: mocks getPeers → [] so test-created records never fan out
     // to live sync peers.  Per-suite vi.mock('./instances.js', …) overrides win.
     setupFiles: ['./vitest.setup.js'],

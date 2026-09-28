@@ -50,6 +50,7 @@
  *   suites (Option B) for working examples.
  */
 
+import { vi, afterAll } from 'vitest';
 import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 
