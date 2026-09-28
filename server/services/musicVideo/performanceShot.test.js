@@ -27,7 +27,7 @@ vi.mock('../videoGen/local.js', async () => {
 
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { findFfmpeg, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
-const { preparePerformanceShot } = await import('./performanceShot.js');
+const { preparePerformanceShot, findStalePerformanceTakes } = await import('./performanceShot.js');
 const fal = await import('../videoGen/fal.js');
 const { videoGenEvents } = await import('../videoGen/events.js');
 const { buildMusicVideoFfmpegArgs, beatSnapClips, resolveSceneClips } = await import('./render.js');
@@ -172,6 +172,22 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     ]).toString().trim());
     expect(out.fps).toBe(24);
     expect(Math.abs(frames - 36)).toBeLessThanOrEqual(1);
+
+    // The take is only valid for the interval and recording it sang: a
+    // re-timed scene or a replaced song must be regenerated, not rendered.
+    const songPath = join(PATHS.music, 'song.wav');
+    expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath)).toEqual([]);
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, endSec: 22 }] }, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'retimed' }]);
+    const replaced = songWav();
+    replaced.writeInt16LE(1000, 44 + 2);
+    await writeFile(songPath, replaced);
+    expect(await findStalePerformanceTakes({ scenes: [withTake] }, songPath))
+      .toEqual([{ sceneId: 'mvs-1', reason: 'audio-changed' }]);
+    // Switched back to a cutaway, the old take is an ordinary clip again.
+    expect(await findStalePerformanceTakes({ scenes: [{ ...withTake, shotMode: 'cutaway' }] }, songPath)).toEqual([]);
+    const [asCutaway] = await resolveSceneClips({ scenes: [{ ...withTake, shotMode: 'cutaway' }] });
+    expect(asCutaway).toMatchObject({ inSec: 0 });
   }, 60_000);
 
   it('uses the full span of a long shot and stays under the provider maximum', async () => {

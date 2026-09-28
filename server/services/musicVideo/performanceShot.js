@@ -39,6 +39,7 @@ import {
   performanceBlockedReason,
   performanceCapability,
   planPerformanceWindow,
+  selectedPerformanceInstruction,
 } from '../../lib/musicVideoShotTiming.js';
 import { getProject } from './projects.js';
 
@@ -77,6 +78,32 @@ async function sliceAudioWindow(sourcePath, outPath, { startSec, endSec }) {
 }
 
 const refuse = (message, code, status = 400) => new ServerError(message, { status, code });
+
+// Recorded vs current scene times agree within a millisecond.
+const SAME_TIME_SEC = 0.001;
+
+/**
+ * Performance scenes whose SELECTED take was generated against a different song
+ * interval (the scene was re-timed) or a different recording (the song was
+ * replaced). Returns `[{ sceneId, reason: 'retimed' | 'audio-changed' }]`;
+ * the master is hashed only when there is a performance take to check.
+ */
+export async function findStalePerformanceTakes(project, masterPath) {
+  const selected = (Array.isArray(project?.scenes) ? project.scenes : [])
+    .map((scene) => ({ scene, instruction: selectedPerformanceInstruction(scene) }))
+    .filter(({ instruction }) => instruction);
+  if (selected.length === 0) return [];
+  const sha256 = await hashFile(masterPath);
+  const stale = [];
+  for (const { scene, instruction } of selected) {
+    const interval = instruction.songInterval || {};
+    if (instruction.audio?.sha256 !== sha256) stale.push({ sceneId: scene.sceneId, reason: 'audio-changed' });
+    else if (!(Math.abs(interval.startSec - scene.startSec) <= SAME_TIME_SEC && Math.abs(interval.endSec - scene.endSec) <= SAME_TIME_SEC)) {
+      stale.push({ sceneId: scene.sceneId, reason: 'retimed' });
+    }
+  }
+  return stale;
+}
 
 /**
  * Prepare a Music Video scene render's performance inputs.

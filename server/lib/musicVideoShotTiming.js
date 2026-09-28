@@ -35,6 +35,21 @@ export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 /** A scene with no `shotMode` (every pre-#8977 record) is a cutaway. */
 export const isPerformanceScene = (scene) => scene?.shotMode === 'performance';
 
+/**
+ * The shot instruction of a performance scene's SELECTED video take, or null —
+ * for a cutaway scene (even one whose selected take was once generated as a
+ * performance), or a take with no usable edit points.
+ */
+export function selectedPerformanceInstruction(scene) {
+  if (!isPerformanceScene(scene) || !scene.videoHistoryId) return null;
+  const take = (Array.isArray(scene.takes) ? scene.takes : [])
+    .find((t) => t?.kind === 'video' && t.assetId === scene.videoHistoryId);
+  const instruction = take?.shotInstruction;
+  const edit = instruction?.edit;
+  if (instruction?.shotMode !== 'performance' || !Number.isFinite(edit?.inSec) || !Number.isFinite(edit?.outSec)) return null;
+  return edit.inSec >= 0 && edit.outSec > edit.inSec ? instruction : null;
+}
+
 // Safety margin kept inside the provider's documented bounds so ffmpeg's
 // sample rounding can never land a window a hair under the minimum (rejected)
 // or over the maximum (silently clipped by the provider).

@@ -38,6 +38,8 @@ import { getProject, listProjects, updateProject } from './projects.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { findStalePerformanceTakes } from './performanceShot.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -74,14 +76,7 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 // generated with — its footage starts `edit.inSec` into the clip (the audio
 // window was padded to the provider minimum) and ends at `edit.outSec`. It
 // never loops: repeating a sung take would desync the mouth from the song.
-function performanceEdit(scene) {
-  const take = (Array.isArray(scene.takes) ? scene.takes : [])
-    .find((t) => t?.kind === 'video' && t.assetId === scene.videoHistoryId);
-  const instruction = take?.shotInstruction;
-  const edit = instruction?.edit;
-  if (instruction?.shotMode !== 'performance' || !Number.isFinite(edit?.inSec) || !Number.isFinite(edit?.outSec)) return null;
-  return edit.outSec > edit.inSec && edit.inSec >= 0 ? edit : null;
-}
+const performanceEdit = (scene) => selectedPerformanceInstruction(scene)?.edit ?? null;
 
 // A non-looping shot may run this much past its source clip; the gap holds the
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
@@ -472,6 +467,16 @@ export async function renderMusicVideo(projectId) {
     if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
     const audioPath = await resolveMasterAudioPath(project);
+    // #8977: a performance take sings one stretch of one recording. If the
+    // scene was re-timed or the song replaced since, its mouth motion no longer
+    // matches the audio under it — refuse rather than render it out of sync.
+    const stale = await findStalePerformanceTakes(project, audioPath);
+    if (stale.length > 0) {
+      throw new ServerError(
+        `${stale.length} performance shot${stale.length === 1 ? ' was' : 's were'} generated against a different song interval or recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
+        { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
+      );
+    }
     // #8985: a composed render cuts still and card sections into the same
     // timebase as the footage; plain concat renders footage only, as before.
     const composed = project.composition?.mode === 'composed';
