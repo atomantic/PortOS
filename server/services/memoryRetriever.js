@@ -7,6 +7,7 @@
 
 import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
+import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
@@ -136,7 +137,7 @@ export async function getRelevantMemories(task, options = {}) {
 /**
  * Format memories for prompt injection
  */
-export function formatForPrompt(memories) {
+export function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {
   if (!memories || memories.length === 0) {
     return '';
   }
@@ -213,7 +214,7 @@ export function formatForPrompt(memories) {
     lines.push('');
   }
 
-  return lines.join('\n');
+  return `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock('Memory reference data', lines.join('\n'), maxTokens * 4)}`;
 }
 
 /**
@@ -227,5 +228,5 @@ export async function getMemorySection(task, options = {}) {
     return null;
   }
 
-  return formatForPrompt(memories);
+  return formatForPrompt(memories, options.maxTokens);
 }

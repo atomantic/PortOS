@@ -17,8 +17,8 @@
  *     change only PortOS's own records or read files; nothing runs.
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
  *     annotate execution, never start it; task reorder/refresh/enhance,
- *     templates, challenge and goal-fidelity reports — records and LLM text
- *     only, and sub-agents call the latter from loopback anyway.
+ *     templates and challenge — records and LLM text only. Goal-fidelity false-
+ *     positive reports are gated because they can queue investigation agents.
  *   - standardize/analyze — reads the repo; `apply` and `backup` are gated.
  *   - feature agents and loops: pause/stop/delete — they reduce execution.
  *   - code-review/cli-outcome — records a reviewer verdict; nothing runs.
@@ -72,6 +72,24 @@
  *     and so are the nested settings keys that pick an executable or disarm
  *     a shell guard (HOST_CONTROL_SETTINGS_PATHS), but only when the body
  *     CHANGES the stored value (#8751).
+ *
+ * Prompt-feeding stores (#9040):
+ *   - prompts: stage templates and shared variables direct agents; writes are
+ *     gated. DELETE removes stored text; preview and reload only read — open.
+ *   - mind bundle/apply replaces execution policy; export/preview only read.
+ *   - mind recipes define tool instructions and arguments; create/edit/restore
+ *     are gated, archive/validate only remove or inspect recipes.
+ *   - mind messages, annotations, journal corrections and attachments speak
+ *     as the operator and steer unattended work, so their writes are gated.
+ *   - goal-fidelity false-positive reports can queue an investigation agent.
+ *   - twin persona create/edit/selection directs agents. Settings changes to
+ *     injection, privacy inclusion or active persona require operator authority
+ *     in the settings handler; unchanged values and other settings stay open.
+ *   - memory, mind curated memories, twin documents/traits and enrichment
+ *     remain writable reference data, fenced at prompt assembly. Deletes,
+ *     previews, inference and mind stop/pause do not arm execution.
+ *   - tools create/edit supplies agent prompt hints (#9014); delete removes
+ *     a tool. The mind maintainer watchdog queues remediation and is gated.
  *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
@@ -188,6 +206,28 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // caller's message into a live PTY and submits it, driving whatever agent or
   // shell that session is running.
   'POST /api/shell/sessions/:sessionId/image',
+
+  // Instruction stores and operator messages consumed by unattended agents.
+  'POST /api/prompts',
+  'PUT /api/prompts/:stage',
+  'POST /api/prompts/variables',
+  'PUT /api/prompts/variables/:key',
+  'POST /api/cos/mind/bundle/apply',
+  // The maintainer watchdog can queue forge remediation agents.
+  'POST /api/cos/mind/maintainer/watchdog',
+  'POST /api/cos/mind/recipes',
+  'PUT /api/cos/mind/recipes/:recipeId',
+  'POST /api/cos/mind/recipes/:recipeId/restore',
+  'POST /api/cos/mind/messages',
+  'POST /api/cos/mind/annotations',
+  'POST /api/cos/mind/journal/:journalEventId/correct',
+  'POST /api/cos/mind/attachments',
+  'POST /api/cos/goal-fidelity/false-positive',
+  'POST /api/digital-twin/personas',
+  'PUT /api/digital-twin/personas/:id',
+  // /personas/:id also covers /personas/active.
+  'POST /api/tools',
+  'PUT /api/tools/:id',
 
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { DIGITAL_TWIN_DIR } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { renderTraitBlendDirective } from '../lib/personaTraitBlend.js';
+import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { getPrivacyTwinContext } from './privacyTwinContext.js';
 
 // Twin document markdown is re-read on every agent prompt build
@@ -48,7 +49,7 @@ function buildPersonaPreamble(persona, baseTraits) {
   if (!persona?.instructions) return '';
   const desc = persona.description ? `${persona.description}\n` : '';
   const calibration = renderTraitBlendDirective(baseTraits, persona.traitAdjustments, persona.name);
-  const calibrationBlock = calibration ? `\n\n${calibration}` : '';
+  const calibrationBlock = calibration ? `\n\n${UNTRUSTED_REFERENCE_NOTICE}\n${fenceBlock('Twin trait reference data', calibration, 4000)}` : '';
   return `# Active Persona: ${persona.name}\n${desc}\n${persona.instructions}${calibrationBlock}\n\n---\n\n`;
 }
 
@@ -77,9 +78,11 @@ export async function getDigitalTwinForPrompt(options = {}) {
       return a.priority - b.priority; // Then by priority
     });
 
+  let reference = '';
   let output = preamble;
   let tokenCount = preamble.length;
-  const maxChars = maxTokens * 4; // Rough char-to-token estimate
+  // Reserve space for the reference notice, fence and truncation marker.
+  const maxChars = Math.max(0, maxTokens * 4 - UNTRUSTED_REFERENCE_NOTICE.length - 100); // Rough char-to-token estimate
 
   // Privacy Vault identity dossier — opt-in TWICE: the GLOBAL gate here
   // (includePrivacyContext, default false) plus the per-field share_with_twin
@@ -92,7 +95,7 @@ export async function getDigitalTwinForPrompt(options = {}) {
     const privacyBlock = await getPrivacyTwinContext()
       .catch(err => { console.log(`⚠️ Privacy twin context retrieval failed: ${err.message}`); return ''; });
     if (privacyBlock && tokenCount + privacyBlock.length + 8 <= maxChars) {
-      output += `${privacyBlock}\n\n---\n\n`;
+      reference += `${privacyBlock}\n\n---\n\n`;
       tokenCount += privacyBlock.length + 8;
     }
   }
@@ -107,15 +110,18 @@ export async function getDigitalTwinForPrompt(options = {}) {
       // Truncate if we're over budget
       const remaining = maxChars - tokenCount;
       if (remaining > 500) {
-        output += content.substring(0, remaining) + '\n\n[Truncated due to token limit]\n';
+        reference += content.substring(0, remaining) + '\n\n[Truncated due to token limit]\n';
       }
       break;
     }
 
-    output += content + '\n\n---\n\n';
+    reference += content + '\n\n---\n\n';
     tokenCount += content.length;
   }
 
+  if (reference.trim()) {
+    output += `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock('Digital twin reference data', reference, Math.max(0, maxChars - preamble.length))}`;
+  }
   return output.trim();
 }
 
