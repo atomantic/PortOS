@@ -83,6 +83,7 @@ export function normalizeComposition(input) {
     });
   }
   const style = input.style && typeof input.style === 'object' ? input.style : {};
+  const codeVideo = normalizeCodeVideo(input.codeVideo);
   return {
     version: COMPOSITION_VERSION,
     mode: pick(input.mode, COMPOSITION_MODES, 'concat'),
@@ -92,7 +93,9 @@ export function normalizeComposition(input) {
       font: pick(style.font, TYPOGRAPHY_FONTS, 'sans'),
     },
     posterSec: toTime(input.posterSec),
-    codeVideo: normalizeCodeVideo(input.codeVideo),
+    // Absent unless a code video was actually stored, so a composed manifest
+    // stays the shape peers and clones already compare.
+    ...(codeVideo ? { codeVideo } : {}),
   };
 }
 
