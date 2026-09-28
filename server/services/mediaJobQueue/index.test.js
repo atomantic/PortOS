@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
 // test gets a clean slate without scribbling over the real data dir.
@@ -58,6 +59,7 @@ vi.mock('../../lib/systemCapabilities.js', async (importOriginal) => ({
 const stubs = {
   generateVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateVideoGrok: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateVideoFal: vi.fn(async () => ({ jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),
@@ -106,6 +108,11 @@ vi.mock('../videoGen/upscaleJob.js', () => ({
 
 vi.mock('../videoGen/grok.js', () => ({
   generateVideo: (...args) => stubs.generateVideoGrok(...args),
+  cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../videoGen/fal.js', () => ({
+  generateVideo: (...args) => stubs.generateVideoFal(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
 }));
 
@@ -213,6 +220,13 @@ afterEach(async () => {
   if (tempDataDir && existsSync(tempDataDir)) {
     rmSync(tempDataDir, { recursive: true, force: true });
   }
+});
+
+// Late work (a debounced persist, a still-terminating child on Windows) can
+// recreate or pin a per-test temp dir after afterEach removed it (#9046) —
+// see sweepStrayTempRoots's doc.
+afterAll(async () => {
+  await sweepStrayTempRoots('mediaJobQueue-test-');
 });
 
 describe('mediaJobQueue', () => {
@@ -780,6 +794,40 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('cancels during dispatch validation without invoking the provider and cleans staged uploads', async () => {
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    let releaseDispatch;
+    let enteredDispatch;
+    const entered = new Promise((resolve) => { enteredDispatch = resolve; });
+    const gate = new Promise((resolve) => { releaseDispatch = resolve; });
+    assertVideoAttemptDispatch.mockImplementationOnce(() => {
+      enteredDispatch();
+      return gate;
+    });
+    const uploads = join(tempDataDir, 'uploads');
+    mkdirSync(uploads, { recursive: true });
+    const uploadedTempPath = join(uploads, 'example-frame.png');
+    const audioFilePath = join(uploads, 'example-audio.wav');
+    const extraPath = join(uploads, 'example-extra.png');
+    for (const path of [uploadedTempPath, audioFilePath, extraPath]) writeFileSync(path, 'staged');
+    const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      prompt: 'cancel before dispatch', uploadedTempPath, audioFilePath,
+      uploadedTempPaths: [extraPath],
+      videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' },
+    } });
+    await entered;
+    stubs.cancelVideo.mockReturnValueOnce(false);
+    try {
+      await expect(mediaJobQueue.cancelJob(job.jobId)).resolves.toEqual({ ok: true, status: 'canceling' });
+    } finally {
+      releaseDispatch();
+    }
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(stubs.generateChainedVideo).not.toHaveBeenCalled();
+    for (const path of [uploadedTempPath, audioFilePath, extraPath]) expect(existsSync(path)).toBe(false);
+  });
+
   it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
     const job = await mediaJobQueue.enqueueJob({ kind: 'video', params: {
       mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },
@@ -890,6 +938,31 @@ describe('mediaJobQueue', () => {
     expect(recovered).toBeTruthy();
     expect(recovered.status).toBe('failed');
     expect(recovered.error).toMatch(/interrupted by restart/);
+  });
+
+  it('boot recovery (#8977): an interrupted paid fal performance render is failed, never resubmitted, and its song slice released', async () => {
+    const interruptedId = '00000000-0000-4000-8000-000000000003';
+    const slice = join(tempDataDir, 'uploads', 'mv-performance-example.wav');
+    mkdirSync(join(tempDataDir, 'uploads'), { recursive: true });
+    writeFileSync(slice, 'wav');
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({
+      jobs: [{
+        id: interruptedId, kind: 'video', status: 'running',
+        queuedAt: '2026-04-30T10:00:00.000Z', startedAt: '2026-04-30T10:00:01.000Z',
+        params: {
+          mode: 'fal', videoMode: 'image', prompt: 'singer', audioFilePath: slice,
+          musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' },
+          shotInstruction: { version: 1, shotMode: 'performance', edit: { inSec: 1, outSec: 2 } },
+        },
+      }],
+    }));
+
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+
+    expect(mediaJobQueue.getJob(interruptedId)).toMatchObject({ status: 'failed', error: expect.stringMatching(/interrupted by restart/) });
+    await waitFor(() => !existsSync(slice));
+    expect(stubs.generateVideoFal).not.toHaveBeenCalled();
   });
 
   it('boot recovery (#1332): a "running" training job whose trainer survived is re-enqueued for re-attach', async () => {
@@ -2057,6 +2130,31 @@ describe('local video failure holds', () => {
     await tick(); await finish(third, 'RuntimeError: shader failed'); await tick();
     expect(mediaJobQueue.getJob(canceled).status).toBe('canceled');
     expect(mediaJobQueue.getJob(retained)).toMatchObject({ status: 'queued', hold: { cause: 'shader failed' } });
+  });
+
+  // #9029: a started job reaches its provider — and attaches the listeners a
+  // terminal event needs — only after async pre-dispatch work (a cold settings
+  // read is real I/O). A drain that skipped that window let `finish` emit into
+  // nothing, stranding the lane so the retained job above never saw its hold.
+  it('drains a started job through its pre-dispatch window', async () => {
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    assertVideoAttemptDispatch.mockImplementationOnce(() => gate);
+    const id = await submit('example-mlx', { videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(mediaJobQueue.getJob(id).status).toBe('running');
+    let drained = false;
+    const drain = flush().then(() => { drained = true; });
+    // Every snapshot write and terminal transition has landed; only dispatch is open.
+    await expect(mediaJobQueue.flushMediaJobQueue()).resolves.toEqual({ ok: true });
+    expect(drained).toBe(false);
+    release();
+    await drain;
+    expect(stubs.generateVideo).toHaveBeenCalledWith(expect.objectContaining({ jobId: id }));
+    await finish(id, null);
+    expect(mediaJobQueue.getJob(id).status).toBe('completed');
   });
 
   it('counts pre-dispatch rejection once and resumes with a cleared streak', async () => {

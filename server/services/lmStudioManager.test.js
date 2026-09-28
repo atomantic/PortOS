@@ -498,11 +498,17 @@ describe('lmStudioManager.loadModelWithArgs', () => {
 // that made `getStatus()` report an installed LM Studio as "Not installed" and
 // offer to install it again.
 describe('isAppInstalled', () => {
+  const homeDirs = [];
   const home = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'portos-lms-home-'));
+    homeDirs.push(dir);
     fakeHome.path = dir;
     return dir;
   };
+
+  afterEach(() => {
+    for (const dir of homeDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
 
   it('counts an LM Studio home directory as installed on any platform', async () => {
     fs.mkdirSync(path.join(home(), '.lmstudio'), { recursive: true });

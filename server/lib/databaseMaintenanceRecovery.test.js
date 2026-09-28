@@ -15,6 +15,13 @@ import { spawnDetached } from './detachedSpawn.js';
 const moduleUrl = new URL('./databaseMaintenanceJournal.js', import.meta.url).href;
 const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
 const target = { ...source, mode: 'docker', port: 5561 };
+// Each launch pays a cold PowerShell supervisor start on Windows; on a loaded
+// CI worker that alone can outlast the 10s production PID deadline (#8994,
+// same budget as the detachedSpawn.test.js real-process fixtures, #8612).
+// Test-only: production keeps its default, and a PID timeout still errors.
+const COLD_START_PID_TIMEOUT_MS = 30_000;
+// PID budget + the worker's ready wait + the rest of the scenario.
+const WORKER_TEST_TIMEOUT_MS = 70_000;
 let root;
 let data;
 let journal;
@@ -53,7 +60,9 @@ async function launchWorker(operation, token, stage = 'importing') {
   `);
   const env = { ...process.env, PORTOS_DATA_ROOT: root, NODE_ENV: 'test' };
   delete env.VITEST;
-  const handle = await spawnDetached(process.execPath, [script], { env, controlDir, cleanup: false, pollMs: 25 });
+  const handle = await spawnDetached(process.execPath, [script], {
+    env, controlDir, cleanup: false, pollMs: 25, pidTimeoutMs: COLD_START_PID_TIMEOUT_MS,
+  });
   const child = { handle, finished: false };
   child.done = new Promise((resolve, reject) => {
     handle.once('close', (code, signal) => { child.finished = true; resolve({ code, signal }); });
@@ -62,6 +71,9 @@ async function launchWorker(operation, token, stage = 'importing') {
   // Attach a rejection observer immediately; teardown still awaits the result.
   child.done.catch(() => {});
   children.push(child);
+  // A failed launch rejects with the supervisor diagnostic; surface that rather
+  // than a missing-ready-file timeout.
+  if (handle.pid === null) await child.done;
   await vi.waitFor(() => expect(readFileSync(join(controlDir, 'ready'), 'utf8')).toBe('ready'), { timeout: 20_000 });
   return { ...child, controlDir };
 }
@@ -114,7 +126,7 @@ describe('same-operation coordinator recovery', () => {
     // success from a missing/dead PID, even on repeated attempts.
     writeFileSync(join(nextDirectory, 'pid'), '2147483647');
     expect(() => journal.recoverCoordinator(operation.id, successor, randomUUID())).toThrow();
-  }, 40_000);
+  }, WORKER_TEST_TIMEOUT_MS);
 
   it('recovers a killed worker only after its supervisor acknowledges exit', async () => {
     const operation = journal.begin({ source, target });
@@ -126,7 +138,7 @@ describe('same-operation coordinator recovery', () => {
     expect(next).not.toBe(token);
     expect(journal.read()).toEqual({ ...operation, stage: 'exporting' });
     expect(() => journal.assertAdmission()).toThrow();
-  }, 40_000);
+  }, WORKER_TEST_TIMEOUT_MS);
 
   it('recovers a published ownership handoff after its caller crashes before receiving the result', async () => {
     const operation = journal.begin({ source, target });
@@ -146,7 +158,7 @@ describe('same-operation coordinator recovery', () => {
     journal.reserveCoordinatorWorker(operation.id, retry.token);
     expect(() => journal.reserveCoordinatorWorker(operation.id, retry.token)).toThrow();
     expect(() => journal.assertAdmission()).toThrow();
-  }, 40_000);
+  }, WORKER_TEST_TIMEOUT_MS);
 
   it('refuses absent, partial, foreign, or damaged completion evidence and preserves the fence', () => {
     const operation = journal.begin({ source, target });

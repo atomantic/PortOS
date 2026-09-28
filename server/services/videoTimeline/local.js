@@ -43,6 +43,7 @@ import {
   resolveAsset,
   fitFades,
 } from './segments.js';
+import { AUDIO_NORM, buildAudioBedMix, fmtSec } from './audioBedMix.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
 
@@ -54,8 +55,6 @@ const DEFAULT_CANVAS = { width: 1280, height: 720, fps: 24 };
 // Floor for a probe-clamped audio slice — atrim with start === end produces
 // an empty stream that amix rejects.
 const MIN_MEDIA_SEC = 0.05;
-// Every audio branch entering concat must present identical link parameters.
-const AUDIO_NORM = 'aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo';
 
 // Per-project render mutex map. Keyed by projectId so two different projects
 // can render in parallel; same project re-render returns 409 with the
@@ -420,7 +419,7 @@ export async function resolveTimeline(rawProject) {
 // leaks float noise (`2.9000000000000004`) into the graph string, while
 // toFixed would pad clean integers to `4.000`. Round to microseconds, then
 // stringify.
-const fmt = (n) => String(Math.round(Number(n) * 1e6) / 1e6);
+const fmt = fmtSec;
 
 const fadeChain = (prefix, { fadeInSec = 0, fadeOutSec = 0 }, duration, lead = []) => {
   const parts = [...lead];
@@ -552,36 +551,12 @@ export function buildFfmpegArgs(timeline, outputPath, { colorTagFilter = null } 
     overlayIn = out;
   });
 
-  // Audio bed. Each track is trimmed from its own offset, faded on its own
-  // clock, then delayed to its project-time start before mixing under the
-  // concatenated lane audio. normalize=0 keeps adding a second bed from
-  // silently attenuating everything already in the mix.
+  // Audio bed — the mix chain lives in audioBedMix.js, shared with the Music
+  // Video render's optional sound-design bed (#8988).
   if (audioTracks.length > 0) {
-    const bedLabels = [];
-    audioTracks.forEach((tr, j) => {
-      const aIdx = inputIdx++;
-      inputs.push('-i', tr.assetPath);
-      const parts = [
-        'aresample=48000',
-        'aformat=sample_fmts=fltp:channel_layouts=stereo',
-        `atrim=start=${fmt(tr.offsetSec)}:end=${fmt(tr.offsetSec + tr.durationSec)}`,
-        'asetpts=PTS-STARTPTS',
-      ];
-      if (tr.volume !== 1) parts.push(`volume=${fmt(tr.volume)}`);
-      if (tr.fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fmt(tr.fadeInSec)}`);
-      if (tr.fadeOutSec > 0) {
-        parts.push(`afade=t=out:st=${fmt(Math.max(0, tr.durationSec - tr.fadeOutSec))}:d=${fmt(tr.fadeOutSec)}`);
-      }
-      if (tr.startSec > 0) {
-        const ms = Math.round(tr.startSec * 1000);
-        parts.push(`adelay=${ms}|${ms}`);
-      }
-      filters.push(`[${aIdx}:a]${parts.join(',')}[bed${j}]`);
-      bedLabels.push(`[bed${j}]`);
-    });
-    filters.push(
-      `[ca]${bedLabels.join('')}amix=inputs=${bedLabels.length + 1}:duration=first:dropout_transition=0:normalize=0[outa]`
-    );
+    const bed = buildAudioBedMix({ beds: audioTracks, firstInputIdx: inputIdx, mainLabel: '[ca]', outLabel: '[outa]' });
+    inputs.push(...bed.inputs);
+    filters.push(...bed.filters);
   }
 
   if (tag) filters.push(`[vpre]${tag}[outv]`);

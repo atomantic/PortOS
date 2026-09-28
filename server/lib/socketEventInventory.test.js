@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -14,9 +14,22 @@ const write = (root, path, source) => {
   writeFileSync(target, source, 'utf8');
 };
 
+const tempRoots = [];
+const makeTempRoot = (prefix) => {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  tempRoots.push(root);
+  return root;
+};
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe('Socket.IO event inventory', () => {
   it('merges client/server declarations and normalizes bounded template events', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-socket-inventory-'));
+    const root = makeTempRoot('portos-socket-inventory-');
     write(root, 'server/services/socket.js', `
       socket.on('demo:start', handler);
       io.emit('demo:done', data);
@@ -37,7 +50,7 @@ describe('Socket.IO event inventory', () => {
   });
 
   it('classifies client lifecycle listeners and excludes the isolated runner tree', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-socket-file-'));
+    const root = makeTempRoot('portos-socket-file-');
     write(root, 'server/sockets/empty.js', 'export default {};');
     write(root, 'server/cos-runner/isolated.js', `socket.emit('runner:internal');`);
     write(root, 'client/src/socket.js', `socket.on('connect', handler); socket.emit('shell:start', {});`);

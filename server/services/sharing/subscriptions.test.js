@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -45,6 +45,13 @@ describe('sharing/subscriptions', () => {
   });
   afterEach(() => {
     if (tempBucket) rmSync(tempBucket, { recursive: true, force: true });
+  });
+
+  // tempData is minted once (module scope) and reused across every test in
+  // this file — beforeEach only wipes-and-recreates it, so the LAST test's
+  // root is never removed. Clean it once here (#9032).
+  afterAll(() => {
+    rmSync(tempData, { recursive: true, force: true });
   });
 
   it('subscribe creates a subscription and writes a deterministic-named manifest', async () => {

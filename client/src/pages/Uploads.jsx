@@ -2,12 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
-import { formatDateTime, formatBytes } from '../utils/formatters';
+import { formatDateTime } from '../utils/formatters';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import * as api from '../services/api';
-import { JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload';
 
 // File type icons based on MIME type
 function getFileIcon(mimeType) {
@@ -53,32 +52,7 @@ export default function Uploads() {
     const fileArray = Array.from(files);
 
     for (const file of fileArray) {
-      if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) {
-        toast.error(`File "${file.name}" exceeds the ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)} limit`);
-        continue;
-      }
-
-      // Read file as base64
-      const base64 = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const result = e.target?.result;
-          if (typeof result === 'string') {
-            resolve(result.split(',')[1]);
-          } else {
-            resolve(null);
-          }
-        };
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(file);
-      });
-
-      if (!base64) {
-        toast.error(`Failed to read file "${file.name}"`);
-        continue;
-      }
-
-      const result = await api.uploadFile(base64, file.name, { silent: true }).catch(err => {
+      const result = await api.uploadFile(file, file.name, { silent: true }).catch(err => {
         toast.error(`Failed to upload "${file.name}": ${err.message}`);
         return null;
       });
@@ -213,7 +187,7 @@ export default function Uploads() {
           {uploading ? 'Uploading...' : 'Browse Files'}
         </FilePickerButton>
         <p className="text-gray-500 text-xs mt-4">
-          Maximum file size: {formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)}
+          No file size limit
         </p>
       </div>
 

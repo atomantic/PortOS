@@ -5,7 +5,9 @@ import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createProjectFileStore } from '../projectFileStore.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import * as logic from './projectsLogic.js';
+import * as takes from './takes.js';
 
 const store = createProjectFileStore({
   file: join(PATHS.data, 'music-video-projects.json'),
@@ -17,12 +19,24 @@ const store = createProjectFileStore({
 });
 
 export const {
-  loadAll, saveAll, loadAllAndIndex, listProjects, getProject, getProjectsByIds,
-  listProjectIds, createProject, updateProject, deleteProject, mergeProjectsFromSync,
-  pruneTombstonedProjects,
+  loadAll, saveAll, loadAllAndIndex, listProjects, getProject, getProjectsByIds, listProjectIds,
 } = store;
 
-export async function cloneProject(id, options = {}) {
+// Every mutator below is a load → modify → save of the ONE projects file, so
+// they all share a single write tail: a render-completion hook appending a take
+// can't interleave with a director's select/reject (or any other edit) and
+// persist a stale pre-image over it. The PG backend gets the same guarantee
+// from its row lock (projectsDB.js withLockedProject).
+const queueWrite = createFileWriteQueue();
+const serialized = (fn) => (...args) => queueWrite(() => fn(...args));
+
+export const createProject = serialized(store.createProject);
+export const updateProject = serialized(store.updateProject);
+export const deleteProject = serialized(store.deleteProject);
+export const mergeProjectsFromSync = serialized(store.mergeProjectsFromSync);
+export const pruneTombstonedProjects = serialized(store.pruneTombstonedProjects);
+
+async function cloneProjectUnqueued(id, options = {}) {
   const all = await loadAll();
   const source = all.find((project) => project.id === id && !project.deleted);
   if (!source) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
@@ -36,21 +50,21 @@ export async function cloneProject(id, options = {}) {
   return clone;
 }
 
-export async function setProjectAnalysis(id, analysis) {
+async function setProjectAnalysisUnqueued(id, analysis) {
   const { all, idx } = await loadAllAndIndex(id);
   all[idx] = logic.setAudioAnalysis(all[idx], analysis);
   await saveAll(all);
   return all[idx];
 }
 
-export async function setProjectMidiTranscription(id, midi) {
+async function setProjectMidiTranscriptionUnqueued(id, midi) {
   const { all, idx } = await loadAllAndIndex(id);
   all[idx] = logic.setMidiTranscription(all[idx], midi);
   await saveAll(all);
   return all[idx];
 }
 
-export async function addProjectScene(id, sceneInput) {
+async function addProjectSceneUnqueued(id, sceneInput) {
   const { all, idx } = await loadAllAndIndex(id);
   const { project, scene } = logic.addScene(all[idx], sceneInput);
   all[idx] = project;
@@ -58,7 +72,7 @@ export async function addProjectScene(id, sceneInput) {
   return scene;
 }
 
-export async function addProjectScenes(id, sceneInputs) {
+async function addProjectScenesUnqueued(id, sceneInputs) {
   const { all, idx } = await loadAllAndIndex(id);
   const { project, scenes } = logic.addScenes(all[idx], sceneInputs);
   all[idx] = project;
@@ -66,7 +80,7 @@ export async function addProjectScenes(id, sceneInputs) {
   return { project, scenes };
 }
 
-export async function updateScene(id, sceneId, patch) {
+async function updateSceneUnqueued(id, sceneId, patch) {
   const { all, idx } = await loadAllAndIndex(id);
   const { project, updated } = logic.applySceneUpdate(all[idx], sceneId, patch);
   all[idx] = project;
@@ -74,16 +88,60 @@ export async function updateScene(id, sceneId, patch) {
   return updated;
 }
 
-export async function deleteScene(id, sceneId) {
+async function deleteSceneUnqueued(id, sceneId) {
   const { all, idx } = await loadAllAndIndex(id);
   all[idx] = logic.removeScene(all[idx], sceneId);
   await saveAll(all);
   return all[idx];
 }
 
-export async function reorderProjectScenes(id, orderedIds) {
+async function reorderProjectScenesUnqueued(id, orderedIds) {
   const { all, idx } = await loadAllAndIndex(id);
   all[idx] = logic.reorderScenes(all[idx], orderedIds);
   await saveAll(all);
   return all[idx];
 }
+
+// ---- scene takes (#8965) — one load/modify/save per take operation ----------
+async function mutateProject(id, transform) {
+  const { all, idx } = await loadAllAndIndex(id);
+  const outcome = transform(all[idx]);
+  all[idx] = outcome.project;
+  await saveAll(all);
+  return outcome;
+}
+
+async function appendSceneTakesUnqueued(id, sceneId, inputs) {
+  const { scene, appended } = await mutateProject(id, (p) => takes.appendSceneTakes(p, sceneId, inputs));
+  return { scene, appended };
+}
+
+async function appendTakesAcrossScenesUnqueued(id, items) {
+  return mutateProject(id, (p) => takes.appendTakesAcrossScenes(p, items));
+}
+
+async function selectSceneTakeUnqueued(id, sceneId, takeId) {
+  const { scene } = await mutateProject(id, (p) => takes.selectSceneTake(p, sceneId, takeId));
+  return scene;
+}
+
+async function reviewSceneTakeUnqueued(id, sceneId, takeId, review) {
+  const { scene } = await mutateProject(id, (p) => takes.reviewSceneTake(p, sceneId, takeId, review));
+  return scene;
+}
+
+export const cloneProject = serialized(cloneProjectUnqueued);
+export const setProjectAnalysis = serialized(setProjectAnalysisUnqueued);
+export const setProjectMidiTranscription = serialized(setProjectMidiTranscriptionUnqueued);
+export const addProjectScene = serialized(addProjectSceneUnqueued);
+export const addProjectScenes = serialized(addProjectScenesUnqueued);
+export const updateScene = serialized(updateSceneUnqueued);
+export const deleteScene = serialized(deleteSceneUnqueued);
+export const reorderProjectScenes = serialized(reorderProjectScenesUnqueued);
+export const appendSceneTakes = serialized(appendSceneTakesUnqueued);
+export const appendTakesAcrossScenes = serialized(appendTakesAcrossScenesUnqueued);
+export const selectSceneTake = serialized(selectSceneTakeUnqueued);
+export const reviewSceneTake = serialized(reviewSceneTakeUnqueued);
+// Generic pure-transform mutation (#8980 treatment ops): `transform(project)`
+// returns `{ project, ...result }`; resolves to that outcome.
+export const mutateProjectRecord = serialized(mutateProject);

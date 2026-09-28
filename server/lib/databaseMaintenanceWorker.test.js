@@ -110,6 +110,14 @@ function run(code) {
 // Exit status of one worker launch. A worker that RELEASED admission moved its
 // control directory with the fence, so its supervisor can publish no exit
 // receipt; that outcome reports `released` once the worker process is gone.
+//
+// The `released` interval below never clears on its own while the control dir
+// still exists (the common case for every non-release outcome, including a
+// refusal). `close` breaks out of it via `process.exit()`, so `error` must do
+// the same — otherwise a detached-spawn `error` (e.g. the Windows supervisor
+// missing its PID deadline under CI load, #9059) leaves this script running
+// forever, and only the outer `run()` spawn's own 30s timeout ever reaps it —
+// surfacing as a SIGTERM'd `exitCode: null` instead of the real failure.
 function launch(id, token) {
   return run(`import {existsSync} from 'node:fs';
     import {spawnDatabaseMaintenanceWorker} from ${JSON.stringify(detachedUrl)};
@@ -117,7 +125,7 @@ function launch(id, token) {
       const child=await spawnDatabaseMaintenanceWorker(${JSON.stringify(id)},${JSON.stringify(token)});
       child.stdout.on('data',chunk=>process.stdout.write(chunk));
       child.stderr.on('data',chunk=>process.stderr.write(chunk));
-      child.on('error',()=>{process.exitCode=1;});
+      child.on('error',()=>{process.exitCode=1;process.exit();});
       child.on('close',code=>{process.exitCode=code;process.exit();});
       const released=setInterval(()=>{
         if(existsSync(${JSON.stringify(controlDirFor(token))})) return;

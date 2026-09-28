@@ -2,7 +2,19 @@ import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
 import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { findFfmpeg, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess, probeVideoDuration, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter } from '../../lib/ffmpeg.js';
+
+// Size the viewport for this format, then let the composition reframe itself
+// (#8960) before any seek captures it. A composition without a layout hook
+// renders exactly as before.
+async function frameFormat(page, { width, height, layout }) {
+  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  if (layout) {
+    page.check();
+    await page.evaluate(`globalThis.portosComposition.layout({ width: ${width}, height: ${height} })`);
+  }
+  page.check();
+}
 
 // Stream one frame at a time. The write callback supplies back-pressure and
 // the terminal race releases a pending write on exit, disconnect or cancel.
@@ -11,12 +23,19 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
   const tag = await bt709TagFilter();
   signal?.throwIfAborted();
-  const { fps, durationSec, width, height } = contract;
+  const { fps, durationSec, width, height, motionBlur } = contract;
   const numFrames = Math.round(durationSec * fps);
-  await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  const args = ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-vcodec', 'png', '-i', 'pipe:0'];
+  // motionBlur (1-4) captures that many subframes per output frame and lets
+  // ffmpeg's tmix filter blend them; 1 (default) captures/encodes exactly as
+  // before, byte for byte.
+  const sub = motionBlur ?? 1;
+  const motionBlurFilter = sub > 1
+    ? `tmix=frames=${sub},select='eq(mod(n\\,${sub})\\,${sub - 1})',setpts=N/${fps}/TB`
+    : null;
+  await frameFormat(page, contract);
+  const args = ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-framerate', String(fps * sub), '-vcodec', 'png', '-i', 'pipe:0'];
   if (musicPath) args.push('-stream_loop', '-1', '-i', musicPath);
-  args.push('-map', '0:v', '-vf', ['scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
+  args.push('-map', '0:v', '-vf', [motionBlurFilter, 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tag].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS);
   if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
   const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
@@ -40,16 +59,18 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   signal?.addEventListener('abort', stop, { once: true });
   try {
     for (let n = 0; n < numFrames; n++) {
-      page.check();
-      // awaitPromise in evaluate is essential: each seek owns its paint.
-      await page.evaluate(`globalThis.portosComposition.seek(${n / fps})`);
-      page.check();
-      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
-      page.check();
-      await Promise.race([
-        new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
-        finished.then(() => { throw new Error('ffmpeg exited before capture completed'); }),
-      ]);
+      for (let k = 0; k < sub; k++) {
+        page.check();
+        // awaitPromise in evaluate is essential: each seek owns its paint.
+        await page.evaluate(`globalThis.portosComposition.seek(${n / fps + k / (fps * sub)})`);
+        page.check();
+        const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false });
+        page.check();
+        await Promise.race([
+          new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
+          finished.then(() => { throw new Error('ffmpeg exited before capture completed'); }),
+        ]);
+      }
       onProgress?.((n + 1) / numFrames);
     }
     proc.stdin.end();
@@ -61,6 +82,131 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));
   }
+}
+
+// A proof holds at most this many frames so one contact sheet stays readable.
+const PROOF_MAX_FRAMES = 60;
+const PROOF_COLUMNS = 6;
+
+/** Sample times for a contact sheet: every `everySec`, widened to fit the frame cap. */
+export function proofTimes(durationSec, everySec) {
+  const step = Math.max(everySec, durationSec / PROOF_MAX_FRAMES);
+  const times = [];
+  for (let n = 0; n * step < durationSec - 1e-9 && times.length < PROOF_MAX_FRAMES; n++) {
+    times.push(Math.round(n * step * 1000) / 1000);
+  }
+  return times;
+}
+
+// Seek each sample time and tile the frames into one PNG, six across; resolves
+// with the column count used. Tiles are
+// phone-sized (360px wide, 240px for vertical) so the sheet doubles as the
+// readability check a reviewer runs before committing to a full render.
+export async function encodeContactSheet(page, contract, outputPath, { times, signal } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  signal?.throwIfAborted();
+  const { width, height } = contract;
+  const tileWidth = width < height ? 240 : 360;
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  await frameFormat(page, contract);
+  const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'image2pipe', '-vcodec', 'png', '-i', 'pipe:0',
+    '-vf', `scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
+    '-frames:v', '1', '-y', outputPath], safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  let stderr = '';
+  let exited = false;
+  proc.stderr.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-2000); });
+  const finished = new Promise((resolve, reject) => {
+    proc.on('error', reject);
+    proc.stdin.on('error', reject);
+    proc.once('close', code => { exited = true; code === 0 ? resolve() : reject(new Error(`ffmpeg contact sheet failed (${code}): ${stderr}`)); });
+  });
+  finished.catch(() => {});
+  try {
+    for (const t of times) {
+      page.check();
+      await page.evaluate(`globalThis.portosComposition.seek(${t})`);
+      page.check();
+      // Chrome downscales to tile size, so full-resolution PNGs never cross CDP.
+      const { data } = await page.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: false,
+        clip: { x: 0, y: 0, width, height, scale: tileWidth / width } });
+      signal?.throwIfAborted();
+      await Promise.race([
+        new Promise((resolve, reject) => proc.stdin.write(Buffer.from(data, 'base64'), error => error ? reject(error) : resolve())),
+        finished.then(() => { throw new Error('ffmpeg exited before the contact sheet was complete'); }),
+      ]);
+    }
+    proc.stdin.end();
+    await finished;
+    return { columns };
+  } finally {
+    if (!exited) {
+      killWithEscalation(proc, { label: 'HTML composition proof', stillRunning: () => !exited, delayMs: 1000 });
+      await new Promise(resolve => proc.once('close', resolve));
+    }
+  }
+}
+
+/**
+ * Sample a REFERENCE video file (not a browser composition) every `everySec`
+ * into the same phone-sized, six-across contact sheet as `encodeContactSheet`
+ * (#8961), so a launch-video agent that cannot play video can still study one
+ * as a single image. Reuses `proofTimes`'s uniform-step/frame-cap math so a
+ * long reference degrades to a wider step rather than an unreadably tall sheet.
+ * Throws when ffmpeg is missing or the file has no readable duration; the
+ * caller treats a style reference as a hard input, not a best-effort extra.
+ */
+export async function encodeReferenceContactSheet(videoPath, outputPath, { everySec = 0.5 } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  const durationSec = await probeVideoDuration(videoPath);
+  if (!durationSec) throw new Error('Could not read the style reference video duration');
+  const times = proofTimes(durationSec, everySec);
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  const step = times.length > 1 ? times[1] - times[0] : durationSec;
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
+      `fps=1/${step},scale=360:-2,tile=${columns}x${rows}:padding=4:color=black`,
+      '-frames:v', '1', '-y', outputPath],
+  });
+  if (!result.ok) throw new Error(`Style reference contact sheet failed: ${result.reason}`);
+  return { columns, rows, times };
+}
+
+// Same phone-sized, six-across contact sheet as `encodeContactSheet`, but
+// sampling a REAL rendered video file at explicit `times` (seconds, relative
+// to the file's own start) rather than a browser composition or a uniform
+// step (#8986 — the excerpt render's cut/cue contact sheet from
+// `excerptBoundaryTimes` in services/musicVideo/render.js). Each time is
+// converted to an exact frame INDEX and selected with `eq(n,…)` — the same
+// technique `extractEvaluationFrames` (lib/ffmpeg.js) uses for multi-frame
+// selection — rather than a `between(t,…)` time window: at 30/60fps a time
+// window can match several consecutive frames, overfilling the tile before
+// later boundary times are ever reached.
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height, fps } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
+  if (!(fps > 0)) throw new Error('encodeFileContactSheetAtTimes: fps is required');
+  const tileWidth = width && height && width < height ? 240 : 360;
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  // Two very close boundary times can round to the same frame index — the
+  // dedup means the tile gets one fewer real frame than requested (a padded
+  // cell), never a duplicate or an out-of-order one.
+  const indices = [...new Set(times.map((t) => Math.max(0, Math.round(t * fps))))];
+  const selectExpr = indices.map((i) => `eq(n,${i})`).join('+');
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
+      `select='${selectExpr}',scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
+      '-vsync', 'vfr', '-frames:v', '1', '-y', outputPath],
+  });
+  if (!result.ok) throw new Error(`Excerpt contact sheet failed: ${result.reason}`);
+  return { columns, rows };
 }
 
 // Source remains subject to the composition sandbox and launch privacy gate;

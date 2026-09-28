@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
@@ -124,9 +124,14 @@ describe('saveUploadedGalleryImage', () => {
     ).rejects.toMatchObject({ status: 400, code: 'UNSUPPORTED_IMAGE' });
   });
 
-  it('rejects an oversized upload with a 400', async () => {
-    // 17MB of zero bytes — over the 16MB ceiling, and not a valid image header.
-    const huge = Buffer.alloc(17 * 1024 * 1024).toString('base64');
-    await expect(saveUploadedGalleryImage(huge)).rejects.toMatchObject({ status: 400, code: 'FILE_TOO_LARGE' });
+  it('accepts a file above the former JSON ceiling and preserves PNG metadata', async () => {
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer();
+    const source = addPngText(png, 'parameters', 'A test image\nSteps: 20, Seed: 42');
+    const tempPath = join(tmpRoot, 'large.png');
+    // Trailing padding is legal input for the decoder, without a huge pixel allocation.
+    writeFileSync(tempPath, Buffer.concat([source, Buffer.alloc(56 * 1024 * 1024)]));
+    const saved = await saveUploadedGalleryImage(null, tempPath);
+    expect(saved.metadata.prompt).toBe('A test image');
+    expect(isPng(readFileSync(join(imagesDir, saved.filename)))).toBe(true);
   });
 });

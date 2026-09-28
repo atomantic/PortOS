@@ -14,13 +14,13 @@
 
 import { spawn } from '../../lib/childProcess.js';
 import sharp from 'sharp';
-import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
+import { readFile, readdir, stat, mkdtemp, open, rename } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
-import { extractPngGenerationMetadata } from '../../lib/pngMetadata.js';
+import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -1204,14 +1204,7 @@ export async function readImageSidecar(filename) {
   return { path: portosSidecar, metadata: {} };
 }
 
-// Cap on uploaded gallery image bytes (decoded). Headshots and similar
-// uploads never need more than a few MB; this is a defense-in-depth ceiling so
-// a hand-crafted request can't write an arbitrarily large file into the
-// gallery dir. The Authors page caps its own headshot upload well below this.
-const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
-// Cap decoded pixels too: a small compressed payload can still decode to a huge
-// canvas (decompression bomb), so the byte ceiling alone isn't enough. Mirrors
-// the cleaner's guard (lib/imageClean.js MAX_PIXELS) — sharp throws past it.
+// Decoder safety is independent of the upload file-size policy.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
 
 async function refreshImageIndex(filename) {
@@ -1231,31 +1224,43 @@ async function refreshImageIndex(filename) {
  * `deleteImage`, both of which only manage `.png`. Returns the bare gallery
  * filename and its `/data/images/` mount path for the caller to store.
  *
- * @param {string} base64Data - Raw base64 (no data: URI prefix) image bytes
+ * @param {string|null} base64Data - Legacy raw base64 image bytes
+ * @param {string} [tempPath] - Server-staged multipart file, preferred over base64
  * @returns {Promise<{ filename: string, path: string, metadata: object }>}
  */
-export async function saveUploadedGalleryImage(base64Data) {
-  const buffer = Buffer.from(base64Data, 'base64');
-  if (buffer.length === 0) {
+export async function saveUploadedGalleryImage(base64Data, tempPath) {
+  const input = tempPath || Buffer.from(base64Data, 'base64');
+  let header = input;
+  if (tempPath) {
+    const file = await open(tempPath, 'r');
+    header = Buffer.alloc(12);
+    await file.read(header, 0, header.length, 0).finally(() => file.close());
+  }
+  if (!tempPath && input.length === 0) {
     throw new ServerError('Empty image upload', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (buffer.length > MAX_GALLERY_UPLOAD_BYTES) {
-    throw new ServerError(`Image exceeds maximum size of ${MAX_GALLERY_UPLOAD_BYTES / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
-  }
-  const detected = detectImageFormat(buffer);
+  const detected = detectImageFormat(header);
   if (!detected) {
     throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
   }
   // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
   // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
-  const metadata = extractPngGenerationMetadata(buffer);
+  const metadata = tempPath
+    ? await extractPngGenerationMetadataFile(tempPath)
+    : extractPngGenerationMetadata(input);
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
-  const png = await sharp(buffer, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toBuffer();
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
-  await atomicWrite(join(PATHS.images, filename), png);
+  const output = join(PATHS.images, filename);
+  const staging = `${output}.tmp`;
+  try {
+    await sharp(input, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toFile(staging);
+    await rename(staging, output);
+  } finally {
+    await unlinkGuarded(staging).catch(() => {});
+  }
   // The normalized PNG intentionally has no source text chunks. Keep the
   // bounded projection in the canonical gallery sidecar so gallery listings,
   // media indexing, and later catalog attachments can still recover it.
@@ -1263,7 +1268,7 @@ export async function saveUploadedGalleryImage(base64Data) {
     await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
   }
   await refreshImageIndex(filename);
-  console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
+  console.log(`📥 Saved uploaded gallery image: ${filename} (PNG from ${detected.mime})`);
   return { filename, path: `/data/images/${filename}`, metadata };
 }
 

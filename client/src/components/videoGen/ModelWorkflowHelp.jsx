@@ -8,6 +8,13 @@ export default function ModelWorkflowHelp({ model, mode, models = [], onResoluti
 
   return (
     <>
+      {mode === 'image' && model.runtime === 'minimax_h3' && (
+        <p className="mt-2 text-xs text-gray-400" role="note">
+          MiniMax H3 can replace the source scene when the prompt describes a different environment.
+          Start with a motion-only prompt and a model-native resolution, then inspect the whole clip.
+          Image conditioning does not guarantee scene continuity.
+        </p>
+      )}
       {mode === 'image' && models.some((entry) => entry.runtime === 'fastvideo' && !entry.supportedModes?.includes('image')) && (
         <p className="mt-2 text-xs text-gray-400" role="note">
           Image mode lists models with image conditioning in their installed runtime. The shipped FastMetal

@@ -486,6 +486,7 @@ export default function App() {
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<RedirectWithSearch to="/video/generate" />} />
             <Route path="prompt" element={<PromptFromMediaPage />} />
+            <Route path="prompt/:examinationId" element={<PromptFromMediaPage />} />
             <Route path="history" element={<MediaHistory />} />
             <Route path="annotate" element={<MediaAnnotate />} />
             <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />

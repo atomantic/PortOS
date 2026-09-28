@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -9,6 +9,7 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 // pulls in modules that read PATHS.data at module-evaluation time, so the
 // proxy's dataRoot getter must already resolve to a string.
 let tempRoot = mkdtempSync(join(tmpdir(), 'portos-mv-assets-boot-'));
+const bootRoot = tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -135,17 +136,21 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toEqual([]);
   });
 
-  it('bundles the MuScriptor MIDI transcription alongside the master audio', async () => {
+  it('bundles the MuScriptor MIDI transcription and the vocal stem alongside the master audio', async () => {
     const audioBytes = Buffer.from('uploaded-audio');
     const midiBytes = Buffer.from('MThd-midi-bytes');
+    const stemBytes = Buffer.from('vocal-stem');
     writeMusic('upload.mp3', audioBytes);
     writeMusic('neon-midi.mid', midiBytes);
+    writeMusic('vocals.wav', stemBytes);
     const manifest = await buildMusicVideoAssetManifest({
       trackId: null, uploadedAudioFilename: 'upload.mp3', scenes: [],
       midiTranscription: { filename: 'neon-midi.mid', model: 'medium' },
+      vocalStemFilename: 'vocals.wav',
     });
     expect(manifest).toContainEqual({ filename: 'upload.mp3', kind: 'music', sha256: sha(audioBytes) });
     expect(manifest).toContainEqual({ filename: 'neon-midi.mid', kind: 'music', sha256: sha(midiBytes) });
+    expect(manifest).toContainEqual({ filename: 'vocals.wav', kind: 'music', sha256: sha(stemBytes) });
   });
 
   it('dedups when the upload basename and the linked track point at the same file', async () => {
@@ -158,6 +163,43 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     const audio = manifest.filter((m) => m.kind === 'music');
     expect(audio).toHaveLength(1);
     expect(audio[0]).toEqual({ filename: 'shared.mp3', kind: 'music', sha256: sha(bytes) });
+  });
+});
+
+describe('buildMusicVideoAssetManifest — scene takes + visual spec (#8965)', () => {
+  beforeEach(() => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'portos-mv-takes-assets-'));
+    vi.mocked(getTrack).mockReset().mockResolvedValue(null);
+  });
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('ships every take and moodboard reference a peer may select, not only the selected slot', async () => {
+    for (const name of ['selected.png', 'candidate.png', 'mood.png']) writeImage(name, Buffer.from(name));
+    writeVideo('clip-a.mp4', Buffer.from('a'));
+    writeVideo('clip-b.mp4', Buffer.from('b'));
+    const manifest = await buildMusicVideoAssetManifest({
+      trackId: null,
+      uploadedAudioFilename: null,
+      visualSpec: { references: [{ id: 'r1', imageId: 'mood.png' }, { id: 'r2', imageId: '../escape.png' }] },
+      scenes: [{
+        sceneId: 's1',
+        referenceImageId: 'selected.png',
+        videoHistoryId: 'clip-a',
+        takes: [
+          { kind: 'image', assetId: 'selected.png' },
+          { kind: 'image', assetId: 'candidate.png', status: 'rejected' },
+          { kind: 'video', assetId: 'clip-b' },
+          { kind: 'bogus', assetId: 'clip-a.mp4' },
+        ],
+      }],
+    });
+    const keys = manifest.map((m) => `${m.kind}:${m.filename}`).sort();
+    expect(keys).toEqual([
+      'image:candidate.png', 'image:mood.png', 'image:selected.png',
+      'video:clip-a.mp4', 'video:clip-b.mp4',
+    ]);
   });
 });
 
@@ -521,4 +563,12 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
     expect(peerFetch).toHaveBeenCalledTimes(1);
     expect(listAssetFiles('audio')).toEqual(['shared.mp3']);
   });
+});
+
+// bootRoot is the module-scope placeholder mkdtemp'd before any hook runs
+// (needed so the mocked PATHS.data resolves before the dynamic import below
+// evaluates) — once the first describe block's beforeEach reassigns
+// `tempRoot`, nothing else references it. Remove it once here (#9032).
+afterAll(() => {
+  rmSync(bootRoot, { recursive: true, force: true });
 });

@@ -13,6 +13,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
@@ -24,10 +25,55 @@ import {
   resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2InstallSatisfied,
 } from '../lib/pythonSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { isPathInsideDir } from '../lib/pathSafety.js';
+import { requestHasHostControl, HOST_CONTROL_FORBIDDEN_MESSAGE } from '../services/authGate.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { getSetupCheck, invalidateSetupCheck, REQUIRED_PIP_NAMES } from '../services/imageGen/setup.js';
 
 const router = Router();
+
+// AUTHORITY gate for a caller-supplied interpreter path, layered on top of
+// `isAllowedPython`'s FORMAT check (basename looks like a python interpreter,
+// not UNC, not a bare relative walk). A path that merely LOOKS like a python
+// binary can still name an attacker-planted file anywhere on the host's
+// filesystem or a reachable network share — see #9015. A caller without host
+// control may reach only interpreters PortOS itself would have picked:
+//   - a bare basename (`python3`, `python`) — execFile resolves that on the
+//     server's own PATH, so a remote caller can't smuggle in a foreign binary
+//     just by naming a common word.
+//   - the interpreter stored in `settings.imageGen.local.pythonPath` — the
+//     operator already chose this one (gated on write by #8751).
+//   - an interpreter that resolves (after symlinks) inside PortOS's own
+//     managed venv directory (`<data>/python/`).
+// Anything else — an arbitrary absolute path, an interpreter the operator
+// never configured — requires `requestHasHostControl(req)`.
+async function resolveSetupInterpreter(req, candidate) {
+  if (!/[\\/]/.test(candidate)) return true;
+
+  const settings = await getSettings();
+  const storedPath = settings?.imageGen?.local?.pythonPath;
+  if (typeof storedPath === 'string' && storedPath && candidate === storedPath) return true;
+
+  try {
+    // Both sides through realpath: a symlinked ancestor of `PATHS.data`
+    // (common for a test's temp data root, and possible for a real install
+    // whose data dir sits on a symlinked volume) would otherwise compare an
+    // unresolved root against a resolved candidate and never match.
+    const realCandidate = realpathSync(candidate);
+    const realVenvRoot = realpathSync(join(PATHS.data, 'python'));
+    if (isPathInsideDir(realVenvRoot, realCandidate)) return true;
+  } catch {
+    // Candidate or the managed venv root doesn't exist (yet) or isn't
+    // reachable — falls through to the host-control check below rather than
+    // being trusted on format alone.
+  }
+
+  return requestHasHostControl(req);
+}
+
+function forbidWithoutHostControl() {
+  throw new ServerError(HOST_CONTROL_FORBIDDEN_MESSAGE, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+}
 
 router.get('/python', asyncHandler(async (_req, res) => {
   const path = await detectPython();
@@ -210,6 +256,7 @@ const sendSetupCheck = async (req, res) => {
       code: 'INVALID_PYTHON_PATH',
     });
   }
+  if (!(await resolveSetupInterpreter(req, pythonPath))) forbidWithoutHostControl();
   res.json(await getSetupCheck(pythonPath));
 };
 
@@ -221,8 +268,11 @@ const venvSchema = z.object({
 
 router.post('/create-venv', asyncHandler(async (req, res) => {
   const { basePython } = validateRequest(venvSchema, req.body || {});
-  if (basePython && !isAllowedPython(basePython)) {
-    throw new ServerError('basePython must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
+  if (basePython) {
+    if (!isAllowedPython(basePython)) {
+      throw new ServerError('basePython must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
+    }
+    if (!(await resolveSetupInterpreter(req, basePython))) forbidWithoutHostControl();
   }
   const base = basePython || (await detectPython());
   if (!base) {
@@ -260,6 +310,7 @@ router.post('/install', asyncHandler(async (req, res) => {
       code: 'INVALID_PYTHON_PATH',
     });
   }
+  if (!(await resolveSetupInterpreter(req, input.pythonPath))) forbidWithoutHostControl();
   const disallowed = input.packages.filter((p) => !REQUIRED_PIP_NAMES.has(p));
   if (disallowed.length) {
     throw new ServerError(`Packages not in allowlist: ${disallowed.join(', ')}`, {

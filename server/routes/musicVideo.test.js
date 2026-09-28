@@ -17,7 +17,14 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateScene: vi.fn(async (id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+  // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
+  splitProjectScene: vi.fn(),
   setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
+  // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
+  appendSceneTakes: vi.fn(),
+  appendTakesAcrossScenes: vi.fn(),
+  selectSceneTake: vi.fn(),
+  reviewSceneTake: vi.fn(),
 }));
 
 // Keeps the real `buildManualAnalysisFromCached` (pure arithmetic, worth
@@ -38,6 +45,22 @@ vi.mock('../services/musicVideo/render.js', () => ({
   renderMusicVideo: vi.fn(async () => ({ jobId: 'job-1' })),
   attachRenderSseClient: vi.fn(() => true),
   cancelRender: vi.fn(() => true),
+}));
+
+// Same posture for the draft excerpt render (#8986) — the route's job is to
+// validate + dispatch + stream; the ffmpeg/overlay pipeline is covered in
+// excerptRender.js's own tests, and note/delete persistence in
+// musicVideoExcerpt.test.js against the real file-backed store.
+vi.mock('../services/musicVideo/excerptRender.js', () => ({
+  startExcerptRender: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
+  attachExcerptRenderSseClient: vi.fn(() => true),
+  cancelExcerptRender: vi.fn(() => true),
+}));
+vi.mock('../services/musicVideo/excerptService.js', () => ({
+  deleteExcerpt: vi.fn(async (id) => ({ id })),
+  addReviewNote: vi.fn(async (id, excerptId, input) => ({ project: { id }, note: { id: 'mvn-1', ...input } })),
+  editReviewNote: vi.fn(async (id, excerptId, noteId, patch) => ({ project: { id }, note: { id: noteId, ...patch } })),
+  deleteReviewNote: vi.fn(async (id) => ({ id })),
 }));
 
 // Mock the MuScriptor transcription service so the route test doesn't depend
@@ -61,6 +84,8 @@ import * as svc from '../services/musicVideo/projects.js';
 import { analyzeAudioFile, analyzeAudioFileManual } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
+import * as excerptRenderSvc from '../services/musicVideo/excerptRender.js';
+import * as excerptSvc from '../services/musicVideo/excerptService.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import musicVideoRoutes from './musicVideo.js';
@@ -154,6 +179,29 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
   });
 
+  it('PATCH /:id accepts the fal.ai video backend with a bounded clip duration (#8968)', async () => {
+    const videoSettings = { backend: 'fal', falDuration: 6 };
+    const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });
+    expect(r.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { videoSettings });
+  });
+
+  it('PATCH /:id rejects an out-of-range fal.ai clip duration', async () => {
+    const r = await request(app).patch('/api/music-video/mv-1')
+      .send({ videoSettings: { backend: 'fal', falDuration: 90 } });
+    expect(r.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id/scenes/:sceneId sets a scene to a performance shot and rejects an unknown shot mode (#8977)', async () => {
+    const ok = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'performance' });
+    expect(ok.status).toBe(200);
+    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' });
+    const bad = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'karaoke' });
+    expect(bad.status).toBe(400);
+    expect(svc.updateScene).toHaveBeenCalledTimes(1);
+  });
+
   it('PATCH /:id accepts null to clear the project video-backend pin', async () => {
     const videoSettings = { backend: null };
     const r = await request(app).patch('/api/music-video/mv-1').send({ videoSettings });
@@ -166,6 +214,71 @@ describe('musicVideo routes', () => {
       .send({ videoSettings: { backend: 'cloud-surprise', grokDuration: 9 } });
     expect(r.status).toBe(400);
     expect(svc.updateProject).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id rejects an out-of-range pacing ceiling or an oversized lyric line', async () => {
+    const pacing = await request(app).patch('/api/music-video/mv-1').send({ pacing: { maxShotSec: 0 } });
+    expect(pacing.status).toBe(400);
+    const cue = await request(app).patch('/api/music-video/mv-1')
+      .send({ lyricCues: [{ text: 'x'.repeat(501), startSec: 1 }] });
+    expect(cue.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id accepts a composition manifest and refuses an unknown motion template (#8984)', async () => {
+    const bad = await request(app).patch('/api/music-video/mv-1')
+      .send({ composition: { mode: 'composed', textCues: [{ text: 'hi', startSec: 1, endSec: 2, template: 'explode' }] } });
+    expect(bad.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+    const composition = { mode: 'composed', textCues: [{ text: 'hi', startSec: 1, endSec: 2, template: 'pop', placement: 'upper' }], posterSec: 1.5 };
+    const ok = await request(app).patch('/api/music-video/mv-1').send({ composition });
+    expect(ok.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { composition });
+  });
+
+  it('PATCH /:id takes an explicit sound-design bed, refuses a bed louder than the song, and clears it with null (#8988)', async () => {
+    const loud = await request(app).patch('/api/music-video/mv-1').send({ soundBed: { trackId: 'trk-rain', volume: 1.5 } });
+    expect(loud.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+    const ok = await request(app).patch('/api/music-video/mv-1').send({ soundBed: { trackId: 'trk-rain', volume: 0.25 } });
+    expect(ok.status).toBe(200);
+    const cleared = await request(app).patch('/api/music-video/mv-1').send({ soundBed: null });
+    expect(cleared.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenLastCalledWith('mv-1', { soundBed: null });
+  });
+
+  describe('POST /:id/lyrics/import (#8964)', () => {
+    it('replaces the cue list with the parsed LRC and reports the detected format', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'lc-old', text: 'old', startSec: 1, endSec: 2 }] });
+      const r = await request(app).post('/api/music-video/mv-1/lyrics/import')
+        .send({ text: '[00:01.00]one\n[00:03.00]two' });
+      expect(r.status).toBe(200);
+      expect(r.body).toMatchObject({ imported: 2, format: 'lrc' });
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
+        lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
+      });
+    });
+
+    it('appends plain lines after the existing cues', async () => {
+      const existing = { id: 'lc-old', text: 'old', startSec: 1, endSec: 2 };
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [existing] });
+      const r = await request(app).post('/api/music-video/mv-1/lyrics/import')
+        .send({ text: 'new line', mode: 'append' });
+      expect(r.status).toBe(200);
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
+        lyricCues: [existing, { text: 'new line', startSec: null, endSec: null }],
+      });
+    });
+
+    it('422s when the text holds no lyric lines, and 404s for a missing project', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [] });
+      const empty = await request(app).post('/api/music-video/mv-1/lyrics/import').send({ text: '[Chorus]\n\n' });
+      expect(empty.status).toBe(422);
+      svc.getProject.mockResolvedValue(null);
+      const missing = await request(app).post('/api/music-video/mv-x/lyrics/import').send({ text: 'a' });
+      expect(missing.status).toBe(404);
+      expect(svc.updateProject).not.toHaveBeenCalled();
+    });
   });
 
   it('DELETE /:id soft-deletes', async () => {
@@ -439,6 +552,71 @@ describe('musicVideo routes', () => {
       renderSvc.attachRenderSseClient.mockReturnValueOnce(false);
       const r = await request(app).get('/api/music-video/render/nope/events');
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('draft excerpt render (#8986)', () => {
+    it('POST /:id/excerpt validates the range and dispatches to the excerpt render service', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt').send({ startSec: 10, endSec: 20 });
+      expect(r.status).toBe(200);
+      expect(excerptRenderSvc.startExcerptRender).toHaveBeenCalledWith('mv-1', { startSec: 10, endSec: 20 });
+      expect(r.body).toEqual({ jobId: 'mve-job-1', excerptId: 'mve-job-1' });
+    });
+
+    it('POST /:id/excerpt rejects a non-forward range before dispatching', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt').send({ startSec: 20, endSec: 10 });
+      expect(r.status).toBe(400);
+      expect(excerptRenderSvc.startExcerptRender).not.toHaveBeenCalled();
+    });
+
+    it('POST /excerpt/:jobId/cancel cancels the job', async () => {
+      const r = await request(app).post('/api/music-video/excerpt/mve-1/cancel').send({});
+      expect(r.status).toBe(200);
+      expect(excerptRenderSvc.cancelExcerptRender).toHaveBeenCalledWith('mve-1');
+      expect(r.body).toEqual({ ok: true });
+    });
+
+    it('GET /excerpt/:jobId/events 404s for an unknown job', async () => {
+      excerptRenderSvc.attachExcerptRenderSseClient.mockReturnValueOnce(false);
+      const r = await request(app).get('/api/music-video/excerpt/nope/events');
+      expect(r.status).toBe(404);
+    });
+
+    it('DELETE /:id/excerpt/:excerptId dispatches to the excerpt service', async () => {
+      const r = await request(app).delete('/api/music-video/mv-1/excerpt/mve-1');
+      expect(r.status).toBe(200);
+      expect(excerptSvc.deleteExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1');
+    });
+
+    it('POST /:id/excerpt/:excerptId/notes validates and adds a review note', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt/mve-1/notes').send({ atSec: 3, note: 'lip-sync drifts here' });
+      expect(r.status).toBe(201);
+      expect(excerptSvc.addReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', { atSec: 3, note: 'lip-sync drifts here' });
+      expect(r.body.note).toMatchObject({ atSec: 3, note: 'lip-sync drifts here' });
+    });
+
+    it('POST /:id/excerpt/:excerptId/notes rejects a blank note', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/excerpt/mve-1/notes').send({ atSec: 3, note: '' });
+      expect(r.status).toBe(400);
+      expect(excerptSvc.addReviewNote).not.toHaveBeenCalled();
+    });
+
+    it('PATCH /:id/excerpt/:excerptId/notes/:noteId edits a note', async () => {
+      const r = await request(app).patch('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1').send({ verdict: 'approved' });
+      expect(r.status).toBe(200);
+      expect(excerptSvc.editReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { verdict: 'approved' });
+    });
+
+    it('PATCH /:id/excerpt/:excerptId/notes/:noteId rejects an empty patch', async () => {
+      const r = await request(app).patch('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1').send({});
+      expect(r.status).toBe(400);
+      expect(excerptSvc.editReviewNote).not.toHaveBeenCalled();
+    });
+
+    it('DELETE /:id/excerpt/:excerptId/notes/:noteId dispatches to the excerpt service', async () => {
+      const r = await request(app).delete('/api/music-video/mv-1/excerpt/mve-1/notes/mvn-1');
+      expect(r.status).toBe(200);
+      expect(excerptSvc.deleteReviewNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1');
     });
   });
 });

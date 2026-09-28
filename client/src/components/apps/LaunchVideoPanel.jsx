@@ -1,22 +1,45 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Download } from 'lucide-react';
+import { Download, Images, Upload, X } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
+import FilePickerButton from '../ui/FilePickerButton';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 import useRunWithPicker from '../../hooks/useRunWithPicker';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useUrlParams from '../../hooks/useUrlParams';
 import { copyToClipboard } from '../../lib/clipboard';
 import socket from '../../services/socket';
-import { createAppLaunchVideo, getAppLaunchVideos, publishAppLaunchVideo } from '../../services/apiApps';
+import { createAppLaunchVideo, getAppLaunchVideos, getMotionToolkit, publishAppLaunchVideo } from '../../services/apiApps';
 import { listPipelineMusicLibrary } from '../../services/apiPipeline';
+import { uploadFile } from '../../services/apiMedia';
 import { trackAudioUrl } from '../../services/apiTracks';
 import { formatBytes, formatDateTime, formatDurationSec } from '../../utils/formatters';
+import toast from '../ui/Toast';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg p-2 text-port-text';
 const buttonClass = 'rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50';
 const videoUrl = video => `/data/videos/${encodeURIComponent(video.filename)}`;
 const posterUrl = video => `/data/video-thumbnails/${encodeURIComponent(video.thumbnail)}`;
+// One run can render the same timeline in several frames (#8960); the order is
+// the server's canonical render order.
+const FORMATS = [
+  ['landscape', 'Landscape 16:9'],
+  ['vertical', 'Vertical 9:16'],
+  ['square', 'Square 1:1'],
+];
+const formatLabel = format => FORMATS.find(([value]) => value === format)?.[1] ?? format;
+// A style-reference upload is capped server-side to what `detectImageFormat`
+// recognizes (PNG/JPEG/WEBP/GIF) or a video ffmpeg can decode — matching the
+// picker's `accept` to that keeps the OS file dialog from offering a format
+// (SVG, HEIC) that would upload fine and then 400 when the run is queued.
+const REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-m4v,.png,.jpg,.jpeg,.webp,.gif,.mp4,.webm,.mov,.m4v';
+const MOTION_STYLES = [
+  ['walkthrough', 'Product walkthrough', 'A paced tour of the key flow, a cursor driving real actions on springs.'],
+  ['showreel', 'Motion-graphics showreel', 'Beat-cut kinetic type, color-field swaps and generative shapes around the key flow.'],
+  ['ui-morph', 'UI morph loop', 'One container that never cuts, morphing through the product flow on the beat and looping seamlessly.'],
+];
 
 // The run is an agent task, so it takes the same provider/model/effort pin as
 // every other manual CoS dispatch. Drawer mounts it only while open, so the
@@ -24,14 +47,25 @@ const posterUrl = video => `/data/video-thumbnails/${encodeURIComponent(video.th
 function LaunchVideoForm({ appId, onQueued }) {
   const [tone, setTone] = useState('default');
   const [direction, setDirection] = useState('');
-  const [format, setFormat] = useState('landscape');
+  const [formats, setFormats] = useState(['landscape']);
   const [duration, setDuration] = useState(20);
-  const [motionGraphics, setMotionGraphics] = useState(false);
+  const [motionStyle, setMotionStyle] = useState('walkthrough');
+  const [critiqueRounds, setCritiqueRounds] = useState(2);
+  const [motionSkills, setMotionSkills] = useState(false);
+  const [skillPacks, setSkillPacks] = useState(null);
   const [music, setMusic] = useState(false);
   const [generateMusic, setGenerateMusic] = useState(false);
   const [musicMethod, setMusicMethod] = useState('agent');
   const [musicTrack, setMusicTrack] = useState('');
   const [tracks, setTracks] = useState(null);
+  // A style reference (#8961): either an existing Media History image/video
+  // (`source: 'gallery'`) or a fresh upload into the generic uploads store
+  // (`source: 'upload'`) — kept out of the gallery so a one-off reference
+  // doesn't clutter it. `label` and `previewUrl` are display-only.
+  const [reference, setReference] = useState(null);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const [videoPickerOpen, setVideoPickerOpen] = useState(false);
+  const [referenceUploading, setReferenceUploading] = useState(false);
   const [error, setError] = useState('');
   const submitting = useRef(false);
   const picker = useRunWithPicker();
@@ -41,15 +75,42 @@ function LaunchVideoForm({ appId, onQueued }) {
     listPipelineMusicLibrary({ silent: true }).then(result => {
       if (active) setTracks(result.tracks);
     }).catch(err => { if (active) { setTracks([]); setError(err.message); } });
+    getMotionToolkit({ silent: true }).then(result => {
+      if (active) setSkillPacks(result.skillPacks);
+    }).catch(() => { if (active) setSkillPacks([]); });
     return () => { active = false; };
   }, []);
+  const installedSkills = (skillPacks ?? []).filter(pack => pack.found.length);
+  const consultSkills = motionSkills && installedSkills.length > 0;
+
+  const handleReferenceUpload = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    // Matches REFERENCE_ACCEPT: PNG/JPEG/WEBP/GIF for an image (what the
+    // server's magic-byte sniff recognizes) or an MP4/WebM/QuickTime/M4V
+    // container for a video. `accept` only filters the OS picker, not a
+    // drag-drop, so this is the real gate against a format that would
+    // otherwise upload fine and then 400 when the run is queued.
+    const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    const VIDEO_TYPES = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-m4v'];
+    const kind = VIDEO_TYPES.includes(file.type) ? 'video' : IMAGE_TYPES.includes(file.type) ? 'image' : null;
+    if (!kind) { toast.error('Choose a PNG, JPEG, WEBP, GIF, MP4, WebM, MOV or M4V file'); return; }
+    setReferenceUploading(true);
+    const saved = await uploadFile(file, file.name, { silent: true }).catch(err => { toast.error(err?.message || 'Upload failed'); return null; });
+    setReferenceUploading(false);
+    if (!saved?.filename) return;
+    setReference({ kind, source: 'upload', filename: saved.filename, label: file.name, previewUrl: null });
+  };
 
   const [submit, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
     await createAppLaunchVideo(appId, {
-      tone, direction, format, targetDurationSec: duration, motionGraphics,
+      // A single frame keeps the original `format` request shape.
+      tone, direction, ...(formats.length === 1 ? { format: formats[0] } : { formats }), targetDurationSec: duration, motionStyle, critiqueRounds,
+      ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
+      ...(reference ? { styleReference: { kind: reference.kind, source: reference.source, filename: reference.filename } } : {}),
       ...picker.pin,
     }, { silent: true }).then(onQueued).finally(() => { submitting.current = false; });
   });
@@ -62,9 +123,62 @@ function LaunchVideoForm({ appId, onQueued }) {
     </section>
     <div><label htmlFor="launch-tone">Tone</label><select id="launch-tone" className={inputClass} value={tone} onChange={event => setTone(event.target.value)}>{['default', 'polished', 'deadpan', 'cinematic', 'parody'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
     <div><label htmlFor="launch-direction">Direction (optional)</label><textarea id="launch-direction" className={inputClass} maxLength={2000} value={direction} onChange={event => setDirection(event.target.value)} /></div>
-    <div><label htmlFor="launch-format">Format</label><select id="launch-format" className={inputClass} value={format} onChange={event => setFormat(event.target.value)}>{['landscape', 'vertical', 'square'].map(value => <option key={value} value={value}>{value}</option>)}</select></div>
+    <fieldset className="space-y-2">
+      <legend>Style reference (optional)</legend>
+      <p className="text-sm text-port-text-muted">A frame, a short clip, or a Media History image or video. The agent studies its palette, type, shot lengths, transitions, camera and texture before writing a style guide — never its content, logos or characters.</p>
+      {reference ? (
+        <div className="flex items-center gap-2 rounded border border-port-border p-2">
+          {reference.previewUrl
+            ? <img src={reference.previewUrl} alt="" className="h-12 w-12 rounded object-cover" />
+            : <div className="flex h-12 w-12 items-center justify-center rounded bg-port-bg text-xs text-port-text-muted">{reference.kind === 'video' ? 'Video' : 'Image'}</div>}
+          <span className="min-w-0 flex-1 truncate text-sm text-port-text">{reference.label}</span>
+          <button type="button" aria-label="Clear style reference" onClick={() => setReference(null)} className="text-port-text-muted hover:text-port-error"><X size={16} /></button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setImagePickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick an image…</button>
+          <button type="button" className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent" onClick={() => setVideoPickerOpen(true)}><Images size={14} aria-hidden="true" /> Pick a video…</button>
+          <FilePickerButton accept={REFERENCE_ACCEPT} onChange={handleReferenceUpload} disabled={referenceUploading} className="inline-flex items-center gap-1.5 rounded border border-port-border px-2.5 py-1.5 text-xs text-port-text hover:border-port-accent">
+            <Upload size={14} aria-hidden="true" /> {referenceUploading ? 'Uploading…' : 'Upload a reference…'}
+          </FilePickerButton>
+        </div>
+      )}
+      <GalleryImagePicker open={imagePickerOpen} onClose={() => setImagePickerOpen(false)}
+        onSelect={item => setReference({ kind: 'image', source: 'gallery', filename: item.filename, label: item.filename, previewUrl: item.thumbnailUrl || item.previewUrl })} />
+      <GalleryVideoPicker open={videoPickerOpen} onClose={() => setVideoPickerOpen(false)}
+        onSelect={item => setReference({ kind: 'video', source: 'gallery', filename: item.filename, label: item.filename, previewUrl: item.previewUrl })} />
+    </fieldset>
+    <fieldset>
+      <legend>Formats</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {FORMATS.map(([value, label]) => <label key={value} htmlFor={`launch-format-${value}`}>
+          <input id={`launch-format-${value}`} type="checkbox" checked={formats.includes(value)}
+            onChange={event => setFormats(current => FORMATS.map(([name]) => name).filter(name => name === value ? event.target.checked : current.includes(name)))} /> {label}
+        </label>)}
+      </div>
+      <p className="text-sm text-port-text-muted">Several formats render one film from a single timeline, recomposed for each frame.</p>
+    </fieldset>
     <div><label htmlFor="launch-duration">Duration (15–120 seconds)</label><input id="launch-duration" type="number" min={15} max={120} step={1} required className={inputClass} value={duration} onChange={event => setDuration(event.target.value === '' ? '' : Number(event.target.value))} /></div>
-    <div><label htmlFor="launch-motion-graphics"><input id="launch-motion-graphics" type="checkbox" checked={motionGraphics} onChange={event => setMotionGraphics(event.target.checked)} /> Dynamic motion graphics</label><p className="text-sm text-port-text-muted">Beat-cut showreel style: kinetic type, color-field swaps and generative shapes around the key flow.</p></div>
+    <div>
+      <label htmlFor="launch-motion-style">Motion style</label>
+      <select id="launch-motion-style" className={inputClass} value={motionStyle} onChange={event => setMotionStyle(event.target.value)}>
+        {MOTION_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+      <p className="text-sm text-port-text-muted">{MOTION_STYLES.find(([value]) => value === motionStyle)[2]}</p>
+    </div>
+    <div>
+      <label htmlFor="launch-critique-rounds">Critique rounds</label>
+      <select id="launch-critique-rounds" className={inputClass} value={critiqueRounds} onChange={event => setCritiqueRounds(Number(event.target.value))}>
+        {[0, 1, 2, 3, 4].map(value => <option key={value} value={value}>{value === 0 ? 'None (render directly)' : value}</option>)}
+      </select>
+      <p className="text-sm text-port-text-muted">The agent renders a contact sheet, scores its own frames and fixes the worst problems before the final render.</p>
+    </div>
+    <div>
+      <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
+      <p className="text-sm text-port-text-muted">{skillPacks === null ? 'Checking installed skills…' : installedSkills.length
+        ? `Technique guides from ${installedSkills.map(pack => pack.label).join(', ')}.`
+        : 'Install HyperFrames, Remotion and Claude Animation skills with npm run setup:motion -- --skills.'}</p>
+    </div>
     <div><label htmlFor="launch-music"><input id="launch-music" type="checkbox" checked={music} onChange={event => setMusic(event.target.checked)} /> Include music</label></div>
     {music && <div><label htmlFor="launch-generate-music"><input id="launch-generate-music" type="checkbox" checked={generateMusic} onChange={event => setGenerateMusic(event.target.checked)} /> Generate original music</label><p className="text-sm text-port-text-muted">Choose how the original soundtrack is made.</p></div>}
     {music && generateMusic && <div>
@@ -97,7 +211,7 @@ function LaunchVideoForm({ appId, onQueued }) {
       </ul>}
     </fieldset>}
     <p className="text-sm text-port-text-muted">These options are submitted together. Follow and cancel the run in CoS agents.</p>
-    <button type="submit" className={buttonClass} disabled={running || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
+    <button type="submit" className={buttonClass} disabled={running || referenceUploading || !formats.length || duration === '' || (music && !generateMusic && !musicTrack)}>{running ? 'Queuing…' : 'Queue launch video'}</button>
   </form>;
 }
 
@@ -126,22 +240,28 @@ function ReviseLaunchVideo({ appId, videoId }) {
 }
 
 function PublishLaunchVideo({ appId, videoId }) {
+  const [format, setFormat] = useState('mp4');
   const picker = useRunWithPicker();
   const submitting = useRef(false);
   const [taskId, setTaskId] = useState(null);
   const [publish, running] = useAsyncAction(async () => {
     if (submitting.current) return;
     submitting.current = true;
-    await publishAppLaunchVideo(appId, { videoId, ...picker.pin }, { silent: true })
+    await publishAppLaunchVideo(appId, { videoId, format, ...picker.pin }, { silent: true })
       .then(result => setTaskId(result.taskId))
       .finally(() => { submitting.current = false; });
   });
   return <div className="space-y-2 rounded border border-port-border p-3">
     <h3 className="font-medium">Publish to README</h3>
-    <p className="text-sm text-port-text-muted">Create a silent, looping GIF of this take for GitHub and GitHub Pages. The agent replaces any existing launch-video embed near the top of README.md, commits the GIF, opens a PR and merges after review and checks pass. This publishes the selected video to the app repository.</p>
+    <p className="text-sm text-port-text-muted">Publish an MP4 with sound and a clickable poster, or a silent looping GIF. MP4 playback or download opens from the poster; it is not an inline README player. The agent replaces any existing launch-video embed near the top of README.md, commits the selected assets, opens a PR and merges after review and checks pass. Assets inherit the repository’s visibility. Nothing is uploaded to YouTube or another video host.</p>
     {taskId ? <p role="status">README publication queued. <Link className="text-port-accent" to="/cos/agents">Follow the render and PR in CoS agents</Link></p> : <>
       <ProviderModelSelector {...picker.selectorProps} />
-      <button type="button" className={buttonClass} disabled={running} onClick={publish}>{running ? 'Queuing publication…' : 'Publish GIF to README and merge PR'}</button>
+      <label htmlFor="launch-publish-format">README media format</label>
+      <select id="launch-publish-format" className={inputClass} value={format} disabled={running} onChange={event => setFormat(event.target.value)}>
+        <option value="mp4">MP4 with sound (clickable poster)</option>
+        <option value="gif">GIF (silent, looping)</option>
+      </select>
+      <button type="button" className={buttonClass} disabled={running} onClick={publish}>{running ? 'Queuing publication…' : 'Publish to README and merge PR'}</button>
     </>}
   </div>;
 }
@@ -152,8 +272,17 @@ export default function LaunchVideoPanel({ app }) {
   const [videos, setVideos] = useState([]);
   const [error, setError] = useState('');
   const [queued, setQueued] = useState(false);
-  // The previewed take lives in the URL so a specific video is linkable.
+  // The previewed video lives in the URL so a specific take and format is linkable.
   const selected = videos.find(video => video.id === search.get('video')) ?? videos[0];
+  // A multi-format run registers one video per format under one runId (#8960);
+  // the tab shows it as a single take. Older entries without a runId stand alone.
+  const takes = [...videos.reduce((groups, video) => {
+    const key = video.runId ?? video.id;
+    groups.set(key, [...(groups.get(key) ?? []), video]);
+    return groups;
+  }, new Map()).values()];
+  const selectedTake = takes.find(take => take.includes(selected)) ?? [];
+  const selectVideo = id => updateParams({ video: id }, { replace: true });
 
   useEffect(() => {
     let active = true;
@@ -182,10 +311,16 @@ export default function LaunchVideoPanel({ app }) {
     {error && <p role="alert" className="text-port-error">{error}</p>}
     {!videos.length && !error && <p className="text-sm text-port-text-muted">No launch videos yet.</p>}
     {selected && <div className="space-y-2">
+      {selectedTake.length > 1 && <div role="group" aria-label="Formats in this take" className="flex flex-wrap gap-2">
+        {selectedTake.map(video => <button key={video.id} type="button" aria-pressed={video.id === selected.id} onClick={() => selectVideo(video.id)}
+          className={`rounded border px-2 py-1 text-sm ${video.id === selected.id ? 'border-port-accent text-port-text' : 'border-port-border text-port-text-muted'}`}>{formatLabel(video.format)}</button>)}
+      </div>}
       <video key={selected.id} controls preload="metadata" className="max-h-[60vh] w-full bg-black" src={videoUrl(selected)} poster={posterUrl(selected)} aria-label="Selected launch video" />
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <span className="text-port-text-muted">{formatDateTime(selected.createdAt)}{Number.isFinite(selected.durationSec) ? ` · ${formatDurationSec(selected.durationSec)}` : ''}</span>
-        <a className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(selected)} download={`${app.id}-launch-video-${selected.id}.mp4`}><Download size={14} aria-hidden="true" />Download</a>
+        {selectedTake.length > 1
+          ? selectedTake.map(video => <a key={video.id} className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(video)} download={`${app.id}-launch-video-${video.id}.mp4`}><Download size={14} aria-hidden="true" />Download {formatLabel(video.format)}</a>)
+          : <a className="inline-flex items-center gap-1 text-port-accent" href={videoUrl(selected)} download={`${app.id}-launch-video-${selected.id}.mp4`}><Download size={14} aria-hidden="true" />Download</a>}
         <button type="button" className="text-port-accent" onClick={() => copyToClipboard(selected.caption)}>Copy caption</button>
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
@@ -194,13 +329,16 @@ export default function LaunchVideoPanel({ app }) {
       <ReviseLaunchVideo key={`revision:${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
       <PublishLaunchVideo key={`${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
     </div>}
-    {videos.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-      {videos.map(video => <li key={video.id}>
-        <button type="button" aria-pressed={video.id === selected?.id} onClick={() => updateParams({ video: video.id }, { replace: true })} className={`w-full overflow-hidden rounded border text-left ${video.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`}>
-          <img src={posterUrl(video)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
-          <span className="block truncate p-1 text-xs text-port-text-muted">{formatDateTime(video.createdAt)}</span>
-        </button>
-      </li>)}
+    {takes.length > 1 && <ul aria-label="Launch video takes" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+      {takes.map(([video, ...others]) => {
+        const current = selectedTake[0] === video;
+        return <li key={video.id}>
+          <button type="button" aria-pressed={current} onClick={() => selectVideo(video.id)} className={`w-full overflow-hidden rounded border text-left ${current ? 'border-port-accent' : 'border-port-border'}`}>
+            <img src={posterUrl(video)} alt="" loading="lazy" className="aspect-video w-full object-cover" />
+            <span className="block truncate p-1 text-xs text-port-text-muted">{formatDateTime(video.createdAt)}{others.length ? ` · ${others.length + 1} formats` : ''}</span>
+          </button>
+        </li>;
+      })}
     </ul>}
     <Drawer open={open} onClose={() => updateParams({ launchVideo: null })} title="Make launch video" size="md">
       {queued ? <div className="space-y-3"><p>Launch video queued. Closing this drawer leaves the run active.</p><Link className="text-port-accent" to="/cos/agents">Open CoS agents to follow or cancel the run</Link></div>

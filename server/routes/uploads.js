@@ -10,8 +10,9 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
   EXTENSION_MIME_MAP, isPathInsideDir, saveBase64Upload, serveLocalFile,
-  unlinkGuarded,
+  unlinkGuarded, importFileToDir,
 } from '../lib/fileUtils.js';
+import { optionalUpload } from '../lib/multipart.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { validateRequest, uploadRequestSchema } from '../lib/validation.js';
 
@@ -44,8 +45,23 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-// POST /api/uploads - Upload a file (base64)
-router.post('/', asyncHandler(async (req, res) => {
+// POST /api/uploads - Stream a file, or accept legacy base64 JSON
+router.post('/', optionalUpload('file'), asyncHandler(async (req, res) => {
+  if (req.file) {
+    try {
+      const saved = await importFileToDir(req.file.path, req.file.originalname, UPLOADS_DIR, {
+        extensions: [...UPLOAD_ALLOWED_EXTENSIONS],
+      });
+      return res.json({
+        id: saved.id, filename: saved.filename, originalName: req.file.originalname,
+        path: `/api/uploads/${encodeURIComponent(saved.filename)}`, size: saved.sizeBytes,
+        sizeFormatted: formatSize(saved.sizeBytes), mimeType: getMimeType(getFileExtension(saved.filename)),
+        createdAt: new Date().toISOString(),
+      });
+    } finally {
+      await unlinkGuarded(req.file.path).catch(() => {});
+    }
+  }
   const { data, filename } = validateRequest(uploadRequestSchema, req.body);
 
   // Shared pipeline: allowlist → decode → size cap → `<uuid8>-name` → write.

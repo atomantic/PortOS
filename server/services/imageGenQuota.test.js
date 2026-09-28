@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -45,6 +45,14 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(join(TEST_ROOT, 'imagegen-quota.json'), { force: true });
+});
+
+// TEST_ROOT / FAB_DIR are module-scope roots (top-level-await mkdtemp, before
+// any per-test hook runs) — remove the roots themselves once, not just the
+// file inside TEST_ROOT the per-test hooks above clean (#9032).
+afterAll(async () => {
+  await rm(TEST_ROOT, { recursive: true, force: true });
+  await rm(FAB_DIR, { recursive: true, force: true });
 });
 
 describe('parseImageQuotaSignal', () => {

@@ -22,6 +22,7 @@ vi.mock('../services/askService.js', () => ({
   // type so zod validation matches what production sees.
   VALID_MODES: new Set(['ask', 'advise', 'draft']),
   runAsk: vi.fn(),
+  resolveAskProvider: vi.fn(async () => null),
 }));
 
 vi.mock('../services/brain.js', () => ({
@@ -316,6 +317,48 @@ describe('POST /api/ask (validation)', () => {
       .post('/api/ask')
       .send({ question: 'hi', conversationId: 'ask_lwg2x4abc_aaaaaaaa' });
     expect(res.status).toBe(404);
+  });
+});
+
+// #9008: the provider is resolved and gated before any write or SSE frame, from
+// the server-derived authority — a refused caller leaves no conversation behind.
+describe('POST /api/ask (host control)', () => {
+  it('returns 403 before creating a conversation or running anything when the provider is refused', async () => {
+    const { ServerError } = await import('../lib/errorHandler.js');
+    svc.resolveAskProvider.mockRejectedValueOnce(new ServerError('needs host control', { status: 403, code: 'HOST_CONTROL_FORBIDDEN' }));
+    const res = await request(makeApp())
+      .post('/api/ask')
+      .send({ question: 'hi', providerId: 'antigravity-cli', hasHostControl: true });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
+    // The body's hasHostControl is ignored: a bare test app carries no auth context.
+    expect(svc.resolveAskProvider).toHaveBeenCalledWith('antigravity-cli', { hasHostControl: false });
+    expect(convs.createConversation).not.toHaveBeenCalled();
+    expect(convs.appendTurn).not.toHaveBeenCalled();
+    expect(svc.runAsk).not.toHaveBeenCalled();
+  });
+
+  it('runs the turn on the provider it resolved', async () => {
+    const provider = { id: 'claude-code', type: 'cli' };
+    svc.resolveAskProvider.mockResolvedValueOnce(provider);
+    convs.createConversation.mockResolvedValue({ id: 'ask_lwgnewabc_abcdef00', mode: 'ask', turns: [] });
+    convs.appendTurn.mockImplementation((id, turn) => Promise.resolve({
+      conversation: { id, mode: 'ask', turns: [{ ...turn, id: 'tid' }] },
+      turn: { ...turn, id: 'tid' },
+    }));
+    svc.runAsk.mockImplementation(async function* () {
+      yield { type: 'done', answer: 'ok', sources: [], providerId: 'claude-code', model: 'm' };
+    });
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
+    app.use('/api/ask', routes);
+    app.use(errorMiddleware);
+
+    await request(app).post('/api/ask').send({ question: 'hi', providerId: 'claude-code' });
+    // Password-free install, loopback connection: the operator.
+    expect(svc.resolveAskProvider).toHaveBeenCalledWith('claude-code', { hasHostControl: true });
+    expect(svc.runAsk.mock.calls[0][0].provider).toBe(provider);
   });
 });
 

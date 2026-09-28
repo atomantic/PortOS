@@ -26,6 +26,7 @@ import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { describeFetchError } from '../../lib/fetchErrorChain.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
+import { probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
@@ -143,6 +144,18 @@ async function toDataUri(imagePath) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
+// Source-audio lip-sync (#8977, fal's MiniMax H3 lip-sync route): the request
+// is the reference frame plus the exact song slice. The route takes no prompt,
+// duration or aspect ratio — its output length follows the submitted audio, and
+// the frame's own aspect ratio carries through.
+function buildLipSyncRequestBody({ imageDataUri, audioDataUri, enableTranscription }) {
+  return {
+    image_url: imageDataUri,
+    audio_url: audioDataUri,
+    ...(enableTranscription ? { enable_transcription: true } : {}),
+  };
+}
+
 function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri }) {
   // fal.ai's queue REST API has no dedicated negative-prompt field for these
   // models — fold it into the prompt as an "Avoid:" clause, same fallback
@@ -216,12 +229,18 @@ export async function generateVideo({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
   sourceImagePath = null, jobId: providedJobId = null,
+  audioFilePath = null, lipSync = null, shotInstruction = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
 
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // A lip-sync render conditions a reference frame on source audio; either
+  // input alone is not a request this route can honor.
+  if (audioFilePath && !sourceImagePath) {
+    throw new ServerError('A fal.ai lip-sync render needs a reference frame', { status: 400, code: 'VALIDATION_ERROR' });
   }
   // The queue only persists the resolved provider CONFIG a job needs (mirrors
   // grokPath on the grok lane) — never a secret — so the key is re-resolved
@@ -253,6 +272,8 @@ export async function generateVideo({
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
+    ...(audioFilePath ? { lipSync: true } : {}),
+    ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
@@ -262,7 +283,10 @@ export async function generateVideo({
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');
 
-  runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta })
+  runFalVideo(job, jobId, {
+    apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta,
+    audioFilePath, enableTranscription: lipSync?.enableTranscription === true,
+  })
     .catch((err) => {
       console.error(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
@@ -274,7 +298,10 @@ export async function generateVideo({
   };
 }
 
-async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta }) {
+async function runFalVideo(job, jobId, {
+  apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta,
+  audioFilePath = null, enableTranscription = false,
+}) {
   const entry = {
     apiKey, controller: new AbortController(), aborted: false, cancelUrl: null, canceledRemote: false, remoteTerminal: false,
   };
@@ -282,7 +309,16 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
     const imageDataUri = sourceImagePath ? await toDataUri(sourceImagePath) : null;
-    const body = buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
+    const body = audioFilePath
+      ? buildLipSyncRequestBody({
+        imageDataUri,
+        audioDataUri: `data:audio/wav;base64,${(await readFile(audioFilePath)).toString('base64')}`,
+        enableTranscription,
+      })
+      : buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
+    // Cancelled while the inputs were being read: nothing was submitted, so
+    // there is nothing to pay for or cancel remotely.
+    if (entry.aborted) return finalizeCanceled(job, jobId);
     const submitted = await submitFalJob({ apiKey, modelId, body });
     entry.cancelUrl = submitted.cancel_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/cancel`;
     const statusUrl = submitted.status_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/status`;
@@ -344,9 +380,17 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
       return finalizeCanceled(job, jobId);
     }
 
+    // Record what the provider actually delivered: fal reports no frame count,
+    // and the Music Video renderer trims every clip by numFrames/fps — the
+    // measured length is also what a performance take's edit points index.
+    const measured = (await probeVideoGeometry(outputPath)) || {};
+    const expectedSec = meta.audioWindow?.durationSec;
+    if (expectedSec && measured.durationSec && measured.durationSec + 0.1 < expectedSec) {
+      console.warn(`⚠️ fal lip-sync [${jobId.slice(0, 8)}] delivered ${measured.durationSec.toFixed(2)}s for a ${expectedSec.toFixed(2)}s audio window`);
+    }
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
-    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
+    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
     // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the

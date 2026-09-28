@@ -108,6 +108,108 @@ describe('projectsFile federation (#1770)', () => {
     expect((await file.listProjectIds({ includeDeleted: true })).sort()).toEqual([a.id, b.id].sort());
   });
 
+  // #8964 — timed lyric cues, phrase annotations, pacing, and per-shot loop
+  // semantics are editable record state: they must survive reload, clone, and
+  // a peer round trip, and an audio-source change must invalidate the timings
+  // (derived from the old track) while keeping the director's text.
+  it('persists timed text + shot fields through reload, clone, and peer sync; an audio change clears the timings', async () => {
+    const p = await file.createProject({ name: 'Lyric MV', trackId: 't1' });
+    expect(p).toMatchObject({ lyricCues: [], phrases: [], pacing: null });
+
+    await file.updateProject(p.id, {
+      lyricCues: [
+        { text: '  first line  ', startSec: 1.25, endSec: 3 },
+        { text: '   ', startSec: 4 }, // empty → dropped
+        { text: 'second line', startSec: 5, endSec: 4 }, // backwards end → open end
+        { text: 'untimed line' },
+      ],
+      phrases: [{ label: 'Lift', startSec: 8, endSec: 16, intent: 'rise above the city' }],
+      pacing: { minShotSec: 1.5, maxShotSec: 6, hookSec: 2 },
+    });
+    const saved = await file.getProject(p.id);
+    expect(saved.lyricCues).toEqual([
+      { id: expect.stringMatching(/^lc-/), text: 'first line', startSec: 1.25, endSec: 3 },
+      { id: expect.stringMatching(/^lc-/), text: 'second line', startSec: 5, endSec: null },
+      { id: expect.stringMatching(/^lc-/), text: 'untimed line', startSec: null, endSec: null },
+    ]);
+    expect(saved.phrases).toEqual([
+      { id: expect.stringMatching(/^mp-/), label: 'Lift', intent: 'rise above the city', startSec: 8, endSec: 16 },
+    ]);
+    // Editing a line keeps its id (the list is replaced whole, entries by id).
+    const retimed = saved.lyricCues.map((c, i) => (i === 2 ? { ...c, startSec: 9 } : c));
+    const edited = await file.updateProject(p.id, { lyricCues: retimed });
+    expect(edited.lyricCues.map((c) => c.id)).toEqual(saved.lyricCues.map((c) => c.id));
+    expect(edited.lyricCues[2].startSec).toBe(9);
+
+    // A new scene never loops by default; planned shot fields persist.
+    await file.addProjectScenes(p.id, [
+      { label: 'Verse · 1/2', sectionLabel: 'Verse', sectionIndex: 0, startSec: 0, endSec: 4, beatAligned: true, lyricText: 'first line' },
+      { label: 'Verse · 2/2', sectionLabel: 'Verse', sectionIndex: 0, startSec: 4, endSec: 8, beatAligned: true, loop: true, visualIntent: 'hold' },
+    ]);
+    const withScenes = await file.getProject(p.id);
+    expect(withScenes.scenes.map((s) => [s.loop, s.sectionIndex, s.lyricText, s.visualIntent]))
+      .toEqual([[false, 0, 'first line', null], [true, 0, null, 'hold']]);
+
+    const clone = await file.cloneProject(p.id);
+    expect(clone.lyricCues).toEqual(edited.lyricCues);
+    expect(clone.phrases).toEqual(saved.phrases);
+    expect(clone.pacing).toEqual({ minShotSec: 1.5, maxShotSec: 6, hookSec: 2 });
+    expect(clone.scenes.map((s) => s.loop)).toEqual([false, true]);
+
+    // Peer round trip: a record carrying these fields lands verbatim.
+    const peerCopy = { ...withScenes, id: 'mv-peer-lyrics', updatedAt: '2099-01-01T00:00:00Z' };
+    await file.mergeProjectsFromSync([peerCopy]);
+    const received = await file.getProject('mv-peer-lyrics');
+    expect(received.lyricCues).toEqual(withScenes.lyricCues);
+    expect(received.phrases).toEqual(withScenes.phrases);
+    expect(received.scenes).toEqual(withScenes.scenes);
+
+    const swapped = await file.updateProject(p.id, { trackId: 't2' });
+    expect(swapped.lyricCues.map((c) => [c.id, c.text, c.startSec, c.endSec]))
+      .toEqual(edited.lyricCues.map((c) => [c.id, c.text, null, null]));
+    expect(swapped.phrases).toEqual([{ ...saved.phrases[0], startSec: null, endSec: null }]);
+  });
+
+  // #8984 — the composition manifest is editable record state like the lyric
+  // cues: normalized on save, carried by clone and peer sync, and its timings
+  // (cue times, poster frame) cleared with the audio source, text kept.
+  it('persists the composition manifest through reload, clone, and peer sync; an audio change clears its timings', async () => {
+    const p = await file.createProject({ name: 'Composed MV', trackId: 't1' });
+    expect(p.composition).toBeNull();
+
+    await file.updateProject(p.id, { composition: {
+      mode: 'composed',
+      textCues: [
+        { text: ' Hook line ', startSec: 1, endSec: 3, template: 'rise', placement: 'center', emphasis: 'hero' },
+        { text: 'Tail', startSec: 4, endSec: 2 },
+      ],
+      style: { color: '#FFCC00' },
+      posterSec: 2,
+    } });
+    const saved = await file.getProject(p.id);
+    expect(saved.composition).toEqual({
+      version: 1,
+      mode: 'composed',
+      textCues: [
+        { id: expect.stringMatching(/^mtc-/), text: 'Hook line', startSec: 1, endSec: 3, template: 'rise', placement: 'center', emphasis: 'hero' },
+        { id: expect.stringMatching(/^mtc-/), text: 'Tail', startSec: 4, endSec: null, template: 'fade', placement: 'lower', emphasis: 'subtitle' },
+      ],
+      style: { color: '#ffcc00', font: 'sans' },
+      posterSec: 2,
+    });
+
+    expect((await file.cloneProject(p.id)).composition).toEqual(saved.composition);
+    await file.mergeProjectsFromSync([{ ...saved, id: 'mv-peer-composed', updatedAt: '2099-01-01T00:00:00Z' }]);
+    expect((await file.getProject('mv-peer-composed')).composition).toEqual(saved.composition);
+
+    const swapped = await file.updateProject(p.id, { uploadedAudioFilename: 'other.wav' });
+    expect(swapped.composition.posterSec).toBeNull();
+    expect(swapped.composition.textCues.map((c) => [c.id, c.text, c.startSec, c.endSec]))
+      .toEqual(saved.composition.textCues.map((c) => [c.id, c.text, null, null]));
+
+    expect((await file.updateProject(p.id, { composition: null })).composition).toBeNull();
+  });
+
   it('mergeProjectsFromSync inserts a brand-new peer record', async () => {
     const remote = { id: 'mv-peer-1', name: 'Peer', status: 'draft', updatedAt: '2026-02-01T00:00:00Z', createdAt: '2026-02-01T00:00:00Z', scenes: [] };
     const res = await file.mergeProjectsFromSync([remote]);

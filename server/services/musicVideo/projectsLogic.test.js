@@ -110,6 +110,12 @@ describe('cloneProjectRecord', () => {
     });
     expect(clone.scenes[0].sceneId).not.toBe('scene-old');
     expect(source.scenes[0].sceneId).toBe('scene-old');
+    // A pre-#8965 scene's selections become takes on the clone, so the new
+    // version's candidate list is never missing what it already shows.
+    expect(clone.scenes[0].takes.map((t) => [t.kind, t.assetId, t.source])).toEqual([
+      ['image', 'frame.png', 'legacy'],
+      ['video', 'clip-1', 'legacy'],
+    ]);
   });
 
   it('can fork the board without carrying generated media', () => {
@@ -131,11 +137,19 @@ describe('cloneProjectRecord', () => {
       rootProjectId: 'mv-root',
       name: 'Test MV v3',
     });
-    expect(clone.scenes[0]).toMatchObject({ referenceImageId: null, videoHistoryId: null });
+    expect(clone.scenes[0]).toMatchObject({ referenceImageId: null, videoHistoryId: null, takes: [] });
   });
 });
 
 describe('applyProjectPatch', () => {
+  it('stores an explicit sound-design bed (level clamped), clears it with null, and never lets the song be its own bed (#8988)', () => {
+    const withSong = applyProjectPatch(baseProject(), { trackId: 'trk-song' });
+    const bedded = applyProjectPatch(withSong, { soundBed: { trackId: 'trk-rain', volume: 0.333 } });
+    expect(bedded.soundBed).toEqual({ trackId: 'trk-rain', volume: 0.33 });
+    expect(applyProjectPatch(bedded, { soundBed: null }).soundBed).toBeNull();
+    expect(() => applyProjectPatch(withSong, { soundBed: { trackId: 'trk-song' } })).toThrow(expect.objectContaining({ code: 'SOUND_BED_IS_MASTER' }));
+  });
+
   it('merges fields and bumps updatedAt', () => {
     const next = applyProjectPatch(baseProject(), { name: 'Renamed', trackId: 't2' });
     expect(next.name).toBe('Renamed');
@@ -202,12 +216,12 @@ describe('applyProjectPatch', () => {
       trackId: 't1',
       scenes: [
         { sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true },
-        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false },
+        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false, sectionIndex: 0 },
       ],
     };
     const next = applyProjectPatch(withScenes, { trackId: 't2' });
     expect(next.scenes[0]).toMatchObject({ beatAligned: false, startSec: 1, endSec: 2 });
-    expect(next.scenes[1]).toMatchObject({ beatAligned: false, startSec: 3, endSec: 4 });
+    expect(next.scenes[1]).toMatchObject({ beatAligned: false, sectionIndex: null, startSec: 3, endSec: 4 });
   });
 
   it('regresses status to draft on track change since the cleared analysis must be redone', () => {
@@ -260,6 +274,20 @@ describe('applyProjectPatch', () => {
     expect(next.concept).toBeNull();
   });
 
+  it('merges a visualSpec patch per sub-field and gives every reference a stable id (#8965)', () => {
+    const first = applyProjectPatch(baseProject(), {
+      visualSpec: { palette: ['#AABBCC'], references: [{ imageId: 'mood.png', condition: true }] },
+    });
+    const [ref] = first.visualSpec.references;
+    expect(ref).toMatchObject({ imageId: 'mood.png', role: 'mood', condition: true, label: '' });
+    expect(ref.id).toMatch(/^mvr-/);
+    expect(first.visualSpec.palette).toEqual(['#aabbcc']);
+    // A later edit of one sub-field keeps the others (and the minted id).
+    const second = applyProjectPatch(first, { visualSpec: { cameraRules: 'handheld only' } });
+    expect(second.visualSpec).toMatchObject({ palette: ['#aabbcc'], cameraRules: 'handheld only' });
+    expect(second.visualSpec.references[0].id).toBe(ref.id);
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',
@@ -269,6 +297,7 @@ describe('applyProjectPatch', () => {
       backend: 'grok',
       modelId: null,
       grokDuration: 6,
+      falDuration: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -281,6 +310,7 @@ describe('applyProjectPatch', () => {
       backend: 'local',
       modelId: 'ltx23_distilled_q4',
       grokDuration: 6,
+      falDuration: null,
       generationMode: 'image',
       audioReactiveLora: null,
       audioReactiveScale: 1.2,
@@ -408,6 +438,15 @@ describe('scene board operations', () => {
     const next = reorderScenes(p, [ids[2], ids[0], ids[1]]);
     expect(next.scenes.map((s) => s.sceneId)).toEqual([ids[2], ids[0], ids[1]]);
     expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2]);
+  });
+
+  it('defaults a new scene to its footage and persists a chosen still or card layer (#8985)', () => {
+    const { project, scene } = addScene(baseProject(), { prompt: 'a' });
+    expect(scene).toMatchObject({ visualLayer: 'footage', stillMove: 'hold', cardText: null, cardColor: null });
+    const { updated } = applySceneUpdate(project, scene.sceneId, { visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233' });
+    expect(updated).toMatchObject({ visualLayer: 'card', cardText: 'Verse two', cardColor: '#112233' });
+    expect(() => applySceneUpdate(project, scene.sceneId, { visualLayer: 'hologram' })).toThrow();
+    expect(() => applySceneUpdate(project, scene.sceneId, { cardColor: 'red' })).toThrow();
   });
 
   it('rejects a reorder that is not an exact permutation', () => {

@@ -73,78 +73,16 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.modelSelection.tier).toBe('medium');
   });
 
-  it('flags a learning-tier override that differs from the provider default and warns loudly (#8148)', async () => {
-    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-sonnet-5'] };
+  it('resolves configured defaults and explicit tiers through the real selector without learning warnings', async () => {
+    const actual = await vi.importActual('./agentModelSelection.js');
+    selectModelForTask.mockImplementation(actual.selectModelForTask);
+    selectModelForRole.mockImplementation(actual.selectModelForRole);
+    const provider = { id: 'p1', type: 'cli', defaultModel: 'model-default', lightModel: 'model-light', models: ['model-default', 'model-light'] };
     getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-sonnet-5', tier: 'medium', reason: 'learning-suggested', isLearningTierOverride: true, learningReason: '80% success on medium' });
 
-    const r = await resolveAgentProviderAndModel(TASK);
-    expect(r.ok).toBe(true);
-    expect(r.selectedModel).toBe('claude-sonnet-5');
-    expect(r.modelSelection.downgradedFromDefault).toBe(true);
-    expect(r.modelSelection.configuredDefault).toBe('claude-opus-5-5');
-    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('differs from provider\'s configured default'), expect.objectContaining({
-      downgradedFromDefault: true,
-      configuredDefault: 'claude-opus-5-5',
-    }));
-  });
-
-  it('does not flag a learning-tier override that already matches the provider default', async () => {
-    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5'] };
-    getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-opus-5-5', tier: 'default', reason: 'learning-suggested', isLearningTierOverride: true });
-
-    const r = await resolveAgentProviderAndModel(TASK);
-    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
-    expect(emitLog).toHaveBeenCalledWith('info', expect.any(String), expect.not.objectContaining({ downgradedFromDefault: true }));
-  });
-
-  it('never flags a differing model unless the selection itself marked it a learning-tier override', async () => {
-    // A model differing from the default for a reason OTHER than the learning
-    // system (e.g. a heuristic "complex-task" heavy-tier pick, or a provider
-    // swap) must never be mislabeled as a silent downgrade — this pins that
-    // the resolver trusts `isLearningTierOverride`, not just "model !== default".
-    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-heavy-5'] };
-    getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-heavy-5', tier: 'heavy', reason: 'complex-task' });
-
-    const r = await resolveAgentProviderAndModel(TASK);
-    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
-    expect(emitLog).toHaveBeenCalledWith('info', expect.any(String), expect.not.objectContaining({ downgradedFromDefault: true }));
-  });
-
-  it('never flags a learning-tier override that picked a STRONGER model than the default (codex #8148 review)', async () => {
-    // provider.defaultModel is a light/medium tier here; the learning system
-    // proved out the heavy tier for this task type — a legitimate upgrade,
-    // not a downgrade, even though the model id obviously differs from
-    // provider.defaultModel.
-    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-sonnet-5', heavyModel: 'claude-opus-5-5', models: ['claude-sonnet-5', 'claude-opus-5-5'] };
-    getActiveProvider.mockResolvedValue(provider);
-    selectModelForTask.mockResolvedValue({ model: 'claude-opus-5-5', tier: 'heavy', reason: 'learning-suggested', isLearningTierOverride: true, learningReason: 'proven high success at heavy' });
-
-    const r = await resolveAgentProviderAndModel(TASK);
-    expect(r.selectedModel).toBe('claude-opus-5-5');
-    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
-    expect(emitLog).toHaveBeenCalledWith('info', expect.any(String), expect.not.objectContaining({ downgradedFromDefault: true }));
-  });
-
-  it('never flags a downgrade when a downstream fallback-model pin replaced the learning selection (codex #8148 review)', async () => {
-    // selectModelForTask picks a weaker learning tier, but the provider is
-    // unavailable and its configured "Fallback Model" pin (a user choice on
-    // the FALLBACK provider) overrides selectedModel afterward — that
-    // substitution is unrelated to learning and must not inherit the flag.
-    const provider = { id: 'fallback-p', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-sonnet-5', 'pinned-fallback-model'] };
-    getActiveProvider.mockResolvedValue({ id: 'primary-p', type: 'cli' });
-    isProviderAvailable.mockReturnValue(false);
-    getProviderStatus.mockReturnValue({ message: 'down', reason: 'down' });
-    getAllProviders.mockResolvedValue({ providers: [{ id: 'primary-p', type: 'cli' }, provider] });
-    getFallbackProvider.mockResolvedValue({ provider, source: 'provider-fallback', model: 'pinned-fallback-model' });
-    selectModelForTask.mockResolvedValue({ model: 'claude-sonnet-5', tier: 'medium', reason: 'learning-suggested', isLearningTierOverride: true });
-
-    const r = await resolveAgentProviderAndModel(TASK);
-    expect(r.selectedModel).toBe('pinned-fallback-model');
-    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
-    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('pinned-fallback-model'), expect.not.objectContaining({ downgradedFromDefault: true }));
+    expect(await resolveAgentProviderAndModel(TASK)).toMatchObject({ selectedModel: 'model-default', modelSelection: { reason: 'provider-default' } });
+    expect(await resolveAgentProviderAndModel({ ...TASK, metadata: { model: 'light' } })).toMatchObject({ selectedModel: 'model-light', modelSelection: { reason: 'user-preference' } });
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.anything(), expect.anything());
   });
 
   it('fails with providerId + status when unavailable and no fallback exists', async () => {
@@ -613,23 +551,14 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(r.error).toMatch(/no-tool/);
   });
 
-  it('also flags a learning-tier downgrade on the public-review stage path (codex #8148 review)', async () => {
-    // resolvePublicReviewAgentProvider is a separate resolution function from
-    // the ordinary ("ARCHITECT role") path — it must share the same downgrade
-    // detection rather than silently omitting it for unpinned review runs.
-    const REVIEW_PROVIDER = { id: 'grok-cli', type: 'cli', command: 'grok', defaultModel: 'grok-heavy', models: ['grok-heavy', 'grok-light'] };
-    getAllProviders.mockResolvedValue({ providers: [REVIEW_PROVIDER], activeProvider: null });
-    selectModelForTask.mockResolvedValue({ model: 'grok-light', tier: 'medium', reason: 'learning-suggested', isLearningTierOverride: true });
+  it('resolves an unpinned public-review stage on the configured default through the real selector', async () => {
+    const actual = await vi.importActual('./agentModelSelection.js');
+    selectModelForTask.mockImplementation(actual.selectModelForTask);
+    const provider = { id: 'grok-cli', type: 'cli', command: 'grok', defaultModel: 'model-default', models: ['model-default'] };
+    getAllProviders.mockResolvedValue({ providers: [provider], activeProvider: null });
 
-    const r = await resolveAgentProviderAndModel(gateTask());
-    expect(r.ok).toBe(true);
-    expect(r.selectedModel).toBe('grok-light');
-    expect(r.modelSelection.downgradedFromDefault).toBe(true);
-    expect(r.modelSelection.configuredDefault).toBe('grok-heavy');
-    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('differs from provider\'s configured default'), expect.objectContaining({
-      downgradedFromDefault: true,
-      configuredDefault: 'grok-heavy',
-    }));
+    expect(await resolveAgentProviderAndModel(gateTask())).toMatchObject({ ok: true, selectedModel: 'model-default', modelSelection: { reason: 'provider-default' } });
+    expect(emitLog).not.toHaveBeenCalledWith('warn', expect.anything(), expect.anything());
   });
 
   it('requires a maintained actions recipe for binary providers and rejects API spawns', async () => {

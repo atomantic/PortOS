@@ -102,6 +102,11 @@ const INHERITED_ENV = {
 
   // Test-harness only — setting any of these on a real install is meaningless.
   VITEST: 'set by the vitest runner',
+  TMPDIR: 'OS temp-dir convention, pointed at a run-scoped root by vitest.config.js (#9032)',
+  TMP: 'OS temp-dir convention, pointed at a run-scoped root by vitest.config.js (#9032)',
+  TEMP: 'OS temp-dir convention, pointed at a run-scoped root by vitest.config.js (#9032)',
+  PORTOS_TEST_TEMP_ROOT: 'in-process marker so a re-import of vitest.config.js (e.g. vitest.config.test.js) reuses the same run-scoped temp root instead of minting a second one (#9032)',
+  NODE_DISABLE_COMPILE_CACHE: 'Node-provided switch, set to "1" by vitest.config.js so no child process (isolated TMPDIR or not) writes Node\'s module compile cache into the run-scoped temp root (#9051)',
   VITEST_FAST: 'opt-in fast-suite selector, CI/local test runs only',
   CI_EXPECT_SLASHDO_SUBMODULE: 'CI flag that turns a skipped slashdo adapter contract into a failure',
   TEST_DB_OK: 'test-harness flag for the DB-backed suites',

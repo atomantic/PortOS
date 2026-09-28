@@ -18,15 +18,35 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoSceneSplitSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
+  musicVideoLyricsImportSchema,
+  musicVideoTakeInputSchema,
+  musicVideoTakeReviewSchema,
+  musicVideoHandoffImportSchema,
+  musicVideoTreatmentUpdateSchema,
+  musicVideoTreatmentCompileSchema,
+  musicVideoTreatmentApplySchema,
+  musicVideoTreatmentProofReviewSchema,
+  musicVideoExcerptRequestSchema,
+  musicVideoExcerptNoteSchema,
+  musicVideoExcerptNoteUpdateSchema,
+  musicVideoRevisionStartSchema,
+  musicVideoRevisionReleaseSchema,
+  musicVideoAutoReviewStartSchema,
+  musicVideoAutoReviewResumeSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
+import { resolveGalleryImage } from '../lib/pathSafety.js';
+import { uploadSingle } from '../lib/multipart.js';
+import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
+import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import {
   listProjects,
   getProject,
@@ -39,8 +59,15 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  splitProjectScene,
   setProjectMidiTranscription,
+  appendSceneTakes,
+  appendTakesAcrossScenes,
+  selectSceneTake,
+  reviewSceneTake,
 } from '../services/musicVideo/projects.js';
+import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
+import { getHistoryItem } from '../services/videoGen/history.js';
 import {
   startMidiTranscription,
   attachMidiTranscriptionSseClient,
@@ -48,7 +75,23 @@ import {
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
+import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
+import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
+import {
+  startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
+} from '../services/musicVideo/revisionService.js';
+import {
+  startAutoReview, resumeAutoReview, stopAutoReview, cancelAutoReview,
+} from '../services/musicVideo/autoReviewService.js';
 import { planProject } from '../services/musicVideo/planner.js';
+import { parseLyricCues } from '../services/musicVideo/timedText.js';
+import {
+  updateTreatment,
+  compileTreatment,
+  previewTreatmentApply,
+  applyTreatment,
+  reviewProof,
+} from '../services/musicVideo/treatmentService.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -102,6 +145,27 @@ router.patch('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   await deleteProject(req.params.id);
   res.json({ ok: true });
+}));
+
+// Optional vocal stem (#8977): a full-length bounce of the vocal on the
+// master's timebase. Performance shots are conditioned on it instead of the
+// mix; the master stays the project's audio. Same audio formats and size cap
+// as a track upload.
+const vocalStemUpload = uploadSingle('stem', {
+  limits: { fileSize: MUSIC_UPLOAD_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (isSupportedMusicUpload(file)) cb(null, true);
+    else cb(new ServerError('Unsupported audio format — accepted: MP3, WAV, M4A, OGG, FLAC', { status: 400, code: 'VALIDATION_ERROR' }));
+  },
+});
+
+router.post('/:id/vocal-stem', vocalStemUpload, asyncHandler(async (req, res) => {
+  if (!req.file) throw new ServerError('No vocal stem file uploaded', { status: 400, code: 'VALIDATION_ERROR' });
+  res.json(await attachVocalStem(req.params.id, { tempPath: req.file.path, originalName: req.file.originalname }));
+}));
+
+router.delete('/:id/vocal-stem', asyncHandler(async (req, res) => {
+  res.json(await detachVocalStem(req.params.id));
 }));
 
 // Resolve a project's source audio to an absolute path under data/music/. The
@@ -173,6 +237,60 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
   const result = await planProject(req.params.id, { seedPrompts, providerId, model });
   res.json(result);
+}));
+
+// --- Pre-production treatment (#8980) ---
+// A structured brief, a compiled whole-song arc, per-shot direction keyed to
+// the board's scene ids and a proof checklist (services/musicVideo/treatment.js).
+// Every write names the revision it was made against; a stale one is a 409.
+router.patch('/:id/treatment', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoTreatmentUpdateSchema, req.body);
+  res.json(await updateTreatment(req.params.id, patch));
+}));
+
+// Compile is an explicit user action. `useAi: false` drafts deterministically
+// with no provider call; otherwise the chosen (or active) provider refines the
+// draft, and any failure degrades to the deterministic draft with a reason.
+router.post('/:id/treatment/compile', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentCompileSchema, req.body);
+  res.json(await compileTreatment(req.params.id, options));
+}));
+
+// Read-only: which scenes Apply would change, which hand-edited prompts it
+// keeps, and whether a stale input blocks it.
+router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
+  res.json(await previewTreatmentApply(req.params.id));
+}));
+
+router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentApplySchema, req.body);
+  res.json(await applyTreatment(req.params.id, options));
+}));
+
+router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
+  const review = validateRequest(musicVideoTreatmentProofReviewSchema, req.body);
+  res.json(await reviewProof(req.params.id, req.params.proofId, review));
+}));
+
+// Import timed lyric cues (#8964) from pasted LRC, SRT/WebVTT, or plain lines
+// (plain lines arrive untimed, ready to be timed by hand). `replace` swaps the
+// project's cue list; `append` adds after it. The cues persist through the
+// ordinary project PATCH path, so ids/normalization match hand edits.
+const MAX_LYRIC_CUES = 2000;
+router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
+  const { format = 'auto', text, mode = 'replace' } = validateRequest(musicVideoLyricsImportSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { format: detected, cues } = parseLyricCues(text, format);
+  if (cues.length === 0) {
+    throw new ServerError(`No lyric lines found in the ${detected} text`, { status: 422, code: 'NO_LYRICS' });
+  }
+  const lyricCues = mode === 'append' ? [...(project.lyricCues || []), ...cues] : cues;
+  if (lyricCues.length > MAX_LYRIC_CUES) {
+    throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const updated = await updateProject(project.id, { lyricCues });
+  res.json({ project: updated, imported: cues.length, format: detected });
 }));
 
 // --- Audio → MIDI transcription (MuScriptor) ---
@@ -249,6 +367,98 @@ router.post('/render/:jobId/cancel', (req, res) => {
   res.json({ ok: cancelRender(req.params.jobId) });
 });
 
+// --- Draft excerpt render (#8986) ---
+// A director-chosen [startSec, endSec) window re-rendered through the same
+// composed pipeline, plus a cut/cue contact sheet and timecoded review notes.
+// Kickoff returns { jobId, excerptId }; progress streams over SSE (mirrors the
+// full render above) on its OWN job map, so an excerpt draft and a full render
+// can run at once without contending for the same mutex.
+router.post('/:id/excerpt', asyncHandler(async (req, res) => {
+  const { startSec, endSec } = validateRequest(musicVideoExcerptRequestSchema, req.body);
+  res.json(await startExcerptRender(req.params.id, { startSec, endSec }));
+}));
+
+router.get('/excerpt/:jobId/events', (req, res) => {
+  const ok = attachExcerptRenderSseClient(req.params.jobId, res);
+  if (!ok) throw new ServerError('Excerpt render job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+
+router.post('/excerpt/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelExcerptRender(req.params.jobId) });
+});
+
+router.delete('/:id/excerpt/:excerptId', asyncHandler(async (req, res) => {
+  res.json(await deleteExcerpt(req.params.id, req.params.excerptId));
+}));
+
+router.post('/:id/excerpt/:excerptId/notes', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoExcerptNoteSchema, req.body);
+  const { project, note } = await addReviewNote(req.params.id, req.params.excerptId, input);
+  res.status(201).json({ project, note });
+}));
+
+router.patch('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoExcerptNoteUpdateSchema, req.body);
+  const { project, note } = await editReviewNote(req.params.id, req.params.excerptId, req.params.noteId, patch);
+  res.json({ project, note });
+}));
+
+router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, res) => {
+  res.json(await deleteReviewNote(req.params.id, req.params.excerptId, req.params.noteId));
+}));
+
+// --- Selective section revision (#8987) ---
+// Reject the flagged sections of a reviewed draft (their selected takes clear)
+// while every other section keeps its selection. Resume continues from the
+// persisted checkpoint: sections still without a take come back as
+// `needsGeneration` for the board to generate; once all hold one, the draft
+// window re-renders. A section holding a take is never asked to generate again,
+// so a render retry never re-submits paid generation.
+router.post('/:id/excerpt/:excerptId/revisions', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoRevisionStartSchema, req.body || {});
+  res.status(201).json(await startRevision(req.params.id, req.params.excerptId, input));
+}));
+
+router.post('/:id/revisions/:revisionId/resume', asyncHandler(async (req, res) => {
+  res.json(await resumeRevision(req.params.id, req.params.revisionId));
+}));
+
+router.post('/:id/revisions/:revisionId/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelRevision(req.params.id, req.params.revisionId));
+}));
+
+// A generation kickoff that failed client-side before reaching the queue
+// (network error, a refused request) leaves its section claimed for the
+// full lease with nothing running — clear the claim so the very next resume
+// hands the section out again immediately (#9011).
+router.post('/:id/revisions/:revisionId/release', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoRevisionReleaseSchema, req.body || {});
+  res.json(await releaseRevisionSection(req.params.id, req.params.revisionId, input.sceneId));
+}));
+
+// --- Opt-in automatic review/retries (#8988) ---
+// Start/resume write the checkpoint and return at once; the run advances in
+// the background (render → review → revise → generate → re-render) and
+// reports over the `music-video:auto-review` socket event. Only these
+// explicit requests start or resume a run — nothing at boot does.
+router.post('/:id/auto-reviews', asyncHandler(async (req, res) => {
+  const { providerId, model, ...input } = validateRequest(musicVideoAutoReviewStartSchema, req.body || {});
+  res.status(201).json(await startAutoReview(req.params.id, { ...input, reviewer: { providerId, model } }));
+}));
+
+router.post('/:id/auto-reviews/:runId/resume', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoAutoReviewResumeSchema, req.body || {});
+  res.json(await resumeAutoReview(req.params.id, req.params.runId, input));
+}));
+
+router.post('/:id/auto-reviews/:runId/stop', asyncHandler(async (req, res) => {
+  res.json(await stopAutoReview(req.params.id, req.params.runId));
+}));
+
+router.post('/:id/auto-reviews/:runId/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelAutoReview(req.params.id, req.params.runId));
+}));
+
 // --- Director scene board ---
 
 router.post('/:id/scenes', asyncHandler(async (req, res) => {
@@ -272,6 +482,99 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const updated = await reorderProjectScenes(req.params.id, sceneIds);
   res.json(updated);
+}));
+
+// Split a shot its backend cannot render in one take (#8977): a performance
+// longer than the lip-sync window, a Grok cutaway longer than its longest clip.
+router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// --- Scene takes (#8965) ---
+// Every render or import for a scene slot is kept as an immutable take; the
+// slot field is the director's explicit selection among them. A take's asset
+// must already exist in this install's media stores — an image in the gallery,
+// a clip in the video history (both reached through the existing upload
+// routes) — so a take can never point at an arbitrary file.
+async function takeAssetExists(kind, assetId) {
+  if (kind === 'image') return Boolean(resolveGalleryImage(assetId));
+  return Boolean(await getHistoryItem(assetId));
+}
+
+// Add one candidate take to a scene: the synchronous image lane's inline
+// render, or an asset the director imports from the gallery.
+router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
+  const { kind, assetId, source = 'imported', provider, originalName, use } = validateRequest(musicVideoTakeInputSchema, req.body);
+  if (!(await takeAssetExists(kind, assetId))) {
+    throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
+  }
+  const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use,
+  }]);
+  res.status(201).json({ scene, take: appended[0] });
+}));
+
+router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
+  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
+  const review = validateRequest(musicVideoTakeReviewSchema, req.body);
+  res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
+}));
+
+// --- External-asset handoff (#8965) ---
+// Export per-scene prompts + reference files for a tool PortOS does not drive
+// (e.g. Midjourney), and import what the director generated there. Nothing
+// here contacts the external service.
+router.get('/:id/handoff', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(buildHandoffManifest(project));
+}));
+
+// Downloadable ZIP counterpart (#8978): the manifest plus every reference
+// image and each scene's selected frame, so nothing has to be saved out of
+// the gallery by hand before attaching it in the external tool.
+router.get('/:id/handoff/bundle', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const { zip } = await buildHandoffBundle(project);
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="music-video-${project.id}-handoff.zip"`);
+  res.send(zip);
+}));
+
+// Associate already-uploaded assets with scenes. An item names its scene
+// explicitly or carries the manifest's file tag in `originalName`; an item that
+// resolves to no scene, or whose asset isn't in this install's media stores, is
+// reported in `skipped` rather than guessed. All matched items land in one
+// record write with `imported` source + provider provenance.
+router.post('/:id/handoff/import', asyncHandler(async (req, res) => {
+  const { provider, items } = validateRequest(musicVideoHandoffImportSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const sceneIds = new Set((project.scenes || []).map((scene) => scene.sceneId));
+  const accepted = [];
+  const skipped = [];
+  for (const item of items) {
+    const sceneId = item.sceneId || matchSceneByFileTag(project.scenes, item.originalName);
+    const skip = (reason) => skipped.push({ assetId: item.assetId, originalName: item.originalName ?? null, reason });
+    if (!sceneId || !sceneIds.has(sceneId)) { skip('no-matching-scene'); continue; }
+    if (!musicVideoTakeInputSchema.safeParse({ kind: item.kind, assetId: item.assetId }).success
+      || !(await takeAssetExists(item.kind, item.assetId))) { skip('asset-not-found'); continue; }
+    accepted.push({ sceneId, kind: item.kind, assetId: item.assetId, source: 'imported', provider, originalName: item.originalName, use: item.use });
+  }
+  if (accepted.length === 0) {
+    return res.json({ project, imported: [], skipped });
+  }
+  const { project: next, appended } = await appendTakesAcrossScenes(project.id, accepted);
+  res.json({
+    project: next,
+    imported: appended.map(({ sceneId, take }) => ({ sceneId, takeId: take.takeId, kind: take.kind, assetId: take.assetId, originalName: take.originalName })),
+    skipped,
+  });
 }));
 
 export default router;

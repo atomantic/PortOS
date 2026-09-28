@@ -740,8 +740,24 @@ const PYTHON_BASENAMES = IS_WIN
   ? ['python.exe', 'python3.exe']
   : ['python', 'python3'];
 
+// A UNC share (`\\host\share\…` or its POSIX-typed twin `//host/share/…`)
+// names a binary that lives on a REMOTE machine — launching it hands
+// execution to whoever controls that share. Checked ahead of the basename
+// test below so `\\attacker\share\python.exe` never gets to the point where
+// its basename ("python.exe") would otherwise pass.
+const isUncPath = (p) => /^\\\\/.test(p) || /^\/\//.test(p);
+
+// A path with directory separators that isn't absolute (`./venv/bin/python3`,
+// `subdir/python3`, a bare relative walk) resolves against whatever the
+// server process's cwd happens to be when the route runs — attacker-
+// influenced in ways an absolute path or a bare basename (resolved on PATH
+// by execFile itself) is not. A bare basename has no separator and is exempt.
+const isAbsolutePath = (p) => /^\//.test(p) || /^[a-zA-Z]:[\\/]/.test(p) || /^\\(?!\\)/.test(p);
+
 export function isAllowedPython(pythonPath) {
   if (typeof pythonPath !== 'string' || !pythonPath) return false;
+  if (isUncPath(pythonPath)) return false;
+  if (/[\\/]/.test(pythonPath) && !isAbsolutePath(pythonPath)) return false;
   if (PYTHON_CANDIDATES.includes(pythonPath)) return true;
   // Allow any path whose basename looks like a python interpreter — covers
   // user-typed venvs (`/path/to/.venv/bin/python3.12`) without opening up

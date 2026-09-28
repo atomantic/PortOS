@@ -620,6 +620,13 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   provider still benches it, so the Providers page and every unpinned caller
  *   learn that this provider is sick. The one exception is a usage limit, whose
  *   observed-block ledger a pinned caller records itself.
+ * @param {boolean} [args.toolFree=false] — the prompt carries text this caller
+ *   does not control (AI app detection, #9008). A headless CLI run then gets no
+ *   approval-bypass flag and, where its vendor has one, its tool-disable switch
+ *   (`toolFreeOneShotArgs` in lib/providerVendors.js). Rides every fallback tier.
+ *   It does not reach a TUI run, whose interactive argv has no such posture —
+ *   a caller that must stay tool-free gates on `isToolFreeOneShotProvider`
+ *   and disables fallback.
  * @param {*} [args.responseSchema] — the caller's declared response schema
  *   (issue #2350). A Zod-style schema (`.safeParse`/`.parse`) or a bare
  *   predicate `(parsedValue) => boolean`. When set, the runner enables Tier-2
@@ -1388,6 +1395,7 @@ async function executeProviderRunOnce({
   outputReserveTokens,
   callerPolicy = null,
   allowFallback = true,
+  toolFree = false,
 }) {
   // Caller EXECUTION-MODE policy, enforced on the EXPLICIT provider before a run
   // record exists and carried into fallback selection below, so the pin and the
@@ -1650,7 +1658,7 @@ async function executeProviderRunOnce({
     }
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
-      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
+      executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout, toolFree }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun now owns the primary wall-clock timeout (it

@@ -2271,3 +2271,11 @@ CREATE TABLE IF NOT EXISTS catalog_pending_applies (
       payload JSONB NOT NULL,
       PRIMARY KEY (kind, id)
     );
+
+CREATE TABLE IF NOT EXISTS media_prompt_examinations (
+      id TEXT PRIMARY KEY,
+      source_key TEXT NOT NULL,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+CREATE INDEX IF NOT EXISTS idx_media_prompt_examinations_created ON media_prompt_examinations (created_at DESC, id DESC);

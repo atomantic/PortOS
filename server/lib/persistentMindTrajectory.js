@@ -1,3 +1,4 @@
+import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from './promptFencing.js';
 /**
  * Pure persistent-mind trajectory helpers.
  *
@@ -420,10 +421,19 @@ export function assemblePersistentMindContext({
     ? journalDigest
     : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
   const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
+  // Leave room for the full delimiter even with a small context budget.
+  // Truncating the assembled prefix must never cut through a memory fence.
+  const memoryBudget = Math.max(0, Math.min(
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
+    cap - identityText.length - instructionsText.length - mindId.length - 500,
+  ));
+  const memoryBlock = memoryBudget > 0
+    ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
+    : '(omitted due to context budget)';
   const prefix = [
     `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
     `# Operating instructions\n${instructionsText || '(none)'}`,
-    `# Curated memories\n${memoryText || '(none)'}`,
+    `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`,
     `# Decision journal\n${journalText || '(none)'}`,
   ].join('\n\n');
   const summaryLines = effectiveReadyRollups

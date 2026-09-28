@@ -241,8 +241,14 @@ describe('isPg17OnlyDirective (sed-replacement line filter)', () => {
 });
 
 describe('importDumpFile (no-shell streaming import)', () => {
+  const dumpDirs = [];
+
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    for (const dir of dumpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
   // Build a fake psql child process backed by real streams. `closeOnKill`
@@ -283,6 +289,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
     spawn.mockReturnValue(child);
 
     const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    dumpDirs.push(dir);
     const dumpPath = pathJoin(dir, 'dump.sql');
     writeFileSync(dumpPath,
       '\\restrict token\n' +
@@ -320,6 +327,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
     spawn.mockReturnValue(child);
 
     const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    dumpDirs.push(dir);
     const dumpPath = pathJoin(dir, 'dump.sql');
     // A lone 0xE9 byte (LATIN1 'é') is NOT valid standalone UTF-8; a utf8
     // decode→re-encode would replace it with 0xEFBFBD. Plus a valid multibyte
@@ -344,6 +352,7 @@ describe('importDumpFile (no-shell streaming import)', () => {
     spawn.mockReturnValue(child);
 
     const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    dumpDirs.push(dir);
     const dumpPath = pathJoin(dir, 'dump.sql');
     // A CRLF file with a stripped directive line and two data lines. The CR
     // bytes on the surviving lines must be preserved.

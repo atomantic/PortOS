@@ -2,6 +2,13 @@
 // boards, and media assets. Extracted verbatim from ensureSchemaImpl() in
 // server/lib/db.js (#2832); idempotent, runs on every boot.
 export const mediaDdl = [
+    `CREATE TABLE IF NOT EXISTS media_prompt_examinations (
+      id TEXT PRIMARY KEY,
+      source_key TEXT NOT NULL,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_media_prompt_examinations_created ON media_prompt_examinations (created_at DESC, id DESC)`,
     // Creative Director projects (Phase 3, issue #997). One row per project;
     // the full record lives in `data` JSONB, with status/created_at/updated_at
     // mirrored into columns (kept in lockstep on every write) for future

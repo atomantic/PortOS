@@ -218,3 +218,86 @@ describe('GET /api/settings — external token redaction', () => {
     expect(persisted.timezone).toBe('America/Los_Angeles');
   });
 });
+
+// Regression for #8997: `videoGen.fal.apiKey` / `videoGen.reactor.apiKey` are
+// nested one level deeper than the #1821 tokens above (`videoGen.<provider>.
+// apiKey` rather than `<parent>.apiKey`), and `hydratePrivateKeys` re-injects
+// them into `settings.videoGen` on every read. The Settings UI reads only
+// presence from GET /api/settings/credentials and writes through the
+// write-only PUT /api/settings/credentials/:id setter.
+describe('GET /api/settings — videoGen fal/reactor token redaction (#8997)', () => {
+  it('omits videoGen.fal.apiKey and videoGen.reactor.apiKey while preserving siblings', async () => {
+    await seedSettings({
+      videoGen: {
+        fal: { apiKey: 'fal_secret123', model: 'kling' },
+        reactor: { apiKey: 'reactor_secret456', enabled: true },
+      },
+    });
+    const app = await buildApp();
+    const res = await request(app).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.videoGen?.fal?.apiKey).toBeUndefined();
+    expect(res.body.videoGen?.reactor?.apiKey).toBeUndefined();
+    expect(res.body.videoGen?.fal?.model).toBe('kling');
+    expect(res.body.videoGen?.reactor?.enabled).toBe(true);
+    // Redaction is response-only.
+    const persisted = readSettingsFile();
+    expect(persisted.videoGen?.fal?.apiKey).toBe('fal_secret123');
+    expect(persisted.videoGen?.reactor?.apiKey).toBe('reactor_secret456');
+  });
+
+  it('also redacts the fal/reactor keys from the PUT /api/settings save response', async () => {
+    await seedSettings({
+      videoGen: { fal: { apiKey: 'fal_secret123' }, reactor: { apiKey: 'reactor_secret456' } },
+    });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'UTC' });
+    expect(res.status).toBe(200);
+    expect(res.body.videoGen?.fal?.apiKey).toBeUndefined();
+    expect(res.body.videoGen?.reactor?.apiKey).toBeUndefined();
+    // On-disk values move into the private key store, same as hfToken/civitai.
+    const persisted = readSettingsFile();
+    expect(persisted.videoGen?.fal?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().fal).toBe('fal_secret123');
+    expect(persisted.videoGen?.reactor?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().reactor).toBe('reactor_secret456');
+  });
+
+  it('preserves a persisted fal.apiKey when a PUT replaces videoGen.fal without it', async () => {
+    await seedSettings({ videoGen: { fal: { apiKey: 'fal_keepme', model: 'kling' } } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ videoGen: { fal: { model: 'veo' } } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.videoGen?.fal?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().fal).toBe('fal_keepme');
+    expect(persisted.videoGen?.fal?.model).toBe('veo');
+    expect(res.body.videoGen?.fal?.apiKey).toBeUndefined();
+  });
+
+  it('preserves a persisted reactor.apiKey when a PUT replaces videoGen.reactor without it', async () => {
+    await seedSettings({ videoGen: { reactor: { apiKey: 'reactor_keepme', enabled: true } } });
+    const app = await buildApp();
+    const res = await request(app)
+      .put('/api/settings')
+      .send({ videoGen: { reactor: { enabled: false } } });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.videoGen?.reactor?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().reactor).toBe('reactor_keepme');
+    expect(persisted.videoGen?.reactor?.enabled).toBe(false);
+  });
+
+  it('leaves a persisted fal.apiKey untouched when the PUT omits videoGen entirely', async () => {
+    await seedSettings({ videoGen: { fal: { apiKey: 'fal_keepme' } }, timezone: 'UTC' });
+    const app = await buildApp();
+    const res = await request(app).put('/api/settings').send({ timezone: 'America/Los_Angeles' });
+    expect(res.status).toBe(200);
+    const persisted = readSettingsFile();
+    expect(persisted.videoGen?.fal?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().fal).toBe('fal_keepme');
+    expect(persisted.timezone).toBe('America/Los_Angeles');
+  });
+});

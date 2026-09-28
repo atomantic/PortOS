@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   getLoom: vi.fn(async () => null),
   prepareRemoteMediaJob: vi.fn(),
   prepareVideoGenParams: vi.fn(),
+  preparePerformanceShot: vi.fn(async () => null),
+  assertRevisionOpen: vi.fn(async () => {}),
 }));
 
 vi.mock('../../lib/federatedMediaRequest.js', () => ({
@@ -27,6 +29,8 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
   fableLoomVideoCapabilities: mocks.fableLoomVideoCapabilities,
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
+vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
+vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
 vi.mock('./prepareParams.js', async (importOriginal) => ({
   ...await importOriginal(),
   cleanupMultipartTemp: mocks.cleanupMultipartTemp,
@@ -63,6 +67,7 @@ describe('submitVideoGenJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.enqueueJob.mockReturnValue(queued);
+    mocks.preparePerformanceShot.mockResolvedValue(null);
   });
 
   it('submits a federated job with only the remote-media marker', async () => {
@@ -184,5 +189,68 @@ describe('submitVideoGenJob', () => {
       fableLoom: { loomId: 'loom-example', sceneId: 'scene-example' },
     }, {})).rejects.toBe(failure);
     expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+  });
+
+  describe('music-video performance shots (#8977)', () => {
+    const musicVideo = { projectId: 'mv-1', sceneId: 'mvs-1' };
+    const falPrepared = () => ({
+      backend: 'fal', cleanupStaged: vi.fn(async () => {}),
+      sourceImagePath: '/example/images/frame.png', uploadedTempPath: null,
+    });
+
+    it('enqueues the lip-sync model, song slice and shot instruction instead of a clip-length pin', async () => {
+      const shotInstruction = { version: 1, shotMode: 'performance', edit: { inSec: 1.775, outSec: 3.275 } };
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.preparePerformanceShot.mockResolvedValue({
+        audioFilePath: '/example/uploads/mv-performance-1.wav', shotInstruction,
+        modelId: 'minimax/h3-max/lip-sync/image-to-video', enableTranscription: true,
+      });
+
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', falDuration: 6, musicVideo, mode: 'image' }, {});
+      expect(mocks.preparePerformanceShot).toHaveBeenCalledWith({
+        musicVideo, backend: 'fal', sourceImagePath: '/example/images/frame.png', mode: 'image',
+      });
+      const { params } = mocks.enqueueJob.mock.calls[0][0];
+      expect(params).toMatchObject({
+        mode: 'fal', modelId: 'minimax/h3-max/lip-sync/image-to-video',
+        audioFilePath: '/example/uploads/mv-performance-1.wav',
+        lipSync: { enableTranscription: true }, shotInstruction, musicVideo,
+      });
+      expect(params.duration).toBeUndefined();
+    });
+
+    it('refuses a performance shot the backend cannot render and releases what was staged', async () => {
+      const prepared = { ...falPrepared(), backend: 'grok', grok: { grokPath: '/example/grok' } };
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+      const refusal = Object.assign(new Error('Grok video is cutaway-only'), { status: 400, code: 'MUSIC_VIDEO_PERFORMANCE_UNSUPPORTED' });
+      mocks.preparePerformanceShot.mockRejectedValue(refusal);
+
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'grok', musicVideo }, {})).rejects.toBe(refusal);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses a kickoff tagged for a revision that has since closed, as the last step before the queue write (#9011)', async () => {
+      const closed = Object.assign(new Error('This revision is already canceled'), { status: 409, code: 'REVISION_CLOSED' });
+      mocks.assertRevisionOpen.mockRejectedValueOnce(closed);
+      const tagged = { ...musicVideo, revisionId: 'mvr-1' };
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo: tagged }, {})).rejects.toBe(closed);
+      expect(mocks.assertRevisionOpen).toHaveBeenCalledWith('mv-1', 'mvr-1', { sceneId: musicVideo.sceneId, kind: 'video' });
+      // The check runs immediately before enqueueJob — after staging, not before
+      // it — so the race window against a concurrent cancel is as small as this
+      // request can make it; a refusal there still rolls back what was staged.
+      expect(mocks.prepareVideoGenParams).toHaveBeenCalledTimes(1);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('does not check for a revision when the tag carries no revisionId', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo }, {});
+      expect(mocks.assertRevisionOpen).not.toHaveBeenCalled();
+    });
   });
 });

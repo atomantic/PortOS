@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, utimes } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +11,8 @@ const CATALOG = JSON.stringify({
 });
 
 const respondWith = (body, ok = true) => async () => ({ ok, text: async () => body });
+
+const tempRoots = [];
 
 let cacheHome;
 let env;
@@ -24,8 +27,13 @@ const seedStaleCatalog = async (body = CATALOG) => {
 
 beforeEach(async () => {
   cacheHome = await mkdtemp(join(tmpdir(), 'opencode-catalog-'));
+  tempRoots.push(cacheHome);
   env = { XDG_CACHE_HOME: cacheHome };
   cachePath = join(cacheHome, 'opencode', 'models.json');
+});
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('primeOpencodeCatalogCache', () => {

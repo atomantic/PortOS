@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { resolveTestPython, PY_TEST_TIMEOUT_MS, PY_SUBPROCESS_TIMEOUT_MS } from '../server/lib/testHelper.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'upscale_ltx25.py');
@@ -41,6 +41,21 @@ const scratch = mkdtempSync(join(tmpdir(), 'portos-upscale-runner-'));
 const REFERENCE = join(scratch, 'source.mp4');
 const ADAPTER = join(scratch, 'adapter.safetensors');
 writeFileSync(REFERENCE, 'not really a video');
+
+// Every mkdtempSync root this file creates (the module-level scratch plus one
+// per test below) so a single afterAll sweeps them all.
+const tempRoots = [scratch];
+const makeTempRoot = (prefix) => {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  tempRoots.push(root);
+  return root;
+};
+
+afterAll(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // A real safetensors file: 8-byte little-endian header length, then the JSON
 // header. Written rather than mocked because the header parse IS the thing
@@ -164,7 +179,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — capability gate (#6512)', () => {
   // LTX-2.3 Gemma 3 id — the wrong conditioner for these weights AND an
   // unannounced multi-GB download. That fallback is why this is a refusal.
   it('refuses a model pack missing its own text encoder', () => {
-    const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-pack-'));
+    const pack = makeTempRoot('portos-ltx25-pack-');
     expect(call(`runner.validate_model_dir(${JSON.stringify(pack)})`))
       .toMatch(/^REJECTED:.*text_encoder\/config\.json/);
   }, PY_TEST_TIMEOUT_MS);
@@ -292,7 +307,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
   // Mirrors BasePipeline._resolve_safetensors: plain name wins, else the
   // lexicographically last versioned file, else None so the caller can say so.
   it('resolves the same transformer file the pipeline would', () => {
-    const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-dit-'));
+    const pack = makeTempRoot('portos-ltx25-dit-');
     const resolve = (dir) => call(`repr(runner.resolve_transformer_path(__import__("pathlib").Path(${JSON.stringify(dir)})) and runner.resolve_transformer_path(__import__("pathlib").Path(${JSON.stringify(dir)})).name)`);
     expect(resolve(pack)).toBe('None');
 
@@ -310,7 +325,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
   // layout itself — and refuses dev WITHOUT the LoRA, because the distilled
   // schedule on an un-distilled model is not a fallback, it is a wrong render.
   it('resolves the dev + distilled-LoRA layout, preferring a pre-fused distilled file', () => {
-    const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-layout-'));
+    const pack = makeTempRoot('portos-ltx25-layout-');
     const layout = (dir) => call(`(lambda t, loras: [t.name, [(__import__("pathlib").Path(p).name, s) for p, s in loras]])(*runner.resolve_transformer_layout(__import__("pathlib").Path(${JSON.stringify(dir)})))`);
     expect(layout(pack)).toMatch(/^REJECTED:.*no transformer weight file/);
 

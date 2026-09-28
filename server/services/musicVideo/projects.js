@@ -157,6 +157,58 @@ export async function reorderProjectScenes(id, orderedIds) {
   return next;
 }
 
+/**
+ * Split a shot longer than its backend renders in one take into contiguous
+ * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene).
+ * Returns `{ project, scenes }` — the persisted project and the pieces.
+ */
+export async function splitProjectScene(id, sceneId, options = {}) {
+  const { splitScene } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
+}
+
+// ---- scene takes (#8965) ----
+// Append candidate takes to one scene: `{ scene, appended }`. A take fills its
+// slot only while the slot is empty — never replaces a selection (takes.js).
+export async function appendSceneTakes(id, sceneId, inputs) {
+  const result = await (await selectBackend()).appendSceneTakes(id, sceneId, inputs);
+  emitRecordUpdated('musicVideoProject', id);
+  return result;
+}
+
+/** Append takes across scenes in one write (handoff import): `{ project, appended }`. */
+export async function appendTakesAcrossScenes(id, items) {
+  const result = await (await selectBackend()).appendTakesAcrossScenes(id, items);
+  emitRecordUpdated('musicVideoProject', id);
+  return result;
+}
+
+/** Explicitly select a take for its scene slot. Returns the updated scene. */
+export async function selectSceneTake(id, sceneId, takeId) {
+  const scene = await (await selectBackend()).selectSceneTake(id, sceneId, takeId);
+  emitRecordUpdated('musicVideoProject', id);
+  return scene;
+}
+
+/** Reject/restore a take and/or set its note. Returns the updated scene. */
+export async function reviewSceneTake(id, sceneId, takeId, review) {
+  const scene = await (await selectBackend()).reviewSceneTake(id, sceneId, takeId, review);
+  emitRecordUpdated('musicVideoProject', id);
+  return scene;
+}
+
+/**
+ * Apply a pure record transform under the backend's write serialization (file
+ * write tail / PG row lock). `transform(project)` returns `{ project, ...result }`;
+ * resolves to that outcome with the persisted project. Used by the treatment
+ * service (#8980) so its revision checks run against the freshest record.
+ */
+export async function mutateProjectRecord(id, transform) {
+  const outcome = await (await selectBackend()).mutateProjectRecord(id, transform);
+  emitRecordUpdated('musicVideoProject', id);
+  return outcome;
+}
+
 /** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
 export async function mergeProjectsFromSync(remoteProjects, options = {}) {
   return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);

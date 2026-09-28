@@ -127,6 +127,7 @@ import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
 import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
+import { recoverStuckMusicVideoExcerpts } from './musicVideo/excerptRender.js';
 import { recoverInterruptedModels as recoverInterruptedThreejsModels } from './threejsModels/index.js';
 import { recoverInterruptedModels as recoverInterruptedImageTo3dModels } from './imageTo3d/models.js';
 import { startPolling } from './instances.js';
@@ -428,6 +429,7 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
   recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
+  recoverStuckMusicVideoExcerpts().catch(err => logBootstrapFailure('❌ Music Video excerpt recovery failed', err));
   // A provider child cannot survive a server restart. Make interrupted
   // Three.js generations retryable; this is state recovery only, never a
   // cold-bootstrap provider call.

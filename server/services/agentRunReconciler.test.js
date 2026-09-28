@@ -80,6 +80,14 @@ afterEach(() => {
 afterAll(() => {
   rmSync(LEDGER_DIR, { recursive: true, force: true });
   rmSync(RUNS_DIR, { recursive: true, force: true });
+  // The path-traversal test below deliberately writes ONE FIXTURE outside
+  // RUNS_DIR (`join(RUNS_DIR, '..', 'escape')`, i.e. a sibling directory
+  // literally named "escape" in the shared temp root) to prove the service
+  // refuses to follow it back in. That fixture is the point of the test, not
+  // application output, but it still has to be swept here — nothing else
+  // owns a path outside RUNS_DIR, and left behind it fails PortOS's own
+  // run-scoped temp-root leak check (#9039).
+  rmSync(join(RUNS_DIR, '..', 'escape'), { recursive: true, force: true });
 });
 
 describe('getRunReconciliation', () => {

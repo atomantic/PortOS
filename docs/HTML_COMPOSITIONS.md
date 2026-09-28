@@ -50,6 +50,77 @@ with the same tail fade, and removes the temporary file after completion or
 failure. No music model, Python runtime, downloaded samples or music-library
 write is required. Missing or invalid audio fails the job.
 
+## Several formats from one timeline
+
+One job can render the same composition at several aspect ratios, so a launch
+posted to several platforms is one film recomposed per frame rather than one
+agent run per format. The composition declares the extra sizes it supports and
+an optional layout hook:
+
+```js
+globalThis.portosComposition = {
+  durationSec: 20, fps: 24, width: 1920, height: 1080,
+  formats: ['1920x1080', '1080x1920', '1080x1080'],
+  async layout({ width, height }) { /* reflow type and UI for this frame */ },
+  async seek(t) { /* same timeline in every format */ },
+};
+```
+
+The render request names formats: `"formats": ["landscape", "vertical", "square"]`
+(1920×1080, 1080×1920, 1080×1080). The renderer renders them in that canonical
+order, in sequence, on the same page and frozen asset snapshot: for each one it
+resizes the viewport, awaits `layout({ width, height })` when defined, then seeks
+every frame. Duration, fps and timing are shared, and synthesized music is
+rendered once and muxed into every format. A requested format whose size is
+neither the composition's own `width`×`height` nor listed in `formats` fails
+the job before any output, naming the missing size. Without `formats` in the
+request, a job renders the composition's own size exactly as before.
+
+Each format is its own Media History entry (`<jobId>-<format>`), all written in
+one history update, so a job registers every format or none. The completed
+job result keeps `generationId` as the job and names the first format in
+`id`/`filename`/`thumbnail`, and lists all of
+them in `videos: [{ format, id, filename, thumbnail, path }]`.
+
+## Motion kit
+
+`server/services/htmlComposition/kit/portos-motion.js` is a deterministic
+helper script for compositions. Copy it beside `index.html`, load it with
+`<script src="portos-motion.js"></script>`, and read `globalThis.PortosMotion`:
+
+- `spring(t, stiffness, damping)` — closed-form damped spring from 0 to 1, a
+  pure function of the time since the move started. `SPRINGS` holds
+  `snappy`, `default`, `heavy` and `playful` presets.
+- `track(t, [[time, value], ...])` — a value that retargets several times, as
+  one spring per change, so motion never restarts or pops.
+- `indicator(t, stops, width)`, `swapAlpha(t, tIn, tOut)`, `loopT(t, dur)` —
+  stretching selection bars, content swaps inside a morphing container, loops.
+- `rng(seed)` — seeded noise (mulberry32); never use `Math.random`.
+- `beats(bpm)` — a beat grid (`at`, `bar`, `index`, `phase`, `list`).
+- `renderCues({ sampleRate, durationSec, cues })`, `mixCues`, `toPcm` —
+  synthesized `click`, `tick`, `pop`, `thump`, `whoosh` and `riser` cues
+  that return the plain PCM array `renderAudio` needs.
+
+Launch-video runs start with the kit already copied into their composition
+directory. It is ordinary UTF-8 source, so it passes the launch asset gate.
+
+## Proof renders (contact sheets)
+
+Add `proof: { everySec: 1 }` (0.25–10 seconds) to the render request to get a
+silent contact sheet instead of a video. `proof.format` (`landscape`,
+`vertical` or `square`) checks one declared framing, running `layout` first;
+a proof request cannot also carry `formats`. The renderer applies the same contract
+and launch-video gates, seeks one frame per interval (at most 60), and tiles
+them six across at phone size (360px wide, 240px for vertical) into one PNG.
+A proof is silent, so the request must omit `musicTrack` and
+`synthesizeMusic`. Nothing is registered in Media History and no
+launch-video artifacts are delivered. The completed job's result carries
+`proof: { file, url, times, columns, width, height }` (plus `format` when one was requested), where `file` is
+relative to the data directory (never an absolute host path) and `url` serves
+it under `/data/`; tile *n* shows `times[n]`.
+Launch runs write `proofs/contact-<jobId>.png` beside the run; other
+compositions write `data/composition-proofs/`. Both are excluded from backups.
+
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,
 complete, error and canceled SSE frames. Cancel through
@@ -77,13 +148,53 @@ a temporary browser profile and data root, never the live managed browser.
 Set `CHROME_PATH` when Chrome is not in a standard location. The suite skips
 explicitly when either binary is unavailable; route and queue tests still run.
 
+## Music-video typography overlays
+
+A Music Video project whose composition manifest is in `composed` mode
+(#8984) renders its timed text cues through this same sandbox. PortOS writes a
+generated overlay page (`server/services/musicVideo/composition.js`) to
+`data/music-video-compositions/<jobId>/`, opens it with the composition
+browser on a transparent background, and captures only the time ranges where
+text is on screen into alpha overlay clips. The music-video renderer then lays
+them over the cut footage in its single ffmpeg pass, so the song remains the
+only audio. A cue's state at a time is a pure function of that time
+(`cueStateAt`), and text is kept inside a 10% title-safe inset at any aspect.
+The scratch directory is removed when the render ends, swept at boot, and
+excluded from backups.
+
+A composed render also honors each scene's visual layer (#8985): its
+generated footage (the default), its selected still frame with a deterministic
+hold, push-in or pan, or a title card — a solid colour whose text is drawn by
+the same typography overlay for exactly that section. Still and card sections
+need an authored start/end instead of a clip, and every section is cut to a
+whole number of frames on the song's timebase, so the edit never drifts from
+the authored timeline. A plain concat render ignores the layer and plays
+footage, exactly as before.
+
+A project's pre-production **treatment** (#8980,
+`server/services/musicVideo/treatment.js`) plans for this layer instead of
+fighting it. Each directed shot names a typography role (none, subtitle,
+hero) and a reserved region (upper third, center, lower third); applying the
+treatment adds that region to the scene's frame and motion prompts as clean,
+low-detail negative space and asks the image/video model for no lettering, so
+the generated picture leaves room for the composited text rather than baking
+text into pixels. Apply can also add text cues from the timed lyrics, placed
+in each shot's reserved region; it never switches the render to `composed`.
+Apply also maps direction onto the scene's own render fields, but only while
+they are still at their defaults: a shot routed to 2D/code motion becomes a
+title card carrying its first sung line (or a pushed-in still when it has no
+line), and a performance shot becomes a `performance` shot mode only when the
+project's video backend has a source-audio lip-sync lane (fal.ai today).
+The treatment's proof checklist treats readable text and audio alignment as
+judgeable only in the final render.
+
 ## Launch-video admission (API foundation)
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
 This option is required for directories rooted at `launch-videos/` and can also
 be applied to other composition directories. An app's **Launch Video** tab
 (`/apps/<appId>/launch-video`, also linked from Overview) queues a user-triggered CoS task with
-tone, direction, format, duration (15–120 seconds), an optional **Dynamic motion
+tone, direction, one or more formats (landscape, vertical, square), duration (15–120 seconds), an optional **Dynamic motion
 graphics** style, optional generated original
 music or an existing Music-library track (each listed with its filename and an
 inline audio preview), and an optional
@@ -100,12 +211,28 @@ media job, and passes the resulting library filename to the renderer. An explici
 service choice still reports missing setup rather than silently changing methods. Shorter music beds loop to fill the video. A generation
 failure is reported instead of silently dropping the soundtrack.
 
-Dynamic motion graphics (`motionGraphics: true`, off by default) asks the agent for
-a beat-cut showreel instead of a paced walkthrough: palette color-field swaps,
-kinetic typography, easing showcases, generative geometry seeded from `t`, an
-optional HUD frame, and a name lockup endcard, with the recreated key flow kept
-as one or two beats. The same privacy and reading-time gates apply, so every
-kinetic word and HUD label is a storyboard line with a readable hold.
+**Motion style** (`motionStyle`) picks the film's grammar: `walkthrough` (the
+default: a paced tour of the key flow), `showreel` (beat-cut kinetic type,
+color-field swaps and generative geometry around the key flow) or `ui-morph`
+(one container that never cuts, morphing through the product's states on a
+120 BPM beat and looping seamlessly). The legacy `motionGraphics: true` means
+`showreel`. Every style carries house rules: springs instead of easing curves,
+a hook in the first two seconds, something new every two to four seconds, one
+accent color, and no centered-title-on-gradient, fade-everything, corner-label
+or frame-border defaults. The same privacy and reading-time gates apply, so
+every kinetic word is a storyboard line with a readable hold.
+
+**Critique rounds** (`critiqueRounds`, 0–4, default 2) make the agent render a
+proof contact sheet, score its own frames (hook, phone readability, variety,
+composition, brand accuracy, storyboard fidelity), log the three worst problems
+in `plan.md`, fix them and proof again before the final render, stopping early
+when every score reaches 8.
+
+**Consult motion skills** (`motionSkills: true`) is offered once
+`npm run setup:motion -- --skills` has installed any skill pack. The server
+resolves the installed skill names and refuses the option when none are
+present. Skills are technique references only: the run still produces the
+`portosComposition` contract and renders through PortOS.
 
 The task supplies the selected app repository and process ports separately from
 the PortOS media API origin. Product evidence comes from that repository; PortOS
@@ -115,10 +242,18 @@ App runs pass `appId` and `runId` together in `launchVideo`, with directory exac
 `launch-videos/<appId>/<runId>/composition`. The run is pinned to this instance.
 On success, the renderer exclusively creates `plan.md`, `storyboard.json`,
 `caption.txt`, `video.mp4` and `poster.jpg` beside `composition/`, using the
-validated in-memory source snapshot. Media History retains its normal video
+validated in-memory source snapshot. A run that asked for several formats
+(`formats` on the launch-video request; the older single `format` is a
+one-item list) gets one composition written against `layout`, and its render
+delivers `video-<format>.mp4` and `poster-<format>.jpg` per format with the
+plan, storyboard and caption once. Every format's history entry carries the
+same `launchVideo.runId`, and the privacy and storyboard gates run once per job
+on the frozen assets. A revision re-renders every format its source run
+delivered. Media History retains its normal video
 and thumbnail copies with app/run metadata. The Launch Video tab previews the
-recent takes (the selected one is the `?video=<id>` URL param, newest by
-default), with caption copy, an MP4 download, and a new-run action. Existing artifacts are never
+recent takes (the selected video is the `?video=<id>` URL param, newest by
+default), groups a run's formats into one take with a format switcher and a
+download per format, and offers caption copy and a new-run action. Existing artifacts are never
 overwritten. This reuses CoS queues and media history; it adds no record store.
 
 Alongside `index.html`, put non-empty `plan.md`, `caption.txt`, and
@@ -158,3 +293,20 @@ are text-pattern and declared-storyboard checks, not proof that arbitrary code
 cannot construct private text or violate its declared timing. Producers must
 still avoid secrets and live records, use fictional content, and make the
 composition faithfully implement the storyboard. Nothing is uploaded or posted.
+
+## Motion studio setup
+
+`npm run setup:motion` reports and installs the optional motion toolkit:
+
+- **ffmpeg** — installed with Homebrew, winget, apt or dnf after confirmation
+  (`--yes` skips the prompt; non-interactive runs print the command instead).
+- **Skill packs** (`--skills` for all, or `--skills=hyperframes,remotion`) —
+  HyperFrames (`hyperframes-animation`, `hyperframes-creative`,
+  `motion-graphics`, `product-launch-video`), Remotion
+  (`remotion-best-practices`) and Claude Animation (`claude-animation`),
+  installed user-wide for Claude Code and Codex through the `skills` CLI.
+- `--status [--json]` prints what is installed. `GET
+  /api/html-composition/toolkit` returns the same view to the launch-video form.
+
+The seek(t) renderer, motion kit and proofs need nothing beyond ffmpeg and the
+managed browser (`npm run setup:browser`).

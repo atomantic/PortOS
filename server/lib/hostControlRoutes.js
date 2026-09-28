@@ -17,8 +17,10 @@
  *     change only PortOS's own records or read files; nothing runs.
  *   - CoS: stop/pause/kill/terminate/delete and feedback — they reduce or
  *     annotate execution, never start it; task reorder/refresh/enhance,
- *     templates, challenge and goal-fidelity reports — records and LLM text
- *     only, and sub-agents call the latter from loopback anyway.
+ *     templates and challenge — records and LLM text only. Goal-fidelity false-
+ *     positive reports are gated because they can queue investigation agents.
+ *   - tools (#9014): create/edit set trusted agent prompt text; DELETE only
+ *     removes a tool from that context and stays open.
  *   - standardize/analyze — reads the repo; `apply` and `backup` are gated.
  *   - feature agents and loops: pause/stop/delete — they reduce execution.
  *   - code-review/cli-outcome — records a reviewer verdict; nothing runs.
@@ -34,10 +36,17 @@
  *     already-configured values), and test, vision, refresh-models and
  *     refresh-catalog (they run an already-configured provider on a fixed
  *     prompt, as every AI feature does).
+ *   - The "already-configured provider" exemptions here hold only for
+ *     tool-free execution (#9008). POST /api/ask and POST /api/detect/ai hand
+ *     caller text to a caller-chosen provider, so they gate per request
+ *     instead: a provider that cannot run tool-free (`toolFreeOneShotArgs` in
+ *     lib/providerVendors.js) needs host control.
  *   - pipeline and FableLoom: only autopilot start is gated — with gap filing
  *     or self-improvement on it queues CoS agents. Every other pipeline route
  *     generates text or media through an already-configured provider, the
  *     same as any AI feature; the caller never chooses what runs.
+ *   - notes (#9007): vault add/repoint gated (chooses the host directory
+ *     note CRUD reads/writes); note CRUD itself stays open.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
  *     downloads DELETE removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
@@ -66,10 +75,34 @@
  *     a shell guard (HOST_CONTROL_SETTINGS_PATHS), but only when the body
  *     CHANGES the stored value (#8751).
  *
+ * Prompt-feeding stores (#9040):
+ *   - prompts: stage templates and shared variables direct agents; writes are
+ *     gated. DELETE removes stored text; preview and reload only read — open.
+ *   - mind bundle/apply replaces execution policy; export/preview only read.
+ *   - mind recipes define tool instructions and arguments; create/edit/restore
+ *     are gated, archive/validate only remove or inspect recipes.
+ *   - mind messages, annotations, journal corrections and attachments speak
+ *     as the operator and steer unattended work, so their writes are gated.
+ *   - goal-fidelity false-positive reports can queue an investigation agent.
+ *   - twin persona create/edit/selection directs agents. Settings changes to
+ *     injection, privacy inclusion or active persona require operator authority
+ *     in the settings handler; unchanged values and other settings stay open.
+ *   - memory, mind curated memories, twin documents/traits and enrichment
+ *     remain writable reference data, fenced at prompt assembly. Deletes,
+ *     previews, inference and mind stop/pause do not arm execution.
+ *   - tools create/edit supplies agent prompt hints (#9014); delete removes
+ *     a tool. The mind maintainer watchdog queues remediation and is gated.
+ *
  * Patterns are `METHOD /path`, with Express-style `:param` (one segment) and
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
  * trailing slash, exactly as Express routing does, so a request cannot reach a
  * listed handler by a spelling this list does not match.
+ *
+ * GitHub routes (#9013): `POST /api/github/repos/sync` is left open — it runs
+ * a read-only `gh repo list`, caching the result locally the same as every
+ * other read-only GET route. Mutable routes (`PUT` flags/secrets, `POST`
+ * archive/unarchive, `POST` secret sync) execute `gh` with the user's GitHub
+ * account and change external state; they require operator authority.
  */
 
 import { isPlainObject } from './objects.js';
@@ -152,15 +185,64 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/jobs/:id/trigger',
   // A job skill template IS the prompt a scheduled job's agent runs (#8762).
   'PUT /api/prompts/skills/jobs/:name',
+  // Tool descriptions and hints become trusted context for CoS agents (#9014).
+  'POST /api/tools',
+  'PUT /api/tools/:id',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/maintenance-runs',
   'POST /api/cos/schedule/maintenance-runs/:id/resume',
   'POST /api/cos/tools/call',
 
+  // Quota Burn (#9030): PUT accepts the legacy agent-prompt compatibility shape
+  // and converts it into an enabled, autonomyLevel-yolo custom CoS job — the
+  // same "arbitrary prompt becomes unattended work" shape as `POST /api/cos/jobs`
+  // above, just reached through a different entry point. `run` dispatches a
+  // family or a named job immediately, past the master switch and (with
+  // `force`) the family's own quota gates. `rearm` re-arms an already-configured
+  // one-shot step for another cycle — it queues no new prompt, but it puts spent
+  // work back into rotation the operator meant to run once.
+  'PUT /api/quota-burn',
+  'POST /api/quota-burn/run',
+  'POST /api/quota-burn/rearm',
+
+  // Shell image drop (#9030): the HTTP twin of the gated `shell:input` socket
+  // event (HOST_CONTROL_SOCKET_EVENTS in services/socket.js) — it pastes the
+  // caller's message into a live PTY and submits it, driving whatever agent or
+  // shell that session is running.
+  'POST /api/shell/sessions/:sessionId/image',
+
+  // Instruction stores and operator messages consumed by unattended agents.
+  'POST /api/prompts',
+  'PUT /api/prompts/:stage',
+  'POST /api/prompts/variables',
+  'PUT /api/prompts/variables/:key',
+  'POST /api/cos/mind/bundle/apply',
+  // The maintainer watchdog can queue forge remediation agents.
+  'POST /api/cos/mind/maintainer/watchdog',
+  'POST /api/cos/mind/recipes',
+  'PUT /api/cos/mind/recipes/:recipeId',
+  'POST /api/cos/mind/recipes/:recipeId/restore',
+  'POST /api/cos/mind/messages',
+  'POST /api/cos/mind/annotations',
+  'POST /api/cos/mind/journal/:journalEventId/correct',
+  'POST /api/cos/mind/attachments',
+  'POST /api/cos/goal-fidelity/false-positive',
+  'POST /api/digital-twin/personas',
+  'PUT /api/digital-twin/personas/:id',
+  // /personas/:id also covers /personas/active.
+  'POST /api/tools',
+  'PUT /api/tools/:id',
+
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
+
+  // Notes vaults: add/repoint chooses which host directory the note CRUD
+  // routes read from and write into (#9007). Note CRUD itself stays open —
+  // it is only safe once the root is operator-chosen.
+  'POST /api/notes/vaults',
+  'PUT /api/notes/vaults/:id',
 
   // Restores replace records and machine-local execution policy; previews
   // require the same operator authority as execution (#8772).
@@ -259,6 +341,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
 
+  // GitHub actions (#9013): mutating routes run `gh` with the user's GitHub
+  // account and change external state. Syncing repos is read-only.
+  'PUT /api/github/repos/:fullName',
+  'POST /api/github/repos/:fullName/archive',
+  'POST /api/github/repos/:fullName/unarchive',
+  'PUT /api/github/secrets/:name',
+  'POST /api/github/secrets/:name/sync',
+
   // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
   // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
   // record a preference — left open.
@@ -355,7 +445,9 @@ const compileSegment = (segment) => {
 const compileRoute = (route) => {
   const [method, path] = route.split(' ');
   const body = path.split('/').slice(1).map(compileSegment).join('/');
-  return { route, method, pattern: new RegExp(`^/${body}/?$`, 'i') };
+  // A mount can consume one slash before its root handler accepts another.
+  // Match trailing runs conservatively without rewriting request identifiers.
+  return { route, method, pattern: new RegExp(`^/${body}/*$`, 'i') };
 };
 
 const COMPILED_ROUTES = HOST_CONTROL_ROUTES.map(compileRoute);

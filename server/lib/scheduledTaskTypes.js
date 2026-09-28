@@ -102,6 +102,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `test-coverage`, which owns the GAPS. Files under `tests` plus the
   // `test-quality` metric label.
   'better-test-quality',
+  // What the development loop leaves on the developer's machine, measured by
+  // diffing host state around a bounded run. Files under `tests` plus the
+  // `dev-environment` metric label.
+  'better-dev-environment',
   // Service and data-platform lenses — what a backend API, data platform, or
   // infrastructure repository is judged on that the UI-shaped audits above
   // do not own. `infrastructure` is gated on IaC/container/CI files; the rest

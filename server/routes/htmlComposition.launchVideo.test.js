@@ -93,6 +93,8 @@ describe('launch-video render admission', () => {
   });
   it('cannot omit the gate for a launch-videos directory', async () => {
     expect((await submit({ launchVideo: undefined })).status).toBe(400);
+    // A proof checks one framing; several formats belong only to the final render.
+    expect((await submit({ formats: ['landscape', 'vertical'], proof: { everySec: 1 } })).status).toBe(400);
     expect(enqueueJob).not.toHaveBeenCalled();
   });
   it('fails closed on uninspectable raster assets', async () => {

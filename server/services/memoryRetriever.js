@@ -7,6 +7,7 @@
 
 import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memoryBackend.js';
 import { generateQueryEmbedding, estimateTokens, truncateToTokens } from './memoryEmbeddings.js';
+import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
@@ -136,7 +137,7 @@ export async function getRelevantMemories(task, options = {}) {
 /**
  * Format memories for prompt injection
  */
-export function formatForPrompt(memories) {
+export function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxContextTokens) {
   if (!memories || memories.length === 0) {
     return '';
   }
@@ -213,7 +214,13 @@ export function formatForPrompt(memories) {
     lines.push('');
   }
 
-  return lines.join('\n');
+  const label = 'Memory reference data';
+  // Include the notice, delimiters and possible truncation marker in the same
+  // budget used for retrieval; an oversized preference cannot crowd them out.
+  const overhead = UNTRUSTED_REFERENCE_NOTICE.length + 2
+    + fenceBlock(label, 'x', 1).length - 1 + '\n… [truncated]'.length;
+  const block = fenceBlock(label, lines.join('\n'), Math.max(0, maxTokens * 4 - overhead));
+  return block ? `${UNTRUSTED_REFERENCE_NOTICE}\n\n${block}` : '';
 }
 
 /**
@@ -227,5 +234,5 @@ export async function getMemorySection(task, options = {}) {
     return null;
   }
 
-  return formatForPrompt(memories);
+  return formatForPrompt(memories, options.maxTokens);
 }

@@ -513,6 +513,9 @@ async function reconcileVideoThumbnail(filename, videoPath, peerId) {
  *     `videoHistory` dataSync category; this adds the bytes. Falls back to the
  *     `<id>.mp4` convention (`collectionVideoRefToFilename`) when the row hasn't
  *     synced yet — a missing file is skipped, so a wrong guess never ships.
+ *   - every scene take (`scene.takes[]`, #8965) of either kind, and the visual
+ *     spec's reference images (`visualSpec.references[].imageId`), so a peer can
+ *     review and select any candidate, not only the current selection.
  *   - per-scene reference-frame stills (`scene.referenceImageId`, #1760 Phase 1b
  *     — a gallery basename under PATHS.images, the same store every other gen'd
  *     image uses). Hashed sidecar-aware via `hashImageForManifest` so a peer that
@@ -544,14 +547,24 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
   // precisely so it rides this manifest; without it a subscribed peer receives
   // a `midiTranscription.filename` pointer whose bytes never arrive.
   if (isStr(project?.midiTranscription?.filename)) audioNames.push(project.midiTranscription.filename);
+  // The optional vocal stem (#8977) conditions performance shots and lives
+  // under PATHS.music beside the master, so it rides the same entries.
+  if (isStr(project?.vocalStemFilename)) audioNames.push(project.vocalStemFilename);
   for (const name of [...new Set(audioNames)]) {
     const audio = assetReference(name, 'music');
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);
   }
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
-  const videoIds = [...new Set(
-    scenes.map((s) => (isStr(s?.videoHistoryId) ? s.videoHistoryId : null)).filter(Boolean),
-  )];
+  // Every scene take (#8965) is a candidate the director can select on any
+  // peer, so its bytes ride along with the selected slot's. Take kinds are
+  // peer-supplied data — only the two known kinds contribute.
+  const takeIds = (kind) => scenes.flatMap((s) => (Array.isArray(s?.takes) ? s.takes : [])
+    .filter((t) => t?.kind === kind && isStr(t.assetId))
+    .map((t) => t.assetId));
+  const videoIds = [...new Set([
+    ...scenes.map((s) => (isStr(s?.videoHistoryId) ? s.videoHistoryId : null)).filter(Boolean),
+    ...takeIds('video'),
+  ])];
   if (videoIds.length) {
     const byId = await videoHistoryFilenamesById();
     const entries = videoIds.map((id) =>
@@ -561,9 +574,14 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
       if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);
     }
   }
-  const imageNames = [...new Set(
-    scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
-  )];
+  // Reference frames, image takes, and the visual spec's moodboard/reference
+  // images (#8965) all live in the gallery under the `image` asset kind.
+  const specRefs = Array.isArray(project?.visualSpec?.references) ? project.visualSpec.references : [];
+  const imageNames = [...new Set([
+    ...scenes.map((s) => (isStr(s?.referenceImageId) ? s.referenceImageId : null)).filter(Boolean),
+    ...takeIds('image'),
+    ...specRefs.map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
+  ])];
   if (imageNames.length) {
     const entries = imageNames.map(imageAssetReference);
     for (const entry of entries) {

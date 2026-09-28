@@ -328,5 +328,13 @@ describe('finalizeAgent — Creative Director scratch cleanup (#4650)', () => {
       prExpected: false,
     });
     expect(existsSync(dir)).toBe(false);
+    // finalizeAgent's real cleanup only removes the per-agent leaf — in
+    // production the shared `portos-cd-cwd` container is meant to persist and
+    // be reused across runs, so this test leaves it in place rather than
+    // removing it itself (which would race spawnCwd.test.js's own use of the
+    // same literal path if Vitest runs them concurrently). The run-scoped
+    // temp root's teardown (#9032, server/test/runTempRoot.js) treats an
+    // empty leftover container as a non-leak, so the now-empty
+    // `portos-cd-cwd` needs no cleanup at all.
   });
 });

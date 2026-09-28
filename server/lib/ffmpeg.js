@@ -29,8 +29,9 @@ export const safeUnder = (root, name) => {
 };
 
 // ffmpeg discovery is async (which/where takes ~10ms+) and the result is
-// stable for the process lifetime — cache the first hit so subsequent calls
-// don't re-shell-out and don't block the event loop.
+// stable once found — cache the first hit so subsequent calls don't re-shell-out.
+// A miss is NOT cached: ffmpeg installed later (npm run setup:motion, brew) must
+// be picked up by the running server without a restart.
 let cachedFfmpegPath;
 export const findFfmpeg = async () => {
   if (cachedFfmpegPath !== undefined) return cachedFfmpegPath;
@@ -40,8 +41,9 @@ export const findFfmpeg = async () => {
   for (const p of candidates) {
     if (existsSync(p)) { cachedFfmpegPath = p; return p; }
   }
-  cachedFfmpegPath = await whichFirst('ffmpeg');
-  return cachedFfmpegPath;
+  const found = await whichFirst('ffmpeg');
+  if (found) cachedFfmpegPath = found;
+  return found;
 };
 
 /**
@@ -297,6 +299,22 @@ export const probeVideoStreamInfo = async (videoPath) => {
     height: positiveInt(height),
     fps: parseRate(frameRate),
     frameCount: positiveInt(frames),
+  };
+};
+
+// The playable geometry of a finished clip — `{ width, height, fps, numFrames,
+// durationSec }` — or null when any axis cannot be measured. For entries whose
+// producer never recorded a frame count (hosted Grok/fal/reactor renders), so a
+// consumer that trims by numFrames/fps measures the file instead of guessing.
+export const probeVideoGeometry = async (videoPath) => {
+  const [stream, durationSec] = await Promise.all([probeVideoStreamInfo(videoPath), probeDurationSeconds(videoPath)]);
+  if (!stream.width || !stream.height || !stream.fps || !durationSec) return null;
+  return {
+    width: stream.width,
+    height: stream.height,
+    fps: stream.fps,
+    numFrames: stream.frameCount || Math.round(durationSec * stream.fps),
+    durationSec,
   };
 };
 

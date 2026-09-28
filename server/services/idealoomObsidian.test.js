@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -49,6 +49,12 @@ const list = (overrides = {}) => ({
 const note = (overrides = {}) => ({
   path: 'Idea Loom/2026-08-29-next-steps.md',
   ...overrides,
+});
+
+// beforeEach removes the PREVIOUS test's vaultRoot before minting a fresh
+// one, so the LAST test's root is never removed — clean it once here (#9032).
+afterAll(() => {
+  if (vaultRoot) rmSync(vaultRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {

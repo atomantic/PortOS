@@ -296,12 +296,19 @@ let dispatchQuiesced = false;
 export const MEDIA_QUEUE_SHUTTING_DOWN = 'MEDIA_QUEUE_SHUTTING_DOWN';
 const terminalOperations = new Set();
 
-function trackTerminalOperation(operation) {
+// A started job crosses async pre-dispatch work (live settings, provider module
+// resolution) before its terminal listeners attach and its provider is invoked.
+// Tracked separately so the test drain can wait for that boundary (#9029).
+const dispatchOperations = new Set();
+
+function trackOperation(operations, operation) {
   const tracked = Promise.resolve(operation);
-  terminalOperations.add(tracked);
-  tracked.finally(() => terminalOperations.delete(tracked)).catch(() => {});
+  operations.add(tracked);
+  tracked.finally(() => operations.delete(tracked)).catch(() => {});
   return tracked;
 }
+
+const trackTerminalOperation = (operation) => trackOperation(terminalOperations, operation);
 
 function findJob(jobId) {
   if (running && running.id === jobId) return running;
@@ -977,7 +984,20 @@ function makeGenDispatcher(emitter, job, handlers) {
   };
 }
 
+// The dispatch window closes once the provider has been invoked (not settled —
+// a provider kickoff may legitimately stay pending) or the job failed before
+// reaching it. The finally covers a throw anywhere before that point.
 async function runJob(job) {
+  let markDispatched;
+  trackOperation(dispatchOperations, new Promise((resolve) => { markDispatched = resolve; }));
+  try {
+    await runJobLifecycle(job, markDispatched);
+  } finally {
+    markDispatched();
+  }
+}
+
+async function runJobLifecycle(job, markDispatched) {
   const sseEntry = ensureSseEntry(job.id);
   let resolveTerminalState;
   const terminalState = new Promise((resolve) => { resolveTerminalState = resolve; });
@@ -1249,21 +1269,23 @@ async function runJob(job) {
         cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
       };
     }
-    if (job.kind === 'video' && safeParams.chunks > 1) {
-      await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
-    } else if (job.kind === 'video') {
-      await mod.generateVideo({ ...safeParams, jobId: job.id });
-    } else if (job.kind === 'html-composition') {
-      await mod.renderComposition({ ...safeParams, jobId: job.id });
-    } else if (job.kind === 'video-upscale') {
-      await mod.runVideoUpscale({ ...safeParams, jobId: job.id });
-    } else if (job.kind === 'training') {
-      await mod.runTraining({ ...safeParams, jobId: job.id });
-    } else if (job.kind === 'audio') {
-      await mod.generateAudio({ ...safeParams, jobId: job.id });
-    } else {
-      await mod.generateImage({ ...safeParams, jobId: job.id });
+    // Remote recovery must still reach its adapter to cancel an existing render.
+    // Local cancellation before dispatch owns no provider process to stop.
+    if (job.cancelRequested && !isRemoteMediaJob(job)) {
+      throw new Error('Canceled before provider dispatch');
     }
+    // Transient, like terminating: no await between this flag and invocation.
+    job.providerInvoked = true;
+    const request = { ...safeParams, jobId: job.id };
+    const kickoff = job.kind === 'video' && safeParams.chunks > 1 ? mod.generateChainedVideo(request)
+      : job.kind === 'video' ? mod.generateVideo(request)
+      : job.kind === 'html-composition' ? mod.renderComposition(request)
+      : job.kind === 'video-upscale' ? mod.runVideoUpscale(request)
+      : job.kind === 'training' ? mod.runTraining(request)
+      : job.kind === 'audio' ? mod.generateAudio(request)
+      : mod.generateImage(request);
+    markDispatched();
+    await kickoff;
   } catch (err) {
     // generateVideo / generateChainedVideo / generateImage threw before
     // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
@@ -1272,12 +1294,16 @@ async function runJob(job) {
     // safeUnlinkUpload constrains the delete to PATHS.uploads as
     // defense-in-depth against corrupted persisted params. audioFilePath
     // is the same kind of staged upload (a2v jobs) — clean it up too.
-    await safeUnlinkUpload(job.params?.uploadedTempPath);
-    await safeUnlinkUpload(job.params?.audioFilePath);
-    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
-      await safeUnlinkUpload(p);
-    }
-    handlers.failed({ error: err.message, code: err.code });
+    // Tracked from the first microtask of the rejection, so a drain that saw
+    // the dispatch window close cannot miss this failure (#9029).
+    await trackTerminalOperation((async () => {
+      await safeUnlinkUpload(job.params?.uploadedTempPath);
+      await safeUnlinkUpload(job.params?.audioFilePath);
+      for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+        await safeUnlinkUpload(p);
+      }
+      handlers.failed({ error: err.message, code: err.code });
+    })());
   }
 
   // The gen modules emit completed/failed asynchronously after kickoff. Await
@@ -1486,7 +1512,8 @@ export async function cancelJob(jobId) {
       // cancellation rather than silently resurrecting the remote render.
       await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
     }
-    if (mod?.cancel && mod.cancel(jobId) === false) {
+    if (mod?.cancel && mod.cancel(jobId) === false
+      && (runningJob.providerInvoked || isRemoteMediaJob(runningJob))) {
       // A provider may have crossed its durable finalization boundary before
       // its completed event reaches the queue. Refusal must not turn a later
       // finalization failure into a cancellation or leave retry markers set.
@@ -1617,8 +1644,11 @@ export function __resetForTests() {
 // instead of sleeping for an arbitrary wall-clock window before inspecting or
 // removing their temporary data directory.
 export async function __drainForTests() {
-  while (terminalOperations.size > 0) {
-    await Promise.allSettled([...terminalOperations]);
+  // Include open dispatches: a started job reaches its provider (or a pre-dispatch
+  // failure, which becomes a terminal operation) only after real I/O that
+  // neither fake timers nor a microtask yield cover (#9029).
+  while (dispatchOperations.size > 0 || terminalOperations.size > 0) {
+    await Promise.allSettled([...dispatchOperations, ...terminalOperations]);
   }
   await persistChain.catch(() => {});
   // A settled terminal operation can schedule the archive snapshot in the

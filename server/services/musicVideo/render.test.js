@@ -8,6 +8,7 @@ vi.mock('../../lib/ffmpeg.js', () => ({
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),
   generateThumbnail: vi.fn(async () => 'thumb.jpg'),
   probeVideoDuration: vi.fn(async () => 30),
+  probeVideoGeometry: vi.fn(async () => null),
 }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(), saveHistory: vi.fn(async () => {}) }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
@@ -17,14 +18,16 @@ import { existsSync } from 'fs';
 import {
   beatSnapClips,
   buildMusicVideoFfmpegArgs,
+  excerptBoundaryTimes,
   resolveSceneClips,
   resolveMasterAudioPath,
   renderMusicVideo,
 } from './render.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject } from './projects.js';
+import { planShots } from './shotPlan.js';
 
 const clip = (over = {}) => ({ videoPath: '/v/a.mp4', width: 768, height: 512, fps: 24, duration: 2, inSec: 0, outSec: 2, ...over });
 
@@ -61,9 +64,123 @@ describe('buildMusicVideoFfmpegArgs', () => {
   it('throws on empty clips', () => {
     expect(() => buildMusicVideoFfmpegArgs([], '/a.wav', '/o.mp4')).toThrow(/empty clips/);
   });
+
+  // #8986 — a draft excerpt render windows the full-song plan down to
+  // [startSec, endSec) with one extra trim/atrim stage, instead of building a
+  // separate concat graph over just the overlapping clips.
+  describe('excerpt option (#8986)', () => {
+    it('trims the finished video+audio to the window and re-zeros totalDuration/sections', () => {
+      // Three 2s clips: [0,2) [2,4) [4,6). Window [1,5) crosses all three.
+      const clips = [clip({ videoPath: '/v/a.mp4', sceneId: 'a' }), clip({ videoPath: '/v/b.mp4', sceneId: 'b' }), clip({ videoPath: '/v/c.mp4', sceneId: 'c' })];
+      const { args, totalDuration, sections } = buildMusicVideoFfmpegArgs(clips, '/music/track.wav', '/out.mp4', { audioDurationSec: 30, excerpt: { startSec: 1, endSec: 5 } });
+      const fc = args[args.indexOf('-filter_complex') + 1];
+      expect(fc).toContain('[outv]trim=start=1:end=5,setpts=PTS-STARTPTS[outvx]');
+      expect(fc).toMatch(/:a\]atrim=start=1:end=5,asetpts=PTS-STARTPTS\[outax\]/);
+      const maps = args.reduce((acc, a, i) => (a === '-map' ? [...acc, args[i + 1]] : acc), []);
+      expect(maps).toEqual(['[outvx]', '[outax]']);
+      expect(totalDuration).toBe(4); // 5 - 1
+      // Re-based to the excerpt's own timeline (0 = startSec=1), clipped to it.
+      expect(sections).toEqual([
+        { sceneId: 'a', layer: 'footage', startSec: 0, endSec: 1 },
+        { sceneId: 'b', layer: 'footage', startSec: 1, endSec: 3 },
+        { sceneId: 'c', layer: 'footage', startSec: 3, endSec: 4 },
+      ]);
+    });
+
+    it('clamps a window past the full render to the actual video/audio length', () => {
+      const clips = [clip({ duration: 2, outSec: 2 }), clip({ duration: 2, outSec: 2 })]; // 4s video
+      const { totalDuration } = buildMusicVideoFfmpegArgs(clips, '/a.wav', '/o.mp4', { audioDurationSec: 30, excerpt: { startSec: 1, endSec: 10 } });
+      expect(totalDuration).toBe(3); // clamped to the 4s video, minus the 1s start
+    });
+  });
+});
+
+// #8988 — an optional, explicitly chosen sound-design bed mixed UNDER the song.
+describe('sound-design bed (#8988)', () => {
+  const clips = [clip({ videoPath: '/v/a.mp4' }), clip({ videoPath: '/v/b.mp4' })];
+  const filterOf = (args) => args[args.indexOf('-filter_complex') + 1];
+  const mapsOf = (args) => args.reduce((acc, a, i) => (a === '-map' ? [...acc, args[i + 1]] : acc), []);
+
+  it('with no bed chosen, the output audio is exactly the master track — no mix stage at all', () => {
+    const plain = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30 });
+    const noBed = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', { audioDurationSec: 30, soundBed: null });
+    expect(noBed.args).toEqual(plain.args);
+    expect(filterOf(noBed.args)).not.toMatch(/amix|\[master\]/);
+    expect(mapsOf(noBed.args)).toEqual(['[outv]', '2:a']);
+  });
+
+  it('mixes a chosen bed under the master at its own level, trimmed to the song, after any overlay inputs', () => {
+    const overlays = [{ startSec: 1, path: '/tmp/cue-0.mov' }];
+    const { args } = buildMusicVideoFfmpegArgs(clips, '/music/song.wav', '/out.mp4', {
+      audioDurationSec: 30, overlays, soundBed: { path: '/music/rain.wav', volume: 0.3 }, excerpt: { startSec: 1, endSec: 3 },
+    });
+    const fc = filterOf(args);
+    // inputs: 0,1 clips · 2 song · 3 overlay · 4 bed
+    const inputs = args.reduce((acc, a, i) => (a === '-i' ? [...acc, args[i + 1]] : acc), []);
+    expect(inputs).toEqual(['/v/a.mp4', '/v/b.mp4', '/music/song.wav', '/tmp/cue-0.mov', '/music/rain.wav']);
+    expect(fc).toContain('[2:a]aresample=48000');
+    expect(fc).toMatch(/\[4:a\][^;]*atrim=start=0:end=4,[^;]*volume=0\.3\[bed0\]/);
+    // The song keeps its length and level: duration=first, normalize=0.
+    expect(fc).toContain('[master][bed0]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[mixa]');
+    // A draft excerpt windows the MIXED audio, not the bare song.
+    expect(fc).toContain('[mixa]atrim=start=1:end=3,asetpts=PTS-STARTPTS[outax]');
+    expect(mapsOf(args)).toEqual(['[outvx]', '[outax]']);
+  });
+});
+
+describe('excerptBoundaryTimes (#8986)', () => {
+  // No encoded file has a frame timestamped at its own total duration, so the
+  // trailing boundary is always guarded back to `span - 1/fps` (default 24fps)
+  // — the last frame a real capture can land on.
+  it('re-bases cut and cue boundaries inside the window to the excerpt timeline and dedupes', () => {
+    const sections = [
+      { sceneId: 'a', startSec: 0, endSec: 2 },
+      { sceneId: 'b', startSec: 2, endSec: 4 },
+      { sceneId: 'c', startSec: 4, endSec: 6 },
+    ];
+    const cues = [{ startSec: 2, endSec: 3 }]; // lands exactly on a cut — deduped
+    expect(excerptBoundaryTimes(sections, cues, 1, 5)).toEqual([0, 1, 2, 3, 3.958]);
+  });
+
+  it('always includes both ends of the window even with no cut/cue on them', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 10 }];
+    expect(excerptBoundaryTimes(sections, [], 2, 7)).toEqual([0, 4.958]);
+  });
+
+  it('drops boundaries outside the window', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 20 }];
+    expect(excerptBoundaryTimes(sections, [], 5, 8)).toEqual([0, 2.958]);
+  });
+
+  it('guards a cut/cue boundary that lands exactly at the window end the same as the trailing bookend', () => {
+    // Section b's end (6) lands exactly on the window's own end (endSec=6) —
+    // its re-based time (span=4) must collapse onto the SAME guarded last-frame
+    // time as the bookend, not sit at an impossible frame just past it.
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 2 }, { sceneId: 'b', startSec: 2, endSec: 6 }];
+    expect(excerptBoundaryTimes(sections, [], 2, 6)).toEqual([0, 3.958]);
+  });
+
+  it('scales the last-frame guard to the given fps', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 10 }];
+    expect(excerptBoundaryTimes(sections, [], 0, 10, { fps: 30 })).toEqual([0, 9.967]); // 10 - 1/30
+  });
 });
 
 describe('beatSnapClips', () => {
+  it('keeps a sparse-grid shot plan on its authored timeline when source clips are longer', async () => {
+    const beats = [0, 12];
+    const { shots } = planShots([{ label: 'Verse', startSec: 0, endSec: 12 }], { beats });
+    expect(shots.some((shot) => !shot.beatAligned)).toBe(true);
+    const scenes = shots.map((shot, order) => ({ ...shot, sceneId: `s${order}`, order, videoHistoryId: `v${order}`, loop: false }));
+    loadHistory.mockResolvedValue(scenes.map((scene) => ({ id: scene.videoHistoryId, filename: `${scene.videoHistoryId}.mp4`, numFrames: 240, fps: 24, width: 768, height: 512 })));
+    const clips = beatSnapClips(await resolveSceneClips({ scenes }), beats, { scenes });
+    expect(clips.map((c) => c.duration)).toEqual(shots.map((shot) => shot.endSec - shot.startSec));
+    const { totalDuration, args } = buildMusicVideoFfmpegArgs(clips, '/music/example.wav', '/out.mp4', { audioDurationSec: 20 });
+    expect(totalDuration).toBe(12);
+    const filters = args[args.indexOf('-filter_complex') + 1];
+    for (const shot of shots) expect(filters).toContain(`trim=start=0:end=${shot.endSec - shot.startSec}`);
+  });
+
   it('returns clips unchanged when there is no beat grid', () => {
     const out = beatSnapClips([clip({ duration: 2, outSec: 2 })], null);
     expect(out[0].outSec).toBe(2);
@@ -199,6 +316,37 @@ describe('resolveSceneClips', () => {
     loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', fps: 24, numFrames: 48 }]); // no width/height
     await expect(resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] }))
       .rejects.toMatchObject({ status: 404, code: 'MISSING_CLIPS' });
+  });
+
+  it('measures a hosted clip whose history entry records no frame count (#8977)', async () => {
+    // Grok/fal entries carry only the requested duration; the renderer probes the file.
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', modelId: 'grok', duration: 6 }]);
+    probeVideoGeometry.mockResolvedValueOnce({ width: 1280, height: 720, fps: 24, numFrames: 145, durationSec: 6.04 });
+    const [c] = await resolveSceneClips({ scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }] });
+    expect(c).toMatchObject({ width: 1280, height: 720, inSec: 0 });
+    expect(c.duration).toBeCloseTo(145 / 24, 6);
+  });
+
+  it('places a performance take at its edit in-point and never loops it (#8977)', async () => {
+    // A 1.5s shot at song 20.0–21.5 generated from a padded 5.05s window
+    // starting at 18.225: the shot occupies clip time 1.775–3.275.
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 121 }]);
+    const scene = {
+      sceneId: 's1', order: 0, videoHistoryId: 'h1', loop: true, shotMode: 'performance',
+      startSec: 20, endSec: 21.5, beatAligned: true,
+      takes: [{ takeId: 't1', kind: 'video', assetId: 'h1', shotInstruction: { shotMode: 'performance', edit: { inSec: 1.775, outSec: 3.275, targetSec: 1.5 } } }],
+    };
+    const [c] = await resolveSceneClips({ scenes: [scene] });
+    expect(c).toMatchObject({ inSec: 1.775, outSec: 3.275, loop: false });
+    // The authored span keeps the in-point through the beat-aligned snap, so
+    // the ffmpeg trim cuts the exact sung frames.
+    const [snapped] = beatSnapClips([c], [], { scenes: [scene] });
+    expect(snapped.inSec).toBe(1.775);
+    expect(snapped.outSec).toBeCloseTo(3.275, 9);
+    const { args } = buildMusicVideoFfmpegArgs([snapped], '/music/song.wav', '/o.mp4');
+    const fc = args[args.indexOf('-filter_complex') + 1];
+    expect(fc).toContain('trim=start=1.775:end=3.275');
+    expect(args).not.toContain('-stream_loop');
   });
 });
 

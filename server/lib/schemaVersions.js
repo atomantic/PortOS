@@ -297,7 +297,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // its v1-only normalizeWaveSketch, which strips a painting to null, and would
   // LWW that loss back — so it must reject the record instead. Stored v1
   // sketches still normalize and render unchanged; nothing to migrate.
-  tracks: 8,
+  // tracks v9 = render-history entries record their provenance `source`
+  // (`'suno'` for a hand-imported Suno export, `'youtube'`, `'upload'`, #8967).
+  // A <=v8 peer's sanitizer would strip it and LWW the unlabelled take back, so
+  // an exported song would silently lose its attribution. Pre-v9 renders read
+  // as `source: ''` (unrecorded); nothing to migrate.
+  tracks: 9,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the
@@ -573,7 +578,31 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (uploaded audio, scene images/rendered videos) is NOT bundled in this phase —
   // it federates via its own channels / a follow-up. The FIRST incompatible
   // project-shape change MUST bump this to 2.
-  musicVideoProjects: 1,
+  // v2 = timed lyric cues, phrase annotations, pacing, and explicit per-shot
+  // `loop` semantics (#8964). The body is still stored verbatim by a v1
+  // receiver, but a v1 peer would mis-execute it and LWW the damage back: its
+  // renderer loops every clip (silently repeating footage in `loop: false`
+  // shots the newer peer refuses to render that way), and its audio-source
+  // change clears the analysis while leaving the lyric/phrase timings aligned
+  // to the OLD track — an edit that then wins LWW onto the upgraded peer.
+  // Gating makes a v1 receiver reject the ahead-version transfer until it
+  // upgrades; pre-#8964 records need no rewrite (absent `loop` = legacy loop).
+  // v3 = immutable scene takes + explicit selection and the project visual spec
+  // (#8965). A v2 receiver stores the body verbatim but mis-executes it: its
+  // completion hooks overwrite `referenceImageId`/`videoHistoryId` with the
+  // newest render — replacing a take the director explicitly selected — and
+  // record no take for it, an edit that then wins LWW onto the upgraded peer.
+  // Gating makes a v2 receiver reject the ahead-version transfer until it
+  // upgrades; pre-#8965 records need no rewrite (a selected slot with no take
+  // is materialized as a `legacy` take on first use).
+  // v4 = performance shots (#8977): `scene.shotMode` and a video take's
+  // immutable `shotInstruction`. A v3 receiver stores both verbatim but
+  // mis-executes them: it renders a performance take from frame 0 instead of
+  // its edit in-point (and may loop it), desyncing the singer from the song,
+  // and submits performance scenes to a cutaway-only lane — edits that then win
+  // LWW onto the upgraded peer. Pre-#8977 records need no rewrite (absent
+  // `shotMode` = cutaway; takes without an instruction render as before).
+  musicVideoProjects: 4,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

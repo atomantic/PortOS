@@ -34,6 +34,18 @@ import { safeChildProcessOptions } from '../../lib/processEnv.js';
 // structure is shared across channels.
 export const ANALYSIS_SAMPLE_RATE = 22050;
 
+// Cap how much of a track ffmpeg decodes (issue #8973). decodeAudioToPcm
+// buffers the whole decoded f32 PCM stream in memory before this module runs
+// tempo/section analysis on it — unbounded, a 20+ minute track can push a
+// single decode into the hundreds of MB, doubling briefly at the
+// Buffer.concat below. Tempo/section analysis doesn't need the full track:
+// TEMPO_WINDOW_SEC-scale windows already assume a fraction of it is enough,
+// and five minutes gives the section segmentation (MAX_SECTIONS sections,
+// MIN_SECTION_SEC apart) far more material than it uses. Passing `-t` lets
+// ffmpeg truncate the decode itself instead of PortOS buffering (and then
+// discarding) the rest of the stream.
+export const MAX_ANALYSIS_SEC = 300;
+
 // Frame hop for the onset envelope. 512 samples @ 22.05kHz → ~43 frames/sec,
 // which gives ~1 BPM tempo resolution across the musical range and ~23ms beat
 // placement granularity — both well within what beat-snapping needs.
@@ -146,11 +158,20 @@ function fftInPlace(real, imaginary, plan) {
  * analyze" rather than throwing (this runs outside the request lifecycle when
  * driven by the render queue).
  *
+ * Decodes at most MAX_ANALYSIS_SEC seconds of the source (see its doc
+ * comment) — a track longer than the cap gets tempo/section data from that
+ * leading window only.
+ *
  * @param {string} audioPath absolute path to the source audio
- * @param {{ signal?: AbortSignal }} [opts]
+ * @param {{ signal?: AbortSignal, maxDurationSec?: number }} [opts]
+ *   `maxDurationSec` overrides MAX_ANALYSIS_SEC — a test-only seam so the
+ *   truncation path can be exercised against a short fixture rather than a
+ *   real multi-minute file; real callers should not pass it. Clamped to
+ *   MAX_ANALYSIS_SEC — it can only shrink the decode window, never grow it,
+ *   so it can't be used to defeat the memory bound.
  * @returns {Promise<{ samples: Float32Array, sampleRate: number } | null>}
  */
-export async function decodeAudioToPcm(audioPath, { signal } = {}) {
+export async function decodeAudioToPcm(audioPath, { signal, maxDurationSec = MAX_ANALYSIS_SEC } = {}) {
   if (typeof audioPath !== 'string' || !audioPath) return null;
   // A listener added to an already-aborted signal never fires, so without this
   // guard a pre-cancelled request (plausible off the request lifecycle, under a
@@ -162,10 +183,15 @@ export async function decodeAudioToPcm(audioPath, { signal } = {}) {
   // the listener below would again attach to an already-aborted signal.
   if (signal?.aborted) return null;
 
+  const boundedDurationSec = Number.isFinite(maxDurationSec) && maxDurationSec > 0
+    ? Math.min(maxDurationSec, MAX_ANALYSIS_SEC)
+    : MAX_ANALYSIS_SEC;
+
   return new Promise((resolve) => {
     const args = [
       '-v', 'error',
       '-i', audioPath,
+      '-t', String(boundedDurationSec),
       '-ac', '1',
       '-ar', String(ANALYSIS_SAMPLE_RATE),
       '-f', 'f32le',

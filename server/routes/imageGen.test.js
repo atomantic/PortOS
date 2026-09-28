@@ -96,7 +96,11 @@ vi.mock('../services/imageGen/index.js', () => ({
 
 // Default to external mode in tests so /generate goes through the dispatcher.
 // Local-mode tests below override the settings mock to flip into queue mode.
-vi.mock('../services/settings.js', () => ({
+// Spread the real module (rather than replacing it outright) so `settingsEvents`
+// stays a real EventEmitter — `authGate.js` (reached via imageGenSetup.js's
+// `resolveSetupInterpreter`, #9015) subscribes to it at import time.
+vi.mock('../services/settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   getSettings: vi.fn(async () => ({ imageGen: { mode: 'external' } })),
 }));
 
@@ -213,6 +217,17 @@ describe('Image Gen Routes', () => {
   beforeEach(() => {
     app = express();
     app.use(express.json());
+    // These requests run over a real loopback socket (`lib/testHelper.js`'s
+    // fetch-based harness), so on a real password-free install they'd carry
+    // host control via `requestHasHostControl` — this stands in for the
+    // `authGate` middleware server/index.js mounts ahead of every route,
+    // without dragging its settings/instance-identity dependencies into this
+    // suite. `imageGenSetup.js`'s `/setup/*` routes need it (#9015) to reach
+    // an interpreter path outside the caller's own allowlisted categories.
+    app.use((req, _res, next) => {
+      req.portosAuthContext = { enabled: false, authenticated: false, method: null };
+      next();
+    });
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();

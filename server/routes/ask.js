@@ -26,7 +26,8 @@ import { awaitWritableDrain } from '../lib/streamBackpressure.js';
 import { SSE_HEADERS } from '../lib/sseHeaders.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import * as convs from '../services/askConversations.js';
-import { runAsk, VALID_MODES } from '../services/askService.js';
+import { resolveAskProvider, runAsk, VALID_MODES } from '../services/askService.js';
+import { requestHasHostControl } from '../services/authGate.js';
 import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
 import { promoteTurnById } from '../services/askPromote.js';
 
@@ -126,6 +127,11 @@ router.post('/:id/turns/:turnId/promote', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(askBodySchema, req.body ?? {});
 
+  // Resolved before any write or SSE handshake so a caller refused the
+  // provider (#9008: one that cannot run tool-free needs host control) gets a
+  // plain 403 and nothing is spawned or persisted.
+  const provider = await resolveAskProvider(body.providerId, { hasHostControl: requestHasHostControl(req) });
+
   let conversation = body.conversationId
     ? await convs.getConversation(body.conversationId)
     : null;
@@ -221,6 +227,7 @@ router.post('/', asyncHandler(async (req, res) => {
       timeWindow: body.timeWindow,
       maxSources: body.maxSources,
       providerId: body.providerId,
+      provider,
       model: body.model,
       signal: abortController.signal,
     })) {

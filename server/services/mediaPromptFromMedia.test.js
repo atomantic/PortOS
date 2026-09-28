@@ -312,3 +312,14 @@ describe('promptFromMedia', () => {
     })).rejects.toMatchObject({ code: 'PROVIDER_NOT_FOUND', status: 404 });
   });
 });
+
+it('requests subject-first render content without conversational instructions', () => {
+  expect(buildPromptFromMediaPrompt({ targets: ['image', 'video'], mediaKind: 'image', frameCount: 1 }))
+    .toContain('Never prefix prompts with instructions such as Create');
+});
+
+it('removes model instruction wrappers while retaining scene content', () => {
+  const result = parsePromptFromMediaJson(JSON.stringify({ imagePrompt: 'Create a moonlit mountain landscape', videoPrompt: 'Generate a video of clouds drifting over mountains' }), ['image', 'video']);
+  expect(result.imagePrompt).toBe('a moonlit mountain landscape');
+  expect(result.videoPrompt).toBe('clouds drifting over mountains');
+});

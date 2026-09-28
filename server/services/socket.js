@@ -31,6 +31,7 @@ import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
+import { mediaPromptHistoryEvents } from './mediaPromptHistory.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { importerEvents, getImporterProgressFrames } from './importerEvents.js';
 import { catalogEvents } from './catalogEvents.js';
@@ -432,6 +433,11 @@ function setupMusicVideoEventForwarding() {
   // (#1760 Phase 1).
   musicVideoEvents.on('scene-video', (data) => {
     if (ioInstance) ioInstance.emit('music-video:scene-video', data);
+  });
+  // An opt-in auto-review run advanced (#8988) — the board submits any
+  // sections it hands out and shows the run's checkpoint without a refetch.
+  musicVideoEvents.on('auto-review', (data) => {
+    if (ioInstance) ioInstance.emit('music-video:auto-review', data);
   });
 }
 
@@ -934,6 +940,8 @@ function setupMediaGenEventForwarding() {
   // consumers (catalog et al.) uniformly — no per-domain event needed. For a
   // job canceled *while running* this fires alongside the gen module's `failed`;
   // both clear the spinner and the handlers are idempotent.
+  mediaPromptHistoryEvents.on('changed', () => { ioInstance?.emit('media-prompt-history:changed', {}); });
+
   mediaJobEvents.on('canceled', (job) => {
     if (!ioInstance || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);

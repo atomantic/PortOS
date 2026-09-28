@@ -4,6 +4,7 @@
  * owns every subsequent orchestration and rollback decision.
  */
 
+import { unlink } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
@@ -22,6 +23,7 @@ import {
 import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
+import { preparePerformanceShot } from '../musicVideo/performanceShot.js';
 import {
   cleanupMultipartTemp,
   prepareVideoGenParams,
@@ -160,9 +162,50 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     }
   }
 
+  // Music Video performance shots (#8977): a lip-synced scene renders only on a
+  // verified source-audio provider, from the exact slice of the master song.
+  // A cutaway scene (or any non-music-video render) gets null and is untouched;
+  // a performance scene on an incapable backend is refused here rather than
+  // rendered as an unrelated voice or a silent cutaway.
+  const performance = body.musicVideo
+    ? await preparePerformanceShot({
+      musicVideo: body.musicVideo,
+      backend,
+      sourceImagePath: prepared.sourceImagePath,
+      mode: body.mode,
+    }).catch(async (error) => {
+      await cleanupStaged();
+      throw error;
+    })
+    : null;
+  const performanceParams = performance ? {
+    modelId: performance.modelId,
+    // The output length follows the submitted audio window; a clip-length pin
+    // would contradict it, so none is sent.
+    duration: undefined,
+    audioFilePath: performance.audioFilePath,
+    lipSync: { enableTranscription: performance.enableTranscription },
+    shotInstruction: performance.shotInstruction,
+  } : null;
+
   const enqueue = (params) => withStagedRollback(
-    cleanupStaged,
-    () => enqueueJob({ kind: 'video', params }),
+    async () => {
+      if (performance) await unlink(performance.audioFilePath).catch(() => {});
+      await cleanupStaged();
+    },
+    async () => {
+      // Selective section revision (#9011): checked as the LAST step before the
+      // actual queue write (staging, FableLoom compilation and the performance-
+      // shot audio slice above can all take real time), so a revision closed
+      // mid-submission is caught as close to the cancel/kickoff race as this
+      // request can get. A no-op when the tag carries no revisionId; deferred
+      // import since only this rare path needs the revision service's closure.
+      if (body.musicVideo?.revisionId) {
+        const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
+        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId, { sceneId: body.musicVideo.sceneId, kind: 'video' });
+      }
+      return enqueueJob({ kind: 'video', params });
+    },
   );
 
   const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
@@ -180,6 +223,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
       ...hosted.buildParams(body, prepared),
+      ...performanceParams,
     });
     return {
       jobId,

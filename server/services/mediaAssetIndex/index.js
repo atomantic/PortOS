@@ -58,16 +58,20 @@ export async function indexImage({ filename, temp } = {}) {
   await upsertAsset(row).catch((err) => console.error(`❌ Media index image upsert failed: ${err.message}`));
 }
 
-// Index a single just-generated video. The 'completed' event carries the job
-// id (generationId); the full metadata is the matching video-history entry.
-async function onVideoCompleted({ generationId } = {}) {
-  if (typeof generationId !== 'string' || !generationId) return;
+// Index the just-generated video(s). The 'completed' event carries the job id
+// (generationId); the full metadata is the matching video-history entry. A
+// multi-format HTML composition (#8960) registers one entry per format and
+// lists their ids in `videos`, none of which is the job id itself.
+async function onVideoCompleted({ generationId, videos } = {}) {
+  const ids = Array.isArray(videos) ? videos.map((video) => video?.id) : [generationId];
+  const wanted = new Set(ids.filter((id) => typeof id === 'string' && id));
+  if (!wanted.size) return;
   const { loadHistory } = await import('../videoGen/local.js');
   const history = await loadHistory().catch(() => []);
-  const entry = Array.isArray(history) ? history.find((h) => h.id === generationId) : null;
-  if (!entry) return;
-  const row = videoToRow(entry);
-  await upsertAsset(row).catch((err) => console.error(`❌ Media index video upsert failed: ${err.message}`));
+  const entries = Array.isArray(history) ? history.filter((h) => wanted.has(h.id)) : [];
+  for (const entry of entries) {
+    await upsertAsset(videoToRow(entry)).catch((err) => console.error(`❌ Media index video upsert failed: ${err.message}`));
+  }
 }
 
 // Drop one row, non-fatally. The delete paths call this AFTER the file is

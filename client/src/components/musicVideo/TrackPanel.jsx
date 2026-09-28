@@ -3,17 +3,22 @@ import toast from '../ui/Toast';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import { trackAudioUrl } from '../../services/apiTracks.js';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
+import VocalStemControl from './VocalStemControl.jsx';
+import SoundBedControl from './SoundBedControl.jsx';
+import { trackSourceLabel } from '../../lib/trackProvenance.js';
 
 /**
  * The project's audio: pick an existing library track or import fresh audio from
  * YouTube (re-selecting either PATCHes the project's trackId), then preview and
  * download the resolved master file. Relinking is blocked while a render or a
  * MIDI transcription is bound to this project — both already resolved the
- * project's audio at kickoff.
+ * project's audio at kickoff. An optional vocal stem (#8977) conditions
+ * lip-sync performance shots in place of the mix, and an optional
+ * sound-design bed (#8988) mixes under the song only when explicitly chosen.
  */
 export default function TrackPanel({
   project, tracks, trackName, audioFilename, youtube,
-  renderBound, midiBound, onChangeTrack,
+  renderBound, midiBound, onChangeTrack, onProjectUpdated,
 }) {
   const blockedMessage = renderBound
     ? 'Wait for the current render to finish before changing the track'
@@ -21,11 +26,18 @@ export default function TrackPanel({
       ? 'Wait for the MIDI transcription to finish before changing the track'
       : null;
   const audioUrl = audioFilename ? trackAudioUrl(audioFilename) : null;
+  // Where the linked track's audio came from (e.g. a Suno export, #8967).
+  const sourceLabel = trackSourceLabel(tracks.find((t) => t.id === project.trackId));
   const midiFile = project.midiTranscription?.filename;
   return (
     <>
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
         <span className="text-port-text-muted flex items-center gap-1"><Music size={12} /> {trackName(project.trackId)}</span>
+        {sourceLabel && (
+          <span className="px-1.5 py-0.5 rounded bg-port-border text-port-text-muted text-[10px]" title={`Audio imported from ${sourceLabel}`}>
+            {sourceLabel}
+          </span>
+        )}
         <select value={project.trackId || ''} aria-label="Change track"
           onChange={(e) => e.target.value && onChangeTrack(e.target.value)}
           disabled={youtube.editJob.active || renderBound || midiBound}
@@ -47,6 +59,13 @@ export default function TrackPanel({
           compact
         />
       </div>
+      <VocalStemControl
+        project={project}
+        hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
+        onUpdated={onProjectUpdated}
+      />
+      {/* #8988: an optional, explicitly chosen bed mixed under the song. */}
+      <SoundBedControl key={project.id} project={project} tracks={tracks} disabled={renderBound} onUpdated={onProjectUpdated} />
       {/* Preview + download the project's master audio track. Both act on
           the resolved data/music/ file (linked track or uploaded audio). */}
       {audioUrl && (

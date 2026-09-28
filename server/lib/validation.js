@@ -2445,7 +2445,30 @@ export const mindBundleApplySchema = z.object({
 }).strict();
 
 export const appLaunchVideoPublishSchema = z.object({
+  format: z.enum(['mp4', 'gif']).default('gif'),
   videoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/),
+}).strict();
+
+export const LAUNCH_VIDEO_MOTION_STYLES = Object.freeze(['walkthrough', 'showreel', 'ui-morph']);
+
+// One launch timeline can render several frames (#8960). Each name maps to the
+// exact size a composition declares in portosComposition.formats; the order is
+// the canonical render/delivery order.
+export const LAUNCH_VIDEO_FORMAT_SIZES = Object.freeze({ landscape: '1920x1080', vertical: '1080x1920', square: '1080x1080' });
+export const LAUNCH_VIDEO_FORMATS = Object.freeze(Object.keys(LAUNCH_VIDEO_FORMAT_SIZES));
+const launchVideoFormatSchema = z.enum(LAUNCH_VIDEO_FORMATS);
+const launchVideoFormatListSchema = z.array(launchVideoFormatSchema).min(1).max(LAUNCH_VIDEO_FORMATS.length)
+  .refine(list => new Set(list).size === list.length, 'formats must not repeat');
+
+// A style reference (#8961): a frame, a short clip, or a Media History image
+// or video. `source` picks the bucket the filename is resolved against —
+// `gallery` (Media History's own images/videos folders) or `upload` (the
+// generic /api/uploads scratch dir) — so the route can contain the read to
+// exactly one directory per kind, never a client-supplied path.
+export const launchVideoStyleReferenceSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  source: z.enum(['gallery', 'upload']),
+  filename: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'filename must not contain a path separator'),
 }).strict();
 
 export const appLaunchVideoRequestSchema = z.object({
@@ -2453,12 +2476,22 @@ export const appLaunchVideoRequestSchema = z.object({
   feedback: z.string().trim().min(1).max(4000).optional(),
   tone: z.enum(['default', 'polished', 'deadpan', 'cinematic', 'parody']).default('default'),
   direction: z.string().trim().max(2000).default(''),
-  format: z.enum(['landscape', 'vertical', 'square']).default('landscape'),
+  // `format` is the single-frame form older callers send; `formats` asks one
+  // run for several aspect ratios of the same film. The route normalizes both.
+  format: launchVideoFormatSchema.optional(),
+  formats: launchVideoFormatListSchema.optional(),
   targetDurationSec: z.number().int().min(15).max(120).default(20),
   generateMusic: z.boolean().default(false),
   musicMethod: z.enum(['agent', 'service']).default('agent'),
-  motionGraphics: z.boolean().default(false),
+  // Legacy boolean for older callers; true means motionStyle "showreel".
+  motionGraphics: z.boolean().optional(),
+  motionStyle: z.enum(LAUNCH_VIDEO_MOTION_STYLES).optional(),
+  // Contact-sheet proof → critique → fix passes before the final render.
+  critiqueRounds: z.number().int().min(0).max(4).default(2),
+  // Ask the agent to consult installed motion-design skills (npm run setup:motion).
+  motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
+  styleReference: launchVideoStyleReferenceSchema.optional(),
 }).strict();
 
 export const launchVideoOptionsSchema = z.object({
@@ -2486,13 +2519,35 @@ export const htmlCompositionRenderSchema = z.object({
   synthesizeMusic: z.boolean().optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
-}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both');
+  // Several aspect ratios of one timeline, rendered in sequence on one page.
+  // Omitted, the job renders the composition's own width/height as before.
+  formats: launchVideoFormatListSchema.optional(),
+  // A proof renders a silent contact sheet for review instead of the video;
+  // `format` checks one declared framing, defaulting to the composition's own.
+  proof: z.object({ everySec: z.number().min(0.25).max(10).default(1), format: launchVideoFormatSchema.optional() }).strict().optional(),
+}).refine(value => !(value.synthesizeMusic && value.musicTrack), 'Choose synthesized music or a library track, not both')
+  .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack)), 'A proof is silent; omit synthesizeMusic and musicTrack')
+  .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
+
+// GET /api/html-composition/beats — a Music-library filename, same shape as
+// htmlCompositionRenderSchema's musicTrack but required (this endpoint exists
+// only to measure one).
+export const htmlCompositionBeatsQuerySchema = z.object({
+  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
+}).strict();
 
 export const htmlCompositionContractSchema = z.object({
   durationSec: z.number().min(1).max(120),
   fps: z.number().int().min(12).max(60),
   width: z.number().int(),
   height: z.number().int(),
+  // Subframes averaged per output frame to fake motion blur on fast moves;
+  // 1 (default) keeps the existing single-sample-per-frame behavior.
+  motionBlur: z.number().int().min(1).max(4).default(1),
+  // Extra sizes this one timeline can render (#8960), reframed by the optional
+  // layout({ width, height }) hook before each format's first seek.
+  formats: z.array(z.enum(Object.values(LAUNCH_VIDEO_FORMAT_SIZES))).min(1).max(LAUNCH_VIDEO_FORMATS.length).optional(),
+  layout: z.boolean().default(false),
 }).superRefine((value, ctx) => {
   if (!['1920x1080', '1080x1920', '1080x1080', '1280x720'].includes(`${value.width}x${value.height}`)) {
     ctx.addIssue({ code: 'custom', path: ['width'], message: 'width/height must be 1920x1080, 1080x1920, 1080x1080 or 1280x720' });

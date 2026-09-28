@@ -19,18 +19,18 @@
  * from the stem resolves identically on the sender and on every peer.
  */
 
+import { open, stat, rename } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS, ensureDir, atomicWrite, unlinkGuarded } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { mutateVideoHistory } from './videoGen/history.js';
 import { videoGenEvents } from './videoGen/events.js';
 
-// The largest raw file that fits the JSON body-parser limit once
-// base64-encoded — the single source of truth in uploadLimits.js, mirrored
-// client-side as JSON_UPLOAD_MAX_FILE_SIZE (the cap the picker enforces).
+// Compatibility export for the separate remote browser-download path.
+// User uploads stream to disk without this legacy JSON transport bound.
 export const MAX_GALLERY_VIDEO_UPLOAD_BYTES = MAX_BASE64_UPLOAD_BYTES;
 
 // Container sniff — extension comes from the BYTES, not the client filename.
@@ -73,10 +73,30 @@ export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') 
   if (buffer.length === 0) {
     throw new ServerError('Empty video upload', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if (buffer.length > MAX_GALLERY_VIDEO_UPLOAD_BYTES) {
-    throw new ServerError(`Video exceeds maximum size of ${MAX_GALLERY_VIDEO_UPLOAD_BYTES / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
-  }
-  const ext = detectVideoContainer(buffer);
+  return persistGalleryVideo(buffer, originalName, buffer.length, (outPath) => atomicWrite(outPath, buffer));
+}
+
+// Read only the container signature; copy the streamed file without buffering it.
+export async function saveUploadedGalleryVideoFile(tempPath, originalName = '') {
+  const file = await open(tempPath, 'r');
+  const header = Buffer.alloc(12);
+  const bytesRead = await file.read(header, 0, header.length, 0)
+    .then((result) => result.bytesRead).finally(() => file.close());
+  const { size } = await stat(tempPath);
+  return persistGalleryVideo(header.subarray(0, bytesRead), originalName, size,
+    async (outPath) => {
+      const staging = `${outPath}.tmp`;
+      try {
+        await copyFileGuarded(tempPath, staging);
+        await rename(staging, outPath);
+      } finally {
+        await unlinkGuarded(staging).catch(() => {});
+      }
+    });
+}
+
+async function persistGalleryVideo(header, originalName, size, write) {
+  const ext = detectVideoContainer(header);
   if (!ext) {
     throw new ServerError('Unsupported video format (expected MP4, MOV/M4V, or WebM)', { status: 400, code: 'UNSUPPORTED_VIDEO' });
   }
@@ -84,8 +104,8 @@ export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') 
   const filename = `${id}.${ext}`;
   await ensureDir(PATHS.videos);
   const outPath = join(PATHS.videos, filename);
-  await atomicWrite(outPath, buffer);
   try {
+    await write(outPath);
     // Both best-effort: a missing ffmpeg/ffprobe degrades to a thumbnail-less
     // entry (normalizeVideo renders a no-preview tile), never a failed upload.
     const [thumbnail, durationSec] = await Promise.all([
@@ -100,7 +120,7 @@ export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') 
     // Let the live media-asset index hook index this immediately (same event
     // the generation and download paths emit). Reconcile is the backstop.
     videoGenEvents.emit('completed', { generationId: id, filename, path: `/data/videos/${filename}`, thumbnail });
-    console.log(`📥 Saved uploaded gallery video: ${filename} (${(buffer.length / 1024 / 1024).toFixed(1)}MB)`);
+    console.log(`📥 Saved uploaded gallery video: ${filename} (${(size / 1024 / 1024).toFixed(1)}MB)`);
     return entry;
   } catch (err) {
     // A throw between the byte write and the history write would orphan a

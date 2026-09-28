@@ -37,6 +37,8 @@ import { isOpenchamberCommand, ensureOpenchamberHeadlessArgs } from '../lib/open
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
+import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from '../lib/providerVendors.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -441,6 +443,27 @@ async function pickProvider(providerId) {
 }
 
 /**
+ * The provider an Ask turn will run on, resolved up front so an HTTP caller can
+ * be refused with a 403 before any conversation write or SSE handshake.
+ *
+ * Ask hands the model the caller's own question, so a provider that cannot run
+ * tool-free (#9008) — an agent CLI such as agy — needs host control. Returns
+ * null when no provider is available; `runAsk` reports that on the stream.
+ *
+ * @param {string} [providerId]
+ * @param {{ hasHostControl?: boolean }} [options] - server-derived authority
+ * @returns {Promise<object|null>}
+ * @throws {ServerError} 403 HOST_CONTROL_FORBIDDEN
+ */
+export async function resolveAskProvider(providerId, { hasHostControl = false } = {}) {
+  const provider = await pickProvider(providerId).catch(() => null);
+  if (!provider) return null;
+  const refusal = toolFreeOneShotRefusal(provider, hasHostControl);
+  if (refusal) throw new ServerError(refusal.message, { status: refusal.status, code: refusal.code });
+  return provider;
+}
+
+/**
  * Stream a completion from an API-style provider. Yields text chunks.
  * Falls back to a single-shot call for non-streaming providers (CLI).
  *
@@ -511,13 +534,13 @@ async function* streamCompletion(provider, model, prompt, signal) {
     // -m/--model pin (mirrors buildCliArgs) rather than duplicating the flag.
     if (cliModel && !hasModelFlag(args)) args.push('--model', prefixOpencodeModel(provider, cliModel));
   } else if (isGrokCommand(provider?.command)) {
-    // Grok reads its prompt from --prompt-file /dev/stdin and needs plain output
-    // + permission bypass; ensureGrokHeadlessArgs adds them (gated on user pins).
-    args = ensureGrokHeadlessArgs(args, cliModel);
+    // Grok reads its prompt from --prompt-file /dev/stdin and needs plain output;
+    // ensureGrokHeadlessArgs adds both, with the read-only permission mode
+    // rather than its agent-path bypass.
+    args = ensureGrokHeadlessArgs(args, cliModel, { toolFree: true });
   } else if (isKiloCommand(provider?.command)) {
-    // Kilo forks OpenCode's `run`, and adds the `--auto` approval posture an
-    // unattended answer needs — without it the run stalls on the first
-    // permission prompt with nobody to answer it.
+    // Kilo forks OpenCode's `run`; its `--auto` approval posture is stripped
+    // below with every other bypass.
     args = ensureKiloHeadlessArgs(args, cliModel);
   } else if (isOpenchamberCommand(provider?.command)) {
     // OpenChamber's prompt path is a control-plane action, not a flag: without
@@ -527,13 +550,20 @@ async function* streamCompletion(provider, model, prompt, signal) {
   } else if (cliModel) {
     args.push('--model', cliModel);
   }
+  // The question is caller text, so the answer runs tool-free (#9008): every
+  // approval-bypass flag goes — whether saved in provider.args or added by a
+  // vendor builder above — and claude/grok/pi get their tool-disable switch.
+  // A vendor with no such switch was already refused for a caller without host
+  // control (resolveAskProvider / runAsk).
+  args = toolFreeOneShotArgs(provider, args).args;
   // Deliver the prompt per provider convention: antigravity gets it as the
   // --print VALUE (agy doesn't read stdin); grok's /dev/stdin sentinel via stdin
   // (POSIX) / temp file (Windows); everyone else via stdin (writePromptToStdin).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, args, prompt);
   // Shared composition (provider.envVars + OpenCode models map + CLAUDECODE
   // strip) — see buildCliChildEnv. No cwd is passed to spawn below, so there is
-  // no PWD to pin; no `guard` — Ask is a one-shot answer, not an agent. Routing
+  // no PWD to pin; no `guard` — the argv above is tool-free for every vendor
+  // that can be, and host-control-gated for the rest. Routing
   // through the shared builder also brings the OpenCode declared-models map here
   // for the first time, so the `--model` this path injects above isn't rejected
   // by an Ollama-backed OpenCode provider (the #2190 fix, previously applied
@@ -634,6 +664,11 @@ async function* streamCompletion(provider, model, prompt, signal) {
  * @param {number} [opts.maxSources]
  * @param {string} [opts.providerId]
  * @param {string} [opts.model]
+ * @param {object} [opts.provider] - already resolved and gated by
+ *   `resolveAskProvider`; skips resolution here.
+ * @param {() => (boolean|Promise<boolean>)} [opts.hasHostControl] - the
+ *   caller's server-derived authority, consulted only when the resolved
+ *   provider cannot run tool-free (#9008). Absent means none.
  * @param {AbortSignal} [opts.signal] - Aborts retrieval/provider stream when
  *   the caller (e.g. SSE client) disconnects, so we don't keep generating
  *   tokens for a closed connection.
@@ -646,6 +681,8 @@ export async function* runAsk({
   maxSources = 12,
   providerId,
   model,
+  provider: resolvedProvider = null,
+  hasHostControl,
   signal,
 }) {
   if (!question || typeof question !== 'string' || !question.trim()) {
@@ -668,12 +705,21 @@ export async function* runAsk({
   if (signal?.aborted) return;
   yield { type: 'sources', sources };
 
-  let provider;
-  try {
-    provider = await pickProvider(providerId);
-  } catch (err) {
-    yield { type: 'error', error: err.message };
-    return;
+  let provider = resolvedProvider;
+  if (!provider) {
+    try {
+      provider = await pickProvider(providerId);
+    } catch (err) {
+      yield { type: 'error', error: err.message };
+      return;
+    }
+    // Authority is asked for only when it matters: a voice turn re-verifies
+    // its session on every call.
+    if (!isToolFreeOneShotProvider(provider) && await hasHostControl?.() !== true) {
+      const refusal = toolFreeOneShotRefusal(provider, false);
+      yield { type: 'error', error: refusal.message, code: refusal.code };
+      return;
+    }
   }
   const effectiveModel = model || provider.defaultModel;
   // API providers will fail with a vague upstream 4xx if `model` is null —

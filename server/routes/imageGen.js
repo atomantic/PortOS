@@ -16,7 +16,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
-import { optionalUploadFields } from '../lib/multipart.js';
+import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
@@ -60,6 +60,16 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
 async function enqueueLoggedImage(req, job) {
+  // Selective section revision (#9011): checked as the LAST step before the
+  // actual queue write — every branch that reaches this helper has already
+  // done its own staging/provider resolution, so this is as close to the
+  // cancel/kickoff race as a request can get. A no-op when the tag carries no
+  // revisionId; deferred import since only this rare path needs the revision
+  // service's closure.
+  if (job.params?.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(job.params.musicVideo.projectId, job.params.musicVideo.revisionId, { sceneId: job.params.musicVideo.sceneId, kind: 'image' });
+  }
   const queued = await enqueueJob(job);
   try {
     const happenedAt = new Date().toISOString();
@@ -86,7 +96,6 @@ async function enqueueLoggedImage(req, job) {
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_LORAS = 8;
 const MAX_REFERENCE_IMAGES = 10;
-const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)
   .regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, `${label} must be a basename ending in png/jpg/jpeg/webp`);
@@ -212,15 +221,18 @@ const generateSchema = z.object({
     role: z.literal('image').optional(),
   }).optional(),
   // Music Video scene reference-frame render (#1760 Phase 1b). When present, the
-  // mediaJobQueue completion hook (`musicVideoSceneImageHook`) files the finished
-  // render onto the project scene's `referenceImageId` — durably, even if the
+  // mediaJobQueue completion hook (`musicVideoSceneImageHook`) appends the
+  // finished render to the project scene's takes (#8965) — durably, even if the
   // director board unmounted mid-render. Only the async local/Codex lanes ride
   // the queue this hook listens to; the synchronous external SD-API lane returns
-  // the filename inline and the client PATCHes `referenceImageId` directly. Rides
+  // the filename inline and the client adds it through the scene takes route. Rides
   // into job.params untouched via `...params` (like `writersRoom`). JSON-only.
   musicVideo: z.object({
     projectId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    // Selective section revision (#9011): see the matching comment on the
+    // video route's musicVideo schema (server/routes/videoGen.js).
+    revisionId: z.string().min(1).max(200).optional(),
   }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
@@ -260,7 +272,6 @@ const REFERENCE_IMAGE_FIELDS = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, 
 const IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
 
 const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
-  limits: { fileSize: MAX_IMAGE_UPLOAD_BYTES },
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
@@ -317,7 +328,7 @@ const avatarSchema = z.object({
 // Upload a user-supplied image straight into the gallery (`data/images/`) so it
 // rides the existing `image` peer-sync asset path. `data` is base64 (no data:
 // URI prefix); the real format is sniffed server-side, so the schema only caps
-// the encoded string length (~16MB decoded ≈ 21.8M base64 chars).
+// the legacy JSON request. Multipart uploads have no size cap.
 const uploadImageSchema = z.object({
   data: z.string().min(1).max(24 * 1024 * 1024),
 });
@@ -542,6 +553,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
     });
   }
+
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
   // call with no local single-flight constraint to absorb. `settings` and
@@ -657,6 +669,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       model: selectedModel?.id || params.modelId || 'dev',
     }));
   }
+  // Selective section revision (#9011): the external/agy lane renders
+  // synchronously and never touches enqueueLoggedImage's guard above, so it
+  // gets its own check right before the (paid) render call. A no-op when the
+  // tag carries no revisionId.
+  if (params.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
+  }
   const result = await imageGen.generateImage(params);
   if (params.fableLoom && result?.filename) {
     await attachNodeImage(
@@ -689,7 +709,14 @@ router.post('/avatar', asyncHandler(async (req, res) => {
 // headshots) get a `/data/images/<f>` URL that the peer-sync `image` asset
 // path can transfer — unlike `/api/uploads/<f>`, which is not a pullable
 // asset kind and 404s on a peer.
-router.post('/upload', asyncHandler(async (req, res) => {
+router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => {
+  if (req.file) {
+    try {
+      return res.json(await local.saveUploadedGalleryImage(null, req.file.path));
+    } finally {
+      await unlinkGuarded(req.file.path).catch(() => {});
+    }
+  }
   const { data } = validateRequest(uploadImageSchema, req.body);
   res.json(await local.saveUploadedGalleryImage(data));
 }));

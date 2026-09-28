@@ -3,7 +3,6 @@ import { Circle, Download, FileCode2, LoaderCircle, Save } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../ui/Toast';
 import { uploadGalleryVideo } from '../../services/api';
-import { readFileAsBase64 } from '../../utils/fileUpload';
 import { downloadBlob } from '../../lib/downloadBlob';
 
 // Seconds past the film's own duration before a silent recording is abandoned
@@ -180,13 +179,10 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   const handleSave = async () => {
     if (!video || video.saved || saving) return;
     setSaving(true);
-    const base64 = await readFileAsBase64(video.blob).catch(() => null);
-    const saved = base64
-      ? await uploadGalleryVideo(base64, `${fileBase}.webm`, { silent: true }).catch((error) => {
-        toast.error(error.message || 'Failed to save the video');
-        return null;
-      })
-      : null;
+    const saved = await uploadGalleryVideo(video.blob, `${fileBase}.webm`, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to save the video');
+      return null;
+    });
     setSaving(false);
     if (saved?.id) {
       setVideo((current) => (current?.blob === video.blob ? { ...current, saved: true } : current));

@@ -119,6 +119,50 @@ function resolveVaultPath(vault, notePath) {
   return null;
 }
 
+// A lexical-only containment check (`resolve`/`relative`, no `realpathSync`),
+// so a plainly out-of-vault path can be rejected BEFORE any directory is
+// created for it. `resolveVaultPath` above still runs afterward for the
+// symlink-aware check once the parent is known to exist.
+function isWithinVaultLexically(vault, notePath) {
+  const rootResolved = resolve(vault.path);
+  const fullPath = resolve(join(vault.path, notePath));
+  const rel = relative(rootResolved, fullPath);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+// Create `dirPath` (a directory under the vault) one path segment at a time,
+// refusing to create anything through an EXISTING symlink that resolves
+// outside the vault. A single recursive `ensureDir(dirPath)` call would hand
+// the whole string to one mkdir syscall, which the OS resolves following any
+// mid-path symlink — so a vault containing a legitimate symlinked folder that
+// happens to point outside the vault could otherwise have host directories
+// planted through it before `resolveVaultPath`'s realpath check ever runs.
+// Returns false (creating nothing further) the moment a segment escapes.
+async function ensureVaultDir(vault, dirPath) {
+  const rootResolved = resolve(vault.path);
+  const rootReal = (() => {
+    try { return realpathSync(rootResolved); } catch { return rootResolved; }
+  })();
+  const relDir = relative(rootResolved, resolve(dirPath));
+  if (relDir === '') return true; // the vault root itself always exists
+  if (relDir.startsWith('..') || isAbsolute(relDir)) return false;
+
+  let current = rootResolved;
+  for (const segment of relDir.split(/[\\/]+/).filter(Boolean)) {
+    current = join(current, segment);
+    if (existsSync(current)) {
+      const real = (() => {
+        try { return realpathSync(current); } catch { return current; }
+      })();
+      const rel = relative(rootReal, real);
+      if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) return false;
+    } else {
+      await ensureDir(current);
+    }
+  }
+  return true;
+}
+
 export async function getVaultById(id) {
   const vaults = await getVaults();
   return vaults.find(v => v.id === id) || null;
@@ -242,6 +286,9 @@ export async function getNote(vaultId, notePath, { includeBacklinks = true } = {
   if (!fullPath) {
     return { error: 'INVALID_PATH', message: 'Path traversal not allowed' };
   }
+  if (extname(fullPath) !== '.md') {
+    return { error: 'INVALID_PATH', message: 'Only .md notes can be read' };
+  }
   if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   const content = await readNoteContent(fullPath);
@@ -289,6 +336,7 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
 
   const fullPath = resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
+  if (extname(fullPath) !== '.md') return { error: 'INVALID_PATH' };
   if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   // Overwriting an EVICTED note would block exactly like reading one — measured,
@@ -375,9 +423,16 @@ export async function createNote(vaultId, notePath, content = '') {
 
   if (!notePath.endsWith('.md')) notePath += '.md';
 
+  // Reject an out-of-vault path lexically BEFORE creating any directories —
+  // a rejected path must never leave directories behind on disk (#9007).
+  if (!isWithinVaultLexically(vault, notePath)) return { error: 'INVALID_PATH' };
+
   // For a new file the target doesn't exist yet — resolveVaultPath realpaths
   // the parent directory (which must exist) to still catch symlink escapes.
-  await ensureDir(dirname(join(vault.path, notePath)));
+  // ensureVaultDir creates it segment-by-segment so an existing symlink
+  // escape is refused before anything is created through it (#9007).
+  const dirOk = await ensureVaultDir(vault, dirname(join(vault.path, notePath)));
+  if (!dirOk) return { error: 'INVALID_PATH' };
   const fullPath = resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
   if (existsSync(fullPath)) {
@@ -450,6 +505,7 @@ export async function deleteNote(vaultId, notePath) {
 
   const fullPath = resolveVaultPath(vault, notePath);
   if (!fullPath) return { error: 'INVALID_PATH' };
+  if (extname(fullPath) !== '.md') return { error: 'INVALID_PATH' };
   if (!existsSync(fullPath)) return { error: 'NOTE_NOT_FOUND' };
 
   // No dataless screen here, deliberately (#3713): `unlink` does NOT materialize

@@ -9,6 +9,7 @@ import { atomicWrite, ensureDir, tryReadFile, writeFileGuarded, PATHS } from '..
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
+import { toolFreeOneShotArgs } from '../lib/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -322,7 +323,7 @@ const describeSpawnFailure = (spawnError, command) =>
  * `.cmd`/`.bat` spawn under `shell:false` fails outright post-CVE-2024-27980,
  * and why the `cmd.exe` wrapper avoids DEP0190's unescaped-join hazard).
  */
-export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout }) {
+export async function executeCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false }) {
   const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
@@ -380,7 +381,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     : null;
   const cleanupVisionFiles = vision?.cleanup || (() => Promise.resolve());
   // Build provider-specific args for prompt delivery
-  const builtArgs = vision?.invocation.args || buildCliArgs(provider);
+  // `toolFree`: a one-shot over caller-supplied text gets no approval bypass
+  // and no tools where the vendor can disable them (#9008). The vision argv is
+  // held to it too: a vendor that needs a tool to read the staged images fails
+  // closed rather than running with its tools on.
+  const builtArgs = vision
+    ? (toolFree ? toolFreeOneShotArgs(provider, vision.invocation.args).args : vision.invocation.args)
+    : buildCliArgs(provider, { toolFree });
   // Rewrite the argv for prompt delivery and learn whether to still write stdin:
   //   - Antigravity (`agy`): prompt spliced in as the --print VALUE (agy doesn't
   //     read stdin) → useStdin=false.

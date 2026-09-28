@@ -262,13 +262,13 @@ PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every
 - **System (native) PostgreSQL on `:5432`** — `PGMODE=native`, or
 - **Docker PostgreSQL on `:5561`** — `PGMODE=docker` (the default).
 
-Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), so an available Docker installation takes precedence over a healthy native database unless you explicitly select `native`. Native auto-detection is a fallback only when Docker or Compose is unavailable, or the Docker daemon is stopped. See [Setup path](#setup-path-npm-run-setupdb) below.
+Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), and provisions only that selected backend. An unavailable Docker installation fails setup without probing native PostgreSQL or changing the saved mode. See [Setup path](#setup-path-npm-run-setupdb) below.
 
 ### `MEMORY_BACKEND=file` is a development/test-only escape hatch — NOT a deployment mode
 
 The file backend (`server/services/memory.js`, JSON under `./data/`) is **unsupported for production and for federated peers.** It exists only so the test suite (and ad-hoc local development) can boot without a database. It is **not** a fallback, a "lite" mode, or a way to run PortOS without Postgres:
 
-- It is reached **only** via the explicit `MEMORY_BACKEND=file` env var (set from `PGMODE=file` in `.env`, mapped by the launcher) **or** automatically under `NODE_ENV=test`. There is no menu choice for it (`scripts/setup-db.js` offers only Docker and Native), and `npm run setup:db` with `PGMODE=file` prints an "unsupported" notice and refuses to provision it.
+- It is reached **only** via the explicit `MEMORY_BACKEND=file` env var (set from `PGMODE=file` in `.env`, mapped by the launcher) **or** automatically under `NODE_ENV=test`. Setup has no interactive backend menu, and `npm run setup:db` with `PGMODE=file` prints an "unsupported" notice and refuses to provision it.
 - When `MEMORY_BACKEND` is unset, PortOS **requires** a healthy database and **does NOT silently fall back to file storage** — an unreachable/unmigrated DB is an error condition. `server/services/memoryBackend.js` fails fast with an actionable message (`run npm run setup:db`) rather than serving a half-broken install. This no-silent-fallback behavior is intentional; do not "fix" it.
 
 **Why file storage cannot be a supported mode:**
@@ -283,9 +283,9 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `npm run setup:db` → `scripts/setup-db.js` is the single command that makes PostgreSQL ready, and is wired into `npm run setup` and `npm start` so a normal install never has to think about it. Its happy path:
 
-1. **Select the mode first.** Set `PGMODE=native` in the repository-root `.env` before running setup to reuse a native PortOS database, even when Docker is running. An exported `PGMODE` overrides `.env` for this script; unset a conflicting shell value before retrying.
+1. **Select the mode first.** For a fresh native install, set `PGMODE=native` in the repository-root `.env` before running setup. For an existing install, retain its authoritative backend; changing backends requires coordinated maintenance cutover, not a setup-time selection. An exported `PGMODE` overrides `.env` for this script; unset a conflicting shell value before retrying.
 2. **`PGMODE=docker` (default):** starts or reuses the `pgvector/pgvector:pg17` container (`docker-compose.yml`), waits for TCP connections **and** the base `memories` table, then reports ready. It does not probe native PostgreSQL first. The host port defaults to `:5561` (`PGPORT_DOCKER` overrides it).
-3. **Docker unavailable:** if Docker or Compose is missing, or the daemon is stopped, a healthy native PortOS database triggers an automatic switch: setup writes `PGMODE=native` to `.env` and exits successfully. Otherwise an interactive terminal offers native bootstrap or instructions to install/start Docker; a non-interactive run exits non-zero.
+3. **Docker unavailable:** if Docker or Compose is missing, or the daemon is stopped, setup exits non-zero with restoration instructions, even when native PostgreSQL is healthy. Both interactive and unattended runs preserve `.env` and never offer a backend switch.
 4. **`PGMODE=native`:** first checks whether the configured role can authenticate to the configured database and its base `memories` table exists. A healthy database exits immediately without re-provisioning. Otherwise it runs `scripts/db.sh setup-native` (Homebrew install, role, database, extensions, schema) and verifies readiness again. The port defaults to `:5432` (`PGPORT` overrides it).
 5. **Failure is non-zero exit.** A started-but-unresponsive container or a failed native bootstrap exits non-zero with an actionable message — so the `&&`-chained `npm start` halts here instead of crash-looping under PM2 against an unready database.
 
@@ -690,3 +690,7 @@ continues its unchanged allowlist (`metadata.json`, `output.txt`, `prompt.txt`).
 Filesystem backups include both gzip assets and their sidecars, and restore keeps
 them readable without a conversion. Data Management's backup export keeps its
 originals and is distinct from space reclamation.
+
+### Media prompt examinations
+
+`media_prompt_examinations` is db-primary, machine-local history of explicit media analyses. Each immutable UUID record retains the source kind and filename/video ID, both requested prompts and negatives, rationale, and provider/model attribution. Source references are descriptive locators, not foreign keys: examinations remain usable after source media deletion. No binary data or credentials are stored. Lists are paginated and details loaded on demand. PostgreSQL dumps cover the records; migration 418 registers additive boot DDL with no seed or backfill. The JSON adapter is only for development/tests. No federation is added.
