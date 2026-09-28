@@ -160,6 +160,10 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
             </span>
             {active && (
               <div className="flex items-center gap-2">
+                {/* After a reload the board may have missed a hand-out: Continue re-derives the step. */}
+                {run.status === 'running' && !autoReview.action && (
+                  <button type="button" disabled={busy} onClick={() => autoReview.resume(run.id)} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0"><Play size={12} /> Continue</button>
+                )}
                 {run.status === 'running'
                   ? <button type="button" disabled={busy} onClick={() => autoReview.stop(run.id)} className="flex items-center gap-1 text-port-warning disabled:opacity-50 min-h-[44px] sm:min-h-0"><Pause size={12} /> Pause</button>
                   : <button type="button" disabled={busy} onClick={resume} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0"><Play size={12} /> Resume</button>}

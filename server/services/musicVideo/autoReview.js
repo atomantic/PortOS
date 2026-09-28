@@ -54,6 +54,9 @@ export const AUTO_REVIEW_CHECKS = Object.freeze(['composition', 'continuity', 'm
 // not loop forever: this many failed renders of one attempt fail the run.
 const MAX_RENDER_FAILURES = 2;
 const MAX_PROJECT_AUTO_REVIEWS = 10;
+// How long a charged submission reserves its section before the job must have
+// reached the queue (a kickoff takes seconds; the live-job check covers the rest).
+const RESERVATION_LEASE_MS = 30_000;
 const MAX_FINDINGS = 20;
 const MAX_FINDING_LEN = 500;
 const NOTE_PREFIX = '[auto-review]';
@@ -68,6 +71,8 @@ export const projectAutoReviews = (project) => (Array.isArray(project?.autoRevie
 const activeAutoReview = (project) => projectAutoReviews(project).find((r) => ACTIVE.has(r.status)) || null;
 
 const currentAttempt = (run) => run.attempts[run.attempts.length - 1];
+const liveReservations = (run, nowMs) => (Array.isArray(run.reservations) ? run.reservations : [])
+  .filter((r) => Number.isFinite(nowMs) && nowMs - Date.parse(r.at) < RESERVATION_LEASE_MS);
 
 function findRun(project, runId) {
   const run = projectAutoReviews(project).find((r) => r.id === runId);
@@ -166,6 +171,11 @@ export function nextAutoReviewStep(project, run) {
     }
     return { type: 'review', excerptId: attempt.excerptId };
   }
+  // A review recorded while the run was paused keeps its verdict for resume.
+  if (attempt.review.verdict === 'pass') return { type: 'halt', status: 'passed', reason: null };
+  if (attempt.review.verdict !== 'revise') {
+    return { type: 'halt', status: 'needs-human', reason: attempt.review.reason || 'The review could not verify every check — watch this draft yourself' };
+  }
   if (!attempt.revisionId) return { type: 'revise', excerptId: attempt.excerptId };
   const revision = projectRevisions(project).find((r) => r.id === attempt.revisionId);
   if (!revision || revision.status === 'canceled') {
@@ -254,12 +264,15 @@ export function recordAttemptReview(project, runId, review, now = new Date().toI
   const findings = (Array.isArray(review.findings) ? review.findings : []).map((f) => cleanFinding(f, spanSec)).filter(Boolean).slice(0, MAX_FINDINGS);
   const stored = { ...review, findings, reviewedAt: now };
   let next = project;
-  if (review.verdict === 'revise' && excerpt) {
+  // A review that returns after the run was paused is still recorded (it was
+  // paid for, and resume continues from it); one that returns after a cancel
+  // is recorded but files nothing and moves no status.
+  if (review.verdict === 'revise' && excerpt && RESUMABLE.has(run.status)) {
     for (const finding of findings.filter((f) => f.severity === 'blocking')) {
       next = addExcerptNote(next, excerpt.id, { atSec: finding.atSec, note: `${NOTE_PREFIX} ${finding.note}`, verdict: 'flagged' }, now).project;
     }
   }
-  const terminal = review.verdict === 'pass'
+  const terminal = run.status !== 'running' ? {} : review.verdict === 'pass'
     ? { status: 'passed', stopReason: null }
     : review.verdict === 'inconclusive'
       ? { status: 'needs-human', stopReason: review.reason || 'The review could not verify every check — a director must watch this draft' }
@@ -297,8 +310,8 @@ export function resumeAutoReviewOnProject(project, runId, { limits } = {}, now =
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw autoReviewError(409, 'AUTO_REVIEW_CLOSED', `This run is ${run.status} — start a new run instead`);
     const nextLimits = limits ? normalizeAutoReviewLimits({ ...run.limits, ...limits }) : run.limits;
-    if (nextLimits.maxAttempts < run.usage.reviews || nextLimits.maxGenerations < run.usage.generations) {
-      throw autoReviewError(422, 'VALIDATION_ERROR', 'A limit cannot be lowered below what this run already used');
+    if (nextLimits.maxAttempts < run.limits.maxAttempts || nextLimits.maxGenerations < run.limits.maxGenerations) {
+      throw autoReviewError(422, 'VALIDATION_ERROR', 'Resuming can only raise a limit, never lower it');
     }
     return { status: 'running', limits: nextLimits, stopReason: null, error: null };
   }, now);
@@ -323,13 +336,42 @@ export function cancelAutoReviewOnProject(project, runId, now = new Date().toISO
  * Returns `{ project, run }` — `run` null (and the project untouched) when no
  * running run owns the revision.
  */
-export function chargeAutoReviewGeneration(project, revisionId, now = new Date().toISOString()) {
+export function chargeAutoReviewGeneration(project, revisionId, { sceneId = null, kind = null } = {}, now = new Date().toISOString()) {
   const run = runOwningRevision(project, revisionId);
   if (!run) return { project, run: null };
+  const nowMs = Date.parse(now);
+  const reservations = liveReservations(run, nowMs);
+  // A charge RESERVES its section until the job reaches the queue (where the
+  // caller's live-job check takes over), so two overlapping submissions of the
+  // same section can never both be paid for.
+  if (sceneId && reservations.some((r) => r.revisionId === revisionId && r.sceneId === sceneId && r.kind === kind)) {
+    throw autoReviewError(409, 'AUTO_REVIEW_SECTION_IN_FLIGHT', 'This section is already being submitted for the auto-review run', { sceneId });
+  }
   if (run.usage.generations >= run.limits.maxGenerations) {
     throw autoReviewError(409, 'AUTO_REVIEW_SPEND_LIMIT', `This auto-review run reached its ${run.limits.maxGenerations}-generation spend limit`, { runId: run.id });
   }
-  return mutateRun(project, run.id, (r) => ({ usage: { ...r.usage, generations: r.usage.generations + 1 } }), now);
+  return mutateRun(project, run.id, (r) => ({
+    usage: { ...r.usage, generations: r.usage.generations + 1 },
+    reservations: sceneId ? [...reservations, { revisionId, sceneId, kind, at: now }] : reservations,
+  }), now);
+}
+
+/**
+ * Refund a charge whose submission never reached the queue (the board reports
+ * a failed kickoff by releasing the section's claim): the reservation is
+ * dropped and its generation returned to the budget. A no-op when there is no
+ * live reservation for the section — a job that was queued stays charged.
+ */
+export function refundAutoReviewGeneration(project, revisionId, sceneId, now = new Date().toISOString()) {
+  const run = projectAutoReviews(project).find((r) => RESUMABLE.has(r.status) && currentAttempt(r).revisionId === revisionId);
+  if (!run) return { project, run: null };
+  const reservations = liveReservations(run, Date.parse(now));
+  const idx = reservations.findIndex((r) => r.revisionId === revisionId && r.sceneId === sceneId);
+  if (idx === -1) return { project, run: null };
+  return mutateRun(project, run.id, (r) => ({
+    usage: { ...r.usage, generations: Math.max(0, r.usage.generations - 1) },
+    reservations: reservations.filter((_, i) => i !== idx),
+  }), now);
 }
 
 /** Generations still affordable before the spend limit. */

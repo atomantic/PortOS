@@ -76,7 +76,8 @@ vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: v
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
 vi.mock('../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn((proc) => proc.emit('close', null, 'SIGTERM')) }));
 vi.mock('../services/htmlComposition/encode.js', () => ({ encodeFileContactSheetAtTimes: vi.fn(async () => {}) }));
-vi.mock('../services/mediaJobQueue/index.js', () => ({
+vi.mock('../services/mediaJobQueue/index.js', async () => ({
+  mediaJobEvents: new (await import('events')).EventEmitter(),
   listJobs: vi.fn(({ kind } = {}) => h.jobs.filter((j) => !kind || j.kind === kind)),
   enqueueJob: vi.fn(),
   cancelJob: vi.fn(async () => {}),
@@ -102,6 +103,7 @@ const projects = await import('../services/musicVideo/projects.js');
 const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { runPromptThroughProvider } = await import('../services/promptRunner.js');
+const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
 
 const app = express();
 app.use(express.json());
@@ -248,6 +250,33 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(run(current).attempts[0].review).toEqual(reviewed);
     expect(run(current).usage).toEqual({ reviews: 2, generations: 0 });
     expect(h.procs).toHaveLength(2);
+  });
+
+  it('refunds a kickoff that never reached the queue, and pauses (not retries) when a revised generation fails', async () => {
+    const p = await project();
+    h.verdicts.push(FAIL_S2);
+    await start(p.id, { maxAttempts: 2, maxGenerations: 2 });
+    await finishDraft(p.id, 1);
+    let current = await settled(p.id, (x) => expect(run(x).attempts[0].revisionId).toBeTruthy());
+    const revisionId = run(current).attempts[0].revisionId;
+    const s2 = { sceneId: 's2', kind: 'video' };
+
+    // The board's kickoff was charged but failed before the queue: releasing
+    // the section returns the generation to the budget.
+    await assertRevisionOpen(p.id, revisionId, s2);
+    expect(run(await projects.getProject(p.id)).usage.generations).toBe(1);
+    await request(app).post(`${base(p.id)}/revisions/${revisionId}/release`).send({ sceneId: 's2' });
+    expect(run(await projects.getProject(p.id)).usage.generations).toBe(0);
+
+    // Resubmitted, queued, and the provider fails it: the run pauses for the
+    // director instead of paying for a retry on its own.
+    await assertRevisionOpen(p.id, revisionId, s2);
+    const job = { id: 'job-s2', kind: 'video', status: 'failed', error: 'provider error', queuedAt: new Date().toISOString(), params: { musicVideo: { projectId: p.id, sceneId: 's2', revisionId } } };
+    mediaJobEvents.emit('failed', job);
+    current = await settled(p.id, (x) => expect(run(x).status).toBe('stopped'));
+    expect(run(current).stopReason).toMatch(/generation failed: provider error/);
+    expect(run(current).usage.generations).toBe(1);
+    expect(current.revisions.find((rv) => rv.id === revisionId).sections.find((s) => s.sceneId === 's2').claimedAt).toBeNull();
   });
 
   it('stops before handing out a revision the remaining spend cannot cover', async () => {

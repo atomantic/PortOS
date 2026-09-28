@@ -32,7 +32,7 @@ import {
   revisionSectionStates,
   startRevisionOnProject,
 } from './revision.js';
-import { chargeAutoReviewGeneration, runOwningRevision } from './autoReview.js';
+import { chargeAutoReviewGeneration, refundAutoReviewGeneration, runOwningRevision } from './autoReview.js';
 
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {
@@ -68,7 +68,7 @@ export async function assertRevisionOpen(projectId, revisionId, { sceneId = null
     if (inFlight) {
       throw new ServerError('This section is already generating for the auto-review run', { status: 409, code: 'AUTO_REVIEW_SECTION_IN_FLIGHT', context: { sceneId } });
     }
-    return chargeAutoReviewGeneration(current, revisionId);
+    return chargeAutoReviewGeneration(current, revisionId, { sceneId, kind });
   });
 }
 
@@ -78,7 +78,12 @@ export async function assertRevisionOpen(projectId, revisionId, { sceneId = null
  * instead of waiting out the claim lease. Returns `{ project, revision }`.
  */
 export async function releaseRevisionSection(projectId, revisionId, sceneId) {
-  return mutateProjectRecord(projectId, (current) => releaseRevisionClaim(current, revisionId, sceneId));
+  // #8988: a kickoff that never reached the queue also returns its charge to
+  // the owning auto-review run's spend budget.
+  return mutateProjectRecord(projectId, (current) => {
+    const released = releaseRevisionClaim(current, revisionId, sceneId);
+    return { ...released, project: refundAutoReviewGeneration(released.project, revisionId, sceneId).project };
+  });
 }
 
 /**

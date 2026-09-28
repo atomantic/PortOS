@@ -37,7 +37,7 @@ import { musicVideoEvents } from './events.js';
 import { startExcerptRender } from './excerptRender.js';
 import { cancelRevision, resumeRevision } from './revisionService.js';
 import { projectExcerpts } from './excerpt.js';
-import { projectRevisions, revisionSectionStates, startRevisionOnProject } from './revision.js';
+import { projectRevisions, releaseRevisionClaim, revisionSectionStates, startRevisionOnProject } from './revision.js';
 import {
   attachAttemptExcerpt,
   attachAttemptRevision,
@@ -51,6 +51,7 @@ import {
   remainingGenerations,
   resumeAutoReviewOnProject,
   runAwaitingExcerpt,
+  runOwningRevision,
   startAutoReviewOnProject,
   stopAutoReviewOnProject,
 } from './autoReview.js';
@@ -279,6 +280,7 @@ async function takeSteps(projectId, runId) {
  * Returns `{ project, run, action }`.
  */
 function advanceAutoReview(projectId, runId) {
+  armJobEndListener();
   const live = advancing.get(runId);
   if (live) {
     live.again = true;
@@ -353,6 +355,46 @@ export async function cancelAutoReview(projectId, runId) {
 }
 
 // ---- completion events of work a run put in flight ------------------------
+
+// A revised section's generation job that FAILS (or is cancelled by hand)
+// pauses its run rather than retrying on its own — a retry is more paid work,
+// so it waits for the director's Resume, which hands the section out again.
+// Armed on a run's first advance (never at boot); the queue module is deferred
+// because only this path needs it.
+let jobEndListenerArmed = false;
+function armJobEndListener() {
+  if (jobEndListenerArmed) return;
+  jobEndListenerArmed = true;
+  import('../mediaJobQueue/index.js').then(({ mediaJobEvents }) => {
+    const onJobEnded = (job) => {
+      const tag = job?.params?.musicVideo;
+      if (!tag?.projectId || !tag.revisionId || !tag.sceneId) return;
+      pauseOnEndedGeneration(tag, job).catch((err) => {
+        console.error(`❌ Music Video auto-review could not pause after a ${job.status} generation: ${err.message}`);
+      });
+    };
+    mediaJobEvents.on('failed', onJobEnded);
+    mediaJobEvents.on('canceled', onJobEnded);
+  }).catch((err) => {
+    jobEndListenerArmed = false;
+    console.error(`❌ Music Video auto-review could not watch generation jobs: ${err.message}`);
+  });
+}
+
+async function pauseOnEndedGeneration(tag, job) {
+  const project = await getProject(tag.projectId);
+  if (!project || !runOwningRevision(project, tag.revisionId)) return;
+  const out = await mutateProjectRecord(tag.projectId, (current) => {
+    const run = runOwningRevision(current, tag.revisionId);
+    if (!run) return { project: current, run: null };
+    const released = releaseRevisionClaim(current, tag.revisionId, tag.sceneId);
+    const detail = job.error ? `: ${String(job.error).slice(0, 200)}` : '';
+    return haltAutoReview(released.project, run.id, { status: 'stopped', reason: `A revised section's generation ${job.status}${detail} — resume to try it again` });
+  });
+  if (!out.run) return;
+  console.warn(`⏸️ Music Video auto-review ${short(out.run.id)} paused: a revised section's generation ${job.status}`);
+  publish(tag.projectId, out.project, out.run, { type: 'idle' });
+}
 
 function continueFromEvent(projectId, pickRun, label) {
   getProject(projectId)
