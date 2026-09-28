@@ -808,7 +808,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(35);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(36);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
