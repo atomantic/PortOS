@@ -1258,7 +1258,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     visualSpec: {
       palette: ['#112233'],
       cameraRules: 'locked-off wides',
-      typography: '',
+      // Non-empty on purpose (#8992): typography guidance must stay out of
+      // the generated image/video prompt below even when the spec has it.
+      typography: 'condensed sans, all caps, lower-third titles',
       references: [
         { id: 'r1', imageId: 'mood.png', role: 'character', label: 'Lead', note: '', condition: true },
         { id: 'r2', imageId: 'set.png', role: 'set', label: 'Pier', note: '', condition: false },

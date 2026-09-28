@@ -60,17 +60,21 @@ export function matchSceneByFileTag(scenes, originalName) {
 }
 
 /**
- * The project-wide visual direction appended to generated prompts — palette,
- * camera rules and typography from the visual spec. Kept in step with
- * `visualDirection` in client/src/hooks/useMusicVideoSceneMedia.js, which
- * composes the same suffix for PortOS's own renders.
+ * The project-wide visual direction appended to generated prompts — palette
+ * and camera rules from the visual spec. Kept in step with `visualDirection`
+ * in client/src/hooks/useMusicVideoSceneMedia.js, which composes the same
+ * suffix for PortOS's own renders.
+ *
+ * Typography is deliberately excluded from this suffix (#8992): it belongs
+ * to the separately composited text layer (#8984), not the image/video
+ * prompt handed to an external tool. `visualSpec.typography` still exports
+ * on the manifest below for the typography lane and other external tools.
  */
 export function visualDirection(spec) {
   if (!spec) return '';
   return [
     spec.palette?.length ? `color palette ${spec.palette.join(' ')}` : '',
     spec.cameraRules?.trim() ? `camera: ${spec.cameraRules.trim()}` : '',
-    spec.typography?.trim() ? `typography: ${spec.typography.trim()}` : '',
   ].filter(Boolean).join('; ');
 }
 

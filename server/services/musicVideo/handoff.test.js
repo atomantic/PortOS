@@ -16,7 +16,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 const projects = await import('./projects.js');
-const { buildHandoffBundle } = await import('./handoff.js');
+const { buildHandoffBundle, buildHandoffManifest } = await import('./handoff.js');
 
 afterAll(cleanupTempDataRoots);
 
@@ -84,5 +84,29 @@ describe('buildHandoffBundle', () => {
     expect(manifest.missing).toEqual([]);
     const entries = await readZipEntries(zip);
     expect(Object.keys(entries)).toEqual(['manifest.json']);
+  });
+});
+
+describe('buildHandoffManifest typography (#8992)', () => {
+  it('keeps typography prose out of the exported frame/shot prompts but leaves it in visualSpec', () => {
+    const project = {
+      id: 'mv-typo', name: 'Typo Project', version: 1,
+      concept: { prompt: '', style: 'grainy 16mm' },
+      visualSpec: {
+        palette: ['#112233'],
+        cameraRules: 'locked-off wides',
+        typography: 'condensed sans, all caps, lower-third titles',
+        references: [],
+      },
+      scenes: [{ sceneId: 's1', prompt: 'waves', framePrompt: 'harbor at dawn' }],
+    };
+
+    const manifest = buildHandoffManifest(project);
+
+    expect(manifest.visualSpec.typography).toBe('condensed sans, all caps, lower-third titles');
+    expect(manifest.scenes[0].framePrompt).toBe('harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides');
+    expect(manifest.scenes[0].shotPrompt).toBe('waves, grainy 16mm, color palette #112233; camera: locked-off wides');
+    expect(manifest.scenes[0].framePrompt).not.toMatch(/typography/i);
+    expect(manifest.scenes[0].shotPrompt).not.toMatch(/typography/i);
   });
 });
