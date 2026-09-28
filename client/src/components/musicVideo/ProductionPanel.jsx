@@ -44,7 +44,7 @@ function StepRow({ step }) {
       <span className="text-port-text-muted">{routeLabel(step.route)}</span>
       <span className={STEP_TONES[step.status] || 'text-port-accent'}>{step.status}</span>
       {step.rationale && <span className="text-port-text-muted min-w-0 break-words">{step.rationale}</span>}
-      {step.error && <span className="text-port-error min-w-0 break-words">{step.error}</span>}
+      {step.error && <span role="status" className="text-port-error min-w-0 break-words">{step.error}</span>}
     </li>
   );
 }
@@ -69,7 +69,7 @@ function RunView({ run, production }) {
       {run.directive && <p className="text-port-text-muted break-words">Directive: {run.directive}</p>}
       <p className="text-port-text-muted">Allowed: {(run.pool || []).map(routeLabel).join(', ')}</p>
       {hint && <p className="text-port-warning break-words">{hint}</p>}
-      {run.error && <p className="text-port-error break-words">{run.error}</p>}
+      {run.error && <p role="status" className="text-port-error break-words">{run.error}</p>}
       {failures.length > 0 && <p className="text-port-error">{failures.length} step{failures.length === 1 ? '' : 's'} failed — see the list below.</p>}
       {steps.length > 0 && (
         <ul className="space-y-0.5" aria-label="Production steps">
