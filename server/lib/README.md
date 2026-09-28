@@ -782,3 +782,4 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `musicVideoCreativeContext.js` | `musicVideoCreativeContext(concept)` composes the selected universe style and authored cast/place/object bible for planning and generation. |
 | `moodBoardStyleContext.js` | `collectBoardStyleContext(board)` bounds a board's notes, captions and analyzed style for creative prompts. |
+| `musicVideoAutomation.js` | Music Video automation brief: `MUSIC_VIDEO_AUTOMATION_TOOLS` (image/video backends derived from `generationModes.js` plus `code:render`, each flagged `metered`), `MUSIC_VIDEO_AUTOMATION_TOOL_IDS`, and `normalizeMusicVideoAutomation(patch, current)` (per-sub-field merge, catalog-ordered tools, `budgetUsd: null` = no cap). Dependency-free; the client create drawer imports it. |

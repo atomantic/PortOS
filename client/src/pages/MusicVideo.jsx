@@ -41,6 +41,11 @@ import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { listTracks } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
+import AutomationPanel from '../components/musicVideo/AutomationPanel.jsx';
+import { automationDraftFrom, automationFromDraft } from '../components/musicVideo/AutomationBriefFields.jsx';
+import { getUniverse, listUniverseNames } from '../services/apiUniverseBuilder.js';
+import { getMoodBoard } from '../services/apiMoodBoard.js';
+import { universeStyleSnapshot, moodBoardStyleSnapshot } from '../lib/musicVideoUniverseRefs.js';
 import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
 import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
 import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
@@ -59,6 +64,11 @@ import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../lib/musicVideoTakes.js';
+
+// Automation first: a new project defaults to autopilot with the free tools.
+const emptyCreateForm = () => ({
+  name: '', mode: 'autonomous', trackId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
+});
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -79,6 +89,7 @@ export default function MusicVideo() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [tracks, setTracks] = useState([]);
+  const [universes, setUniverses] = useState(null);
   const selectedId = routeProjectId || null;
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
@@ -88,7 +99,9 @@ export default function MusicVideo() {
   const [cloning, setCloning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', mode: 'director', trackId: '' });
+  const [creating, setCreating] = useState(false);
+  const [kickingOff, setKickingOff] = useState(false);
+  const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
 
   const replaceProject = (next) => setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
@@ -185,6 +198,7 @@ export default function MusicVideo() {
       .then((data) => { setProjects(data || []); setLoading(false); })
       .catch((err) => { toast.error(err?.message || 'Failed to load music video projects'); setLoading(false); });
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
+    listUniverseNames({ silent: true }).then((u) => setUniverses(u || [])).catch(() => setUniverses([]));
   }, []);
 
   const trackName = useCallback((id) => tracks.find((t) => t.id === id)?.title || id || '—', [tracks]);
@@ -210,15 +224,35 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before creating the project');
       return;
     }
-    createMusicVideoProject({ name: form.name.trim(), mode: form.mode, trackId: form.trackId || null }, { silent: true })
+    if (creating) return;
+    setCreating(true);
+    // Snapshot the chosen universe/board style into the concept at creation,
+    // the same authored copy the creative setup panel saves.
+    Promise.all([
+      form.universeId ? getUniverse(form.universeId, { silent: true }) : null,
+      form.moodBoardId ? getMoodBoard(form.moodBoardId, { silent: true }) : null,
+    ])
+      .then(([universe, board]) => createMusicVideoProject({
+        name: form.name.trim(),
+        mode: form.mode,
+        trackId: form.trackId || null,
+        concept: {
+          universeId: form.universeId || null,
+          universeStyle: universeStyleSnapshot(universe),
+          moodBoardStyle: moodBoardStyleSnapshot(board),
+        },
+        ...(form.moodBoardId ? { visualSpec: { moodBoardId: form.moodBoardId } } : {}),
+        ...(form.mode === 'autonomous' ? { automation: automationFromDraft(form.automation) } : {}),
+      }, { silent: true }))
       .then((proj) => {
         setProjects((prev) => [...prev, proj]);
         selectProject(proj.id);
-        setForm({ name: '', mode: 'director', trackId: '' });
+        setForm(emptyCreateForm());
         setCreateOpen(false);
         toast.success('Project created');
       })
-      .catch((err) => toast.error(err?.message || 'Failed to create project'));
+      .catch((err) => toast.error(err?.message || 'Failed to create project'))
+      .finally(() => setCreating(false));
   };
 
   const handleDelete = (id) => {
@@ -250,12 +284,13 @@ export default function MusicVideo() {
       .finally(() => setCloning(false));
   };
 
+  // Resolves with the analyzed project, or null when analysis failed (toasted).
   const handleAnalyze = () => {
-    if (!selected) return;
+    if (!selected) return Promise.resolve(null);
     setAnalyzing(true);
-    analyzeMusicVideoProject(selected.id, { silent: true })
-      .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
-      .catch((err) => toast.error(err?.message || 'Analysis failed'))
+    return analyzeMusicVideoProject(selected.id, { silent: true })
+      .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); return proj; })
+      .catch((err) => { toast.error(err?.message || 'Analysis failed'); return null; })
       .finally(() => setAnalyzing(false));
   };
 
@@ -264,10 +299,12 @@ export default function MusicVideo() {
   // the beat grid, capped at the renderer's clip length — and seed them onto
   // the board, optionally with a first-pass framePrompt/prompt per shot.
   // Director-first — seeded shots are ordinary, fully-editable board entries.
-  const handlePlan = () => {
-    if (!selected?.audioAnalysis) return;
+  // `target` lets the autopilot kickoff plan the freshly analyzed record
+  // before `selected` re-renders with it.
+  const handlePlan = (target = selected) => {
+    if (!target?.audioAnalysis) return Promise.resolve();
     setPlanning(true);
-    planMusicVideoProject(selected.id, { seedPrompts: true }, { silent: true })
+    return planMusicVideoProject(target.id, { seedPrompts: true }, { silent: true })
       .then(({ project, scenesAdded, promptsSeeded, promptsSkippedReason }) => {
         replaceProject(project);
         const suffix = promptsSeeded
@@ -278,6 +315,23 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Plan failed'))
       .finally(() => setPlanning(false));
   };
+
+  // Autopilot kickoff: analyze the song when it has no beat map yet, then plan
+  // every shot against the brief (the planner reads automation.guidance).
+  const autopilotBlockedReason = !selected ? null
+    : (!selected.trackId && !selected.uploadedAudioFilename) ? 'Attach a track before starting autopilot.'
+      : (selected.scenes || []).length > 0 ? 'The board already has shots — edit them below or fork a new version to re-plan.'
+        : null;
+  const handleKickoff = () => {
+    if (!selected || kickingOff || autopilotBlockedReason) return;
+    setKickingOff(true);
+    (selected.audioAnalysis ? Promise.resolve(selected) : handleAnalyze())
+      .then((proj) => (proj?.audioAnalysis ? handlePlan(proj) : null))
+      .finally(() => setKickingOff(false));
+  };
+  const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation }, { silent: true })
+    .then((proj) => patchProject(proj.id, { automation: proj.automation, updatedAt: proj.updatedAt }))
+    .catch((err) => { toast.error(err?.message || 'Failed to save autopilot brief'); throw err; });
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song
   // sections weighted by each section's energy, writing the same persisted
@@ -563,7 +617,45 @@ export default function MusicVideo() {
           onOpenPreview={openPreview}
         />
       )}
-      <PageHeader icon={Film} title="Music Video" subtitle="Director-controlled, beat-aware music videos" />
+      <PageHeader
+        icon={Film}
+        title="Music Video"
+        subtitle="Beat-aware music videos — autopilot or hands-on"
+        actions={(
+          <>
+            <label htmlFor="mv-project-picker" className="sr-only">Project</label>
+            <select
+              id="mv-project-picker"
+              value={selectedId || ''}
+              onChange={(e) => selectProject(e.target.value || null)}
+              disabled={loading || youtube.editJob.active}
+              className="min-w-0 w-full sm:w-72 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
+            >
+              <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name} · {project.scenes?.length || 0} scenes · {project.status}
+                </option>
+              ))}
+            </select>
+            {selected && (
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">v{selected.version || 1}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[selected.status] || 'bg-port-border'}`}>
+                  {selected.status}
+                </span>
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+            >
+              <Plus size={15} /> New project
+            </button>
+          </>
+        )}
+      />
 
       <CreateProjectDrawer
         open={createOpen}
@@ -571,45 +663,13 @@ export default function MusicVideo() {
         form={form}
         onFormChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
         tracks={tracks}
+        universes={universes}
         trackName={trackName}
         youtube={youtube}
         onSubmit={handleCreate}
+        submitting={creating}
       />
 
-      <div className="bg-port-card border border-port-border rounded-lg p-3 flex flex-wrap items-center gap-2">
-        <label htmlFor="mv-project-picker" className="text-xs text-port-text-muted">Project</label>
-        <select
-          id="mv-project-picker"
-          value={selectedId || ''}
-          onChange={(e) => selectProject(e.target.value || null)}
-          disabled={loading || youtube.editJob.active}
-          className="min-w-0 flex-1 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
-        >
-          <option value="">{loading ? 'Loading projects…' : 'Select a project…'}</option>
-          {projects.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name} · {project.scenes?.length || 0} scenes · {project.status}
-            </option>
-          ))}
-        </select>
-        {selected && (
-          <>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-border">
-              v{selected.version || 1}
-            </span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_COLORS[selected.status] || 'bg-port-border'}`}>
-              {selected.status}
-            </span>
-          </>
-        )}
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
-        >
-          <Plus size={15} /> New project
-        </button>
-      </div>
 
       <div>
         {!selected && !loading && routeProjectId && (
@@ -620,11 +680,26 @@ export default function MusicVideo() {
         )}
         {!selected && (loading || !routeProjectId) && (
           <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
-            <p className="text-sm text-port-text-muted">Select a project above or create one to open its scene board.</p>
+            <p className="text-sm text-port-text-muted mb-3">Pick a project in the header, or start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn.</p>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="inline-flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+            >
+              <Plus size={15} /> New music video
+            </button>
           </div>
         )}
         {selected && (
           <div className="space-y-3">
+            <AutomationPanel
+              key={`automation-${selected.id}`}
+              project={selected}
+              onSave={saveAutomation}
+              onKickoff={handleKickoff}
+              kickoffBusy={kickingOff || analyzing || planning}
+              kickoffBlockedReason={autopilotBlockedReason}
+            />
             <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}
               onSave={(patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
                 patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec });
@@ -640,7 +715,7 @@ export default function MusicVideo() {
                 renderJob={renderJob}
                 busy={{ analyzing, planning, arranging, cloning }}
                 onAnalyze={handleAnalyze}
-                onPlan={handlePlan}
+                onPlan={() => handlePlan()}
                 onAutoArrange={handleAutoArrange}
                 onClone={handleClone}
                 onDelete={() => handleDelete(selected.id)}

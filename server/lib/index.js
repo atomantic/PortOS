@@ -764,3 +764,4 @@ export * from './databaseWriterRegistry.js';
 
 export * from './musicVideoCreativeContext.js';
 export * from './moodBoardStyleContext.js';
+export * from './musicVideoAutomation.js';

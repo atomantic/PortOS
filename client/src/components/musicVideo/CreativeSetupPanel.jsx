@@ -4,8 +4,7 @@ import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilde
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { uuidv4 } from '../../lib/uuid.js';
-import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
-import { collectBoardStyleContext } from '../../../../server/lib/moodBoardStyleContext.js';
+import { pullUniverseCanonReferences, universeStyleSnapshot, moodBoardStyleSnapshot } from '../../lib/musicVideoUniverseRefs.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
@@ -75,7 +74,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
     if (draft.universeId !== (project.concept?.universeId || '') || project.concept?.universeStyle == null) {
-      concept.universeStyle = draft.universeId && universe?.id === draft.universeId ? [universe.name, universe.styleNotes, universe.influences?.embrace?.length ? `Embrace: ${universe.influences.embrace.join(', ')}` : '', universe.influences?.avoid?.length ? `Avoid: ${universe.influences.avoid.join(', ')}` : ''].filter(Boolean).join('\n').slice(0, 4000) : '';
+      concept.universeStyle = draft.universeId && universe?.id === draft.universeId ? universeStyleSnapshot(universe) : '';
     }
     const visualSpec = { moodBoardId: draft.moodBoardId || null };
     const canon = { characters: [], places: [], objects: [] };
@@ -88,10 +87,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     const boardRequest = draft.moodBoardId && refreshBoard
       ? getMoodBoard(draft.moodBoardId, { silent: true }) : Promise.resolve(null);
     return boardRequest.then((board) => {
-      if (refreshBoard) {
-        const context = board ? collectBoardStyleContext(board) : null;
-        concept.moodBoardStyle = context ? [context.name, context.description, ...context.items.map((item) => Object.values(item).join('; '))].filter(Boolean).join('\n').slice(0, 4000) : '';
-      }
+      if (refreshBoard) concept.moodBoardStyle = moodBoardStyleSnapshot(board);
       return onSave({ concept, visualSpec });
     }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };

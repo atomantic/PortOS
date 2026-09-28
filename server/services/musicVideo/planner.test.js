@@ -210,6 +210,13 @@ describe('planShots', () => {
 });
 
 describe('buildScenePlanPrompt', () => {
+  it('carries the automation brief guidance into the plan prompt', () => {
+    const base = makeProject({ concept: {} });
+    expect(buildScenePlanPrompt(base, [])).not.toContain('Director guidance');
+    const prompt = buildScenePlanPrompt({ ...base, automation: { tools: [], guidance: '  one long take,\n no cuts ', budgetUsd: null } }, []);
+    expect(prompt).toContain('Director guidance: one long take, no cuts');
+  });
+
   it('bounds a maximal production bible without dropping cast identities', () => {
     const subjects = Array.from({ length: 24 }, (_, index) => ({
       id: `subject-${index}`, kind: 'character', role: 'protagonist',

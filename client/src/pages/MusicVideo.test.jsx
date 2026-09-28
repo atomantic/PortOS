@@ -82,7 +82,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   resumeMusicVideoRevision: vi.fn(),
   cancelMusicVideoRevision: vi.fn(),
 }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn(), listUniverseNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn(), uploadGalleryImage: vi.fn() }));
 vi.mock('../hooks/useProviderModels', () => ({
@@ -153,12 +153,12 @@ vi.mock('../hooks/useSseProgress.js', () => ({
   isTerminalSseFrame: (frame) => TERMINAL_TYPES.has(frame?.type),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
-vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title}</div> }));
+vi.mock('../components/PageHeader', () => ({ default: ({ title, actions }) => <div>{title}{actions}</div> }));
 
 import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
-  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
+  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
   importMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
@@ -1343,10 +1343,40 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     fireEvent.click(within(createInput.closest('div')).getByRole('button', { name: /Import/i }));
     await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
 
-    const createBtn = screen.getByRole('button', { name: /^Create$/ });
+    const createBtn = screen.getByRole('button', { name: /^Create/ });
     expect(createBtn).toHaveProperty('disabled', true);
     fireEvent.click(createBtn);
     expect(createMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('creates an autopilot project by default with the chosen tools, guidance and budget', async () => {
+    listMusicVideoProjects.mockResolvedValue([]);
+    createMusicVideoProject.mockResolvedValue({ ...PROJECT_NO_CLIP, id: 'mv-new', name: 'Auto MV', mode: 'autonomous' });
+    renderMV();
+    await openCreateForm();
+    fireEvent.change(await screen.findByPlaceholderText('Project name'), { target: { value: 'Auto MV' } });
+    fireEvent.click(screen.getByLabelText(/fal\.ai video/));
+    fireEvent.change(screen.getByLabelText('Guidance'), { target: { value: ' one long take ' } });
+    fireEvent.change(screen.getByLabelText('Budget cap (USD)'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: /Create autopilot project/ }));
+    await waitFor(() => expect(createMusicVideoProject).toHaveBeenCalled());
+    const [body] = createMusicVideoProject.mock.calls[0];
+    expect(body).toMatchObject({ name: 'Auto MV', mode: 'autonomous', trackId: null });
+    expect(body.automation).toEqual({
+      tools: ['image:local', 'image:external', 'video:local', 'video:fal', 'code:render'],
+      guidance: 'one long take',
+      budgetUsd: 40,
+    });
+  });
+
+  it('autopilot kickoff analyzes the song, then plans the shots against the brief', async () => {
+    const project = { ...PROJECT_NO_CLIP, scenes: [], automation: { tools: ['image:local'], guidance: 'noir', budgetUsd: null } };
+    analyzeMusicVideoProject.mockResolvedValue({ ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' });
+    planMusicVideoProject.mockResolvedValue({ project: { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis }, scenesAdded: 3, promptsSeeded: true });
+    await openProject(project);
+    fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
+    expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
   });
 
   it('blocks relinking the track while a render is in progress for the selected project', async () => {
