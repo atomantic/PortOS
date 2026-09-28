@@ -1689,9 +1689,11 @@ start of its dev server stopped after about 60 seconds, snapshot:
 Run only commands the repository documents for development. Never run a suite
 against real user data or a production database, never start a second copy of
 a long-running service on its production port, and follow the repository's
-instructions about which databases and directories tests may use. Measurement
-is read-only: do not delete anything that existed before your run — report its
-count and the safe cleanup command instead.
+instructions about which databases and directories tests may use. Do not
+delete anything that existed before your run — report its count and the safe
+cleanup command instead. After recording the measurement, stop every process and
+remove every temp entry YOUR run created (the after-minus-before set), so the
+audit does not add the leaks it reports.
 
 ## Hunt for
 
