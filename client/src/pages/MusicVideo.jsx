@@ -28,6 +28,7 @@ import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoRevisions from '../hooks/useMusicVideoRevisions.js';
 import useMusicVideoAutoReview from '../hooks/useMusicVideoAutoReview.js';
+import useMusicVideoProduction from '../hooks/useMusicVideoProduction.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -50,6 +51,7 @@ import { universeStyleSnapshot, moodBoardStyleSnapshot } from '../lib/musicVideo
 import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
 import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
 import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
+import ProductionPanel from '../components/musicVideo/ProductionPanel.jsx';
 import ExcerptPanel from '../components/musicVideo/ExcerptPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
@@ -162,6 +164,7 @@ export default function MusicVideo() {
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
   const autoReview = useMusicVideoAutoReview({ project: selected, replaceProject, submitSections: revisions.submitSections });
+  const production = useMusicVideoProduction({ project: selected, replaceProject });
   // Pre-production treatment (#8980): brief, compiled arc, shot direction,
   // proof checklist and the non-destructive Apply review.
   const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
@@ -814,6 +817,7 @@ export default function MusicVideo() {
                 finalVideo={finalVideo}
                 onOpenPreview={openPreview}
               />
+              <ProductionPanel project={selected} production={production} />
               <ExcerptPanel
                 project={selected}
                 rendering={excerpts.rendering}
