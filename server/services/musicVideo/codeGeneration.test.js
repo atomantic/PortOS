@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fixtureSectionSource } from './codeFrame.js';
+const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
 
 const h = vi.hoisted(() => ({ project: null, calls: 0, response: '' }));
 

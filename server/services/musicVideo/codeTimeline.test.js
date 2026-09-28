@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { normalizeComposition } from './composition.js';
 import { buildCodeTimeline, buildSongDocument, quantizeSongDuration } from './codeTimeline.js';
-import { fixtureSectionSource } from './codeFrame.js';
+
+const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
 
 const project = {
   name: 'Click',

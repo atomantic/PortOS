@@ -18,7 +18,7 @@ import { buildCodeTimeline, buildSongDocument, codeFrameSize, paletteFromProject
 // so unit tests of the footage renderer can keep a partial ffmpeg mock.
 const AAC_MUX_ARGS = Object.freeze(['-c:a', 'aac', '-b:a', '192k']);
 
-export function muxExactArgs(videoPath, audioPath, outputPath, durationSec, audioStartSec = 0) {
+export function _muxExactArgs(videoPath, audioPath, outputPath, durationSec, audioStartSec = 0) {
   const args = ['-hide_banner', '-loglevel', 'error', '-i', videoPath];
   if (audioStartSec > 0) args.push('-ss', String(audioStartSec));
   args.push(
@@ -92,7 +92,7 @@ export async function encodeCodeComposition({
     });
     signal?.throwIfAborted();
     const mux = await runFfmpegProcess({
-      bin: ffmpeg, signal, args: muxExactArgs(silent, audioPath, outputPath, durationSec, audioStartSec),
+      bin: ffmpeg, signal, args: _muxExactArgs(silent, audioPath, outputPath, durationSec, audioStartSec),
     });
     if (!mux.ok) {
       if (signal?.aborted || /cancelled/.test(mux.reason || '')) {

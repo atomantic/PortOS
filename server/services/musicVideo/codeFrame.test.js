@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { buildCodeDocument, embeddedSong } from './codeComposition.js';
-import { CODE_EARLY_DIM_SEC, fixtureSectionSource, lineActive, sampleFrame, samePixels, wordAppearance } from './codeFrame.js';
+import { buildCodeDocument } from './codeComposition.js';
+import { _sampleFrame } from './codeFrame.js';
 import { buildSongDocument, paletteFromProject } from './codeTimeline.js';
+
+const fixtureSectionSource = (color) => `function render(ctx, env) {\n  ctx.fillStyle = ${JSON.stringify(color)};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
+
+function samePixels(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function embeddedSong(html) {
+  const marker = 'const SONG = ';
+  const start = html.indexOf(marker);
+  const jsonStart = start + marker.length;
+  const end = html.indexOf(';\n', jsonStart);
+  return JSON.parse(html.slice(jsonStart, end));
+}
 
 const project = {
   audioAnalysis: {
@@ -23,7 +39,7 @@ const project = {
 
 function frameAt(sources, t) {
   const song = buildSongDocument(project);
-  return sampleFrame({
+  return _sampleFrame({
     song, palette: paletteFromProject(project), sources, t, width: 320, height: 180, fps: song.fps,
   });
 }
@@ -47,14 +63,14 @@ describe('code frame contract (#9076)', () => {
   });
 
   it('highlights a word only at its start and keeps the line inside the safe area', () => {
-    const word = { text: 'hello', startSec: 0.2, endSec: 0.6 };
-    expect(wordAppearance(word, 0.2 - CODE_EARLY_DIM_SEC - 0.05).opacity).toBe(0);
-    expect(wordAppearance(word, 0.2 - 0.01).highlight).toBe(false);
-    expect(wordAppearance(word, 0.2).highlight).toBe(true);
-    const song = buildSongDocument(project);
-    const line = song.lyrics[0];
-    expect(lineActive(line, 0.5)).toBe(true);
-    const painted = frameAt({ a: fixtureSectionSource('#2244aa'), b: fixtureSectionSource('#aa4422') }, 0.5);
+    const sources = { a: fixtureSectionSource('#2244aa'), b: fixtureSectionSource('#aa4422') };
+    const before = frameAt(sources, 0.19);
+    const helloEarly = before.karaoke.flatMap((line) => line.words).find((word) => word.text === 'hello');
+    expect(helloEarly.highlight).toBe(false);
+    expect(frameAt(sources, 1.7).karaoke).toEqual([]);
+    const painted = frameAt(sources, 0.5);
+    const hello = painted.karaoke.flatMap((line) => line.words).find((word) => word.text === 'hello');
+    expect(hello.highlight).toBe(true);
     expect(painted.textOps.map((op) => op.text)).toEqual(expect.arrayContaining(['hello', 'there']));
     const safe = { x: 320 * 0.1, y: 180 * 0.1, w: 320 * 0.8, h: 180 * 0.8 };
     for (const op of painted.textOps) {

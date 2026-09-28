@@ -22,7 +22,7 @@ export const CODE_EARLY_DIM_SEC = 0.4;
 const FONT_STACKS = { sans: 'sans-serif', serif: 'serif', mono: 'monospace' };
 
 /** How one lyric word looks at time `t`. The highlight never starts early. */
-export function wordAppearance(word, t) {
+function wordAppearance(word, t) {
   const start = word.startSec;
   const end = typeof word.endSec === 'number' && word.endSec > start ? word.endSec : start + 0.35;
   const dimAt = Math.max(0, start - CODE_EARLY_DIM_SEC);
@@ -41,7 +41,7 @@ function lineEnd(line) {
 }
 
 /** A line is on screen from 0.4s before its first word through its end. */
-export function lineActive(line, t) {
+function lineActive(line, t) {
   const start = line.words?.[0]?.startSec ?? line.startSec ?? 0;
   return t >= start - CODE_EARLY_DIM_SEC && t < lineEnd(line);
 }
@@ -101,7 +101,7 @@ export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, f
     ctx.fillRect(safe.x, safe.y, band, band);
   }
   paintKaraoke(ctx, { palette, safe, karaoke });
-  return { frame, sectionId: section.id };
+  return { frame, sectionId: section.id, karaoke };
 }
 
 function lockClock() {
@@ -153,12 +153,6 @@ function paintKaraoke(ctx, { palette, safe, karaoke }) {
   }
 }
 
-/** A section body the tests and the fallback provider share. Color is literal. */
-export function fixtureSectionSource(color) {
-  const ink = JSON.stringify(color);
-  return `function render(ctx, env) {\n  ctx.fillStyle = ${ink};\n  ctx.fillRect(env.safe.x, env.safe.y, 12 + (env.frame % 3), 12);\n}`;
-}
-
 function parseHex(style) {
   const match = /^#([0-9a-f]{6})$/i.exec(String(style || ''));
   if (!match) return [0, 0, 0];
@@ -167,7 +161,7 @@ function parseHex(style) {
 }
 
 /** Canvas stand-in so a seek can be compared without a browser. */
-export function createSoftwareCanvas(width, height) {
+function createSoftwareCanvas(width, height) {
   const data = new Uint8ClampedArray(width * height * 4);
   const stack = [];
   const state = { fillStyle: '#000000', globalAlpha: 1, font: '16px sans-serif', textAlign: 'left', textBaseline: 'alphabetic' };
@@ -232,8 +226,8 @@ function sandboxCompile(source) {
   );
 }
 
-/** Paint `t` and return the pixel buffer plus the lyric placements. */
-export function sampleFrame({ song, palette, sources, t, width, height, fps = CODE_FPS }) {
+/** Paint `t` and return the pixel buffer plus the lyric placements. Test hook. */
+export function _sampleFrame({ song, palette, sources, t, width, height, fps = CODE_FPS }) {
   const ctx = createSoftwareCanvas(width, height);
   const meta = drawCodeFrame({ ctx, song, palette, sources, t, width, height, fps, compile: sandboxCompile });
   return { data: ctx.data, textOps: ctx.textOps, ...meta, width, height };
@@ -254,8 +248,3 @@ export function codeRuntimeSource() {
   ].map((part) => (typeof part === 'function' ? part.toString() : part)).join('\n');
 }
 
-export function samePixels(a, b) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
-  return true;
-}

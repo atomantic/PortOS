@@ -61,13 +61,3 @@ try { parent.postMessage({ type: 'mv-code:ready', durationSec: ${durationSec} },
   return { html, song, durationSec, fps, width, height, windowStart: Number(windowStart) || 0 };
 }
 
-/** The inlined song.json document, for tests that the page and the file match. */
-export function embeddedSong(html) {
-  const marker = 'const SONG = ';
-  const start = html.indexOf(marker);
-  if (start < 0) return null;
-  const jsonStart = start + marker.length;
-  const end = html.indexOf(';\n', jsonStart);
-  if (end < 0) return null;
-  return JSON.parse(html.slice(jsonStart, end));
-}

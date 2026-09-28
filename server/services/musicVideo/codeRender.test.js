@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { pcmToWavBuffer } from '../../lib/chiptuneRender.js';
-import { prepareCodeRender, muxExactArgs } from './codeRender.js';
+import { prepareCodeRender, _muxExactArgs } from './codeRender.js';
 
 const ffmpeg = await findFfmpeg();
 
@@ -50,13 +50,13 @@ describe.skipIf(!ffmpeg)('code render mux (#9076)', () => {
       await writeFile(wav, pcmToWavBuffer(samples, { sampleRate: rate }));
       const muxed = await runFfmpegProcess({
         bin: ffmpeg,
-        args: muxExactArgs(silent, wav, out, plan.durationSec, 0),
+        args: _muxExactArgs(silent, wav, out, plan.durationSec, 0),
       });
       expect(muxed.ok).toBe(true);
       const duration = await probeVideoDuration(out);
       expect(Math.abs(duration - plan.durationSec)).toBeLessThan(1 / 24 + 0.02);
       expect(duration).toBeGreaterThanOrEqual(2.01 - 1 / 24);
-      const args = muxExactArgs(silent, wav, out, plan.durationSec, 0).join(' ');
+      const args = _muxExactArgs(silent, wav, out, plan.durationSec, 0).join(' ');
       expect(args).not.toContain('afade');
       expect(await readFile(out)).toBeInstanceOf(Buffer);
     } finally {
