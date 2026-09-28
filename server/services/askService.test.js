@@ -474,7 +474,7 @@ describe('runAsk', () => {
     spawn.mockReturnValue(child);
 
     const events = [];
-    for await (const evt of askService.runAsk({ question: 'test question' })) {
+    for await (const evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) {
       events.push(evt);
     }
 
@@ -506,7 +506,7 @@ describe('runAsk', () => {
     spawn.mockReturnValue(child);
 
     const events = [];
-    for await (const evt of askService.runAsk({ question: 'test question' })) {
+    for await (const evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) {
       events.push(evt);
     }
 
@@ -516,7 +516,7 @@ describe('runAsk', () => {
     expect(args[modelIdx + 1]).toBe('o4-mini');
   });
 
-  it('runs `grok` headless with plain output, permission bypass, and stdin prompt file (no --model for configured-default)', async () => {
+  it('runs `grok` headless with plain output, read-only permission mode, no tools, and stdin prompt file (no --model for configured-default)', async () => {
     providers.getActiveProvider.mockResolvedValue({
       id: 'grok-cli',
       type: 'cli',
@@ -551,10 +551,12 @@ describe('runAsk', () => {
     const expectedPromptFile = process.platform === 'win32'
       ? expect.stringMatching(/grok-prompt-.*\.txt$/)
       : '/dev/stdin';
+    // #9008: Ask runs tool-free — never grok's agent-path bypassPermissions.
     expect(args).toEqual([
       '--output-format', 'plain',
-      '--permission-mode', 'bypassPermissions',
       '--prompt-file', expectedPromptFile,
+      '--permission-mode', 'plan',
+      '--tools', '',
     ]);
     expect(args).not.toContain('--model');
     // POSIX delivery: the prompt is piped in via stdin.
@@ -584,7 +586,7 @@ describe('runAsk', () => {
     });
     spawn.mockReturnValue(child);
 
-    for await (const _evt of askService.runAsk({ question: 'test question' })) { /* drain */ }
+    for await (const _evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) { /* drain */ }
 
     const [, args] = spawn.mock.calls.at(-1);
     // agy takes the prompt as the --print VALUE, so --print must be second-to-last
@@ -593,7 +595,7 @@ describe('runAsk', () => {
       '--add-dir', '/tmp/x',
       // The suffixed id splits into base + `--effort` (equivalent invocation).
       '--model', 'gemini-3.1-pro', '--effort', 'high',
-      '--dangerously-skip-permissions',
+      // #9008: the bypass ensureAntigravityPrintArgs adds is stripped.
       '--print',
     ]);
     expect(args.at(-1)).toContain('test question');
@@ -621,11 +623,11 @@ describe('runAsk', () => {
     });
     spawn.mockReturnValue(child);
 
-    for await (const _evt of askService.runAsk({ question: 'test question' })) { /* drain */ }
+    for await (const _evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) { /* drain */ }
 
     const [, args] = spawn.mock.calls.at(-1);
     expect(args).not.toContain('--model');
-    expect(args.slice(0, -1)).toEqual(['--dangerously-skip-permissions', '--print']);
+    expect(args.slice(0, -1)).toEqual(['--print']);
     expect(args.at(-1)).toContain('test question');
   });
 
@@ -653,7 +655,7 @@ describe('runAsk', () => {
     spawn.mockReturnValue(child);
 
     const events = [];
-    for await (const evt of askService.runAsk({ question: 'test question' })) {
+    for await (const evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) {
       events.push(evt);
     }
 
@@ -690,7 +692,7 @@ describe('runAsk', () => {
     spawn.mockReturnValue(child);
 
     const events = [];
-    for await (const evt of askService.runAsk({ question: 'test question' })) {
+    for await (const evt of askService.runAsk({ question: 'test question', hasHostControl: () => true })) {
       events.push(evt);
     }
 
@@ -828,5 +830,75 @@ describe('runAsk', () => {
       expect(events.find((e) => e.type === 'done')).toBeUndefined();
       expect(callCount).toBe(0);
     });
+  });
+});
+
+// #9008: Ask hands a caller-chosen provider the caller's own question. A CLI
+// that cannot be made tool-free is an agent, so it needs host control; one
+// that can runs with its bypass stripped and its tool-disable switch applied.
+describe('tool-free Ask (#9008)', () => {
+  const AGY = { id: 'antigravity-cli', type: 'cli', enabled: true, command: 'agy', args: ['--print', '--dangerously-skip-permissions'], timeout: 5000 };
+  const CLAUDE = {
+    id: 'claude-code', type: 'cli', enabled: true, command: 'claude', timeout: 5000,
+    // A saved bypass must not survive, and a saved tool list must not widen the set.
+    args: ['--print', '--dangerously-skip-permissions', '--tools', 'Bash'],
+    headlessArgs: ['--no-session-persistence', '--disable-slash-commands', '--tools', ''],
+  };
+  const fakeChild = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn(), write: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+
+  it('refuses a provider that cannot run tool-free for a caller without host control, before spawning', async () => {
+    providers.getProviderById.mockResolvedValue(AGY);
+    await expect(askService.resolveAskProvider('antigravity-cli', { hasHostControl: false }))
+      .rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+
+    // The voice/palette path resolves inside runAsk and must fail closed the same way.
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi', providerId: 'antigravity-cli', hasHostControl: async () => false })) events.push(evt);
+    expect(events.at(-1)).toMatchObject({ type: 'error', code: 'HOST_CONTROL_FORBIDDEN' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps every provider for a caller with host control, still without the bypass flag', async () => {
+    providers.getProviderById.mockResolvedValue(AGY);
+    await expect(askService.resolveAskProvider('antigravity-cli', { hasHostControl: true })).resolves.toBe(AGY);
+    spawn.mockReturnValue(fakeChild());
+    for await (const _evt of askService.runAsk({ question: 'hi', provider: AGY })) { /* drain */ }
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('lets a caller without host control use claude-code with no tools and no bypass', async () => {
+    providers.getProviderById.mockResolvedValue(CLAUDE);
+    const provider = await askService.resolveAskProvider('claude-code', { hasHostControl: false });
+    expect(provider).toBe(CLAUDE);
+    spawn.mockReturnValue(fakeChild());
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi', provider })) events.push(evt);
+    expect(events.at(-1).type).toBe('done');
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args).not.toContain('Bash');
+    expect(args.filter((a) => a === '--tools')).toHaveLength(1);
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+    // A project `.mcp.json` or `.claude/settings.json` cannot add servers or hooks.
+    expect(args).toContain('--strict-mcp-config');
+    expect(args[args.indexOf('--setting-sources') + 1]).toBe('user');
+  });
+
+  it('lets a caller without host control use an API provider', async () => {
+    const api = { id: 'example-api', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:1', defaultModel: 'm' };
+    providers.getProviderById.mockResolvedValue(api);
+    await expect(askService.resolveAskProvider('example-api', { hasHostControl: false })).resolves.toBe(api);
   });
 });

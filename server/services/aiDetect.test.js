@@ -78,7 +78,7 @@ describe('detectAppWithAi', () => {
     runPromptThroughProvider.mockResolvedValue({ text: VALID_DETECTION_JSON, runId: 'r1', model: 'm1' });
 
     await withProjectDir({ 'package.json': JSON.stringify({ name: 'my-app' }) }, async (dir) => {
-      const result = await detectAppWithAi(dir, 'claude-tui');
+      const result = await detectAppWithAi(dir, 'claude-tui', { hasHostControl: true });
 
       expect(result.success).toBe(true);
       expect(result.provider).toBe('Claude TUI');
@@ -88,7 +88,31 @@ describe('detectAppWithAi', () => {
       expect(call.source).toBe('ai-app-detect');
       expect(call.cwd).toBe(dir);
       expect(call.timeout).toBe(30000);
+      expect(call.toolFree).toBe(true);
+      expect(call.allowFallback).toBe(true);
     });
+  });
+
+  // #9008: the caller picks the directory and the provider, so the run is
+  // tool-free, and an agent CLI that cannot be made so needs host control.
+  it('refuses a provider that cannot run tool-free to a caller without host control, before any run', async () => {
+    getProviderById.mockResolvedValue({ id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true });
+    await withProjectDir({}, async (dir) => {
+      await expect(detectAppWithAi(dir, 'antigravity-cli'))
+        .rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
+    });
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('runs a tool-free CLI for a caller without host control, with fallback off', async () => {
+    getProviderById.mockResolvedValue({ id: 'claude-code', name: 'Claude', type: 'cli', command: 'claude', enabled: true });
+    runPromptThroughProvider.mockResolvedValue({ text: VALID_DETECTION_JSON, runId: 'r1', model: 'm1' });
+    await withProjectDir({}, async (dir) => {
+      const result = await detectAppWithAi(dir, 'claude-code');
+      expect(result.success).toBe(true);
+    });
+    // Fallback off: a failed tool-free run cannot be rerouted to an agent CLI.
+    expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({ toolFree: true, allowFallback: false });
   });
 
   it('uses default 60s timeout when provider does not specify one', async () => {
@@ -128,7 +152,7 @@ describe('detectAppWithAi', () => {
     });
 
     await withProjectDir({}, async (dir) => {
-      const result = await detectAppWithAi(dir);
+      const result = await detectAppWithAi(dir, null, { hasHostControl: true });
       expect(result.success).toBe(true);
       expect(result.detected.name).toBe('Test App');
     });
@@ -257,7 +281,7 @@ describe('detectAppWithAi', () => {
     });
 
     await withProjectDir({ 'package.json': echoedPackageJson }, async (dir) => {
-      const result = await detectAppWithAi(dir);
+      const result = await detectAppWithAi(dir, null, { hasHostControl: true });
       expect(result.success).toBe(true);
       expect(result.detected.name).toBe('Test App');
       expect(result.detected.uiPort).toBe(3000);

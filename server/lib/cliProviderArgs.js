@@ -25,7 +25,7 @@ import { resolveCliModel, stripBrokenModelFlags } from './providerModels.js';
 // registry (#3618) instead of a hand-rolled per-vendor if-chain — see
 // providerVendors.js for the vendor rows and its own dependency-light note
 // (this module must stay importable from the standalone autofixer process).
-import { buildVendorCliArgs, prepareCliPrompt } from './providerVendors.js';
+import { buildVendorCliArgs, prepareCliPrompt, toolFreeOneShotArgs } from './providerVendors.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -43,8 +43,10 @@ import { buildVendorCliArgs, prepareCliPrompt } from './providerVendors.js';
  * with both pinned (see `promptRunner.js#executeProviderRunOnce`). It becomes
  * `--effort <level>` on claude/agy and `-c model_reasoning_effort=<level>` on
  * codex, and is suppressed when the saved args already bake an effort pin.
+ *
+ * `toolFree` (#9008): see `toolFreeOneShotArgs` in providerVendors.js.
  */
-export function buildCliArgs(provider) {
+export function buildCliArgs(provider, { toolFree = false } = {}) {
   const effort = provider?.effort || null;
   // Sanitize: drop any broken/dangling `--model` / `-m` tokens before
   // appending. hasModelFlag (in providerVendors.js's per-vendor arg builders)
@@ -55,7 +57,11 @@ export function buildCliArgs(provider) {
   // Configured-default sentinels (Codex / Antigravity / Grok Build) resolve to
   // null so the CLI uses its own latest/default model without a --model flag.
   const effectiveDefaultModel = resolveCliModel(provider.defaultModel);
-  return buildVendorCliArgs(provider, baseArgs, { model: effectiveDefaultModel, effort });
+  const args = buildVendorCliArgs(provider, baseArgs, { model: effectiveDefaultModel, effort, toolFree });
+  // A one-shot over caller-supplied text (AI app detection, #9008) runs with
+  // no approval bypass and, where the vendor has one, no tools. Applied to the
+  // BUILT argv because several vendor builders append their bypass themselves.
+  return toolFree ? toolFreeOneShotArgs(provider, args).args : args;
 }
 
 /**

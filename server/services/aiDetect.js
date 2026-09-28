@@ -7,6 +7,8 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { validateCommand } from '../lib/commandSecurity.js';
+import { toolFreeOneShotRefusal } from '../lib/providerVendors.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 const DEFAULT_AI_DETECT_TIMEOUT_MS = 60000;
 
@@ -216,9 +218,21 @@ function parseAiResponse(response) {
 }
 
 /**
- * Auto-detect app configuration using AI
+ * Auto-detect app configuration using AI.
+ *
+ * The caller picks both the directory and the provider, and the prompt carries
+ * that directory's README and config, so the run is tool-free (#9008): no
+ * approval-bypass flag, and the vendor's tool-disable switch where it has one.
+ * A provider that cannot be made tool-free (agy, codex, a TUI record, …) needs
+ * `hasHostControl`, and without it fallback is off too, so the run cannot be
+ * rerouted onto such a provider after this check.
+ *
+ * @param {string} dirPath
+ * @param {string|null} [providerId]
+ * @param {{ hasHostControl?: boolean }} [options] - the caller's server-derived
+ *   authority (`requestHasHostControl`); absent means none
  */
-export async function detectAppWithAi(dirPath, providerId = null) {
+export async function detectAppWithAi(dirPath, providerId = null, { hasHostControl = false } = {}) {
   // Validate directory
   if (!existsSync(dirPath)) {
     return { success: false, error: 'Directory does not exist' };
@@ -242,6 +256,9 @@ export async function detectAppWithAi(dirPath, providerId = null) {
     return { success: false, error: 'AI provider is disabled' };
   }
 
+  const refusal = toolFreeOneShotRefusal(provider, hasHostControl);
+  if (refusal) throw new ServerError(refusal.message, { status: refusal.status, code: refusal.code });
+
   // Gather context
   const context = await gatherProjectContext(dirPath);
   const prompt = buildAnalysisPrompt(context);
@@ -253,6 +270,8 @@ export async function detectAppWithAi(dirPath, providerId = null) {
     source: 'ai-app-detect',
     timeout: provider.timeout || DEFAULT_AI_DETECT_TIMEOUT_MS,
     cwd: dirPath,
+    toolFree: true,
+    allowFallback: hasHostControl === true,
   });
 
   // Parse response
