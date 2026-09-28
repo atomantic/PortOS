@@ -54,10 +54,8 @@ const hashFile = (path) => new Promise((resolve, reject) => {
 
 /**
  * Cut `[startSec, endSec]` of `sourcePath` into a new PCM WAV at `outPath`.
- * Exported for the synthetic-audio contract test; production callers go
- * through `preparePerformanceShot`.
  */
-export async function sliceAudioWindow(sourcePath, outPath, { startSec, endSec }) {
+async function sliceAudioWindow(sourcePath, outPath, { startSec, endSec }) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg is required to slice the song for a performance shot', { status: 500, code: 'FFMPEG_MISSING' });
   const result = await runFfmpegProcess({
