@@ -71,6 +71,14 @@ const base = (id) => `/api/music-video/${id}`;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
 const settle = async () => { for (let i = 0; i < 5; i += 1) await tick(); };
+// The ffmpeg `close` handler settles the render through several awaited store
+// writes; a fixed tick count races them under full-suite CPU load (#9017), so
+// assertions on the post-close record poll until it converges instead.
+const settledProject = (projectId, check) => vi.waitFor(async () => {
+  const project = await projects.getProject(projectId);
+  check(project);
+  return project;
+}, { timeout: 5000, interval: 20 });
 
 beforeEach(() => {
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
@@ -191,11 +199,11 @@ describe('selective section revision (#8987)', () => {
     const proc = lastProc();
     proc.emit('spawn');
     proc.emit('close', 1, null); // ffmpeg fails
-    await settle();
 
-    let reloaded = await projects.getProject(project.id);
-    expect(reloaded.revisions[0]).toMatchObject({ status: 'open', renderAttempts: 1 });
-    expect(reloaded.excerpts.find((e) => e.id === firstRender)).toMatchObject({ status: 'error', partialFilename: null });
+    let reloaded = await settledProject(project.id, (p) => {
+      expect(p.revisions[0]).toMatchObject({ status: 'open', renderAttempts: 1 });
+      expect(p.excerpts.find((e) => e.id === firstRender)).toMatchObject({ status: 'error', partialFilename: null });
+    });
 
     // Retry: s2 already holds its new take, so the retry renders straight away.
     const retry = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
@@ -204,10 +212,10 @@ describe('selective section revision (#8987)', () => {
     expect(h.procs).toHaveLength(2);
     lastProc().emit('spawn');
     lastProc().emit('close', 0, null);
-    await settle();
 
-    reloaded = await projects.getProject(project.id);
-    expect(reloaded.revisions[0]).toMatchObject({ status: 'complete', renderAttempts: 2 });
+    reloaded = await settledProject(project.id, (p) => {
+      expect(p.revisions[0]).toMatchObject({ status: 'complete', renderAttempts: 2 });
+    });
     expect(reloaded.scenes[1].videoHistoryId).toBe('clip-2b');
     expect(reloaded.scenes[0].videoHistoryId).toBe('clip-1'); // approved section still untouched
     expect(h.enqueueJob).not.toHaveBeenCalled(); // zero paid (re)submissions across the retry
@@ -259,11 +267,11 @@ describe('selective section revision (#8987)', () => {
     const canceled = await request(app).post(`${base(project.id)}/revisions/${revision.id}/cancel`);
     expect(canceled.status).toBe(200);
     expect(canceled.body.revision.status).toBe('canceled');
-    await settle();
 
-    const reloaded = await projects.getProject(project.id);
+    const reloaded = await settledProject(project.id, (p) => {
+      expect(p.excerpts.find((e) => e.id === render.excerptId)).toMatchObject({ status: 'canceled', partialFilename: null });
+    });
     expect(reloaded.revisions[0].status).toBe('canceled'); // the render's own cancel doesn't reopen it
-    expect(reloaded.excerpts.find((e) => e.id === render.excerptId)).toMatchObject({ status: 'canceled', partialFilename: null });
     const resume = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
     expect(resume.status).toBe(409);
   });
