@@ -1204,6 +1204,9 @@ export async function readImageSidecar(filename) {
   return { path: portosSidecar, metadata: {} };
 }
 
+// Decoder safety is independent of the upload file-size policy.
+const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
+
 async function refreshImageIndex(filename) {
   await import('../mediaAssetIndex/index.js')
     .then(m => m.indexImage({ filename }))
@@ -1253,7 +1256,7 @@ export async function saveUploadedGalleryImage(base64Data, tempPath) {
   const output = join(PATHS.images, filename);
   const staging = `${output}.tmp`;
   try {
-    await sharp(input, { limitInputPixels: false }).rotate().png().toFile(staging);
+    await sharp(input, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toFile(staging);
     await rename(staging, output);
   } finally {
     await unlinkGuarded(staging).catch(() => {});
