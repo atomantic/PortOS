@@ -20,7 +20,15 @@ vi.mock('../server/services/fableLoom/visualConditioning.js', () => ({
 vi.mock('../server/services/musicVideo/projects.js', () => ({ getProject: vi.fn(async () => null) }));
 vi.mock('../server/services/federatedMedia/remoteSubmission.js', () => ({ prepareRemoteMediaJob: vi.fn() }));
 vi.mock('../server/services/character.js', () => ({ setAvatar: vi.fn() }));
-vi.mock('../server/services/settings.js', () => ({ getSettings: vi.fn() }));
+// Spread the real module (rather than replacing it outright) so
+// `settingsEvents` stays a real EventEmitter — `authGate.js` (reached via
+// imageGen.js → imageGenSetup.js's `resolveSetupInterpreter`, #9015)
+// subscribes to it at import time even though this suite never calls
+// `/setup/*`.
+vi.mock('../server/services/settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(),
+}));
 vi.mock('../server/services/imageGen/index.js', async () => ({
   ...await import('../server/lib/generationModes.js'),
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
