@@ -42,7 +42,7 @@ import { listTracks } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
 import AutomationPanel from '../components/musicVideo/AutomationPanel.jsx';
-import { automationDraftFrom, automationFromDraft } from '../components/musicVideo/AutomationBriefFields.jsx';
+import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { getUniverse, listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { getMoodBoard } from '../services/apiMoodBoard.js';
 import { universeStyleSnapshot, moodBoardStyleSnapshot } from '../lib/musicVideoUniverseRefs.js';
@@ -69,6 +69,14 @@ import { sceneTakeList } from '../lib/musicVideoTakes.js';
 const emptyCreateForm = () => ({
   name: '', mode: 'autonomous', trackId: '', universeId: '', moodBoardId: '', automation: automationDraftFrom(null),
 });
+
+// Why the autopilot kickoff can't run yet, or null when it can.
+function autopilotBlocker(project) {
+  if (!project) return null;
+  if (!project.trackId && !project.uploadedAudioFilename) return 'Attach a track before starting autopilot.';
+  if ((project.scenes || []).length > 0) return 'The board already has shots — edit them below or fork a new version to re-plan.';
+  return null;
+}
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -100,7 +108,6 @@ export default function MusicVideo() {
   const [importingLyrics, setImportingLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [kickingOff, setKickingOff] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
   const selected = projects.find((p) => p.id === selectedId) || null;
 
@@ -318,19 +325,15 @@ export default function MusicVideo() {
 
   // Autopilot kickoff: analyze the song when it has no beat map yet, then plan
   // every shot against the brief (the planner reads automation.guidance).
-  const autopilotBlockedReason = !selected ? null
-    : (!selected.trackId && !selected.uploadedAudioFilename) ? 'Attach a track before starting autopilot.'
-      : (selected.scenes || []).length > 0 ? 'The board already has shots — edit them below or fork a new version to re-plan.'
-        : null;
+  const autopilotBlockedReason = autopilotBlocker(selected);
   const handleKickoff = () => {
-    if (!selected || kickingOff || autopilotBlockedReason) return;
-    setKickingOff(true);
+    if (!selected || analyzing || planning || autopilotBlockedReason) return;
     (selected.audioAnalysis ? Promise.resolve(selected) : handleAnalyze())
-      .then((proj) => (proj?.audioAnalysis ? handlePlan(proj) : null))
-      .finally(() => setKickingOff(false));
+      .then((proj) => (proj?.audioAnalysis ? handlePlan(proj) : null));
   };
-  const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation }, { silent: true })
-    .then((proj) => patchProject(proj.id, { automation: proj.automation, updatedAt: proj.updatedAt }))
+  // Saving a brief hands the project to autopilot, so mode follows it.
+  const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
+    .then((proj) => patchProject(proj.id, { automation: proj.automation, mode: proj.mode, updatedAt: proj.updatedAt }))
     .catch((err) => { toast.error(err?.message || 'Failed to save autopilot brief'); throw err; });
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song
@@ -697,7 +700,7 @@ export default function MusicVideo() {
               project={selected}
               onSave={saveAutomation}
               onKickoff={handleKickoff}
-              kickoffBusy={kickingOff || analyzing || planning}
+              kickoffBusy={analyzing || planning}
               kickoffBlockedReason={autopilotBlockedReason}
             />
             <CreativeSetupPanel key={`creative-${selected.id}`} project={selected} onPendingChange={setCreativeSetupPending}

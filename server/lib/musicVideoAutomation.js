@@ -5,13 +5,17 @@
  * A dependency-free leaf (the client's create drawer and automation panel
  * import it directly, like navManifest.js) so the tool alphabet cannot drift
  * between the picker and the server schema. Image/video tool ids derive from
- * the render-backend alphabets in generationModes.js, so a backend added there
- * reaches the picker in the same commit; `code:render` is the code-rendered
+ * the render-backend alphabets in generationModes.js and `metered` from its
+ * cloud (remote-quota) lists, so a backend added there reaches the picker —
+ * correctly flagged — in the same commit; `code:render` is the code-rendered
  * pass (typography, composition layers, procedural frames).
  */
 
-import { IMAGE_GEN_MODE, VIDEO_GEN_MODE } from './generationModes.js';
+import {
+  CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES,
+} from './generationModes.js';
 
+// Display names only; a backend with no entry falls back to its mode id.
 const IMAGE_TOOL_LABELS = {
   [IMAGE_GEN_MODE.LOCAL]: 'Local image gen',
   [IMAGE_GEN_MODE.CODEX]: 'Codex image gen',
@@ -19,7 +23,6 @@ const IMAGE_TOOL_LABELS = {
   [IMAGE_GEN_MODE.AGY]: 'Antigravity image gen',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External SD API',
 };
-
 const VIDEO_TOOL_LABELS = {
   [VIDEO_GEN_MODE.LOCAL]: 'Local video gen',
   [VIDEO_GEN_MODE.GROK]: 'Grok video',
@@ -27,18 +30,17 @@ const VIDEO_TOOL_LABELS = {
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor video',
 };
 
-// Metered = spends money or remote quota; the budget cap is meaningful only
-// for these. Local backends cost electricity, not dollars.
-const METERED = new Set([
-  `image:${IMAGE_GEN_MODE.CODEX}`, `image:${IMAGE_GEN_MODE.GROK}`, `image:${IMAGE_GEN_MODE.AGY}`,
-  `video:${VIDEO_GEN_MODE.GROK}`, `video:${VIDEO_GEN_MODE.FAL}`, `video:${VIDEO_GEN_MODE.REACTOR}`,
-]);
+// Metered = spends money or remote quota (the cloud lists); the budget cap is
+// meaningful only for these. Local backends cost electricity, not dollars.
+const toolsFor = (group, modes, labels, cloud) => modes.map((mode) => ({
+  id: `${group}:${mode}`, group, label: labels[mode] || `${mode} ${group}`, metered: cloud.includes(mode),
+}));
 
 export const MUSIC_VIDEO_AUTOMATION_TOOLS = Object.freeze([
-  ...Object.entries(IMAGE_TOOL_LABELS).map(([mode, label]) => ({ id: `image:${mode}`, group: 'image', label })),
-  ...Object.entries(VIDEO_TOOL_LABELS).map(([mode, label]) => ({ id: `video:${mode}`, group: 'video', label })),
-  { id: 'code:render', group: 'code', label: 'Render with code' },
-].map((tool) => Object.freeze({ ...tool, metered: METERED.has(tool.id) })));
+  ...toolsFor('image', IMAGE_GEN_MODES, IMAGE_TOOL_LABELS, CLOUD_IMAGE_GEN_MODES),
+  ...toolsFor('video', VIDEO_GEN_MODES, VIDEO_TOOL_LABELS, CLOUD_VIDEO_GEN_MODES),
+  { id: 'code:render', group: 'code', label: 'Render with code', metered: false },
+].map((tool) => Object.freeze(tool)));
 
 export const MUSIC_VIDEO_AUTOMATION_TOOL_IDS = Object.freeze(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => t.id));
 

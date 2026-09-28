@@ -1363,7 +1363,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     const [body] = createMusicVideoProject.mock.calls[0];
     expect(body).toMatchObject({ name: 'Auto MV', mode: 'autonomous', trackId: null });
     expect(body.automation).toEqual({
-      tools: ['image:local', 'image:external', 'video:local', 'video:fal', 'code:render'],
+      tools: ['image:external', 'image:local', 'video:local', 'video:fal', 'code:render'],
       guidance: 'one long take',
       budgetUsd: 40,
     });

@@ -1,34 +1,15 @@
-import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../../../server/lib/musicVideoAutomation.js';
+import ToggleChip from '../ui/ToggleChip.jsx';
+import { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
 
 const GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 
-// Free (local) tools — the default pick for a new autopilot brief, so nothing
-// metered is spent until the director opts in.
-export const DEFAULT_AUTOMATION_TOOLS = MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => !t.metered).map((t) => t.id);
-
-// Form draft ↔ wire shape. The draft keeps budget as the raw input string so
-// an empty field reads as "no cap" rather than 0.
-export const automationDraftFrom = (automation) => ({
-  tools: automation?.tools ?? DEFAULT_AUTOMATION_TOOLS,
-  guidance: automation?.guidance ?? '',
-  budget: automation?.budgetUsd != null ? String(automation.budgetUsd) : '',
-});
-export const automationFromDraft = (draft) => {
-  const budget = Number.parseFloat(draft.budget);
-  return {
-    tools: draft.tools,
-    guidance: draft.guidance.trim(),
-    budgetUsd: draft.budget.trim() && Number.isFinite(budget) && budget >= 0 ? budget : null,
-  };
-};
-
 /** Tool picker + guidance + budget for an automation-first music video. */
 export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
   const picked = new Set(draft.tools);
-  const allPicked = picked.size === MUSIC_VIDEO_AUTOMATION_TOOLS.length;
+  const allPicked = picked.size === MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length;
   const toggle = (id) => onChange({
-    tools: MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => t.id).filter((t) => (t === id ? !picked.has(t) : picked.has(t))),
+    tools: MUSIC_VIDEO_AUTOMATION_TOOL_IDS.filter((t) => (t === id ? !picked.has(t) : picked.has(t))),
   });
   return (
     <div className="space-y-3 min-w-0">
@@ -37,7 +18,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           <span id={`${idPrefix}-tools-label`} className="text-xs text-port-text-muted">Tools the agent may use</span>
           <button
             type="button"
-            onClick={() => onChange({ tools: allPicked ? [] : MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => t.id) })}
+            onClick={() => onChange({ tools: allPicked ? [] : [...MUSIC_VIDEO_AUTOMATION_TOOL_IDS] })}
             className="text-xs text-port-accent min-h-[44px] sm:min-h-0"
           >
             {allPicked ? 'Clear all' : 'Select all'}
@@ -47,18 +28,18 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           {GROUPS.map(([group, label]) => (
             <div key={group} className="border border-port-border rounded p-2 min-w-0">
               <div className="text-[11px] uppercase tracking-wide text-port-text-muted mb-1">{label}</div>
-              {MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === group).map((tool) => (
-                <label key={tool.id} htmlFor={`${idPrefix}-tool-${tool.id}`} className="flex items-center gap-2 text-sm py-0.5 min-h-[32px] sm:min-h-0">
-                  <input
+              <div className="flex flex-wrap gap-1.5">
+                {MUSIC_VIDEO_AUTOMATION_TOOLS.filter((t) => t.group === group).map((tool) => (
+                  <ToggleChip
+                    key={tool.id}
                     id={`${idPrefix}-tool-${tool.id}`}
-                    type="checkbox"
+                    label={tool.metered ? `${tool.label} $` : tool.label}
+                    hint={tool.metered ? 'Spends money or remote quota' : undefined}
                     checked={picked.has(tool.id)}
-                    onChange={() => toggle(tool.id)}
+                    onToggle={() => toggle(tool.id)}
                   />
-                  <span className="min-w-0 break-words">{tool.label}</span>
-                  {tool.metered && <span className="ml-auto text-[10px] text-port-warning" title="Spends money or remote quota"><span aria-hidden="true">$</span><span className="sr-only">(metered)</span></span>}
-                </label>
-              ))}
+                ))}
+              </div>
             </div>
           ))}
         </div>
