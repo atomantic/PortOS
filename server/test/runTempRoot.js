@@ -19,7 +19,8 @@
  * the issue asks for — once every per-file leaker in the tree is fixed, any
  * new leak fails the run instead of silently reappearing in $TMPDIR.
  */
-import { readdirSync, rmSync } from 'node:fs';
+import { readdirSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 export function setup() {
   // No-op: server/vitest.config.js already created the root and pointed
@@ -65,6 +66,41 @@ export function groupLeakPrefix(name) {
   return name.replace(/[0-9a-zA-Z]{6,}$/, '') || name;
 }
 
+/**
+ * True when `path` holds no real content: a zero-byte file, or a directory
+ * whose entries (recursively) are all themselves empty. A shared,
+ * production-managed scratch container — `creativeDirectorScratchCwd`'s
+ * `portos-cd-cwd`, or a fixed-name log a service truncates with `writeFile
+ * (path, '')` before every start — is meant to persist across runs and be
+ * reused; once its own per-run content is cleaned up (as production code
+ * already does), what remains costs nothing and is not a leak worth
+ * reporting or failing over. This also sidesteps a real hazard two files
+ * sharing that literal path would otherwise create: each file removing the
+ * whole shared container in its own `afterAll` races the other if Vitest
+ * runs them concurrently, and one can delete a sibling's still-in-use
+ * fixture. Skipping empty entries here means neither file needs to touch
+ * the shared path at all — production's own per-item cleanup is trusted,
+ * and this function only asks "is anything really left". Exported for the
+ * regression test.
+ */
+export function isEffectivelyEmpty(path) {
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    return true; // already gone
+  }
+  if (stat.isFile()) return stat.size === 0;
+  if (!stat.isDirectory()) return false; // a socket, symlink, etc. — never silently drop it
+  let children;
+  try {
+    children = readdirSync(path);
+  } catch {
+    return true;
+  }
+  return children.every((child) => isEffectivelyEmpty(join(path, child)));
+}
+
 export function teardown() {
   const root = process.env.TMPDIR;
   if (!root) return;
@@ -78,7 +114,9 @@ export function teardown() {
     return;
   }
 
-  entries = entries.filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name));
+  entries = entries
+    .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
+    .filter((name) => !isEffectivelyEmpty(join(root, name)));
 
   if (entries.length > 0) {
     const byPrefix = new Map();
@@ -104,8 +142,12 @@ export function teardown() {
 
   try {
     rmSync(root, { recursive: true, force: true });
-  } catch {
+  } catch (err) {
     // Best-effort — a lingering open handle on a worker that hasn't fully
-    // exited yet must not crash teardown and mask the leak report above.
+    // exited yet (most often on Windows) must not crash teardown and mask
+    // the leak report above. Not silent, though: warn so a stubborn root is
+    // visible rather than just reappearing next run — the stale-root sweep
+    // in vitest.config.js cleans it up once it's 6h old either way.
+    console.warn(`⚠️ could not remove run temp root ${root}: ${err.message}`);
   }
 }
