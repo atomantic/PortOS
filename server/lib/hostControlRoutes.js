@@ -38,6 +38,8 @@
  *     or self-improvement on it queues CoS agents. Every other pipeline route
  *     generates text or media through an already-configured provider, the
  *     same as any AI feature; the caller never chooses what runs.
+ *   - notes (#9007): vault add/repoint gated (chooses the host directory
+ *     note CRUD reads/writes); note CRUD itself stays open.
  *   - browser: navigate uses the configured browser with its URL/IP guards;
  *     downloads DELETE removes data. Harness models/refresh re-reads the
  *     configured harness catalog; neither selects or installs an executable.
@@ -161,6 +163,12 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Git in a caller-named directory. Every POST is gated, reads included: git
   // runs repository-configured programs (hooks, fsmonitor) even for `status`.
   'POST /api/git/*rest',
+
+  // Notes vaults: add/repoint chooses which host directory the note CRUD
+  // routes read from and write into (#9007). Note CRUD itself stays open —
+  // it is only safe once the root is operator-chosen.
+  'POST /api/notes/vaults',
+  'PUT /api/notes/vaults/:id',
 
   // Restores replace records and machine-local execution policy; previews
   // require the same operator authority as execution (#8772).

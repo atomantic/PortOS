@@ -37,6 +37,14 @@ describe('notesValidation', () => {
       expect(notePathSchema.safeParse({ path: 'folder/./file.md' }).success).toBe(false);
     });
 
+    it('rejects dot-prefixed segments, including dot-directories (#9007)', () => {
+      expect(notePathSchema.safeParse({ path: '.ssh/id_ed25519' }).success).toBe(false);
+      expect(notePathSchema.safeParse({ path: '.ssh/authorized_keys' }).success).toBe(false);
+      expect(notePathSchema.safeParse({ path: '.claude/CLAUDE.md' }).success).toBe(false);
+      expect(notePathSchema.safeParse({ path: '.env' }).success).toBe(false);
+      expect(notePathSchema.safeParse({ path: 'folder/.git/config' }).success).toBe(false);
+    });
+
     it('rejects posix absolute paths', () => {
       expect(notePathSchema.safeParse({ path: '/etc/passwd' }).success).toBe(false);
     });
