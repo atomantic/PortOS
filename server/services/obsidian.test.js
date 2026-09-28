@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -101,5 +101,18 @@ describe('obsidian note CRUD extension enforcement (#9007)', () => {
   it('still serves ordinary .md notes after the extension check is added', async () => {
     writeFileSync(join(VAULT_DIR, 'ok.md'), 'hello');
     expect(await getNote(vaultId, 'ok.md')).toMatchObject({ content: 'hello' });
+  });
+
+  it('createNote refuses to create directories through an existing in-vault symlink that escapes it', async () => {
+    const outsideDir = join(tempRoot, 'outside');
+    mkdirSync(outsideDir, { recursive: true });
+    symlinkSync(outsideDir, join(VAULT_DIR, 'linked'));
+
+    const result = await createNote(vaultId, 'linked/newdir/escaped.md', 'x');
+    expect(result).toMatchObject({ error: 'INVALID_PATH' });
+    // The escaping segment must never have been created on the far side of
+    // the symlink — this is the directory-creation-through-a-mid-path-symlink
+    // case a single recursive `ensureDir(fullDirString)` cannot see (#9007).
+    expect(existsSync(join(outsideDir, 'newdir'))).toBe(false);
   });
 });
