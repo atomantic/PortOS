@@ -13,7 +13,7 @@ vi.mock('../components/ui/Toast', () => {
 });
 
 import toast from '../components/ui/Toast';
-import { throwApiError, request } from './apiCore.js';
+import { throwApiError, request, uploadBody } from './apiCore.js';
 
 const makeResponse = ({ status = 400, ok = false, json = null } = {}) => ({
   status,
@@ -104,4 +104,16 @@ describe('request() error path (now delegating to throwApiError)', () => {
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
+});
+
+
+it('streams Blob uploads with a browser boundary and retains legacy JSON callers', async () => {
+  const file = new Blob(['video bytes'], { type: 'video/mp4' });
+  global.fetch.mockResolvedValue({ ok: true, json: async () => ({ filename: 'saved.mp4' }) });
+  await request('/video-gen/upload', { method: 'POST', body: uploadBody(file, 'clip.mp4') });
+  const [, options] = global.fetch.mock.calls[0];
+  expect(options.headers).not.toHaveProperty('Content-Type');
+  expect(options.body.get('file').name).toBe('clip.mp4');
+  expect(await options.body.get('file').text()).toBe('video bytes');
+  expect(JSON.parse(uploadBody('YWJj', 'old.mp4'))).toEqual({ data: 'YWJj', filename: 'old.mp4' });
 });

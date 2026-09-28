@@ -28,12 +28,13 @@ export async function importFileToDir(tempPath, originalName, destDir, { extensi
     throw new ServerError('Invalid file type', { status: 400, code: 'INVALID_FILE_TYPE' });
   }
   await ensureDir(destDir);
-  const filename = `${randomUUID().slice(0, 8)}-${sanitizeFilename(originalName)}`;
+  const id = randomUUID();
+  const filename = `${id.slice(0, 8)}-${sanitizeFilename(originalName)}`;
   const dest = join(destDir, filename);
   await copyFileGuarded(tempPath, dest);
   await unlink(tempPath).catch(() => {});
   const s = await stat(dest).catch(() => null);
-  return { filename, sizeBytes: s?.size ?? 0 };
+  return { id, filename, sizeBytes: s?.size ?? 0 };
 }
 
 /**

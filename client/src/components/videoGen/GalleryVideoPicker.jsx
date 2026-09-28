@@ -18,9 +18,7 @@ import MediaCard from '../media/MediaCard';
 import { normalizeVideo } from '../media/normalize';
 import { listVideoHistory, uploadGalleryVideo } from '../../services/apiImageVideo';
 import { uploadFile } from '../../services/apiMedia';
-import { readFileAsBase64, JSON_UPLOAD_MAX_FILE_SIZE } from '../../utils/fileUpload';
 import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
-import { formatBytes } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 const VIDEO_ACCEPT = 'video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v';
@@ -77,17 +75,10 @@ export default function GalleryVideoPicker({
   const handleUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) {
-      toast.error(`Video is too large (${formatBytes(file.size)}). Max ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)}.`);
-      return;
-    }
     const session = sessionRef.current;
     setUploading(true);
-    const base64 = await readFileAsBase64(file).catch(() => null);
-    if (sessionRef.current !== session) return;
-    if (!base64) { setUploading(false); toast.error(`Failed to read ${file.name}`); return; }
     if (uploadToGallery) {
-      const entry = await uploadGalleryVideo(base64, file.name, { silent: true }).catch((err) => {
+      const entry = await uploadGalleryVideo(file, file.name, { silent: true }).catch((err) => {
         if (sessionRef.current === session) toast.error(err?.message || 'Upload failed');
         return null;
       });
@@ -98,7 +89,7 @@ export default function GalleryVideoPicker({
       onClose?.();
       return;
     }
-    const saved = await uploadFile(base64, file.name, { silent: true }).catch((err) => {
+    const saved = await uploadFile(file, file.name, { silent: true }).catch((err) => {
       if (sessionRef.current === session) toast.error(err?.message || 'Upload failed');
       return null;
     });

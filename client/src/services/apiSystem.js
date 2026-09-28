@@ -1,4 +1,4 @@
-import { request, API_BASE, throwApiError } from './apiCore.js';
+import { uploadBody, request, API_BASE, throwApiError } from './apiCore.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
 export const rectifyModelDuplicates = (payload, options = {}) => request('/system-resources/duplicates/rectify', {
@@ -506,7 +506,7 @@ export const generateAvatar = (data, options = {}) => request('/image-gen/avatar
 // URL must sync to peers — the `image` asset path only ships `/data/images/<f>`.
 export const uploadGalleryImage = (base64Data, options = {}) => request('/image-gen/upload', {
   method: 'POST',
-  body: JSON.stringify({ data: base64Data }),
+  body: uploadBody(base64Data),
   ...options,
 });
 

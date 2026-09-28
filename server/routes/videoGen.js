@@ -13,7 +13,7 @@ import os from 'os';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
-import { uploadFields } from '../lib/multipart.js';
+import { uploadFields, optionalUpload } from '../lib/multipart.js';
 import {
   validateRequest, videoModelTermsSchema,
 } from '../lib/validation.js';
@@ -78,7 +78,7 @@ import {
 } from '../services/videoGen/modelCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { openSseStream } from '../lib/sseDownload.js';
-import { saveUploadedGalleryVideo } from '../services/videoUpload.js';
+import { saveUploadedGalleryVideo, saveUploadedGalleryVideoFile } from '../services/videoUpload.js';
 import { JSON_BODY_LIMIT_BYTES } from '../lib/uploadLimits.js';
 import {
   FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
@@ -163,12 +163,10 @@ export const isAudioMime = (mime, filename) => {
 
 // FFLF accepts up to two image uploads (start and end frame); a2v takes one
 // audio upload (audioFile); the IC-LoRA remix modes take one reference video
-// upload (icReference). Audio duration is not capped: the 100MB transport cap
-// is a file-size safety bound, so compressed inputs may be much longer than
-// lossless PCM inputs. Per-fieldname mime filtering rejects mismatched parts
+// upload (icReference). Files stream to disk without a file-size cap.
+// Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
 const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', 'icReference'], {
-  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
     const isAudioField = file.fieldname === 'audioFile';
@@ -1115,16 +1113,20 @@ router.get('/history/:id', createVideoHistoryItemRead(getHistoryItem));
 // POST /api/image-gen/upload. Lands the bytes under PATHS.videos with a
 // `source: 'upload'` history entry so the file federates via the peer-sync
 // asset manifest (unlike POST /api/uploads → data/uploads/, which does not).
-// The schema's string cap is the JSON body-parser limit itself — anything
-// longer 413s at the parser before this route runs — and the reachable cap
-// is the binary MAX_GALLERY_VIDEO_UPLOAD_BYTES check in the saver, both
-// derived from server/lib/uploadLimits.js so there is one source of truth.
+// Legacy base64 callers retain the JSON transport bounds; multipart files bypass them.
 const uploadVideoSchema = z.object({
   data: z.string().min(1).max(JSON_BODY_LIMIT_BYTES),
   filename: z.string().max(255).optional(),
 });
 
-router.post('/upload', asyncHandler(async (req, res) => {
+router.post('/upload', optionalUpload('file'), asyncHandler(async (req, res) => {
+  if (req.file) {
+    try {
+      return res.json(await saveUploadedGalleryVideoFile(req.file.path, req.file.originalname));
+    } finally {
+      await cleanupMultipartTemp(req.files);
+    }
+  }
   const parsed = uploadVideoSchema.safeParse(req.body || {});
   if (!parsed.success) failValidation(parsed);
   const { data, filename } = parsed.data;

@@ -25,7 +25,7 @@ import {
 } from '../services/api';
 import { copyToClipboard } from '../lib/clipboard';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
-import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
+import { UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
 import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
@@ -256,12 +256,7 @@ const providerFilter = (provider) => provider.enabled !== false;
 
 // Read + upload one file; toasts and resolves null on failure.
 async function uploadOrToast(file) {
-  const base64 = await readFileAsBase64(file).catch(() => null);
-  if (!base64) {
-    toast.error(`Failed to read ${file.name}`);
-    return null;
-  }
-  return uploadFile(base64, file.name, { silent: true }).catch((error) => {
+  return uploadFile(file, file.name, { silent: true }).catch((error) => {
     toast.error(error.message || `Failed to upload ${file.name}`);
     return null;
   });
@@ -413,7 +408,7 @@ export default function CodeAnimation() {
     const room = Math.max(0, maxRefs - draft.referenceImages.length);
     if (files.length > room) toast.error(`Only ${room} more reference image(s) fit`);
     const valid = files.slice(0, room).filter((file) => {
-      const invalid = validateImageFile(file);
+      const invalid = validateImageFile(file, Infinity);
       if (invalid) toast.error(invalid);
       return !invalid;
     });

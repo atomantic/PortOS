@@ -11,8 +11,7 @@ import {
 import { uploadGalleryImage } from '../services/apiSystem.js';
 import { uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
-import { readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE } from '../utils/fileUpload.js';
-import { formatBytes } from '../utils/formatters.js';
+import { validateImageFile } from '../utils/fileUpload.js';
 
 // Mirrors the server's handoff import cap, checked BEFORE uploading so an
 // oversized pick can't leave a gallery full of files nothing imported.
@@ -20,12 +19,10 @@ const MAX_HANDOFF_FILES = 200;
 // The video formats the gallery video upload can container-sniff.
 const HANDOFF_VIDEO_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 
-// Why a picked file can't be uploaded, or null. Both uploads are one base64
-// JSON body, so both share the wire cap.
+// Why a picked file can't be uploaded, or null.
 function handoffFileProblem(file, isVideo) {
-  if (!isVideo) return validateImageFile(file, JSON_UPLOAD_MAX_FILE_SIZE);
+  if (!isVideo) return validateImageFile(file, Infinity);
   if (!HANDOFF_VIDEO_TYPES.has(file.type)) return `File "${file.name}" is not an MP4, MOV, or WebM video`;
-  if (file.size > JSON_UPLOAD_MAX_FILE_SIZE) return `File "${file.name}" exceeds the ${formatBytes(JSON_UPLOAD_MAX_FILE_SIZE)} limit`;
   return null;
 }
 
@@ -124,12 +121,10 @@ export default function useMusicVideoTakes({ project, applyScenePatch }) {
       const isVideo = typeof file.type === 'string' && file.type.startsWith('video/');
       const invalid = handoffFileProblem(file, isVideo);
       if (invalid) { failures.push(invalid); continue; }
-      const base64 = await readFileAsBase64(file).catch(() => null);
-      if (!base64) { failures.push(`Failed to read ${file.name}`); continue; }
-      // Sequential on purpose: each upload is a whole file in one JSON body.
+      // Sequential uploads keep disk and decode work bounded.
       const saved = await (isVideo
-        ? uploadGalleryVideo(base64, file.name, { silent: true })
-        : uploadGalleryImage(base64, { silent: true })
+        ? uploadGalleryVideo(file, file.name, { silent: true })
+        : uploadGalleryImage(file, { silent: true })
       ).catch((err) => { failures.push(`${file.name}: ${err?.message || 'upload failed'}`); return null; });
       const assetId = isVideo ? saved?.id : saved?.filename;
       if (assetId) items.push({ kind: isVideo ? 'video' : 'image', assetId, originalName: file.name });

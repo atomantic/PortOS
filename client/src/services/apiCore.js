@@ -141,3 +141,13 @@ export default {
   }),
   delete: (endpoint, options) => request(endpoint, { method: 'DELETE', ...options })
 };
+
+// File/Blob uploads stream as multipart; retain base64 JSON for older callers.
+export function uploadBody(data, filename) {
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    const body = new FormData();
+    body.append('file', data, filename || data.name || 'upload');
+    return body;
+  }
+  return JSON.stringify({ data, ...(filename ? { filename } : {}) });
+}

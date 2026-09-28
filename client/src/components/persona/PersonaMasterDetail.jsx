@@ -10,7 +10,6 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { DEFAULT_NEGATIVE_PROMPT } from '../../lib/imageGenDefaults';
 
-const PERSONA_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
 const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
 
 export default function PersonaMasterDetail({
@@ -298,7 +297,7 @@ export default function PersonaMasterDetail({
         </div>
       </div>
 
-      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleImagePick} allowUpload maxBytes={PERSONA_IMAGE_MAX_BYTES} />
+      <GalleryImagePicker open={galleryOpen} onClose={() => setGalleryOpen(false)} onSelect={handleImagePick} allowUpload />
     </div>
   );
 }
