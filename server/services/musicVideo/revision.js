@@ -233,6 +233,18 @@ export function resumableRevision(project, revisionId) {
 }
 
 /**
+ * Pure: the live (queued/running) generation jobs a revision started — tagged
+ * for one of its rejected sections and queued since it opened. Cancelling the
+ * revision cancels these, so no paid work keeps running for a closed revision.
+ */
+export function revisionGenerationJobs(project, revision, jobs = []) {
+  const rejected = (revision.sections || []).filter((s) => s.verdict === 'rejected');
+  return jobs.filter((job) => (job?.status === 'queued' || job?.status === 'running')
+    && typeof job.queuedAt === 'string' && job.queuedAt >= revision.createdAt
+    && rejected.some((s) => job.kind === s.kind && tagMatches(job, project.id, s.sceneId)));
+}
+
+/**
  * Resume's atomic step (run under the record's write serialization): derive
  * every section's state and CLAIM the ones about to be handed out for
  * generation, so two overlapping resumes can never both hand out the same

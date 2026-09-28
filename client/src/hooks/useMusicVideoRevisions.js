@@ -89,7 +89,12 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
     .then((res) => (res?.revision ? resume(res.revision.id) : null));
 
   const cancel = (revisionId) => run(() => cancelMusicVideoRevision(projectId, revisionId, { silent: true })
-    .then((res) => { replaceProject(res.project); return res; }));
+    .then((res) => {
+      replaceProject(res.project);
+      const stopped = res.canceledJobIds?.length || 0;
+      toast.info(stopped ? `Revision cancelled — stopped ${plural(stopped, 'generation job')}` : 'Revision cancelled');
+      return res;
+    }));
 
   return { busy, revise, resume, cancel };
 }

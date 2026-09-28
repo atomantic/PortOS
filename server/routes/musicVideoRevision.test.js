@@ -35,7 +35,7 @@ const h = vi.hoisted(() => {
     procs.push(p);
     return p;
   };
-  return { procs, spawn, jobs: [], enqueueJob: vi.fn() };
+  return { procs, spawn, jobs: [], enqueueJob: vi.fn(), cancelJob: vi.fn(async () => {}) };
 });
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: h.spawn }));
@@ -45,6 +45,7 @@ vi.mock('../services/htmlComposition/encode.js', () => ({ encodeFileContactSheet
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(({ kind } = {}) => h.jobs.filter((j) => !kind || j.kind === kind)),
   enqueueJob: h.enqueueJob,
+  cancelJob: h.cancelJob,
 }));
 // Three 10s sections: footage s1, footage s2, still s3 (a composed render).
 const CLIPS = [
@@ -265,6 +266,23 @@ describe('selective section revision (#8987)', () => {
     expect(reloaded.excerpts.find((e) => e.id === render.excerptId)).toMatchObject({ status: 'canceled', partialFilename: null });
     const resume = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
     expect(resume.status).toBe(409);
+  });
+
+  it('cancelling an open revision stops the generation it started, and only that', async () => {
+    const project = await reviewedProject();
+    const earlier = new Date(Date.now() - 60_000).toISOString();
+    const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
+    const tag = (sceneId) => ({ musicVideo: { projectId: project.id, sceneId } });
+    const now = new Date().toISOString();
+    h.jobs.push(
+      { id: 'job-s2', kind: 'video', status: 'running', queuedAt: now, params: tag('s2') },
+      { id: 'job-s1', kind: 'video', status: 'queued', queuedAt: now, params: tag('s1') }, // an approved section: not the revision's
+      { id: 'job-old', kind: 'video', status: 'running', queuedAt: earlier, params: tag('s2') }, // predates the revision
+    );
+    const r = await request(app).post(`${base(project.id)}/revisions/${revision.id}/cancel`);
+    expect(r.status).toBe(200);
+    expect(r.body.canceledJobIds).toEqual(['job-s2']);
+    expect(h.cancelJob).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a second open revision, a section outside the draft, and a draft without a section map', async () => {

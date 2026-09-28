@@ -25,6 +25,7 @@ import {
   cancelRevisionOnProject,
   claimRevisionGeneration,
   projectRevisions,
+  revisionGenerationJobs,
   revisionSectionStates,
   startRevisionOnProject,
 } from './revision.js';
@@ -57,9 +58,22 @@ export async function resumeRevision(projectId, revisionId) {
   return { project: fresh, revision: { ...current, sections: revisionSectionStates(fresh, current, jobs) }, needsGeneration: [], generating: [], render };
 }
 
-/** Cancel a revision; a draft render it started is cancelled too. Returns `{ project, revision }`. */
+/**
+ * Cancel a revision. Its draft render and any generation job it started that
+ * is still queued/running are cancelled too, so a closed revision incurs no
+ * further paid work. Returns `{ project, revision, canceledJobIds }`.
+ */
 export async function cancelRevision(projectId, revisionId) {
   const { project, revision, renderExcerptId } = await mutateProjectRecord(projectId, (current) => cancelRevisionOnProject(current, revisionId));
   if (renderExcerptId) cancelExcerptRender(renderExcerptId);
-  return { project, revision };
+  const { listJobs, cancelJob } = await import('../mediaJobQueue/index.js');
+  const live = revisionGenerationJobs(project, revision, [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })]);
+  const canceledJobIds = [];
+  for (const job of live) {
+    await cancelJob(job.id).then(() => canceledJobIds.push(job.id), (err) => {
+      console.error(`❌ Music Video revision ${revisionId.slice(4, 12)} could not cancel generation job ${job.id.slice(0, 8)}: ${err.message}`);
+    });
+  }
+  if (canceledJobIds.length) console.log(`🛑 Music Video revision ${revisionId.slice(4, 12)} cancelled ${canceledJobIds.length} generation job(s)`);
+  return { project, revision, canceledJobIds };
 }
