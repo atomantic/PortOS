@@ -17,7 +17,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import EmptyState from '../components/EmptyState';
 import { timeAgo } from '../utils/formatters';
 import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
-import { moodBoardItemSrc } from '../lib/moodBoardItemSrc';
+import { moodBoardItemSrc, moodBoardPosterSrc } from '../lib/moodBoardItemSrc';
 
 const itemCounts = (board) => {
   const items = Array.isArray(board?.items) ? board.items : [];
@@ -50,9 +50,13 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
       .filter((it) => Boolean(it.src));
   }, [board]);
 
-  const coverItem = visualItems[0] || null;
-  const subThumbnails = visualItems.slice(1, 1 + MAX_THUMBNAILS);
-  const remainingVisualsCount = visualItems.length - (1 + subThumbnails.length);
+  const posterSrc = moodBoardPosterSrc(board);
+  const coverSrc = posterSrc || visualItems[0]?.src || null;
+  // A rendered poster is the cover, so the pinned stills all stay in the strip.
+  // Without one, the first still is the cover and drops out of the strip.
+  const stripItems = posterSrc ? visualItems : visualItems.slice(1);
+  const subThumbnails = stripItems.slice(0, MAX_THUMBNAILS);
+  const remainingVisualsCount = stripItems.length - subThumbnails.length;
 
   return (
     <li className="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col hover:border-port-accent/40 transition-colors">
@@ -71,9 +75,9 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
         className="block bg-port-bg border-b border-port-border/60 group relative"
       >
         <div className="aspect-[16/10] w-full overflow-hidden relative bg-port-bg flex items-center justify-center">
-          {coverItem ? (
+          {coverSrc ? (
             <img
-              src={coverItem.src}
+              src={coverSrc}
               alt={board.name}
               loading="lazy"
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"

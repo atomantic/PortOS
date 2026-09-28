@@ -27,8 +27,13 @@ vi.mock('../services/moodBoardStyleSynthesis.js', () => ({
   synthesizeBoardStyle: vi.fn(),
 }));
 
+vi.mock('../services/moodBoardCompositeStyle.js', () => ({
+  composeBoardPrompt: vi.fn(),
+}));
+
 import * as svc from '../services/moodBoard/index.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
+import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import moodBoardRoutes from './moodBoard.js';
 
 const makeApp = () => {
@@ -124,6 +129,34 @@ describe('mood-board routes', () => {
       });
       expect(res.status).toBe(400);
       expect(synthesizeBoardStyle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/compose-prompt', () => {
+    it('404s when the board is missing', async () => {
+      svc.getBoard.mockResolvedValueOnce(null);
+      const res = await request(makeApp()).post('/api/mood-boards/nope/compose-prompt').send({});
+      expect(res.status).toBe(404);
+      expect(composeBoardPrompt).not.toHaveBeenCalled();
+    });
+
+    it('persists the composed style on the board', async () => {
+      const board = { id: 'mb-1', name: 'A', items: [] };
+      const style = { prompt: 'ink wash dusk', negativePrompt: null, rationale: 'tactile', analyzedItemCount: 1, providerId: 'ollama', model: 'qwen', composedAt: '2026-08-14T00:00:00.000Z' };
+      svc.getBoard.mockResolvedValueOnce(board);
+      composeBoardPrompt.mockResolvedValueOnce(style);
+      svc.updateBoard.mockResolvedValueOnce({ ...board, style });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ providerId: 'ollama', model: 'qwen' });
+      expect(res.status).toBe(200);
+      expect(composeBoardPrompt).toHaveBeenCalledWith({ board, providerId: 'ollama', model: 'qwen' });
+      expect(svc.updateBoard).toHaveBeenCalledWith('mb-1', { style });
+      expect(res.body.style.prompt).toBe('ink wash dusk');
+    });
+
+    it('400s on an unknown body key', async () => {
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/compose-prompt').send({ effort: 'high' });
+      expect(res.status).toBe(400);
+      expect(composeBoardPrompt).not.toHaveBeenCalled();
     });
   });
 

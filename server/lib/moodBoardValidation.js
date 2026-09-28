@@ -53,11 +53,38 @@ export const moodBoardCreateSchema = z.object({
   description: z.string().max(5000).optional(),
 }).strict();
 
+// Gallery filename for the board's canonical poster. Same traversal rule as
+// the asset manifest (`sanitizeAssetFilename`): separators and `.` / `..`
+// are rejected; an image extension is required so a video ref can't be
+// stored as the still the poster slot renders.
+const posterFilenameSchema = z.string().trim().min(1).max(255).refine(
+  (v) => !v.includes('/') && !v.includes('\\') && v !== '.' && v !== '..'
+    && /\.(png|jpe?g|gif|webp)$/i.test(v),
+  'posterImageRef must be a gallery image filename',
+);
+
+// Composite board style — one ready-to-render prompt distilled from the
+// per-item prompt-from-media analyses. Written by POST /compose-prompt and
+// editable from the board page. `null` on the PATCH clears it. Additive on
+// the wire (whole-record LWW); bounds match the per-item analysis caps.
+export const moodBoardStyleSchema = z.object({
+  prompt: z.string().trim().min(1).max(8000),
+  negativePrompt: z.string().max(8000).nullable().optional(),
+  rationale: z.string().max(1200).nullable().optional(),
+  analyzedItemCount: z.number().int().min(0).max(500).optional(),
+  providerId: z.string().max(128).nullable().optional(),
+  model: z.string().max(256).nullable().optional(),
+  composedAt: z.string().datetime({ offset: true }).nullable().optional(),
+}).strict();
+
 // Board PATCH — only the editable board-level fields. items[] is managed via
-// the dedicated item endpoints, never a bulk board PATCH.
+// the dedicated item endpoints, never a bulk board PATCH. `style` / 
+// `posterImageRef` are the composite prompt and the canonical poster.
 export const moodBoardUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().max(5000).optional(),
+  style: moodBoardStyleSchema.nullable().optional(),
+  posterImageRef: posterFilenameSchema.nullable().optional(),
 }).strict();
 
 // Add-item. An `image` item requires at least one of mediaKey / imageUrl; a

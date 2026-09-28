@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectBoardStyleContext } from './styleContext.js';
+import { collectBoardStyleContext, moodBoardImageCandidates } from './styleContext.js';
 
 const boardWith = (items) => ({
   id: 'mb-1',
@@ -38,6 +38,28 @@ describe('collectBoardStyleContext', () => {
     });
     expect(ctx.items[1]).toMatchObject({ kind: 'text', note: 'lean grim and spiritual' });
     expect(ctx.droppedItems).toBe(0);
+    expect(ctx.stylePrompt).toBeNull();
+  });
+
+  it('carries the composite style prompt and lists the poster ahead of pinned images', () => {
+    const board = {
+      ...boardWith([analyzedItem]),
+      style: { prompt: 'the shared ink-wash look', negativePrompt: 'gloss' },
+      posterImageRef: 'poster.png',
+    };
+    const ctx = collectBoardStyleContext(board);
+    expect(ctx.stylePrompt).toBe('the shared ink-wash look');
+    expect(ctx.styleNegative).toBe('gloss');
+    const candidates = moodBoardImageCandidates(board, (item) => (
+      item.mediaKey === 'image:ref.png' ? { kind: 'image', filename: 'ref.png' } : null
+    ));
+    expect(candidates.map((c) => c.filename)).toEqual(['poster.png', 'ref.png']);
+  });
+
+  it('does not list the poster twice when a pin is the same file', () => {
+    const board = { posterImageRef: 'ref.png', items: [{ caption: 'same', mediaKey: 'image:ref.png' }] };
+    const candidates = moodBoardImageCandidates(board, () => ({ kind: 'image', filename: 'ref.png' }));
+    expect(candidates).toEqual([{ kind: 'image', filename: 'ref.png', label: 'Mood board poster' }]);
   });
 
   it('caps the fragment list and reports the overflow', () => {

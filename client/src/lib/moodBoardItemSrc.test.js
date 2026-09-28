@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from './moodBoardItemSrc';
+import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource, moodBoardPosterSrc } from './moodBoardItemSrc';
 
 describe('moodBoardItemSrc', () => {
   it('prefers an explicit imageUrl', () => {
@@ -81,6 +81,18 @@ describe('moodBoardItemAnalysisSource (#4188 Phase 3)', () => {
     expect(moodBoardItemAnalysisSource({ type: 'image', mediaKey: 'video:abc', imageUrl: 'https://x/t.jpg' })).toBeNull();
     expect(moodBoardItemAnalysisSource({ type: 'video', mediaKey: null })).toBeNull();
     expect(moodBoardItemAnalysisSource(null)).toBeNull();
+  });
+});
+
+describe('moodBoardPosterSrc', () => {
+  it('serves the canonical poster from the gallery', () => {
+    expect(moodBoardPosterSrc({ posterImageRef: 'board poster.png' }))
+      .toBe('/data/images/board%20poster.png');
+  });
+  it('returns null when there is no poster or the name is a path', () => {
+    expect(moodBoardPosterSrc({})).toBeNull();
+    expect(moodBoardPosterSrc({ posterImageRef: 'a/b.png' })).toBeNull();
+    expect(moodBoardPosterSrc(null)).toBeNull();
   });
 });
 // @vitest-environment node

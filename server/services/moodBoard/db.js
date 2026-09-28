@@ -146,7 +146,7 @@ export async function updateBoard(id, patch) {
 }
 
 /**
- * Faithful conflict-restore (RESTORABLE_FIELDS.moodBoard = name/description/items)
+ * Faithful conflict-restore (RESTORABLE_FIELDS.moodBoard = name/description/items/style/posterImageRef)
  * wired into conflictJournalResolver. Goes through the row lock + tombstone guard
  * like every other mutator, but uses applyBoardRestore so a "restore my whole
  * version" also brings back items[] (applyBoardPatch only touches name/description).

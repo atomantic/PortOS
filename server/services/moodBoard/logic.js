@@ -148,13 +148,32 @@ export function boardItemLocalImage(item) {
   return imageUrlToAppAsset(item.imageUrl);
 }
 
-// Apply a PATCH to board-level fields (name/description). Absent keys preserve
-// the original; a present empty string clears (description). `items` is managed
-// only through the dedicated item ops below, never a bulk board PATCH.
+// Stored shape of the board's composite style prompt. Absent optionals become
+// explicit nulls; `composedAt` is stamped when the writer didn't send one.
+// `null` clears the style (the poster render has nothing to pin to).
+export function normalizeBoardStyle(style, now = nowIso()) {
+  if (!style) return null;
+  return {
+    prompt: style.prompt,
+    negativePrompt: style.negativePrompt ?? null,
+    rationale: style.rationale ?? null,
+    analyzedItemCount: Number.isInteger(style.analyzedItemCount) ? style.analyzedItemCount : 0,
+    providerId: style.providerId ?? null,
+    model: style.model ?? null,
+    composedAt: style.composedAt ?? now,
+  };
+}
+
+// Apply a PATCH to board-level fields (name/description/style/poster). Absent
+// keys preserve the original; a present empty string clears description, and
+// `null` clears style or the poster filename. `items` is managed only through
+// the dedicated item ops below, never a bulk board PATCH.
 export function applyBoardPatch(board, patch) {
   const next = { ...board };
   if (patch.name !== undefined) next.name = patch.name;
   if (patch.description !== undefined) next.description = patch.description;
+  if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
+  if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }
@@ -270,10 +289,11 @@ export function removeItem(board, itemId) {
 }
 
 // Faithful conflict-restore of the restorable board fields (RESTORABLE_FIELDS.
-// moodBoard = name/description/items). Unlike applyBoardPatch — the route PATCH
-// path, which only touches name/description because items are managed through
-// the dedicated item ops — a "restore my whole version" must bring back the
-// board's items[]. The conflict resolver narrows `patch` to the allowed fields
+// moodBoard = name/description/items/style/posterImageRef). Unlike applyBoardPatch
+// — the route PATCH path, which does not touch items because they are managed
+// through the dedicated item ops — a "restore my whole version" must bring back
+// the board's items[], and the composite style + poster when the journaled
+// version had them. The conflict resolver narrows `patch` to the allowed fields
 // (via `pick`), so this just spreads the present ones and bumps updatedAt so the
 // restore wins LWW and re-propagates. Mirrors creativeDirector's
 // applyProjectPatch wholesale-spread restore path.
@@ -282,6 +302,8 @@ export function applyBoardRestore(board, patch) {
   if (patch.name !== undefined) next.name = patch.name;
   if (patch.description !== undefined) next.description = patch.description;
   if (Array.isArray(patch.items)) next.items = patch.items;
+  if (patch.style !== undefined) next.style = normalizeBoardStyle(patch.style);
+  if (patch.posterImageRef !== undefined) next.posterImageRef = patch.posterImageRef ?? null;
   next.updatedAt = nowIso();
   return next;
 }

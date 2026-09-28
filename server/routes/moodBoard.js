@@ -23,6 +23,7 @@ import {
 } from '../lib/validation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
+import { composeBoardPrompt } from '../services/moodBoardCompositeStyle.js';
 import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
@@ -116,6 +117,21 @@ router.post('/:id/synthesize-style', asyncHandler(async (req, res) => {
   const board = await getBoard(req.params.id);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
   res.json(await synthesizeBoardStyle({ board, ...body }));
+}));
+
+// Board-level composite prompt. Reads the per-item analyses already stored on
+// the board (prompt-from-media), distills one still-image prompt, and persists
+// it as `board.style`. The page then renders that prompt as the poster.
+const composePromptSchema = z.object({
+  providerId: z.string().trim().max(128).optional(),
+  model: z.string().trim().max(256).optional(),
+}).strict();
+router.post('/:id/compose-prompt', asyncHandler(async (req, res) => {
+  const body = validateRequest(composePromptSchema, req.body ?? {});
+  const board = await getBoard(req.params.id);
+  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
+  const style = await composeBoardPrompt({ board, ...body });
+  res.json(await updateBoard(req.params.id, { style }));
 }));
 
 // Link the board to a public Pinterest board's RSS feed.

@@ -120,18 +120,18 @@ export async function resolveUniverseStyleSource(universeId, { imageSlots, narra
  */
 export async function resolveMoodBoardStyleSource(moodBoardId, { imageSlots }) {
   if (!moodBoardId) return { board: null, images: [] };
-  const [{ getBoard }, { collectBoardStyleContext }, { boardItemLocalImage }] = await Promise.all([
+  const [{ getBoard }, { collectBoardStyleContext, moodBoardImageCandidates }, { boardItemLocalImage }] = await Promise.all([
     import('./moodBoard/db.js'),
     import('./moodBoard/styleContext.js'),
     import('./moodBoard/logic.js'),
   ]);
   const board = await getBoard(moodBoardId);
   if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  // Text items, videos, and external pins attach nothing — they still
-  // contribute their caption/analysis text through the board context.
-  const candidates = (board.items || []).map((item) => () => {
-    const asset = boardItemLocalImage(item);
-    return asset ? localReference(asset.kind, asset.filename, trimTo(item.caption, 120) || asset.filename, 'mood-board') : null;
-  });
+  // The canonical poster leads, then pinned gallery stills. Text items, videos,
+  // and external pins attach nothing — they still contribute their caption and
+  // analysis text through the board context.
+  const candidates = moodBoardImageCandidates(board, boardItemLocalImage).map((candidate) => () => (
+    localReference(candidate.kind, candidate.filename, trimTo(candidate.label, 120) || candidate.filename, 'mood-board')
+  ));
   return { board: collectBoardStyleContext(board), images: fillReferences(candidates, imageSlots) };
 }

@@ -31,6 +31,12 @@ export function moodBoardSection(board) {
   if (!board) return '';
   const lines = [`Mood board: "${board.name || 'Untitled board'}" — distill its through-line (palette, texture, lighting, rhythm, mood), not any single item.`];
   if (isNonBlankStr(board.description)) lines.push(`Board description: ${board.description}`);
+  // The composite prompt is the board's canonical look, already distilled from
+  // per-item analyses. Lead with it so a later item fragment can't outrank it.
+  if (isNonBlankStr(board.stylePrompt)) {
+    lines.push(`Composite board style (the canonical look distilled from the item analyses): ${board.stylePrompt}`);
+  }
+  if (isNonBlankStr(board.styleNegative)) lines.push(`Composite board style to avoid: ${board.styleNegative}`);
   const fragments = (board.items || []).map((item) => {
     const parts = [];
     if (item.note) parts.push(`note: ${item.note}`);

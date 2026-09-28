@@ -78,6 +78,24 @@ describe('MoodBoards index', () => {
     expect(screen.getByText('7 items')).toBeInTheDocument();
   });
 
+  it('uses the canonical poster as the cover and keeps the first pin in the strip', async () => {
+    listMoodBoards.mockResolvedValue([
+      {
+        id: 'board-2',
+        name: 'Ink',
+        description: '',
+        posterImageRef: 'board poster.png',
+        items: [
+          { id: 'it-1', type: 'image', imageUrl: '/data/images/pin.png', caption: 'First pin' },
+        ],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    await renderPage();
+    expect((await screen.findByAltText('Ink')).getAttribute('src')).toBe('/data/images/board%20poster.png');
+    expect(screen.getByAltText('First pin')).toBeInTheDocument();
+  });
+
   it('allows deleting a board with confirmation', async () => {
     listMoodBoards.mockResolvedValue([
       { id: 'board-1', name: 'Board To Delete', items: [], updatedAt: '2026-01-01T00:00:00.000Z' },

@@ -19,11 +19,15 @@ import { deriveAvailableBackends } from '../lib/imageGenBackends';
  * @param {object}      [opts]
  * @param {object|null} [opts.record] - Record whose `imageMode`/`imageModelId` pin wins.
  * @param {string|null} [opts.target] - RENDER_TARGET id whose `renderDefaults` pin is next.
+ * @param {boolean} [opts.includeExternal] - Also list an enabled external SDAPI
+ *   backend. Default false; the mood-board poster opts in so the user can pick
+ *   any configured image service.
  * @returns {{ imageCfg: object, backends: Array<{id:string,label:string}> }} —
- *   `backends` is the enabled, non-external list the pin ladder was gated on
- *   (empty until settings land), for callers that also render a backend picker.
+ *   `backends` is the enabled list the pin ladder was gated on (external omitted
+ *   unless `includeExternal`; empty until settings land), for callers that also
+ *   render a backend picker.
  */
-export default function useImageRenderSettings({ record = null, target = null } = {}) {
+export default function useImageRenderSettings({ record = null, target = null, includeExternal = false } = {}) {
   // `null` = not fetched yet (or the fetch failed), which is NOT the same as a
   // settings blob with no backends enabled. Holding the raw blob (rather than a
   // derived cfg seeded with the defaults and an `[]` backend list) keeps the two
@@ -38,11 +42,11 @@ export default function useImageRenderSettings({ record = null, target = null } 
   // a freshly-fetched draft object on every save, and re-deriving an identical
   // cfg would churn the render opts for every consumer downstream.
   return useMemo(() => {
-    const backends = settings ? deriveAvailableBackends(settings, { excludeExternal: true }) : [];
+    const backends = settings ? deriveAvailableBackends(settings, { excludeExternal: !includeExternal }) : [];
     return {
       backends,
       // Display projection only; tagged submissions retain server inheritance.
       imageCfg: resolveRenderCfg(settings, { record, target }),
     };
-  }, [settings, target, record?.imageMode, record?.imageModelId]);
+  }, [settings, target, includeExternal, record?.imageMode, record?.imageModelId]);
 }

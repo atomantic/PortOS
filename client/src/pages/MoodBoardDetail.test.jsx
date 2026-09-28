@@ -38,6 +38,10 @@ vi.mock('../components/ui/Toast', () => ({
 // test is the page's own wiring (open, persist via onResult, stored-analysis
 // children), not the analyzer internals, which have their own suite.
 let analysisDelay = null;
+vi.mock('../components/moodBoard/MoodBoardStylePanel', () => ({
+  default: () => <div data-testid="board-style-panel" />,
+}));
+
 vi.mock('../components/media/PromptFromMedia', () => ({
   PromptFromMediaModal: ({ open, item, onResult, children }) => (open && item ? (
     <div data-testid="pfm-modal">
@@ -350,7 +354,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
       .mockResolvedValueOnce({ id: 'b', name: 'Board B', items: [] });
     const { rerender } = renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
-    fireEvent.click(screen.getByRole('button', { name: 'Analyze with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
 
     currentId = 'b';
@@ -378,7 +382,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 
     // One analyzable item → exactly one analyze button; the text item and the
     // external-URL pin get none.
-    expect(screen.getAllByRole('button', { name: 'Analyze with AI' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'Prompt from media' })).toHaveLength(1);
   });
 
   it('persists a run onto the item and flips the card to its analyzed state', async () => {
@@ -398,7 +402,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Analyze with AI' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prompt from media' }));
     expect(screen.getByTestId('pfm-modal')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'mock-generate' }));
@@ -416,7 +420,7 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
 
     // The persisted item flows back into board state: the card badge flips and
     // the modal now shows the stored analysis.
-    await screen.findByRole('button', { name: 'View AI analysis' });
+    await screen.findByRole('button', { name: 'View prompt from media' });
     expect(screen.getByLabelText('Saved analysis prompt')).toHaveValue('a moody castle at dusk');
   });
 
@@ -433,11 +437,11 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     renderPage();
     await waitFor(() => expect(boardNameValue()).toBe('Board A'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'View AI analysis' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View prompt from media' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     await waitFor(() => {
       expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { analysis: null }, { silent: true });
     });
-    await screen.findByRole('button', { name: 'Analyze with AI' });
+    await screen.findByRole('button', { name: 'Prompt from media' });
   });
 });
