@@ -476,6 +476,8 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
           providerId: 'openai',
           model: 'gpt-4o',
         },
+        // The caption mirrors the analysis prompt when the item had none.
+        caption: 'a moody castle at dusk',
       }, { silent: true });
     });
 

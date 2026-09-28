@@ -223,7 +223,12 @@ function MoodBoardEditor({ id }) {
     if (!mountedRef.current) return;
     const analysis = moodBoardAnalysisFromResult(item, result);
     if (!analysis) return;
-    const updated = await updateMoodBoardItem(id, item.id, { analysis }, { silent: true }).catch(() => null);
+    // The caption mirrors the prompt: fill it when empty or when it still holds
+    // the previous analysis prompt, but never overwrite a caption the user wrote.
+    const prevCaption = (item.caption || '').trim();
+    const captionFollows = !prevCaption || prevCaption === (item.analysis?.prompt || '').trim();
+    const patch = captionFollows ? { analysis, caption: analysis.prompt.slice(0, 2000) } : { analysis };
+    const updated = await updateMoodBoardItem(id, item.id, patch, { silent: true }).catch(() => null);
     if (!mountedRef.current) return;
     if (!updated) { toast.error('Analysis ran but could not be saved to the item'); return; }
     setBoard((prev) => (prev
@@ -517,6 +522,7 @@ function MoodBoardEditor({ id }) {
                     <div className="p-2 flex flex-col gap-1">
                       <input
                         type="text"
+                        key={item.caption || ""}
                         aria-label="Item caption"
                         defaultValue={item.caption || ''}
                         placeholder="Add a caption…"
