@@ -52,7 +52,7 @@ describe('POST /:id/scenes/:sceneId/split', () => {
       label: 'Verse', prompt: 'singer at the mic', startSec: 30, endSec: 56, shotMode: 'performance', loop: false,
     });
     const after = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 56, endSec: 70 });
-    await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png' });
+    await projects.updateScene(project.id, shot.sceneId, { referenceImageId: 'singer.png', videoHistoryId: 'clip-whole-verse' });
 
     // No backend in the body: the project's pinned fal lane bounds the take.
     const res = await split(shot.sceneId);
@@ -71,14 +71,20 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(stored.scenes.map((s) => [s.sceneId, s.order])).toEqual([
       [before.sceneId, 0], [shot.sceneId, 1], [pieces[1].sceneId, 2], [pieces[2].sceneId, 3], [after.sceneId, 4],
     ]);
-    expect(stored.scenes[1].takes.map((t) => t.assetId)).toEqual(['singer.png']);
+    // The lip-synced clip was generated for 30–56s: it stays a candidate take
+    // but is no longer selected, so the render never re-cuts it.
+    expect(stored.scenes[1].videoHistoryId).toBeNull();
+    expect(stored.scenes[1].takes.map((t) => t.assetId)).toEqual(['singer.png', 'clip-whole-verse']);
   });
 
   it('splits a Grok cutaway at its 10-second clip limit when the director renders on Grok', async () => {
     const shot = await projects.addProjectScene(project.id, { label: 'Bridge', startSec: 30, endSec: 55 });
+    await projects.updateScene(project.id, shot.sceneId, { videoHistoryId: 'clip-bridge' });
     const res = await split(shot.sceneId, { backend: 'grok' });
     expect(res.status).toBe(200);
     const pieces = res.body.scenes;
+    // A cutaway clip still starts where the first piece does: it stays selected.
+    expect(pieces.map((p) => p.videoHistoryId)).toEqual(['clip-bridge', null, null]);
     expect(pieces).toHaveLength(3);
     for (const p of pieces) expect(p.endSec - p.startSec).toBeLessThanOrEqual(10);
     expect(pieces[0].startSec).toBe(30);

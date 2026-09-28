@@ -323,7 +323,10 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
     return { ok: false, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED', message: 'This shot already fits in a single take.' };
   }
   const candidates = splitCandidates({ lyricCues, phrases, beats });
-  const fewest = Math.ceil(round6((endSec - startSec) / maxSec));
+  // The same 1µs tolerance as the fits-one-take check above: float noise in
+  // a span like 29.9999999 must not demand a fourth 10s piece, and no piece
+  // may exceed the limit by more than that tolerance.
+  const fewest = Math.ceil((endSec - startSec - 1e-6) / maxSec);
   const base = { startSec, endSec, maxSec, minPieceSec, candidates };
   const first = cutPieces({ ...base, count: fewest });
   let chosen = first;

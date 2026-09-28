@@ -29,7 +29,7 @@ import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
-import { planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
+import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
@@ -461,13 +461,12 @@ function lyricTextWithin(cues, startSec, endSec) {
  * window, a Grok cutaway at the longest Grok clip. `backend` is the lane the
  * director will render with ('' / null = the project's pinned backend).
  *
- * The original scene keeps its id, takes and selections and becomes the first
- * piece; each later piece is a new scene placed right after it, carrying the
- * shot's direction and the selected reference frame (as a take, so the frame
- * is ready to animate) but no clip — the old clip was generated for the whole
- * span. A performance take on the first piece is then correctly refused by the
- * render as re-timed, never silently re-cut. Each piece's `lyricText` is the
- * timed lines sung inside it. Returns `{ project, scenes }` (all pieces, in
+ * The original scene keeps its id and takes and becomes the first piece (a
+ * performance's lip-synced clip selection is cleared — see below). Each later
+ * piece is a new scene placed right after it, carrying the shot's direction
+ * and the selected reference frame (as a take, so the frame is ready to
+ * animate) but no clip — the old clip was generated for the whole span. Each
+ * piece's `lyricText` is the timed lines sung inside it. Returns `{ project, scenes }` (all pieces, in
  * order); throws 400 when the shot is untimed or already fits one take.
  */
 export function splitScene(project, sceneId, { backend = null } = {}) {
@@ -503,7 +502,16 @@ export function splitScene(project, sceneId, { backend = null } = {}) {
 
   const pieces = plan.pieces.map((piece, i) => {
     const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece) };
-    if (i === 0) return { ...scene, ...timing, takes: ensureSceneTakes(scene, now) };
+    if (i === 0) {
+      const takes = ensureSceneTakes(scene, now);
+      // A lip-synced take was generated for the old interval and the render
+      // refuses it as re-timed, so the selection is cleared (the take stays a
+      // candidate) and "Generate missing" fills it. A cutaway clip still starts
+      // where the first piece does, so it stays selected and is trimmed.
+      return isPerformanceScene(scene)
+        ? { ...scene, ...timing, takes, videoHistoryId: null }
+        : { ...scene, ...timing, takes };
+    }
     const fresh = buildScene({
       ...parseSceneOrThrow(musicVideoSceneCreateSchema, {
         sectionLabel: scene.sectionLabel ?? null,
