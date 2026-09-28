@@ -1249,6 +1249,13 @@ async function runJob(job) {
         cancelRequested: job.params?.remoteMedia?.cancelRequested === true,
       };
     }
+    // Remote recovery must still reach its adapter to cancel an existing render.
+    // Local cancellation before dispatch owns no provider process to stop.
+    if (job.cancelRequested && !isRemoteMediaJob(job)) {
+      throw new Error('Canceled before provider dispatch');
+    }
+    // Transient, like terminating: no await between this flag and invocation.
+    job.providerInvoked = true;
     if (job.kind === 'video' && safeParams.chunks > 1) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
@@ -1486,7 +1493,8 @@ export async function cancelJob(jobId) {
       // cancellation rather than silently resurrecting the remote render.
       await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
     }
-    if (mod?.cancel && mod.cancel(jobId) === false) {
+    if (mod?.cancel && mod.cancel(jobId) === false
+      && (runningJob.providerInvoked || isRemoteMediaJob(runningJob))) {
       // A provider may have crossed its durable finalization boundary before
       // its completed event reaches the queue. Refusal must not turn a later
       // finalization failure into a cancellation or leave retry markers set.
