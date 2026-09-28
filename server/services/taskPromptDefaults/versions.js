@@ -99,7 +99,7 @@ export const PROMPT_VERSIONS = {
 // slashdo /do:next skill — its next/issue-<num> branch and sibling worktree convention
 // differ from this flow's claim/issue-<num>, which is what made a /do:next-created PR
 // invisible to the watchdog's live-claim check (#8161; server/lib/planIds.js).
-PROMPT_VERSIONS['claim-issue'] = 35;
+PROMPT_VERSIONS['claim-issue'] = 36;
 PROMPT_VERSIONS['claim-issue-gitlab'] = 31;
 PROMPT_VERSIONS['claim-issue-jira'] = 20;
 

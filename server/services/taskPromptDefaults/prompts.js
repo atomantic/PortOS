@@ -2793,6 +2793,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
+# Link node_modules from the primary checkout so tests can run immediately:
+node {repoRoot}/scripts/link-worktree-deps.js "\${WORKTREE}"
 # Cross-machine claim markers (best-effort — do not abort the run if these fail):
 gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
 gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
