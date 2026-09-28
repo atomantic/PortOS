@@ -396,9 +396,13 @@ async function applyHarnessCatalog(runtime, models, targets) {
  * would also spawn an unrelated record's bootstrap CLI, minting a credential
  * nobody asked for. The Harnesses page button omits it and refreshes them all.
  *
+ * `probeOnly` lists without writing any provider record. A caller already holding
+ * the provider-graph queue (`refreshServiceCatalog`) must use it: every record
+ * write awaits a graph reconcile that queues behind that caller and never returns.
+ *
  * @returns {Promise<{ok:boolean, reason?:string, models:string[], updated:string[]}>}
  */
-export async function refreshHarnessModels(id, { run = commandOutput, providerId = null, listModels, ...probeDeps } = {}) {
+export async function refreshHarnessModels(id, { run = commandOutput, providerId = null, listModels, probeOnly = false, ...probeDeps } = {}) {
   const runtime = getProviderRuntime(id);
   if (!runtime) return { ok: false, reason: 'Unknown harness.', models: [], updated: [] };
   // `listModels` is the alternative to `modelsArgs` for a harness whose
@@ -505,7 +509,7 @@ export async function refreshHarnessModels(id, { run = commandOutput, providerId
       continue;
     }
     for (const model of listed) seen.add(model);
-    updated.push(...await applyHarnessCatalog(runtime, listed, group.targets));
+    if (!probeOnly) updated.push(...await applyHarnessCatalog(runtime, listed, group.targets));
   }
 
   // `reason` rides along on a PARTIAL success too: with one bucket probed per
