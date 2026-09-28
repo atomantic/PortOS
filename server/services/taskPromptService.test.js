@@ -5,7 +5,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 // touching persisted schedule state. getTaskInterval is the only taskSchedule
 // export taskPromptService imports.
 vi.mock('./taskSchedule.js', () => ({
-  getTaskInterval: vi.fn(async () => ({ prompt: 'before {worktreesRoot}/claim-x after' })),
+  getTaskInterval: vi.fn(async () => ({ prompt: 'before {worktreesRoot}/claim-x after {portosRoot}/scripts' })),
 }));
 
 // Stand-in slashdo bodies. Every one carries the `$`-prefixed tokens that
@@ -30,8 +30,8 @@ import { getTaskInterval } from './taskSchedule.js';
 import { loadSlashdoFile, loadSlashdoLib } from '../lib/slashdoLoader.js';
 import { PATHS } from '../lib/fileUtils.js';
 
-describe('taskPromptService {worktreesRoot} substitution', () => {
-  it('resolves {worktreesRoot} to PATHS.worktrees (PortOS shared dir), leaving no literal placeholder', async () => {
+describe('taskPromptService {worktreesRoot} / {portosRoot} substitution', () => {
+  it('resolves {worktreesRoot} to PATHS.worktrees and {portosRoot} to the PortOS install root, leaving no literal placeholder', async () => {
     // PATHS.worktrees is PortOS's own shared worktrees dir — an absolute path
     // ending in data/cos/worktrees — NOT a repo-relative one.
     // Accept either separator: PATHS.worktrees is composed with path.join, so
@@ -39,8 +39,8 @@ describe('taskPromptService {worktreesRoot} substitution', () => {
     expect(PATHS.worktrees).toMatch(/[\\/]data[\\/]cos[\\/]worktrees$/);
 
     const out = await getTaskPrompt('claim-issue');
-    expect(out).toBe(`before ${PATHS.worktrees}/claim-x after`);
-    expect(out).not.toContain('{worktreesRoot}');
+    expect(out).toBe(`before ${PATHS.worktrees}/claim-x after ${PATHS.installRoot}/scripts`);
+    expect(out).not.toMatch(/\{worktreesRoot\}|\{portosRoot\}/);
   });
 });
 
@@ -117,7 +117,8 @@ describe('claim-flow prompt variants', () => {
     expect(scheduled).not.toContain('## Phase 6 — Review locally');
     expect(scheduled).toContain('gh pr checks <num> --required --watch --fail-fast');
     const expectedManual = DEFAULT_TASK_PROMPTS['plan-task-claim']
-      .replace(/\{worktreesRoot\}/g, PATHS.worktrees);
+      .replace(/\{worktreesRoot\}/g, PATHS.worktrees)
+      .replace(/\{portosRoot\}/g, PATHS.installRoot);
     expect(manual).toBe(expectedManual);
     expect(manual).toContain('## Phase 6 — Review locally');
     expect(manual).toContain('{reviewers}');

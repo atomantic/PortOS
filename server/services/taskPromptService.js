@@ -126,6 +126,12 @@ async function resolvePromptPlaceholders(prompt) {
   if (prompt.includes('{worktreesRoot}')) {
     prompt = prompt.replace(/\{worktreesRoot\}/g, () => PATHS.worktrees);
   }
+  // {portosRoot} → the PortOS install root, where the claim flows find
+  // scripts/link-worktree-deps.js (#9052). Distinct from {repoPath}, which is
+  // the managed app's own checkout and has no such script.
+  if (prompt.includes('{portosRoot}')) {
+    prompt = prompt.replace(/\{portosRoot\}/g, () => PATHS.installRoot);
+  }
   if (prompt.includes('{reviewChecklist}')) {
     const checklist = await loadSlashdoCommandBody('review').catch(() => '');
     prompt = prompt.replace(/\{reviewChecklist\}/g, () => checklist);
