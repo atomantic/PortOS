@@ -474,6 +474,24 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'test-quality finding(s)',
     }),
   },
+  // The host the code is developed on. Every lens above reads source or runs
+  // the product; none measures what running the test suite, dev server, or
+  // setup does to the developer's machine — the gap that let test suites leak
+  // tens of thousands of temp directories unnoticed (#9000). Ungated: any
+  // repository has a development loop.
+  'better-dev-environment': {
+    quotaBurnId: null,
+    label: 'Development environment',
+    description: 'Dev-loop host-impact audit (leaked temp files and processes, writes outside the sandbox, watcher and idle cost, suite runtime, setup drift) — configurable: file issues (default) or implement one fix',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'dev-environment-',
+      label: 'dev-environment-audit',
+      issueLabel: 'tests',
+      labelDescription: 'Proposed from a development-environment audit',
+      noun: 'dev-environment finding(s)',
+    }),
+  },
   // Service and data-platform lenses. The catalog above grew out of a web app
   // with a UI; these cover what a backend service, data platform, or
   // infrastructure repository is judged on and nothing above owns: the
@@ -746,7 +764,7 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency'],
   'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
-  tests: ['test-coverage', 'better-test-quality'],
+  tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
   ux: ['ux', 'mobile-responsive', 'copy'],
   structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
@@ -799,6 +817,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   // the findings the triage surfaced.
   'test-coverage': Object.freeze(['code-quality']),
   'better-test-quality': Object.freeze(['test-coverage']),
+  'better-dev-environment': Object.freeze(['better-test-quality']),
   // The restructuring ladder: consolidate sources of truth, delete what is
   // dead, then draw module boundaries, then reduce what survives.
   simplify: Object.freeze(['better-structural-drift']),
@@ -823,6 +842,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
 // Urgent bugs outrank the sequence; re-measure after each merged change.
 export const AUDIT_RUN_GUIDANCE = Object.freeze({
   'better-test-quality': 'Assesses whether the tests you have detect the regressions the other audits found — so refactors that follow have a safety net.',
+  'better-dev-environment': 'Follows test quality, so it measures the host impact of the suite that will keep running rather than tests about to be deleted.',
   'test-coverage': 'Adds the missing boundary coverage a refactor needs before it starts; avoid duplicating assertions a stronger test already makes.',
   security: 'Head of the order — an exploitable defect is fixed before any cleanup, whatever else is queued.',
   'data-safety': 'Head of the order — data-loss and upgrade hazards are fixed before code moves around them.',

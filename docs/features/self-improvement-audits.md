@@ -52,10 +52,11 @@ the operator's live checkout.
 | `better-runtime-safety` | Latent defects not yet triggered | `bug`, `runtime-safety` | file | |
 | `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
+| `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
 
 ## Why the boundaries are explicit
 
-Twenty-five lanes only pay off if they do not file each other's findings. Every
+Twenty-six lanes only pay off if they do not file each other's findings. Every
 mission body names what it cedes and to whom, so two lanes cannot both claim one
 problem:
 
@@ -73,8 +74,14 @@ problem:
   `error-handling` owns the failure path once something goes wrong; and
   `ui-lifecycle` owns UI lifecycle and state correctness across UI runtimes.
   Its checks follow the target app’s own semantics.
-- **Tests are split two ways.** `test-coverage` owns the gaps;
-  `better-test-quality` owns the tests that already exist.
+- **Tests are split three ways.** `test-coverage` owns the gaps;
+  `better-test-quality` owns whether the tests that exist prove anything; and
+  `better-dev-environment` owns what running them does to the host — temp
+  files and processes left behind, writes outside the sandbox, watcher cost,
+  suite runtime. It measures host state before and after a bounded run,
+  because a static read of one suite cannot see accumulation: every suite
+  leaking one temp directory per run passed both other lanes while filling a
+  dev machine's temp directory with tens of thousands of entries (#9000).
 
 ## The `better-` prefix and slashdo scope alignment
 

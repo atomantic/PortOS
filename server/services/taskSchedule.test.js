@@ -1902,6 +1902,7 @@ describe('taskSchedule', () => {
         'better-runtime-safety',
         'better-dependency-freedom',
         'better-test-quality',
+        'better-dev-environment',
       ])
     })
 
