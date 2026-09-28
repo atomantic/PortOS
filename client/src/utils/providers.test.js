@@ -1355,7 +1355,7 @@ describe('supportsModelRefresh', () => {
     // Intentional shipped-catalog contract: a newly seeded provider must either
     // have a usable fetcher or stay out of this list.
     expect(withButton).toEqual([
-      'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
+      'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code', 'claude-code-tui',
       // #8034: claude-code-bedrock stays off this list. Its command is `claude`,
       // but the cached catalog is first-party ids, so a refresh would overwrite
       // the Bedrock catalog and strand defaultModel. The card keeps the stored list.
