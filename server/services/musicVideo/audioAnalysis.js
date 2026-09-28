@@ -737,7 +737,7 @@ function pickBandOnsets(fluxSeries, hopSec) {
  * @param {number} sampleRate
  * @param {{ truncatedAtSec?: number|null }} [opts] set when the decode was cut short
  */
-export function computeSongFeatures(samples, sampleRate, { truncatedAtSec = null } = {}) {
+function computeSongFeatures(samples, sampleRate, { truncatedAtSec = null } = {}) {
   if (!samples || samples.length < FFT_SIZE) return null;
   const envHop = Math.round(sampleRate / FEATURE_ENVELOPE_FPS);
   const env = bandFrames(samples, sampleRate, envHop);

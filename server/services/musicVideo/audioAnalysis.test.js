@@ -4,7 +4,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   analyzePcm,
-  computeSongFeatures,
   ANALYSIS_VERSION,
   analyzeAudioFile,
   decodeAudioToPcm,
@@ -547,7 +546,7 @@ describe('snapSectionsToGrid', () => {
   });
 });
 
-describe('computeSongFeatures / analyzePcm feature track (#9073)', () => {
+describe('analyzePcm feature track (#9073)', () => {
   const SR = ANALYSIS_SAMPLE_RATE;
   const HOP_SEC = 1 / 30;
 
@@ -614,8 +613,9 @@ describe('computeSongFeatures / analyzePcm feature track (#9073)', () => {
 
   it('reports null features (never empty arrays) for audio too short to analyse, and zeros for silence', () => {
     expect(analyzePcm(new Float32Array(100), SR).features).toBeNull();
-    expect(computeSongFeatures(new Float32Array(SR), SR).envelopes.low.every((v) => v === 0)).toBe(true);
-    expect(computeSongFeatures(new Float32Array(SR), SR).onsets.low).toEqual([]);
+    const silent = analyzePcm(new Float32Array(SR), SR).features;
+    expect(silent.envelopes.low.every((v) => v === 0)).toBe(true);
+    expect(silent.onsets.low).toEqual([]);
   });
 
   it('carries a prior feature track (or its absence) through a manual tempo override', () => {
