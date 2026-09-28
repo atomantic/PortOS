@@ -36,7 +36,7 @@ import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject } from './projects.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { renderableCues } from './composition.js';
+import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
@@ -424,19 +424,6 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     outputPath,
   ];
   return { args, totalDuration, canonW, canonH, fps, sections };
-}
-
-// A title card's text (#8985) is drawn by the typography layer for exactly
-// its section on the output timebase, clipped to the rendered video.
-export function sectionCardCues(clips, sections, durationSec) {
-  const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText).map((c) => [c.sceneId, c.cardText]));
-  return sections
-    .filter((section) => textBySceneId.has(section.sceneId) && section.startSec < durationSec)
-    .map((section) => ({
-      id: `card-${section.sceneId}`, text: textBySceneId.get(section.sceneId),
-      startSec: section.startSec, endSec: Math.min(section.endSec, durationSec),
-      template: 'fade', placement: 'center', emphasis: 'hero',
-    }));
 }
 
 export async function renderMusicVideo(projectId) {

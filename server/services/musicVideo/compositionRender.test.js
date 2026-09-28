@@ -8,8 +8,8 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
-import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips, sectionCardCues } from './render.js';
-import { renderableCues } from './composition.js';
+import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
+import { renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
 
 let endpoint;
