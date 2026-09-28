@@ -1,5 +1,5 @@
 /** Real clean-dump restore regressions. Only guarded test databases. */
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -68,11 +68,22 @@ async function restore(dryRun = false, snapshotId = 'old-schema') {
 }
 
 describe.skipIf(!ready)('restore older database schema', () => {
-  it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
+  let appliedBefore;
+  let feedBefore;
+  const folder = { id: folderId, name: 'Recovered folder' };
+
+  // A timed-out test keeps running. Gate every following case before it can
+  // query the shared database; a failed drain hook skips that case's body.
+  beforeEach(async () => {
+    await Promise.all([...pendingRestores]);
+  });
+
+  // Prepare the shared snapshot in a hook so setup failures stop dependent
+  // cases and the first test's budget measures restore and its assertions.
+  beforeAll(async () => {
     await ensureSchema({ force: true });
     await runDbMigrations();
-    const appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
-    const folder = { id: folderId, name: 'Recovered folder' };
+    appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
     await query('INSERT INTO writers_room_folders (id, name, data) VALUES ($1, $2, $3)', [folderId, folder.name, folder]);
     await query("INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, 'restore-schema-series', $2)", [
       issueId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
@@ -101,7 +112,10 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await query("INSERT INTO app_quality_measurements VALUES ('restore-probe', 'test', 'agent', NOW(), '{}')");
     // Feed positions handed out after the dump must never be reissued (#8710).
     await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 5)");
-    const feedBefore = await feedSequenceValues();
+    feedBefore = await feedSequenceValues();
+  });
+
+  it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
     expect(await restore()).toMatchObject({ status: 'ok', dryRun: false });
     expect(rewindPostgresSyncCursors).toHaveBeenCalledOnce();
     const feedAfter = await feedSequenceValues();
