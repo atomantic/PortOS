@@ -74,9 +74,12 @@ export default function TreatmentPanel({ project, treatment: api }) {
 
   const addNote = () => {
     if (notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid) return;
-    saveNotes([...notes, { note: noteText.trim(), url: noteUrl.trim() || null }]);
-    setNoteText('');
-    setNoteUrl('');
+    // Keep the typed note until the save lands, so a failed save loses nothing.
+    saveNotes([...notes, { note: noteText.trim(), url: noteUrl.trim() || null }]).then((saved) => {
+      if (!saved) return;
+      setNoteText('');
+      setNoteUrl('');
+    });
   };
 
   return (
