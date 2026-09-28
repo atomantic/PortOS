@@ -26,6 +26,7 @@ import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
 import useMusicVideoTakes from '../hooks/useMusicVideoTakes.js';
+import useMusicVideoTreatment from '../hooks/useMusicVideoTreatment.js';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
@@ -43,6 +44,7 @@ import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
 import TypographyPanel from '../components/musicVideo/TypographyPanel.jsx';
 import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
+import TreatmentPanel from '../components/musicVideo/TreatmentPanel.jsx';
 import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
 import ContactSheetDrawer from '../components/musicVideo/ContactSheetDrawer.jsx';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker.jsx';
@@ -121,6 +123,9 @@ export default function MusicVideo() {
     applyScenePatch: patchScene,
   });
   const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene });
+  // Pre-production treatment (#8980): brief, compiled arc, shot direction,
+  // proof checklist and the non-destructive Apply review.
+  const treatment = useMusicVideoTreatment({ project: selected, onProjectPatch: patchProject, replaceProject });
   // The one gallery picker on the page, aimed at either the visual spec's
   // references or one scene's frame takes. Cleared on a project switch so a
   // picker opened for one project can never write into another.
@@ -650,6 +655,7 @@ export default function MusicVideo() {
                 onSave={saveVisualSpec}
                 onAddReference={() => setPickerTarget({ type: 'reference' })}
               />
+              <TreatmentPanel key={`treatment-${selected.id}`} project={selected} treatment={treatment} />
               <HandoffControls
                 projectId={selected.id}
                 busy={takes.busy}

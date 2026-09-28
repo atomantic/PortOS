@@ -39,7 +39,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', now }) {
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -51,6 +51,8 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     sourceImageId: clip(sourceImageId, 256),
     originalName: takeOriginalName(originalName),
     status: 'candidate',
+    // #8980 — 'motion-reference' scaffolding never fills the slot on its own.
+    use: use === 'motion-reference' ? 'motion-reference' : 'final',
     note: null,
     createdAt: now,
     // #8977: the immutable record of what a performance take was generated
@@ -112,8 +114,10 @@ function replaceScene(project, idx, scene) {
  * present as a take of that kind is not duplicated (a replayed job completion
  * or a re-import is a no-op for the list). A slot is filled only while it is
  * empty, by the first appended take of that kind; an existing selection is
- * never replaced. Returns `{ scene, appended }` — `appended` lists the take
- * for every input, whether newly created or already present.
+ * never replaced, and a motion-reference take (#8980) never fills a slot — it
+ * becomes final picture only by an explicit select. Returns
+ * `{ scene, appended }` — `appended` lists the take for every input, whether
+ * newly created or already present.
  */
 function appendToScene(scene, inputs, now) {
   let takes = ensureSceneTakes(scene, now);
@@ -125,7 +129,7 @@ function appendToScene(scene, inputs, now) {
     if (!existing) takes = [...takes, take];
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    if (!isNonBlankStr(next[field]) && take.status !== 'rejected') next[field] = take.assetId;
+    if (!isNonBlankStr(next[field]) && take.status !== 'rejected' && take.use !== 'motion-reference') next[field] = take.assetId;
   }
   next.takes = pruneTakes(takes, next);
   return { scene: next, appended };

@@ -126,3 +126,29 @@ export const musicVideoRenderEventsUrl = (jobId) =>
 
 export const cancelMusicVideoRender = (jobId, options = {}) =>
   request(`/music-video/render/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
+
+// ---- Pre-production treatment (#8980) ----
+// A structured brief, a compiled whole-song arc, per-shot direction keyed to the
+// board's scene ids and a proof checklist. Every write names the treatment
+// revision it was made against; a stale one is a 409 (`TREATMENT_REVISION_CONFLICT`).
+export const getMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, options);
+// Body: { baseRevision, brief?, beats?, motifs?, shotDirections?, rebase? } → { project, treatment }.
+export const updateMusicVideoTreatment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment`, {
+  method: 'PATCH', body: JSON.stringify(body), ...options,
+});
+// Explicit user action. Body: { baseRevision, useAi?, providerId?, model? }
+// → { project, treatment, aiUsed, aiSkippedReason }.
+export const compileMusicVideoTreatment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/compile`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// Read-only → { revision, stale, blocked, scenes, missingSceneIds, unmappedSceneIds, textCueCandidates }.
+export const previewMusicVideoTreatmentApply = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply-preview`, options);
+// Body: { revision, overwrite?: [{ sceneId, promptFingerprint }], addTextCues? } → { project, result }.
+export const applyMusicVideoTreatment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// Body: { baseRevision, status, evidence?: { videoHistoryId?, imageId?, note } } → { project, treatment }.
+export const reviewMusicVideoTreatmentProof = (id, proofId, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/treatment/proofs/${encodeURIComponent(proofId)}/review`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });

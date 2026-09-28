@@ -97,6 +97,17 @@ async function mutateLocked(id, transform) {
   return result;
 }
 
+// Generic pure-transform mutation under the row lock (#8980 treatment ops):
+// `transform(project)` returns `{ project, ...result }`; resolves to that
+// outcome with `project` replaced by the persisted record.
+export async function mutateProjectRecord(id, transform) {
+  const { project, result } = await withLockedProject(id, (current) => {
+    const outcome = transform(current);
+    return { project: outcome.project, result: outcome };
+  });
+  return { ...result, project };
+}
+
 export async function appendSceneTakes(id, sceneId, inputs) {
   const { scene, appended } = await mutateLocked(id, (p) => takes.appendSceneTakes(p, sceneId, inputs));
   return { scene, appended };

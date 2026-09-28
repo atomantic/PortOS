@@ -74,11 +74,15 @@ export function visualDirection(spec) {
   ].filter(Boolean).join('; ');
 }
 
-function composePrompt(primary, fallback, project) {
+// `clause` is the scene's applied treatment direction (#8980) — the composition
+// constraints for a frame or a motion prompt. Same order as the client's
+// buildFramePrompt/buildShotPrompt.
+function composePrompt(primary, fallback, project, clause) {
   return [
     primary?.trim() || fallback?.trim() || '',
     project.concept?.style?.trim() || '',
     visualDirection(project.visualSpec),
+    clause?.trim() || '',
   ].filter(Boolean).join(', ');
 }
 
@@ -91,6 +95,7 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
     label: ref.label,
     note: ref.note,
     condition: ref.condition === true,
+    use: ref.use || 'reference',
     filename: ref.imageId,
     url: `/data/images/${encodeURIComponent(ref.imageId)}`,
   }));
@@ -117,8 +122,8 @@ export function buildHandoffManifest(project, { now = new Date().toISOString() }
       endSec: scene.endSec ?? null,
       lyricText: scene.lyricText || '',
       visualIntent: scene.visualIntent || '',
-      framePrompt: composePrompt(scene.framePrompt, scene.prompt, project),
-      shotPrompt: composePrompt(scene.prompt, scene.framePrompt, project),
+      framePrompt: composePrompt(scene.framePrompt, scene.prompt, project, scene.direction?.frameClause),
+      shotPrompt: composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause),
       referenceFiles: conditioning,
       selected: {
         referenceImageId: scene.referenceImageId || null,

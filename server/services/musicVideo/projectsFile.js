@@ -142,3 +142,6 @@ export const appendSceneTakes = serialized(appendSceneTakesUnqueued);
 export const appendTakesAcrossScenes = serialized(appendTakesAcrossScenesUnqueued);
 export const selectSceneTake = serialized(selectSceneTakeUnqueued);
 export const reviewSceneTake = serialized(reviewSceneTakeUnqueued);
+// Generic pure-transform mutation (#8980 treatment ops): `transform(project)`
+// returns `{ project, ...result }`; resolves to that outcome.
+export const mutateProjectRecord = serialized(mutateProject);

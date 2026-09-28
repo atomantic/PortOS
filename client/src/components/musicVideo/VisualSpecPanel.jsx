@@ -11,6 +11,9 @@ const ROLES = [
   ['mood', 'Mood'], ['character', 'Character'], ['wardrobe', 'Wardrobe'],
   ['set', 'Set'], ['prop', 'Prop'], ['style', 'Style'],
 ];
+// How the asset is meant to be used (#8980): a look reference, media that
+// appears in the final video as-is, or motion-reference scaffolding only.
+const USES = [['reference', 'Look reference'], ['final-visible', 'Final visible'], ['motion-reference', 'Motion reference only']];
 const MAX_PALETTE = 12;
 const MAX_REFERENCES = 24;
 
@@ -122,6 +125,12 @@ export default function VisualSpecPanel({ project, onSave, onAddReference }) {
                       <Trash2 size={12} />
                     </button>
                   </div>
+                  <label htmlFor={idFor(`use-${ref.id}`)} className="sr-only">Reference use</label>
+                  <select id={idFor(`use-${ref.id}`)} value={ref.use || 'reference'}
+                    onChange={(e) => updateRef(ref.id, { use: e.target.value })}
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px]">
+                    {USES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
                   <label htmlFor={idFor(`label-${ref.id}`)} className="sr-only">Reference label</label>
                   <input id={idFor(`label-${ref.id}`)} defaultValue={ref.label || ''} maxLength={120}
                     placeholder="Label (e.g. lead singer)"

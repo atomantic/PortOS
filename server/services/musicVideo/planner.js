@@ -40,7 +40,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
-import { planShots, resolveClipCapacitySec } from './shotPlan.js';
+import { planShots, resolveClipCapacitySec, validSections } from './shotPlan.js';
 import { getProject, addProjectScenes } from './projects.js';
 
 const SCENE_LABEL_MAX = 120;
@@ -54,26 +54,9 @@ const PROMPT_LYRIC_MAX = 240;
 // first-pass prompt text.
 const MAX_SHOTS_FOR_PROMPTS = 120;
 
-// Mirrors musicVideoSceneCreateSchema's startSec/endSec bounds (musicVideoValidation.js)
-// so a section just outside the downstream scene schema's range is dropped
-// here rather than failing addScenes' atomic batch validation and aborting
-// the whole plan request over one bad section.
-const MAX_SECTION_SEC = 36000;
-
-/**
- * Keep only sections with a valid forward-time span within the bounds the
- * downstream scene schema accepts. Defensive against a malformed/legacy
- * cached analysis — `musicVideoAudioAnalysisSchema` doesn't enforce these
- * per-section invariants the way `musicVideoSceneCreateSchema` does. Shared
- * by the scene-input builder and the LLM prompt builder so their array
- * indices always agree.
- */
-export function validSections(sections) {
-  return (Array.isArray(sections) ? sections : [])
-    .filter((s) => s
-      && typeof s.startSec === 'number' && s.startSec >= 0
-      && typeof s.endSec === 'number' && s.endSec > s.startSec && s.endSec <= MAX_SECTION_SEC);
-}
+// `validSections` moved to shotPlan.js (#8980) so the treatment compiler can
+// share it without importing the provider-calling planner; re-exported here.
+export { validSections };
 
 /**
  * Pure: turn the shot plan into scene-create inputs, in timeline order. Each
@@ -115,6 +98,16 @@ export function buildScenePlanPrompt(project, shots) {
   const concept = project.concept || {};
   const conceptLine = concept.prompt ? `Concept: ${concept.prompt}` : '';
   const styleLine = concept.style ? `Visual style: ${concept.style}` : '';
+  // #8980: the treatment brief (when the director wrote one) steers the
+  // first-pass prompts toward the intended audience, emotion and hook.
+  const brief = project.treatment?.brief || {};
+  const briefLines = [
+    brief.audience && `Audience: ${quote(brief.audience, PROMPT_LYRIC_MAX)}`,
+    brief.emotion && `Desired emotion: ${quote(brief.emotion, PROMPT_LYRIC_MAX)}`,
+    brief.premise && `Premise: ${quote(brief.premise, PROMPT_LYRIC_MAX)}`,
+    brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective, PROMPT_LYRIC_MAX)}`,
+    brief.avoid && `Avoid: ${quote(brief.avoid, PROMPT_LYRIC_MAX)}`,
+  ].filter(Boolean).join('\n');
   const hasLyrics = shots.some((s) => s.lyricText);
   const shotLines = shots.map((s, i) => {
     const duration = (s.endSec - s.startSec).toFixed(1);
@@ -130,6 +123,7 @@ export function buildScenePlanPrompt(project, shots) {
   return `You are directing a music video for "${project.name}".
 ${conceptLine}
 ${styleLine}
+${briefLines}
 
 The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):
 ${shotLines}

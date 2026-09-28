@@ -65,6 +65,7 @@ export { default as useMusicVideoModelSettings } from './useMusicVideoModelSetti
 export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';
 export { default as useMusicVideoTakes } from './useMusicVideoTakes.js';
+export { default as useMusicVideoTreatment } from './useMusicVideoTreatment.js';
 export { default as useMusicVideoYoutubeImport } from './useMusicVideoYoutubeImport.js';
 export { default as useBeeperOutbox } from './useBeeperOutbox.js';
 export { default as useBeeperRealtime } from './useBeeperRealtime.js';

@@ -104,13 +104,17 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // The image prompt for a scene's reference frame: its frame prompt (or the
   // shot prompt as a fallback) suffixed with the project's global concept style
   // and the visual spec's palette/camera/typography direction.
+  // An applied treatment (#8980) adds the scene's composition constraints last:
+  // focal subject, framing, the region reserved for the composited typography,
+  // and no lettering in the generated pixels. Same order as the server's
+  // handoff manifest (handoff.js composePrompt).
   const buildFramePrompt = (scene) =>
-    [(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction].filter(Boolean).join(', ');
+    [(scene.framePrompt?.trim() || scene.prompt?.trim() || ''), style, direction, scene.direction?.frameClause?.trim()].filter(Boolean).join(', ');
   // The i2v prompt for a scene's clip: its shot prompt (or the frame prompt as a
   // fallback) suffixed the same way. The reference frame already fixes the
   // look; this prompt guides the motion.
   const buildShotPrompt = (scene) =>
-    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, direction].filter(Boolean).join(', ');
+    [(scene.prompt?.trim() || scene.framePrompt?.trim() || ''), style, direction, scene.direction?.motionClause?.trim()].filter(Boolean).join(', ');
 
   /**
    * Render a still reference frame for one scene from its frame prompt. The
