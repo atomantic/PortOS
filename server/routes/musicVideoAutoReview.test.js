@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { promisify } from 'util';
 import { request } from '../lib/testHelper.js';
@@ -343,4 +343,35 @@ describe('opt-in automatic review/retries (#8988)', () => {
     expect(review.checks.motion).toBe('fail');
     expect(review.findings).toEqual([expect.objectContaining({ atSec: 6, check: 'motion', source: 'analysis' })]);
   });
+});
+
+
+it('cloning an active draft cannot give recovery ownership of the source render', async () => {
+  const { startExcerptRender, recoverStuckMusicVideoExcerpts } = await import('../services/musicVideo/excerptRender.js');
+  const p = await project();
+  await startExcerptRender(p.id, { startSec: 5, endSec: 25 });
+  await finishDraft(p.id, 1);
+  const completed = (await projects.getProject(p.id)).excerpts[0];
+
+  await startExcerptRender(p.id, { startSec: 5, endSec: 25 });
+  const proc = h.procs[1];
+  const outputPath = proc.args[proc.args.length - 1];
+  writeFileSync(outputPath, 'partial-mp4');
+  try {
+    const response = await request(app).post(`${base(p.id)}/clone`).send({});
+    expect(response.status).toBe(201);
+    await recoverStuckMusicVideoExcerpts();
+    // The source still owns the running encoder; recovery on its clone must
+    // never remove the output that encoder is writing.
+    expect(existsSync(outputPath)).toBe(true);
+    const cloned = await projects.getProject(response.body.id);
+    expect(cloned.excerpts).toHaveLength(1);
+    expect(cloned.excerpts[0]).toMatchObject({
+      id: completed.id, status: 'complete', filename: completed.filename,
+      contactSheetFilename: completed.contactSheetFilename, notes: completed.notes,
+    });
+    expect((await projects.getProject(p.id)).excerpts[1].status).toBe('rendering');
+  } finally {
+    await finishDraft(p.id, 2);
+  }
 });

@@ -206,7 +206,9 @@ export function cloneProjectRecord(source, {
     // #8987 — a draft's section map follows the scenes to their new ids, so a
     // clone can still revise from the review notes it carried over (#8986).
     ...(Array.isArray(source.excerpts) ? {
-      excerpts: source.excerpts.map((excerpt) => (Array.isArray(excerpt?.sections)
+      // A running encoder belongs only to the source project. Copying its
+      // partial-file ownership would let clone recovery delete that output.
+      excerpts: source.excerpts.filter((excerpt) => excerpt?.status !== 'rendering').map((excerpt) => (Array.isArray(excerpt?.sections)
         ? { ...excerpt, sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
         : excerpt)),
     } : {}),
