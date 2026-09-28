@@ -14,7 +14,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, readdir, rm, stat } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
@@ -26,6 +26,20 @@ export const EXPORT_FRAME_SIZES = Object.freeze(['1920x1080', '1080x1920', '1080
 // The composition renderer's duration cap; longer films export their first 120s.
 export const EXPORT_MAX_DURATION_SEC = 120;
 export const EXPORT_DIRECTORY_ROOT = 'code-animation-exports';
+// A staged export older than this has long since been snapshotted by its render.
+const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
+
+// Remove this animation's earlier stagings, keeping any a queued render may
+// not have snapshotted yet.
+async function sweepStaleStagings(parent) {
+  const entries = await readdir(parent).catch(() => []);
+  const cutoff = Date.now() - STALE_STAGING_MS;
+  for (const name of entries) {
+    const path = join(parent, name);
+    const info = await stat(path).catch(() => null);
+    if (info && info.mtimeMs < cutoff) await rm(path, { recursive: true, force: true });
+  }
+}
 
 const scriptLiteral = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 
@@ -125,6 +139,7 @@ export async function startCodeAnimationExport(id, deps = {}) {
   // only when it starts, so a later export must never rewrite an earlier one's.
   const directory = `${EXPORT_DIRECTORY_ROOT}/${id}/${randomUUID()}`;
   const dir = join(PATHS.data, directory);
+  await sweepStaleStagings(join(PATHS.data, EXPORT_DIRECTORY_ROOT, id));
   await mkdir(dir, { recursive: true });
   await atomicWrite(join(dir, 'index.html'), injectExportShim(html, buildExportShim({ song })));
   const queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });
