@@ -32,6 +32,7 @@ import {
   syncMoodBoardPinterest,
   importMoodBoardPinterest,
   importMoodBoardXPost,
+  localizeMoodBoardMedia,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
 import { moodBoardAnalysisFromResult } from '../lib/moodBoardAnalysis';
@@ -101,6 +102,18 @@ function MoodBoardEditor({ id }) {
       setName(data.name || '');
       setDescription(data.description || '');
       setPinUrl(data.pinterest?.boardUrl || '');
+      // Boards never serve remote URLs: re-host any external pins in the
+      // background, then swap the localized board in.
+      if ((data.items || []).some((it) => /^https?:\/\//i.test(it?.imageUrl || ''))) {
+        localizeMoodBoardMedia(id, { silent: true }).then((res) => {
+          if (!mountedRef.current || seq !== loadSeqRef.current || !res?.board) return;
+          if (res.localized > 0) {
+            setBoard(res.board);
+            toast.success(`Imported ${res.localized} external image${res.localized === 1 ? '' : 's'} into the gallery`);
+          }
+          if (res.failed > 0) toast.error(`${res.failed} external image${res.failed === 1 ? '' : 's'} could not be downloaded`);
+        }).catch(() => {});
+      }
     } else {
       setBoard(null);
       toast.error('Mood board not found');
@@ -370,7 +383,7 @@ function MoodBoardEditor({ id }) {
   );
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
+    <div className="max-w-7xl mx-auto space-y-4">
       <button
         type="button"
         onClick={() => navigate('/mood-boards')}
@@ -379,10 +392,10 @@ function MoodBoardEditor({ id }) {
         <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Boards
       </button>
 
-      {/* Board metadata */}
-      <div className="bg-port-card border border-port-border rounded-md p-4">
-        <div className="space-y-3">
-          <div>
+      {/* Board metadata — one compact row on desktop */}
+      <div className="bg-port-card border border-port-border rounded-md p-3">
+        <div className="flex flex-col md:flex-row md:items-end gap-3">
+          <div className="md:w-72 shrink-0">
             <label htmlFor="board-name" className="block text-xs text-gray-400 mb-1">Name</label>
             <input
               id="board-name"
@@ -393,27 +406,25 @@ function MoodBoardEditor({ id }) {
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
             />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <label htmlFor="board-description" className="block text-xs text-gray-400 mb-1">Description</label>
             <textarea
               id="board-description"
               value={description}
               maxLength={5000}
-              rows={2}
+              rows={1}
               onChange={(e) => setDescription(e.target.value)}
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
             />
           </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={handleSaveMeta}
-              disabled={!metaDirty || savingMeta}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
-            >
-              <Save className="w-4 h-4" aria-hidden="true" /> Save
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleSaveMeta}
+            disabled={!metaDirty || savingMeta}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+          >
+            <Save className="w-4 h-4" aria-hidden="true" /> Save
+          </button>
         </div>
       </div>
 

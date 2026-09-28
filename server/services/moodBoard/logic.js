@@ -433,3 +433,36 @@ export function appendImportedItems(board, imported) {
   const next = { ...board, items: [...items, ...fresh], updatedAt: nowIso() };
   return { board: next, added: fresh.length };
 }
+
+// ─── Re-hosting external media ───────────────────────────────────────────────
+
+/** True for an http(s) URL — the only `imageUrl` shape that isn't a local asset. */
+export function isExternalImageUrl(url) {
+  return isStr(url) && /^https?:\/\//i.test(url.trim());
+}
+
+/** Media items whose displayed image still points at a remote host. */
+export function externalImageItems(board) {
+  const items = Array.isArray(board?.items) ? board.items : [];
+  return items.filter((it) => it && (it.type === 'image' || it.type === 'video') && isExternalImageUrl(it.imageUrl));
+}
+
+/**
+ * Swap re-hosted images in. Each replacement is `{ id, from, to }`; it only
+ * applies while the item still carries the `from` URL the download was started
+ * for (the fetch runs outside the row lock, so the user may have edited the item
+ * meanwhile). Returns `{ board, changed }`.
+ */
+export function applyLocalizedImageUrls(board, replacements) {
+  const items = Array.isArray(board.items) ? board.items : [];
+  const byId = new Map((replacements || []).map((r) => [r.id, r]));
+  let changed = 0;
+  const nextItems = items.map((it) => {
+    const r = it && byId.get(it.id);
+    if (!r || it.imageUrl !== r.from) return it;
+    changed += 1;
+    return { ...it, imageUrl: r.to };
+  });
+  if (!changed) return { board, changed: 0 };
+  return { board: { ...board, items: nextItems, updatedAt: nowIso() }, changed };
+}

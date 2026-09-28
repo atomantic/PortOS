@@ -240,16 +240,16 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const showCompose = plan.analyzed > 0;
 
   return (
-    <section className="bg-port-card border border-port-border rounded-md p-4 mb-6">
-      <div className="flex items-center gap-2 mb-1">
+    <section className="bg-port-card border border-port-border rounded-md p-3">
+      <div className="flex items-center gap-2 mb-2">
         <ScanEye className="w-4 h-4 text-port-accent" aria-hidden="true" />
         <h2 className="text-sm font-medium text-white">Board style</h2>
+        <span className="text-[11px] text-gray-500 truncate" title="Prompt from media for each gallery item, then one composite style from those prompts. The poster is this board’s canonical reference image.">
+          Analyze pins → composite style → poster
+        </span>
       </div>
-      <p className="text-[11px] text-gray-500 mb-3">
-        Prompt from media for each gallery item, then one composite style from those prompts. The poster is this board’s canonical reference image.
-      </p>
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="w-full sm:w-56 shrink-0">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="w-full sm:w-36 shrink-0">
           <div className="aspect-[3/2] w-full rounded-md overflow-hidden border border-port-border bg-port-bg">
             {jobId ? (
               <MediaJobThumb jobId={jobId} onFilename={handleComplete} size="fill" label="Board poster" />
@@ -263,7 +263,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             )}
           </div>
         </div>
-        <div className="flex-1 min-w-0 space-y-3">
+        <div className="flex-1 min-w-0 space-y-2">
           <ProviderModelSelector
             providers={providers}
             selectedProviderId={selectedProviderId}
@@ -272,7 +272,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
             onProviderChange={setSelectedProviderId}
             onModelChange={setSelectedModel}
             disabled={busy || providersLoading}
-            layout="stacked"
+            layout="row"
           />
           {providers.length === 0 && !providersLoading ? (
             <p className="text-xs text-port-warning">No vision-capable provider is enabled. Add one under Settings → Providers to analyze items. Composing from analyses you already have still works.</p>
@@ -300,37 +300,44 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
               </button>
             ) : null}
             {!showAnalyze && !showCompose ? (
-              <p className="text-xs text-gray-500">Pin a gallery image or video to analyze this board. External links can’t be read.</p>
+              <p className="text-xs text-gray-500">Pin an image or video to analyze this board.</p>
             ) : null}
           </div>
           {plan.skipped > 0 ? (
             <p className="text-[11px] text-gray-500">
-              {formatCount(plan.skipped)} pin{plan.skipped === 1 ? '' : 's'} {plan.skipped === 1 ? 'is' : 'are'} an external link and can’t be analyzed.
+              {formatCount(plan.skipped)} pin{plan.skipped === 1 ? '' : 's'} couldn’t be imported from {plan.skipped === 1 ? 'its' : 'their'} source URL and can’t be analyzed yet.
             </p>
           ) : null}
-          <div>
-            <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
-            <textarea
-              id="board-style-prompt"
-              value={prompt}
-              rows={4}
-              maxLength={8000}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Compose a style from the item analyses, or write one."
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
-            />
-          </div>
-          <div>
-            <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt</label>
-            <textarea
-              id="board-style-negative"
-              value={negative}
-              rows={2}
-              maxLength={8000}
-              onChange={(e) => setNegative(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
-            />
-          </div>
+          <details className="group" open={!savedPrompt}>
+            <summary className="cursor-pointer text-xs text-gray-400 hover:text-white select-none">
+              Style prompt{savedPrompt ? `: ${savedPrompt.slice(0, 90)}${savedPrompt.length > 90 ? '…' : ''}` : ''}
+            </summary>
+            <div className="space-y-2 mt-2">
+              <div>
+                <label htmlFor="board-style-prompt" className="block text-xs text-gray-400 mb-1">Style prompt</label>
+                <textarea
+                  id="board-style-prompt"
+                  value={prompt}
+                  rows={4}
+                  maxLength={8000}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Compose a style from the item analyses, or write one."
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
+                />
+              </div>
+              <div>
+                <label htmlFor="board-style-negative" className="block text-xs text-gray-400 mb-1">Negative prompt</label>
+                <textarea
+                  id="board-style-negative"
+                  value={negative}
+                  rows={2}
+                  maxLength={8000}
+                  onChange={(e) => setNegative(e.target.value)}
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none resize-y"
+                />
+              </div>
+            </div>
+          </details>
           {board?.style?.rationale ? (
             <p className="text-xs text-gray-400">{board.style.rationale}</p>
           ) : null}

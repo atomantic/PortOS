@@ -109,3 +109,8 @@ export const importMoodBoardXPost = (id, url, options) =>
     body: JSON.stringify({ url }),
     ...options,
   });
+
+// Download every external image on the board into the local gallery.
+// Resolves `{ board, localized, failed }`.
+export const localizeMoodBoardMedia = (id, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/localize-media`, { method: 'POST', ...options });

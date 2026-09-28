@@ -21,6 +21,8 @@ import {
   clearPinterestLinkRecord,
   appendPinterestPins,
   appendImportedItems,
+  externalImageItems,
+  applyLocalizedImageUrls,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -491,5 +493,37 @@ describe('appendImportedItems', () => {
     const { added, board: next } = appendImportedItems(board(), []);
     expect(added).toBe(0);
     expect(next.items).toEqual([]);
+  });
+});
+
+describe('re-hosting external media', () => {
+  const mk = () => ({
+    ...buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' }),
+    items: [
+      { id: 'a', type: 'image', imageUrl: 'https://example.com/a.jpg' },
+      { id: 'b', type: 'image', imageUrl: '/data/images/b.jpg' },
+      { id: 'c', type: 'video', mediaKey: 'video:c.mp4', imageUrl: 'http://example.com/c.jpg' },
+      { id: 'd', type: 'text', text: 'note' },
+    ],
+  });
+
+  it('finds only media items whose image is still remote', () => {
+    expect(externalImageItems(mk()).map((it) => it.id)).toEqual(['a', 'c']);
+  });
+
+  it('swaps a URL only while the item still carries the URL that was downloaded', () => {
+    const b = mk();
+    const { board: next, changed } = applyLocalizedImageUrls(b, [
+      { id: 'a', from: 'https://example.com/a.jpg', to: '/data/images/a.jpg' },
+      { id: 'c', from: 'http://example.com/stale.jpg', to: '/data/images/c.jpg' },
+    ]);
+    expect(changed).toBe(1);
+    expect(next.items.find((it) => it.id === 'a').imageUrl).toBe('/data/images/a.jpg');
+    expect(next.items.find((it) => it.id === 'c').imageUrl).toBe('http://example.com/c.jpg');
+  });
+
+  it('returns the same board when nothing matches', () => {
+    const b = mk();
+    expect(applyLocalizedImageUrls(b, [{ id: 'zzz', from: 'x', to: 'y' }])).toEqual({ board: b, changed: 0 });
   });
 });
