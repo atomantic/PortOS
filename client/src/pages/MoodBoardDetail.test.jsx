@@ -10,6 +10,7 @@ const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
 const mockUpdateMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
+const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
 
 vi.mock('../services/api', () => ({
@@ -21,6 +22,7 @@ vi.mock('../services/api', () => ({
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
+  importMoodBoardPinterest: (...args) => mockImportMoodBoardPinterest(...args),
   importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
 }));
 
@@ -228,6 +230,34 @@ describe('MoodBoardDetail stale-response guards', () => {
     await act(async () => { oldSync.reject(new Error('Sync failed')); });
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
     expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('MoodBoardDetail private Pinterest import', () => {
+  it('imports a board directly through the signed-in PortOS browser action', async () => {
+    const boardUrl = 'https://www.pinterest.com/example-user/example-board/';
+    const importedBoard = {
+      id: 'a',
+      name: 'Board A',
+      items: [{
+        id: 'mbi-1',
+        type: 'image',
+        imageUrl: '/data/images/pinterest-example.jpg',
+        caption: 'Example pin',
+        source: 'https://www.pinterest.com/pin/9999999999999999999/',
+      }],
+    };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockImportMoodBoardPinterest.mockResolvedValueOnce({ board: importedBoard, added: 1, found: 1, skipped: 0 });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.change(screen.getByLabelText('Board URL'), { target: { value: boardUrl } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import pins' }));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 of 1 Pinterest pins'));
+    expect(mockImportMoodBoardPinterest).toHaveBeenCalledWith('a', boardUrl, { silent: true });
+    expect(screen.getByAltText('Example pin')).toHaveAttribute('src', '/data/images/pinterest-example.jpg');
   });
 });
 

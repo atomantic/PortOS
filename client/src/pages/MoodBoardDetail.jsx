@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -29,6 +29,7 @@ import {
   linkMoodBoardPinterest,
   unlinkMoodBoardPinterest,
   syncMoodBoardPinterest,
+  importMoodBoardPinterest,
   importMoodBoardXPost,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
@@ -73,6 +74,7 @@ function MoodBoardEditor({ id }) {
   const [pinUrl, setPinUrl] = useState('');
   const [linking, setLinking] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [importingPinterest, setImportingPinterest] = useState(false);
   const [confirmingUnlink, setConfirmingUnlink] = useState(false);
 
   // X.com (Twitter) post import — one-shot, no persisted link.
@@ -280,6 +282,23 @@ function MoodBoardEditor({ id }) {
       : 'Up to date — no new pins');
   };
 
+  const handleImportPinterest = async () => {
+    if (!mountedRef.current) return;
+    if (!pinUrl.trim()) { toast.error('Enter a Pinterest board URL'); return; }
+    setImportingPinterest(true);
+    const result = await importMoodBoardPinterest(id, pinUrl.trim(), { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
+    setImportingPinterest(false);
+    if (!result?.board) {
+      toast.error('Could not import that board — check that Pinterest is signed in to the PortOS browser');
+      return;
+    }
+    setBoard(result.board);
+    toast.success(result.added > 0
+      ? `Added ${result.added} of ${result.found} Pinterest pins`
+      : result.found > 0 ? 'No new Pinterest pins were added' : 'The Pinterest board has no pins');
+  };
+
   const handleImportXPost = async () => {
     if (!mountedRef.current) return;
     if (!xPostUrl.trim()) { toast.error('Enter an x.com/twitter.com post URL'); return; }
@@ -344,10 +363,19 @@ function MoodBoardEditor({ id }) {
         <button
           type="button"
           onClick={handleLinkPinterest}
-          disabled={linking || !pinUrl.trim() || (isLinked && !pinDirty)}
+          disabled={linking || importingPinterest || !pinUrl.trim() || (isLinked && !pinDirty)}
           className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
         >
           {linking ? 'Linking…' : buttonText}
+        </button>
+        <button
+          type="button"
+          onClick={handleImportPinterest}
+          disabled={importingPinterest || linking || syncing || !pinUrl.trim()}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
+        >
+          <Download className={`w-4 h-4 ${importingPinterest ? 'animate-pulse' : ''}`} aria-hidden="true" />
+          {importingPinterest ? 'Importing…' : 'Import pins'}
         </button>
       </div>
     </div>
@@ -425,11 +453,14 @@ function MoodBoardEditor({ id }) {
             <p className="text-[11px] text-gray-500">
               Pinterest’s feed exposes only the most-recent ~25 pins, so a sync pulls those — not the entire board.
             </p>
+            <p className="text-[11px] text-gray-500">
+              Use “Import pins” below to read the full board from your signed-in PortOS browser.
+            </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleSyncPinterest}
-                disabled={syncing || linking || pinDirty}
+                disabled={syncing || linking || importingPinterest || pinDirty}
                 title={pinDirty ? 'Link the new URL before syncing' : undefined}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 transition-colors"
               >
@@ -459,7 +490,7 @@ function MoodBoardEditor({ id }) {
           <div>
             {renderPinUrlForm('Board URL', 'Link')}
             <p className="text-[11px] text-gray-500 mt-2">
-              Paste a public Pinterest board URL. “Sync now” downloads its pins (newest ~25) into this board.
+              Link a public board to sync its newest ~25 pins. “Import pins” reads the full board from your signed-in PortOS browser and saves the images here.
             </p>
           </div>
         )}

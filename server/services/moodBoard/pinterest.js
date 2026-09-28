@@ -47,7 +47,7 @@ const DOWNLOAD_CONCURRENCY = 3;
  * also rejects a non-image body (an error/HTML page served with 200) — more
  * trustworthy than Pinterest's Content-Type header.
  */
-async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
+export async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
   let res = await fetchPublicBinary(imageUrl, { timeoutMs: IMAGE_TIMEOUT_MS, headers: IMAGE_HEADERS, maxBytes: MAX_IMAGE_BYTES });
   if (!res?.buffer?.length && imageUrlOriginal && imageUrlOriginal !== imageUrl) {
     res = await fetchPublicBinary(imageUrlOriginal, { timeoutMs: IMAGE_TIMEOUT_MS, headers: IMAGE_HEADERS, maxBytes: MAX_IMAGE_BYTES });

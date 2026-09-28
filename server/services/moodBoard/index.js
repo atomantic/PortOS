@@ -36,6 +36,7 @@ export { imageUrlToAppAsset } from './logic.js';
 // (network I/O + image download) but is surfaced here so routes import a single
 // moodBoard entry. It fires its own federation emits after each store mutation.
 export { linkPinterestBoard, unlinkPinterestBoard, syncPinterestBoard } from './pinterest.js';
+export { importPrivatePinterestBoard } from './privatePinterest.js';
 
 // X.com (Twitter) post importer — one-shot "paste a post URL, pull its
 // photos/video in". Lives in its own module (network I/O + downloads) but
