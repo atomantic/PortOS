@@ -50,7 +50,7 @@ const energyOf = (section) => (typeof section?.energy === 'number' && Number.isF
  * second half is the payoff; the quietest section between them is the
  * contrast that makes the payoff land; anything after the payoff releases.
  */
-export function assignBeatRoles(sections) {
+function assignBeatRoles(sections) {
   const n = sections.length;
   const roles = sections.map(() => 'build');
   if (n === 0) return roles;

@@ -56,7 +56,7 @@ import {
 } from '../../lib/musicVideoValidation.js';
 import { normalizeComposition } from './composition.js';
 
-export const TREATMENT_VERSION = 1;
+const TREATMENT_VERSION = 1;
 
 const pick = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
 const text = (value, max) => trimTo(value, max);
@@ -64,12 +64,12 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const isTime = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 
 /** Short, stable content fingerprint (not a security boundary — change detection only). */
-export function fingerprint(value) {
+function fingerprint(value) {
   return createHash('sha1').update(JSON.stringify(value ?? null)).digest('hex').slice(0, 12);
 }
 
 /** The fingerprint of a scene's two prompts — what Apply's overwrite list is checked against. */
-export function scenePromptFingerprint(scene) {
+function scenePromptFingerprint(scene) {
   return fingerprint([scene?.framePrompt || '', scene?.prompt || '']);
 }
 
@@ -176,7 +176,7 @@ function normalizeArc(arc) {
   };
 }
 
-export function normalizeShotDirection(d) {
+function normalizeShotDirection(d) {
   return {
     sceneId: String(d.sceneId),
     beatId: typeof d.beatId === 'string' && d.beatId ? d.beatId : null,
@@ -252,7 +252,7 @@ function normalizeBasis(basis) {
  * Normalize a stored (or legacy / peer-supplied) treatment to its full shape.
  * Returns null for a non-object so a project without a treatment stays null.
  */
-export function normalizeTreatment(input, now = new Date().toISOString()) {
+function normalizeTreatment(input, now = new Date().toISOString()) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   return {
     version: TREATMENT_VERSION,
@@ -279,7 +279,7 @@ export function normalizeTreatment(input, now = new Date().toISOString()) {
 const blankTreatment = (now) => ({ ...normalizeTreatment({}, now), revision: 0 });
 
 /** The currently stored revision (0 when the project has no treatment yet). */
-export function treatmentRevision(project) {
+function treatmentRevision(project) {
   return normalizeTreatment(project?.treatment)?.revision ?? 0;
 }
 
@@ -325,7 +325,7 @@ export function treatmentBasis(project) {
 }
 
 /** Inputs that changed since the treatment was compiled: `[{ input, blocking, message }]`. */
-export function treatmentStaleness(project, treatment = normalizeTreatment(project?.treatment)) {
+function treatmentStaleness(project, treatment = normalizeTreatment(project?.treatment)) {
   if (!treatment?.basis) return [];
   const current = treatmentBasis(project);
   return BASIS_KEYS
@@ -493,7 +493,7 @@ const REGION_PHRASE = { upper: 'upper third', center: 'center', lower: 'lower th
  * the reserved region stays clean for the independently rendered typography
  * layer, and every clause asks for no lettering in the picture.
  */
-export function composeDirectionClauses(direction, { aspectRatio = null, lipSyncUnavailable = false } = {}) {
+function composeDirectionClauses(direction, { aspectRatio = null, lipSyncUnavailable = false } = {}) {
   const region = REGION_PHRASE[direction.negativeSpace] || null;
   const frame = [
     aspectRatio ? `composed for a ${aspectRatio} frame` : '',
