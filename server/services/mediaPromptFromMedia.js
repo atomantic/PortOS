@@ -79,6 +79,7 @@ export function buildPromptFromMediaPrompt({ targets, mediaKind, frameCount, max
   const rules = [
     '- Output ONLY valid JSON. Replace every <…> with real content; do NOT emit the literal angle-bracket text.',
     '- Each prompt field must be the COMPLETE ready-to-render text, paragraph-style — not a summary, not a caption of the file, not a list of changes.',
+    '- Start directly with the subject or scene content. Never prefix prompts with instructions such as Create, Generate, Make, or Render an image/video of. No conversational preamble.',
     '- Describe what is actually visible: subject, setting, materials, lighting, color, composition, camera, mood, style.',
     '- Do not invent brands, logos, or named characters that are not visible.',
   ];
@@ -131,8 +132,11 @@ export function parsePromptFromMediaJson(raw, targets) {
     throw new Error(lastError?.message || 'Invalid JSON in AI response');
   }
 
-  const imagePrompt = wantImage ? trimTo(value.imagePrompt, MAX_PROMPT_LEN) : '';
-  const videoPrompt = wantVideo ? trimTo(value.videoPrompt, MAX_PROMPT_LEN) : '';
+  // Some models still return imperative wrappers despite the content-only contract.
+  const contentPrompt = (text) => trimTo(text, MAX_PROMPT_LEN)
+    .replace(/^(?:please\s+)?(?:create|generate|render|make)\s+(?:(?:an?|the)\s+(?:image|video|picture|clip)\s+(?:of|showing|depicting)\s+)?/i, '').trim();
+  const imagePrompt = wantImage ? contentPrompt(value.imagePrompt) : '';
+  const videoPrompt = wantVideo ? contentPrompt(value.videoPrompt) : '';
   if (wantImage && (isPlaceholderPrompt(value.imagePrompt) || !imagePrompt)) {
     throw new Error('LLM returned an empty image prompt');
   }

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route, Link } from 'react-router';
 import PromptFromMedia from './PromptFromMedia';
 import * as api from '../../services/apiMediaJobs';
+
+vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 vi.mock('../../hooks/useProviderModels', () => ({
   default: vi.fn(() => ({
@@ -24,6 +26,8 @@ vi.mock('../../hooks/useVisionModelIds', () => ({
 
 vi.mock('../../services/apiMediaJobs', () => ({
   promptFromMedia: vi.fn(),
+  listMediaPromptExaminations: vi.fn(async () => ({ items: [], hasMore: false })),
+  getMediaPromptExamination: vi.fn(),
 }));
 
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
@@ -142,9 +146,54 @@ describe('PromptFromMedia', () => {
     expect(onResult).toHaveBeenCalledWith(payload);
   });
 
-  it('skips the disclosure toggle when hosted as an always-open card', () => {
+  it('skips the disclosure toggle when hosted as an always-open card', async () => {
     renderPanel({ alwaysOpen: true, initialSource: null });
+    await screen.findByText('No saved examinations yet.');
     expect(screen.queryByRole('button', { name: /toggle prompt from media/i })).toBeNull();
     expect(screen.getByRole('button', { name: /pick image/i })).toBeInTheDocument();
   });
+});
+
+// Returning from either renderer restores the complete examination without a provider call.
+it('reopens both saved prompts from a durable examination URL', async () => {
+  api.getMediaPromptExamination.mockResolvedValue({
+    id: 'saved', source: { sourceKind: 'image', filename: 'still.png' },
+    result: { imagePrompt: 'Moonlit mountains', videoPrompt: 'Clouds drift over mountains', imageNegativePrompt: 'blur' },
+  });
+  render(<MemoryRouter initialEntries={['/media/prompt/saved']}><Routes>
+    <Route path="/media/prompt/:examinationId" element={<PromptFromMedia alwaysOpen />} />
+  </Routes></MemoryRouter>);
+  await screen.findByDisplayValue('Moonlit mountains');
+  expect(screen.getByDisplayValue('Clouds drift over mountains')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open in Image Gen' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Open in Video Gen' })).toBeTruthy();
+  expect(api.promptFromMedia).not.toHaveBeenCalled();
+});
+
+it('does not duplicate a saved examination already received through history refresh', async () => {
+  api.listMediaPromptExaminations.mockResolvedValueOnce({
+    items: [{ id: 'saved', source: { filename: 'still.png' }, createdAt: '2026-01-01T00:00:00Z' }], hasMore: false,
+  });
+  api.promptFromMedia.mockResolvedValueOnce({ imagePrompt: 'Mountains', examinationId: 'saved' });
+  renderPanel();
+  await screen.findByText(/still.png ·/);
+  fireEvent.click(screen.getByRole('button', { name: 'Create prompt' }));
+  await screen.findByDisplayValue('Mountains');
+  expect(screen.getAllByText(/still.png ·/)).toHaveLength(1);
+});
+
+it('clears the saved examination when returning to the analyzer index', async () => {
+  api.getMediaPromptExamination.mockResolvedValueOnce({
+    id: 'saved', source: { sourceKind: 'image', filename: 'still.png' },
+    result: { imagePrompt: 'Previous examination' },
+  });
+  render(<MemoryRouter initialEntries={['/media/prompt/saved']}>
+    <Link to="/media/prompt">New examination</Link>
+    <Routes><Route path="/media/prompt/:examinationId?" element={<PromptFromMedia alwaysOpen />} /></Routes>
+  </MemoryRouter>);
+  await screen.findByDisplayValue('Previous examination');
+  fireEvent.click(screen.getByRole('link', { name: 'New examination' }));
+  await waitFor(() => expect(screen.queryByDisplayValue('Previous examination')).toBeNull());
+  expect(screen.queryByRole('button', { name: 'Clear selected media' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Create prompt' })).toBeDisabled();
 });

@@ -11,6 +11,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES, MEDIA_QUEUE_SHUTTING_DOWN } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
+import { saveMediaPromptExamination, listMediaPromptExaminations, getMediaPromptExamination } from '../services/mediaPromptHistory.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
@@ -147,9 +148,23 @@ router.post('/refine-prompt', asyncHandler(async (req, res) => {
   res.json(await refineMediaPrompt(data));
 }));
 
+router.get('/prompt-history', asyncHandler(async (req, res) => {
+  const { offset } = validateRequest(z.object({ offset: z.coerce.number().int().min(0).max(1000000).default(0) }), req.query);
+  res.json(await listMediaPromptExaminations(offset));
+}));
+router.get('/prompt-history/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(z.object({ id: z.string().uuid() }), req.params);
+  const record = await getMediaPromptExamination(id);
+  if (!record) throw new ServerError('Examination not found', { status: 404 });
+  res.json(record);
+}));
+
 router.post('/prompt-from-media', asyncHandler(async (req, res) => {
   const data = validateRequest(promptFromMediaSchema, req.body);
-  res.json(await promptFromMedia(data));
+  const result = await promptFromMedia(data);
+  const source = { sourceKind: data.sourceKind, filename: data.filename, videoId: data.videoId };
+  const record = await saveMediaPromptExamination(source, result);
+  res.json({ ...result, examinationId: record.id });
 }));
 
 const resumeHoldParamsSchema = z.object({ holdId: z.string().uuid() });

@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useId, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router';
 import { ScanEye, ChevronDown, ChevronUp, Image as ImageIcon, Film, X, Copy } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
+import useMounted from '../../hooks/useMounted';
+import { formatDateTime } from '../../utils/formatters';
 import useProviderModels from '../../hooks/useProviderModels';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 import Modal from '../ui/Modal';
 import { FormField } from '../ui/FormField';
-import { promptFromMedia } from '../../services/apiMediaJobs';
+import { promptFromMedia, listMediaPromptExaminations, getMediaPromptExamination } from '../../services/apiMediaJobs';
 import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { copyToClipboard } from '../../lib/clipboard';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+
+const HISTORY_EVENTS = ['media-prompt-history:changed'];
 
 const LS_KEY_PROVIDER = 'portos_prompt_from_media_provider';
 const LS_KEY_MODEL = 'portos_prompt_from_media_model';
@@ -71,6 +76,12 @@ export default function PromptFromMedia({
 }) {
   const navigate = useNavigate();
   const idPrefix = useId();
+  const { examinationId } = useParams();
+  const mounted = useMounted();
+  const activeExamination = useRef(examinationId);
+  activeExamination.current = examinationId;
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [detailError, setDetailError] = useState('');
   const [isOpen, setIsOpen] = useState(!!initialSource || alwaysOpen);
   const [source, setSource] = useState(() => sourceFromItem(initialSource));
   const [imagePickerOpen, setImagePickerOpen] = useState(false);
@@ -111,11 +122,29 @@ export default function PromptFromMedia({
     }
   }, [providers, providersLoading, setSelectedProviderId, setSelectedModel]);
 
+  const { data: history, error: historyError, updateData: setHistory } = useSocketResource(
+    ({ signal }) => listMediaPromptExaminations(historyOffset, { silent: true, signal }),
+    { events: HISTORY_EVENTS, resourceKey: historyOffset, enabled: isOpen },
+  );
+
   useEffect(() => {
-    if (!initialSource) return;
-    setSource(sourceFromItem(initialSource));
+    if (!examinationId) {
+      setSource(sourceFromItem(initialSource));
+      setResult(null);
+      setDetailError('');
+      return;
+    }
+    let active = true;
     setResult(null);
-  }, [initialSource]);
+    setSource(null);
+    setDetailError('');
+    getMediaPromptExamination(examinationId, { silent: true }).then((record) => {
+      if (!active) return;
+      setSource(record.source);
+      setResult({ ...record.result, examinationId: record.id });
+    }).catch(() => { if (active) setDetailError('Saved examination could not be loaded.'); });
+    return () => { active = false; };
+  }, [examinationId, initialSource]);
 
   const persistProvider = (id) => {
     if (id) safeWriteStorage(LS_KEY_PROVIDER, id);
@@ -168,9 +197,11 @@ export default function PromptFromMedia({
       effort: effort || undefined,
       maxVideoPromptLength: maxVideoPromptLength > 0 ? maxVideoPromptLength : undefined,
     };
+    const requestedExamination = examinationId;
     const data = await promptFromMedia(payload).catch(() => null);
+    if (!mounted.current) return;
     setRunning(false);
-    if (!data) return;
+    if (!data || activeExamination.current !== requestedExamination) return;
     setResult(data);
     // Name the trim rather than letting a cut prompt read as a thin analysis.
     if (data.videoPromptTruncated) {
@@ -179,6 +210,14 @@ export default function PromptFromMedia({
       toast.success('Prompts ready');
     }
     if (onResult) onResult(data);
+    if (data.examinationId) {
+      setHistoryOffset(0);
+      setHistory((previous) => ({
+        items: [{ id: data.examinationId, createdAt: new Date().toISOString(), source }, ...(previous?.items || []).filter((entry) => entry.id !== data.examinationId)].slice(0, 20),
+        hasMore: previous?.hasMore || previous?.items.length >= 20,
+      }));
+      if (alwaysOpen && !initialSource && !setPrompt) navigate(`/media/prompt/${data.examinationId}`);
+    }
   };
 
   const apply = (kind) => {
@@ -223,6 +262,23 @@ export default function PromptFromMedia({
 
       {isOpen && (
         <div className={alwaysOpen ? 'space-y-3' : 'p-3 bg-port-bg/70 border border-port-border rounded-lg space-y-3'}>
+          <details className="space-y-2">
+            <summary className="text-sm text-white cursor-pointer min-h-[36px]">Saved examinations</summary>
+            <p className="text-xs text-gray-400">Each analysis saves both requested prompts. Reopen a reference to render either without analyzing again.</p>
+            {historyError && <p role="alert" className="text-xs text-port-warning">Could not load examination history.</p>}
+            {history?.items.map((entry) => (
+              <button key={entry.id} type="button" disabled={running} onClick={() => navigate(`/media/prompt/${entry.id}`)}
+                className="block text-left text-xs text-port-accent break-all min-h-[36px]">
+                {entry.source.filename || entry.source.videoId} · {formatDateTime(entry.createdAt)}
+              </button>
+            ))}
+            {history && !history.items.length && <p className="text-xs text-gray-400">No saved examinations yet.</p>}
+            <div className="flex gap-3 text-xs text-port-accent">
+              {historyOffset > 0 && <button type="button" onClick={() => setHistoryOffset((value) => Math.max(0, value - 20))}>Previous examinations</button>}
+              {history?.hasMore && <button type="button" onClick={() => setHistoryOffset((value) => value + 20)}>Older examinations</button>}
+            </div>
+          </details>
+          {detailError && <p role="alert" className="text-xs text-port-warning">{detailError}</p>}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -255,6 +311,7 @@ export default function PromptFromMedia({
                 type="button"
                 onClick={() => { setSource(null); setResult(null); }}
                 className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 text-gray-400 hover:text-white"
+                disabled={running}
                 aria-label="Clear selected media"
               >
                 <X className="w-3.5 h-3.5" />

@@ -67,3 +67,6 @@ export const listMediaVideoHolds = (options = {}) => request('/media-jobs/holds'
 // Resume only the retained jobs covered by this local video hold.
 export const resumeMediaVideoHold = (holdId, options = {}) =>
   request(`/media-jobs/holds/${encodeURIComponent(holdId)}/resume`, { method: 'POST', ...options });
+
+export const listMediaPromptExaminations = (offset = 0, options) => request(`/media-jobs/prompt-history?offset=${offset}`, options);
+export const getMediaPromptExamination = (id, options) => request(`/media-jobs/prompt-history/${encodeURIComponent(id)}`, options);
