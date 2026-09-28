@@ -5,14 +5,14 @@
 // 'auto' refines 1 → 3 → 9 → 27 → 81. Tripling keeps every earlier sample: the
 // centre of each third of a stratum is that stratum's own centre, so a level
 // only renders the 2n new offsets. 81 stays under the issue's 108 cap.
-export const AUTO_MAX_SAMPLES = 81;
+const AUTO_MAX_SAMPLES = 81;
 const BLOCK = 8;
 
 /** Offsets, as fractions of the shutter, of `n` stratified samples centred on 0. */
-export const shutterOffsets = n => Array.from({ length: n }, (_, k) => (k + 0.5) / n - 0.5);
+const shutterOffsets = n => Array.from({ length: n }, (_, k) => (k + 0.5) / n - 0.5);
 
 /** The offsets a refinement from `n` to `3n` samples adds (the old ones are reused). */
-export const refinementOffsets = n => shutterOffsets(3 * n).filter((_, k) => k % 3 !== 1);
+const refinementOffsets = n => shutterOffsets(3 * n).filter((_, k) => k % 3 !== 1);
 
 const TO_LINEAR = Float32Array.from({ length: 256 }, (_, v) => {
   const c = v / 255;
@@ -25,7 +25,7 @@ const TO_SRGB = Uint8Array.from({ length: LINEAR_STEPS + 1 }, (_, i) => {
 });
 
 /** A linear-light running sum over packed 8-bit sRGB frames of one size. */
-export function createAccumulator(length) {
+function createAccumulator(length) {
   const sum = new Float32Array(length);
   let count = 0;
   return {
@@ -49,7 +49,7 @@ export function createAccumulator(length) {
  * 0–255 levels. A block mean ignores single-pixel dither yet still catches a
  * small moving object that a whole-frame mean would dilute away.
  */
-export function worstBlockDifference(a, b, width, height) {
+function worstBlockDifference(a, b, width, height) {
   let worst = 0;
   for (let by = 0; by < height; by += BLOCK) {
     for (let bx = 0; bx < width; bx += BLOCK) {
