@@ -48,7 +48,14 @@ import { execFileSync } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
+// This file lives at server/lib/, so REPO_ROOT needs two levels up. Getting
+// this wrong silently drops the repo-root scripts/, lib/, and autofixer/
+// trees from `git ls-files` (it would run with cwd=server/, so a top-level
+// scripts/foo.test.js is never returned) — those trees are part of the same
+// `server` vitest run (see AGENTS.md: "ALSO globs ../scripts, ../lib,
+// ../autofixer") and must be scanned too.
+const LIB_DIR = dirname(fileURLToPath(import.meta.url));
+const SERVER_ROOT = dirname(LIB_DIR);
 const REPO_ROOT = dirname(SERVER_ROOT);
 
 // Test-bearing trees where mkdtemp cleanup is required

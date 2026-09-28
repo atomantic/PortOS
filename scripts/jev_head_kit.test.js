@@ -14,11 +14,11 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
@@ -57,9 +57,18 @@ const head = (overrides = {}) => ({
   ...overrides,
 });
 
+const tempRoots = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 /** A heads directory holding `scope-adherence.json`, plus a file outside it. */
 function headsDir(contents = head()) {
   const root = mkdtempSync(join(tmpdir(), 'portos-jev-kit-'));
+  tempRoots.push(root);
   const dir = join(root, 'heads');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'scope-adherence.json'), JSON.stringify(contents));

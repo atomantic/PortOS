@@ -7,13 +7,23 @@
  * to disk despite a refusal.
  */
 
-import { mkdtemp, mkdir, writeFile, readdir } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, readdir, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const repoPath = await mkdtemp(join(tmpdir(), 'portos-jev-repo-'));
+// Real filesystem mkdtemp roots this file creates outside the lazyTempDataRoot
+// mock (which cleanupTempDataRoots() below already handles) — tracked here so
+// the final afterAll can remove them too.
+const repoTempRoots = [];
+const makeRepoTempRoot = async (prefix) => {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  repoTempRoots.push(root);
+  return root;
+};
+
+const repoPath = await makeRepoTempRoot('portos-jev-repo-');
 
 // The shared helper re-roots every `PATHS` member under `data/`, not just
 // `PATHS.data` — a bare spread leaves the rest pointing at the live install.
@@ -31,7 +41,10 @@ vi.mock('../lib/childProcess.js', () => ({
 
 const { buildScopeAdherenceCorpus } = await import('./jevCorpusBuilder.js');
 
-afterAll(() => cleanupTempDataRoots());
+afterAll(async () => {
+  cleanupTempDataRoots();
+  await Promise.all(repoTempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 // Enough distinct goals that the retriever has something to rank, and enough
 // prose per clause to clear the parser's minimum.
@@ -112,7 +125,7 @@ describe('buildScopeAdherenceCorpus', () => {
   });
 
   it('refuses a repository that states no product intent', async () => {
-    const bare = await mkdtemp(join(tmpdir(), 'portos-jev-bare-'));
+    const bare = await makeRepoTempRoot('portos-jev-bare-');
     mockForge({ merged: changes(60) });
     expect(await buildScopeAdherenceCorpus({ repoPath: bare })).toEqual({ ok: false, code: 'jev-corpus-no-clauses' });
     // A missing repoPath must not silently grade against this install's own.
