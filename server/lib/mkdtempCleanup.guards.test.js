@@ -30,6 +30,26 @@
  *
  * See `server/lib/apiRouteGraph.test.js` for a worked example.
  *
+ * ## Detection tradeoff: file-wide vs per-call
+ *
+ * The guard checks for cleanup at the FILE level — it looks for ANY `rmSync`,
+ * `destroyGitSandbox`, or equivalent cleanup call anywhere in the scanned file
+ * and assumes all mkdtemp calls in that file are covered. This is a
+ * coarse-grained heuristic: if a file creates two independent temp roots and
+ * only one is cleaned up (e.g. one in a proper `afterEach(...)`, the other
+ * created ad hoc in a test with no cleanup), the file-wide check WILL MISS the
+ * leak. A per-call analysis would require scope-aware association (parsing
+ * `describe(...)` blocks or tracking cleanup paths per mkdtemp site), which
+ * is expensive for the gain.
+ *
+ * This is intentional: prefer fixing the easy wins (files with no cleanup at
+ * all) over catching the corner case of partial cleanup in a single file. The
+ * rare multi-root file can add a `// SKIP: mkdtemp cleanup — multiple cleanup
+ * sites` comment if it genuinely requires different cleanup paths per call.
+ * The regression test below (`accepts a known-limitation case: one cleaned and
+ * one leaked root in the same file`) documents this false-negative as a
+ * deliberate design choice.
+ *
  * ## Opt-out
  *
  * A justified case (e.g., a helper that intentionally retains temp state across
@@ -169,6 +189,50 @@ describe('mkdtemp cleanup guard (#9000)', () => {
     const violations = findViolationsInSource('probe/fixture.test.js', probeSrc);
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatch(/probe\/fixture\.test\.js line \d+: mkdtemp without cleanup/);
+  });
+
+  it('accepts a known-limitation case: one cleaned and one leaked root in the same file', () => {
+    // This fixture documents the false-negative tradeoff of the file-wide check.
+    // The guard looks for ANY cleanup mechanism in the file (line 111:
+    // `const hasCleanup = CLEANUP_PATTERN.test(src)`). If one mkdtemp is
+    // properly cleaned in an afterEach, the flag is set true, and a second
+    // mkdtemp in the same file with no cleanup goes undetected. This is a
+    // deliberate design choice: per-call association requires scope-aware AST
+    // analysis (too expensive), so we accept missing the rare multi-root file
+    // where only some roots are cleaned. Catch these in code review or add a
+    // SKIP marker if the pattern is intentional. See the "Detection tradeoff"
+    // section in the module docstring above.
+    const fixtureWithMixedCleanup = `
+      import { mkdtempSync } from 'fs';
+      import { tmpdir } from 'os';
+      import { join } from 'path';
+      import { rmSync } from 'fs';
+
+      let tempRoot1;
+      let tempRoot2;
+
+      describe('probe', () => {
+        it('creates and cleans one temp root', () => {
+          tempRoot1 = mkdtempSync(join(tmpdir(), 'cleaned-'));
+          expect(tempRoot1).toBeTruthy();
+        });
+
+        it('creates another temp root with no cleanup', () => {
+          tempRoot2 = mkdtempSync(join(tmpdir(), 'leaked-'));
+          expect(tempRoot2).toBeTruthy();
+        });
+
+        afterEach(() => {
+          if (tempRoot1) rmSync(tempRoot1, { recursive: true, force: true });
+          // Note: tempRoot2 is NOT cleaned here.
+        });
+      });
+    `;
+    const violations = findViolationsInSource('fixture-with-mixed-cleanup.test.js', fixtureWithMixedCleanup);
+    // The guard reports NO violation because it found rmSync() anywhere in the file.
+    // This is the known false-negative. If we wanted to catch it, we would need
+    // per-call scope analysis, which is too expensive for this improvement.
+    expect(violations).toHaveLength(0);
   });
 
   describe('the guard recognizer', () => {
