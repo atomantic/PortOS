@@ -9,7 +9,7 @@ import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
 
 const STYLE_SNAPSHOT_MAX = 4000;
 
-export function universeStyleSnapshot(universe) {
+function universeStyleSnapshot(universe) {
   if (!universe) return '';
   const embrace = universe.influences?.embrace || [];
   const avoid = universe.influences?.avoid || [];
@@ -21,7 +21,7 @@ export function universeStyleSnapshot(universe) {
   ].filter(Boolean).join('\n').slice(0, STYLE_SNAPSHOT_MAX);
 }
 
-export function moodBoardStyleSnapshot(board) {
+function moodBoardStyleSnapshot(board) {
   const context = board ? collectBoardStyleContext(board) : null;
   if (!context) return '';
   return [context.name, context.description, ...context.items.map((item) => Object.values(item).join('; '))]
