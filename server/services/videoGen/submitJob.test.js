@@ -230,14 +230,20 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
-    it('refuses a kickoff tagged for a revision that has since closed, before any staging (#9011)', async () => {
+    it('refuses a kickoff tagged for a revision that has since closed, as the last step before the queue write (#9011)', async () => {
       const closed = Object.assign(new Error('This revision is already canceled'), { status: 409, code: 'REVISION_CLOSED' });
       mocks.assertRevisionOpen.mockRejectedValueOnce(closed);
       const tagged = { ...musicVideo, revisionId: 'mvr-1' };
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
 
       await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo: tagged }, {})).rejects.toBe(closed);
       expect(mocks.assertRevisionOpen).toHaveBeenCalledWith('mv-1', 'mvr-1');
-      expect(mocks.prepareVideoGenParams).not.toHaveBeenCalled();
+      // The check runs immediately before enqueueJob — after staging, not before
+      // it — so the race window against a concurrent cancel is as small as this
+      // request can make it; a refusal there still rolls back what was staged.
+      expect(mocks.prepareVideoGenParams).toHaveBeenCalledTimes(1);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 

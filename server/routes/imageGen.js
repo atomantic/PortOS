@@ -60,6 +60,16 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
 async function enqueueLoggedImage(req, job) {
+  // Selective section revision (#9011): checked as the LAST step before the
+  // actual queue write — every branch that reaches this helper has already
+  // done its own staging/provider resolution, so this is as close to the
+  // cancel/kickoff race as a request can get. A no-op when the tag carries no
+  // revisionId; deferred import since only this rare path needs the revision
+  // service's closure.
+  if (job.params?.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(job.params.musicVideo.projectId, job.params.musicVideo.revisionId);
+  }
   const queued = await enqueueJob(job);
   try {
     const happenedAt = new Date().toISOString();
@@ -542,16 +552,6 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     res.on('close', () => {
       for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
     });
-  }
-
-  // Selective section revision (#9011): a kickoff tagged for a revision that
-  // has since closed is refused before any provider dispatch, closing the
-  // cancel/kickoff race server-side. No-op when the tag carries no
-  // revisionId; `res.on('close')` above already covers any staged uploads.
-  // Deferred import since only this rare path needs the revision service.
-  if (params.musicVideo?.revisionId) {
-    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
-    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId);
   }
 
   // Local + codex both go through mediaJobQueue (separate lanes — codex
