@@ -225,6 +225,11 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await expect(preparePerformanceShot({
       musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'grok', sourceImagePath: '/x/frame.png',
     })).resolves.toBeNull();
+    // A performance is sung footage: a still/card-layer scene (#8985) is never lip-synced.
+    getProject.mockResolvedValue(project({ visualLayer: 'still' }));
+    await expect(preparePerformanceShot({
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'grok', sourceImagePath: '/x/frame.png',
+    })).resolves.toBeNull();
   });
 
   it('never submits a paid request when cancelled while its inputs are still being read', async () => {

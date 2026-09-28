@@ -149,14 +149,19 @@ export default function SceneCard({
           <input type="checkbox" checked={loops} disabled={performance} onChange={(e) => applyPatch({ loop: e.target.checked })} />
           Loop clip
         </label>
-        <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
-        <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
-          onChange={(e) => applyPatch({ shotMode: e.target.value })}
-          className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-          title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
-          <option value="cutaway">Cutaway</option>
-          <option value="performance">Performance (lip-sync)</option>
-        </select>
+        {/* A performance is sung footage — only the footage layer offers it. */}
+        {layer === 'footage' && (
+          <>
+            <label htmlFor={shotModeId} className="flex items-center gap-1">Shot</label>
+            <select id={shotModeId} value={performance ? 'performance' : 'cutaway'}
+              onChange={(e) => applyPatch({ shotMode: e.target.value })}
+              className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+              title="Cutaway: any video lane animates the frame under the song. Performance: a singer lip-synced to the song itself (needs a source-audio provider).">
+              <option value="cutaway">Cutaway</option>
+              <option value="performance">Performance (lip-sync)</option>
+            </select>
+          </>
+        )}
       </div>
       <div className="flex flex-wrap gap-2 items-center text-xs">
         <label htmlFor={fieldId('layer')}>Layer</label>

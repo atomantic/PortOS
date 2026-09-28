@@ -32,8 +32,13 @@ import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
 
 export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 
-/** A scene with no `shotMode` (every pre-#8977 record) is a cutaway. */
-export const isPerformanceScene = (scene) => scene?.shotMode === 'performance';
+/**
+ * A scene with no `shotMode` (every pre-#8977 record) is a cutaway. A
+ * performance is sung footage, so it only applies on the footage layer
+ * (#8985): a still or title-card scene is never lip-synced.
+ */
+export const isPerformanceScene = (scene) => scene?.shotMode === 'performance'
+  && (scene.visualLayer == null || scene.visualLayer === 'footage');
 
 /**
  * The shot instruction of a performance scene's SELECTED video take, or null —
