@@ -624,6 +624,8 @@ async function renderMusicVideoCode(projectId, { codeDirectory, startSec = 0 }) 
 // routes apply, and it never asks a footage model for pixels.
 async function renderCodeMode(projectId, project, handOff) {
   const plan = prepareCodeRender(project);
+  // Resolve the master before any rendering mark. A missing track throws here
+  // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);

@@ -6,7 +6,14 @@
  * over module state — every input arrives on the argument, and the helpers it
  * calls are emitted beside it. Seeking the same `t` twice paints the same
  * pixels. Jitter, when a section uses it, is keyed to `env.frame`.
+ *
+ * Request handlers never call this painter. The preview runs it in a
+ * sandboxed iframe and the file render runs it in the composition browser,
+ * both with network globals removed first. The node sampler below passes its
+ * own `compile` so a test does not evaluate section source against this
+ * process's globals.
  */
+import vm from 'node:vm';
 
 export const CODE_FPS = 24;
 export const CODE_SAFE_INSET = 0.1;
@@ -43,7 +50,7 @@ export function lineActive(line, t) {
  * Paint one frame. `sources` maps a section id to `function render(ctx, env)`.
  * A missing or throwing section still leaves the palette and the lyric line.
  */
-export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, fps }) {
+export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, fps, compile }) {
   const duration = song.durationSec;
   const time = Math.min(Math.max(0, t), Math.max(0, duration));
   const frame = Math.max(0, Math.floor(time * fps + 1e-9));
@@ -69,16 +76,22 @@ export function drawCodeFrame({ ctx, song, palette, sources, t, width, height, f
     }),
   }));
   const env = { t: time, localT, frame, width, height, song, palette, section, safe, karaoke };
+  // The page uses this when the caller does not pass its own compiler.
+  // It stays inside this function so the embedded page has it too.
+  function defaultCompile(source) {
+    const wrapped = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
+    return new Function('ctx', 'env', `${wrapped}\nreturn typeof render === 'function' ? render(ctx, env) : undefined;`);
+  }
   const source = sources && sources[section.id];
   if (typeof source === 'string' && source) {
-    const body = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
     const restore = lockClock();
     try {
       if (!drawCodeFrame.compiled) drawCodeFrame.compiled = new Map();
-      let fn = drawCodeFrame.compiled.get(body);
+      const key = `${typeof compile === 'function' ? 'custom' : 'page'}:${source}`;
+      let fn = drawCodeFrame.compiled.get(key);
       if (!fn) {
-        fn = new Function('ctx', 'env', `${body}\nreturn typeof render === 'function' ? render(ctx, env) : undefined;`);
-        drawCodeFrame.compiled.set(body, fn);
+        fn = (typeof compile === 'function' ? compile : defaultCompile)(source);
+        drawCodeFrame.compiled.set(key, fn);
       }
       fn(ctx, env);
     } catch { /* the host lyric pass below still runs */ } finally { restore(); }
@@ -204,10 +217,25 @@ export function createSoftwareCanvas(width, height) {
   };
 }
 
+// Section source under test runs in a context with no process, require, or
+// network. The page compiler is the browser's, after network globals are removed.
+function sandboxCompile(source) {
+  const wrapped = source.includes('function render') ? source : `function render(ctx, env) {\n${source}\n}`;
+  const sandbox = {
+    Math: { ...Math, random() { throw new Error('Math.random is disabled'); } },
+    Date: { now() { throw new Error('Date.now is disabled'); } },
+  };
+  vm.createContext(sandbox);
+  return vm.runInContext(
+    `(function (ctx, env) {\n${wrapped}\nreturn typeof render === "function" ? render(ctx, env) : undefined;\n})`,
+    sandbox,
+  );
+}
+
 /** Paint `t` and return the pixel buffer plus the lyric placements. */
 export function sampleFrame({ song, palette, sources, t, width, height, fps = CODE_FPS }) {
   const ctx = createSoftwareCanvas(width, height);
-  const meta = drawCodeFrame({ ctx, song, palette, sources, t, width, height, fps });
+  const meta = drawCodeFrame({ ctx, song, palette, sources, t, width, height, fps, compile: sandboxCompile });
   return { data: ctx.data, textOps: ctx.textOps, ...meta, width, height };
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Film, RotateCcw } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -40,7 +40,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
     return () => { active = false; };
   }, [project.id, project.updatedAt, project.composition?.codeVideo?.generatedAt]);
 
-  const sections = doc?.song?.sections || doc?.timeline?.sections || [];
+  const sections = useMemo(() => doc?.song?.sections || doc?.timeline?.sections || [], [doc]);
   const fps = doc?.fps || 24;
   const duration = doc?.durationSec || 0;
   const requested = searchParams.get('section');
@@ -58,7 +58,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
 
   const srcDoc = useMemo(() => (doc?.html ? prepareAnimationHtml(doc.html, 'MV_CODE_AUDIO', null) : null), [doc]);
 
-  const seek = (time) => {
+  const seek = useCallback((time) => {
     const next = Math.min(Math.max(0, time), duration || time);
     tRef.current = next;
     setT(next);
@@ -66,7 +66,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
     if (audioRef.current && Math.abs((audioRef.current.currentTime || 0) - next) > 0.05) {
       audioRef.current.currentTime = next;
     }
-  };
+  }, [duration]);
 
   useEffect(() => {
     const step = (dir) => seek(tRef.current + dir / fps);
@@ -98,11 +98,12 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [seek, fps, sections, section, setSearchParams]);
 
   useEffect(() => {
     if (!playing) return undefined;
-    let frame = 0;
+    let handle = 0;
+    let posted = -1;
     const tick = () => {
       const audio = audioRef.current;
       if (!audio) return;
@@ -111,14 +112,18 @@ export default function CodeVideoPanel({ project, audioUrl, onProject }) {
         time = section.startSec || 0;
         audio.currentTime = time;
       }
-      tRef.current = time;
-      setT(time);
-      iframeRef.current?.contentWindow?.postMessage({ type: 'mv-code:seek', t: time }, '*');
-      frame = requestAnimationFrame(tick);
+      const frameIndex = Math.floor(time * fps + 1e-9);
+      if (frameIndex !== posted) {
+        posted = frameIndex;
+        tRef.current = time;
+        setT(time);
+        iframeRef.current?.contentWindow?.postMessage({ type: 'mv-code:seek', t: time }, '*');
+      }
+      handle = requestAnimationFrame(tick);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [playing, looping, section]);
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [playing, looping, section, fps]);
 
   const providerLabel = selectedProvider?.name || selectedProviderId || 'the active provider';
   const modelLabel = selectedModel ? ` / ${selectedModel}` : '';

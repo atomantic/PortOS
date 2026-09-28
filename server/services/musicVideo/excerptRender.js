@@ -80,6 +80,8 @@ const unlinkUnder = (root, filename) => {
 // instead of the footage concat. Footage generation is not involved.
 async function launchCodeExcerpt({ projectId, project, startSec, endSec, revisionId, handOff }) {
   const full = prepareCodeRender(project);
+  // Same order as a full code render: a missing master throws before the
+  // excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > full.durationSec + 1e-6) {
     throw new ServerError(
