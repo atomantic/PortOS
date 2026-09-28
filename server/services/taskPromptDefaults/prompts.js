@@ -2337,6 +2337,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-\${SLUG}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
+# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
 cd "\${WORKTREE}"
 \`\`\`
 
@@ -2509,6 +2511,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-\${SLUG}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
+# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
 cd "\${WORKTREE}"
 \`\`\`
 
@@ -2793,8 +2797,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
-# Link node_modules from the primary checkout so tests can run immediately:
-node {repoRoot}/scripts/link-worktree-deps.js "\${WORKTREE}"
+# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
 # Cross-machine claim markers (best-effort — do not abort the run if these fail):
 gh issue edit "\${NUM}" --add-assignee @me 2>/dev/null
 gh issue edit "\${NUM}" --add-label in-progress 2>/dev/null
@@ -2983,6 +2987,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin "\${DEFAULT_BRANCH}"
 git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
 # Cross-machine claim markers (best-effort — do not abort the run if these fail).
 # Resolve your own username first — glab's --assignee wants a username (the
 # \`@me\` gh-ism isn't universally supported), falling back to @me if the lookup fails:
@@ -3180,6 +3186,8 @@ WORKTREE="{worktreesRoot}/claim-{appSlug}-\${KEY}"
 mkdir -p "{worktreesRoot}"
 git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
 git -C {repoPath} worktree add --no-track -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+# Link the source checkout's node_modules so tests run in the worktree (never npm install there):
+node "{portosRoot}/scripts/link-worktree-deps.js" "{repoPath}" "\${WORKTREE}"
 cd "\${WORKTREE}"
 \`\`\`
 

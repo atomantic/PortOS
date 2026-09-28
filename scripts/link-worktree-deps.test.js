@@ -1,112 +1,47 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, rmdir, stat, readlink, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawnSync } from 'child_process';
+import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { execSync } from 'child_process';
-import { linkWorktreeDependencies } from '../server/services/worktreeManager.js';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
-describe('link-worktree-deps', () => {
-  let tempDir;
-  let sourceDir;
-  let worktreeDir;
+// Drives the script the claim prompts run (#9052) end to end; the linking
+// rules themselves are covered in server/services/worktreeManager.test.js.
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'link-worktree-deps.js');
+const runScript = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
 
-  beforeEach(async () => {
-    // Create temporary directories for testing
-    const timestamp = Date.now();
-    tempDir = join(tmpdir(), `link-deps-test-${timestamp}`);
-    sourceDir = join(tempDir, 'source');
-    worktreeDir = join(tempDir, 'worktree');
+let root;
+afterEach(() => {
+  if (root) rmSync(root, { recursive: true, force: true });
+  root = undefined;
+});
 
-    await mkdir(sourceDir, { recursive: true });
-    await mkdir(join(sourceDir, 'client'), { recursive: true });
-    await mkdir(join(sourceDir, 'server'), { recursive: true });
-    await mkdir(join(sourceDir, 'node_modules'), { recursive: true });
-    await mkdir(join(sourceDir, 'client', 'node_modules'), { recursive: true });
-    await mkdir(join(sourceDir, 'server', 'node_modules'), { recursive: true });
-    await mkdir(join(sourceDir, 'unrelated'), { recursive: true });
-
-    // Create package.json files so the helper recognizes client/server as needing symlinks
-    await Promise.all([
-      writeFile(join(sourceDir, 'package.json'), '{}'),
-      writeFile(join(sourceDir, 'client', 'package.json'), '{}'),
-      writeFile(join(sourceDir, 'server', 'package.json'), '{}'),
-    ]);
-
-    await mkdir(worktreeDir, { recursive: true });
-    await mkdir(join(worktreeDir, 'client'), { recursive: true });
-    await mkdir(join(worktreeDir, 'server'), { recursive: true });
-
-    await Promise.all([
-      writeFile(join(worktreeDir, 'package.json'), '{}'),
-      writeFile(join(worktreeDir, 'client', 'package.json'), '{}'),
-      writeFile(join(worktreeDir, 'server', 'package.json'), '{}'),
-    ]);
-  });
-
-  afterEach(async () => {
-    // Cleanup
-    if (tempDir) {
-      try {
-        execSync(`rm -rf "${tempDir}"`);
-      } catch {
-        // Ignore cleanup errors
-      }
+describe('link-worktree-deps script', () => {
+  it('links missing dependency dirs from the source checkout and keeps existing ones', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    for (const dir of ['node_modules', 'client/node_modules', 'server/node_modules']) {
+      mkdirSync(join(source, dir), { recursive: true });
     }
+    for (const pkg of ['client', 'server']) {
+      mkdirSync(join(worktree, pkg), { recursive: true });
+      writeFileSync(join(worktree, pkg, 'package.json'), '{}');
+    }
+    mkdirSync(join(worktree, 'client', 'node_modules'));
+
+    const result = runScript(source, worktree);
+
+    expect(result.status).toBe(0);
+    expect(readlinkSync(join(worktree, 'node_modules'))).toBe(join(source, 'node_modules'));
+    expect(readlinkSync(join(worktree, 'server', 'node_modules'))).toBe(join(source, 'server', 'node_modules'));
+    expect(lstatSync(join(worktree, 'client', 'node_modules')).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(source, 'node_modules')).isSymbolicLink()).toBe(false);
   });
 
-  it('creates symlinks for root, client, and server node_modules', async () => {
-    await linkWorktreeDependencies(sourceDir, worktreeDir);
-
-    // Verify symlinks were created
-    const rootLink = await readlink(join(worktreeDir, 'node_modules'));
-    expect(rootLink).toBe(join(sourceDir, 'node_modules'));
-
-    const clientLink = await readlink(join(worktreeDir, 'client', 'node_modules'));
-    expect(clientLink).toBe(join(sourceDir, 'client', 'node_modules'));
-
-    const serverLink = await readlink(join(worktreeDir, 'server', 'node_modules'));
-    expect(serverLink).toBe(join(sourceDir, 'server', 'node_modules'));
-  });
-
-  it('preserves pre-existing entries without modifying them', async () => {
-    // Create a pre-existing directory (not a symlink) for client node_modules
-    // This should be preserved
-    await mkdir(join(worktreeDir, 'client', 'node_modules', 'existing-dep'), { recursive: true });
-
-    // Run the link function
-    await linkWorktreeDependencies(sourceDir, worktreeDir);
-
-    // Verify the pre-existing directory structure in client/node_modules still exists
-    const stat1 = await stat(join(worktreeDir, 'client', 'node_modules', 'existing-dep'));
-    expect(stat1.isDirectory()).toBe(true);
-    expect(stat1.isSymbolicLink()).toBe(false);
-
-    // Server node_modules should have been created as a symlink (it wasn't pre-existing)
-    const serverLink = await readlink(join(worktreeDir, 'server', 'node_modules'));
-    expect(serverLink).toBe(join(sourceDir, 'server', 'node_modules'));
-  });
-
-  it('does not touch the primary checkout node_modules', async () => {
-    const sourceNodeModulesStat = await stat(join(sourceDir, 'node_modules'));
-    expect(sourceNodeModulesStat.isDirectory()).toBe(true);
-
-    await linkWorktreeDependencies(sourceDir, worktreeDir);
-
-    // Verify source is still an ordinary directory (not modified)
-    const sourceNodeModuleStatAfter = await stat(join(sourceDir, 'node_modules'));
-    expect(sourceNodeModuleStatAfter.isDirectory()).toBe(true);
-    expect(sourceNodeModuleStatAfter.isSymbolicLink()).toBe(false);
-  });
-
-  it('skips missing source directories gracefully', async () => {
-    // Remove the source node_modules (simulate a repo that doesn't have them)
-    execSync(`rm -rf "${join(sourceDir, 'node_modules')}"`);
-
-    // Should not throw
-    await linkWorktreeDependencies(sourceDir, worktreeDir);
-
-    // root node_modules should not exist in worktree since source doesn't have it
-    const exists = await stat(join(worktreeDir, 'node_modules')).catch(() => null);
-    expect(exists).toBeNull();
+  it('exits non-zero without both paths', () => {
+    const result = runScript('/only-one-path');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Usage');
   });
 });

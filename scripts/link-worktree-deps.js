@@ -1,35 +1,31 @@
 #!/usr/bin/env node
 /**
- * Link node_modules from the source checkout into a worktree.
+ * Link a source checkout's dependency dirs (root, client/, server/
+ * node_modules) into a freshly created worktree, so an agent can run tests
+ * there without installing — an `npm install` inside a symlinked worktree
+ * follows the link and empties the source checkout's real node_modules.
  *
- * This script symlinks the root, client/, and server/ node_modules directories
- * from the primary checkout into a fresh worktree, allowing agents to run tests
- * and npm commands without installing dependencies inside the worktree (which
- * would corrupt the primary checkout through symlinks).
+ * Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path>
  *
- * Usage: node scripts/link-worktree-deps.js <worktree-path>
- *
- * This is called by the Claim Issue prompt's Phase 2 to set up dependencies
- * immediately after `git worktree add`, before any agent work begins.
+ * The claim prompts run this right after their own `git worktree add` (#9052);
+ * PortOS-created CoS worktrees get the same links from worktreeManager.
+ * Existing entries in the worktree are left untouched.
  */
 
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { resolve } from 'path';
 import { linkWorktreeDependencies } from '../server/services/worktreeManager.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = dirname(__dirname);
-const worktreePath = process.argv[2];
+const [sourceCheckout, worktreePath] = process.argv.slice(2);
 
-if (!worktreePath) {
-  console.error('❌ Usage: node scripts/link-worktree-deps.js <worktree-path>');
+if (!sourceCheckout || !worktreePath) {
+  console.error('❌ Usage: node scripts/link-worktree-deps.js <source-checkout> <worktree-path>');
   process.exit(1);
 }
 
 try {
-  await linkWorktreeDependencies(repoRoot, worktreePath);
-  console.log(`✓ Linked node_modules into ${worktreePath}`);
+  await linkWorktreeDependencies(resolve(sourceCheckout), resolve(worktreePath));
+  console.log(`🔗 Linked dependencies into ${worktreePath}`);
 } catch (err) {
-  console.error(`❌ Failed to link node_modules: ${err.message}`);
+  console.error(`❌ Failed to link dependencies: ${err.message}`);
   process.exit(1);
 }
