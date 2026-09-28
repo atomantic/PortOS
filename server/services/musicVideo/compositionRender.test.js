@@ -68,7 +68,7 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
   afterAll(async () => {
     await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
     // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
-    sweepStrayTempRoots('portos-mv-composition-');
+    await sweepStrayTempRoots('portos-mv-composition-');
   });
 
   it('lays timed text over the cut on one continuous audio master, covering the edit within a frame', async () => {

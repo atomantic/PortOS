@@ -62,10 +62,10 @@ beforeEach(async () => {
   writeFileSync(join(MUSIC(), 'other-song.wav'), wav(6));
   project = await projects.createProject({ name: 'Example Video', uploadedAudioFilename: 'song.wav' });
 });
-afterAll(() => {
+afterAll(async () => {
   cleanupTempDataRoots();
   // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
-  sweepStrayTempRoots('mv-vocal-stem-route-test-');
+  await sweepStrayTempRoots('mv-vocal-stem-route-test-');
 });
 
 describe.skipIf(!ffmpeg)('music-video vocal stem routes', () => {

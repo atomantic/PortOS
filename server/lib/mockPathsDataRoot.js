@@ -108,18 +108,30 @@ export function cleanupTempDataRoots() {
  * running background job can still recreate the prefix afterward) that race.
  * `server/services/musicVideo/compositionRender.test.js` and
  * `server/routes/musicVideoVocalStem.test.js` are the worked examples.
+ *
+ * Runs the sweep twice, ~300ms apart: a single pass right after
+ * `cleanupTempDataRoots()` can still race a background job that has not
+ * started writing yet (observed on CI's slower/more contended runners, not
+ * reproduced in ~10 local runs) — the second pass catches what the first
+ * one was too early for. `await` this call as the LAST statement of the
+ * suite's `afterAll`.
  */
-export function sweepStrayTempRoots(prefix) {
-  const root = tmpdir();
-  let entries;
-  try {
-    entries = readdirSync(root);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
-  }
+export async function sweepStrayTempRoots(prefix) {
+  const sweepOnce = () => {
+    const root = tmpdir();
+    let entries;
+    try {
+      entries = readdirSync(root);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
+    }
+  };
+  sweepOnce();
+  await new Promise((resolve) => { setTimeout(resolve, 300); });
+  sweepOnce();
 }
 
 /**
