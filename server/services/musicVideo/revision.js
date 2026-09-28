@@ -33,19 +33,18 @@ import { isNonBlankStr } from '../../lib/textUtils.js';
 import { ensureSceneTakes, reviewSceneTake, TAKE_SLOT } from './takes.js';
 import { projectExcerpts } from './excerpt.js';
 
-export const REVISION_STATUSES = Object.freeze(['open', 'rendering', 'complete', 'canceled']);
 // A project row carries its recent revisions; the oldest SETTLED ones are
 // dropped past this so a long review loop can't grow one record without bound.
-export const MAX_PROJECT_REVISIONS = 20;
+const MAX_PROJECT_REVISIONS = 20;
 // A resume that hands a section out for generation CLAIMS it for this long, so
 // a second resume (another tab, a double submit) in the window between the
 // hand-out and the job reaching the queue can't hand it out again. After the
 // lease a section with no job and no take is handed out again — the earlier
 // submission evidently never reached the queue.
-export const GENERATION_CLAIM_LEASE_MS = 90_000;
+const GENERATION_CLAIM_LEASE_MS = 90_000;
 // A job that completed but whose take never attached (a failed attach write)
 // counts as in flight only this long, so it can't wedge the revision forever.
-export const TAKE_ATTACH_GRACE_MS = 120_000;
+const TAKE_ATTACH_GRACE_MS = 120_000;
 
 const revisionError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
@@ -224,7 +223,7 @@ export function revisionSectionStates(project, revision, jobs = [], nowMs = Date
 }
 
 /** Find a revision that can still be resumed (open, or rendering). Throws 404/409. */
-export function resumableRevision(project, revisionId) {
+function resumableRevision(project, revisionId) {
   const revision = findRevision(project, revisionId);
   if (!isActive(revision)) {
     throw revisionError(409, 'REVISION_CLOSED', `This revision is already ${revision.status}`);
