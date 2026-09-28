@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,16 @@ import {
 } from './apiRouteGraph.js';
 import { SERVER_DIR, collectServerSources } from './testHelper.js';
 
+const tempRoots = [];
+const makeRoot = () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
+  tempRoots.push(root);
+  return root;
+};
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
 const write = (root, path, source) => {
   const target = join(root, path);
   mkdirSync(join(target, '..'), { recursive: true });
@@ -20,7 +30,7 @@ const write = (root, path, source) => {
 
 describe('API route graph scanner', () => {
   it('resolves top-level mounts, imported child routers, local subrouters, and aliases', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
+    const root = makeRoot();
     write(root, 'server/index.js', `
       import widgetsRoutes from './routes/widgets.js';
       app.use('/api/widgets', widgetsRoutes);
@@ -57,7 +67,7 @@ describe('API route graph scanner', () => {
   });
 
   it('deduplicates the same operation while retaining every declaration source', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
+    const root = makeRoot();
     write(root, 'server/index.js', `
       import routes from './routes/index.js';
       app.use('/api/demo', routes);
@@ -87,7 +97,7 @@ describe('API route graph scanner', () => {
   });
 
   it('follows named factory returns and composed toolkit router properties', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
+    const root = makeRoot();
     write(root, 'server/index.js', `
       import { createRuns } from './routes/runs.js';
       import { createProviders } from './routes/providers.js';
