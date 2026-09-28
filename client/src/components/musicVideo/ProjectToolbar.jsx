@@ -2,6 +2,7 @@ import { Film, Trash2, Music, Activity, Image as ImageIcon, Video, Wand2, Copy }
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
 import { MUSCRIPTOR_MODELS } from '../../lib/muscriptorModels.js';
 import VideoRenderSettings from './VideoRenderSettings.jsx';
+import { sceneRenderReady, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 
 const uniqueCount = (scenes, key) => new Set(scenes.map((scene) => scene[key]).filter(Boolean)).size;
 
@@ -20,12 +21,19 @@ export default function ProjectToolbar({
 }) {
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
-  const referenceFrameCount = scenes.filter((scene) => scene.referenceImageId).length;
-  const renderableSceneCount = scenes.filter((scene) => scene.videoHistoryId).length;
-  const uniqueReferenceFrameCount = uniqueCount(scenes, 'referenceImageId');
-  const uniqueVideoCount = uniqueCount(scenes, 'videoHistoryId');
-  const missingFrameCount = sceneCount - referenceFrameCount;
-  const missingVideoCount = sceneCount - renderableSceneCount;
+  // #8985: in a composed render a still needs only its frame and a title card
+  // needs neither frame nor clip, so the counts cover the scenes that use them.
+  const layered = project.composition?.mode === 'composed';
+  const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
+  const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
+  const referenceFrameCount = frameScenes.filter((scene) => scene.referenceImageId).length;
+  const renderableSceneCount = footageScenes.filter((scene) => scene.videoHistoryId).length;
+  const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+  const uniqueReferenceFrameCount = uniqueCount(frameScenes, 'referenceImageId');
+  const uniqueVideoCount = uniqueCount(footageScenes, 'videoHistoryId');
+  const missingFrameCount = frameScenes.length - referenceFrameCount;
+  const missingVideoCount = footageScenes.length - renderableSceneCount;
+  const footageFramesReady = footageScenes.every((scene) => scene.referenceImageId);
   const generatingFrames = Object.keys(sceneMedia.genScenes).length > 0;
   const generatingVideos = Object.keys(sceneMedia.genVideoScenes).length > 0;
   const noAudio = !project.trackId && !project.uploadedAudioFilename;
@@ -94,18 +102,18 @@ export default function ProjectToolbar({
             : (missingFrameCount > 0 ? `Generate ${missingFrameCount} missing reference frame${missingFrameCount === 1 ? '' : 's'}` : 'Every scene has a reference frame')}
           className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
         >
-          <ImageIcon size={15} /> Frames {referenceFrameCount}/{sceneCount}
+          <ImageIcon size={15} /> Frames {referenceFrameCount}/{frameScenes.length}
         </button>
         <button
           onClick={sceneMedia.generateMissingVideos}
-          disabled={videoSettings.saving || sceneCount === 0 || missingVideoCount === 0 || referenceFrameCount !== sceneCount || generatingVideos || !!videoSettings.videoBlockedReason}
+          disabled={videoSettings.saving || footageScenes.length === 0 || missingVideoCount === 0 || !footageFramesReady || generatingVideos || !!videoSettings.videoBlockedReason}
           title={videoSettings.videoBlockedReason
-            || (referenceFrameCount !== sceneCount
+            || (!footageFramesReady
               ? 'Generate every reference frame first'
               : (missingVideoCount > 0 ? `Generate ${missingVideoCount} missing scene video${missingVideoCount === 1 ? '' : 's'}` : 'Every scene has a video'))}
           className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
         >
-          <Video size={15} /> Videos {renderableSceneCount}/{sceneCount}
+          <Video size={15} /> Videos {renderableSceneCount}/{footageScenes.length}
         </button>
         {(uniqueReferenceFrameCount < referenceFrameCount || uniqueVideoCount < renderableSceneCount) && (
           <span
@@ -130,13 +138,15 @@ export default function ProjectToolbar({
             <Activity size={15} className="animate-spin" /> {renderJob.pending ? 'Preparing render…' : `${renderJob.progress}% · Cancel`}
           </button>
         ) : (
-          <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || sceneCount === 0 || renderableSceneCount !== sceneCount}
+          <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || sceneCount === 0 || readySceneCount !== sceneCount}
             title={renderJob.active
               ? 'Wait for the other project render to finish, or return to it to cancel'
               : sceneCount === 0
                 ? 'Add scenes first'
-                : renderableSceneCount !== sceneCount
-                  ? `Generate videos for all ${sceneCount} scenes first`
+                : readySceneCount !== sceneCount
+                  ? (layered
+                    ? `${sceneCount - readySceneCount} scene${sceneCount - readySceneCount === 1 ? ' is' : 's are'} not ready — footage needs a video, a still needs a frame and a span, a card needs a span`
+                    : `Generate videos for all ${sceneCount} scenes first`)
                   : 'Render the complete music video over the track'}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
             <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}

@@ -310,6 +310,11 @@ function buildScene(input, { order }) {
     sectionIndex: input.sectionIndex ?? null,
     lyricText: input.lyricText ?? null,
     visualIntent: input.visualIntent ?? null,
+    // #8985: what a composed render shows for this span (render.js#sceneLayer).
+    visualLayer: input.visualLayer ?? 'footage',
+    stillMove: input.stillMove ?? 'hold',
+    cardText: input.cardText ?? null,
+    cardColor: input.cardColor ?? null,
     referenceImageId: null,
     videoHistoryId: null,
     // #8965 — immutable candidate takes; the two slot fields above are the

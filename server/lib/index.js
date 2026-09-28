@@ -479,6 +479,7 @@ export * from './claimFlowTaskTypes.js';
 export * from './chiptuneRender.js';
 export * from './chiptuneScore.js';
 export * from './pitchMath.js';
+export * from './musicVideoLayers.js';
 export * from './wavAudioFile.js';
 export * from './waveSketch.js';
 export * from './paintedCanvas.js';

@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -209,6 +210,15 @@ export const musicVideoCompositionSchema = z.object({
   posterSec: timedSec,
 }).strict();
 
+// Per-scene visual layer (#8985) — footage, a moved still, or a title card;
+// see musicVideoLayers.js. Only a composed render honors a non-footage layer.
+const sceneLayerFields = {
+  visualLayer: z.enum(MUSIC_VIDEO_VISUAL_LAYERS).optional(),
+  stillMove: z.enum(MUSIC_VIDEO_STILL_MOVES).optional(),
+  cardText: z.string().max(500).nullable().optional(),
+  cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
+};
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -264,6 +274,7 @@ export const musicVideoSceneCreateSchema = z.object({
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
+  ...sceneLayerFields,
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -288,6 +299,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
+  ...sceneLayerFields,
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
 }).strict();

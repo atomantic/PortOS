@@ -4,6 +4,7 @@ import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
+import { sceneVisualLayer } from '../lib/musicVideoLayers.js';
 
 // Audio-reactive generation conditions motion on the song itself, so the prompt
 // has to rule out anything that reads as a performance of it.
@@ -249,8 +250,13 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   };
 
   const scenes = project?.scenes || [];
+  // #8985: a composed render's title cards need no frame, and its stills need
+  // no clip — the batch generators skip them.
+  const layered = project?.composition?.mode === 'composed';
+  const frameScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) !== 'card');
+  const footageScenes = scenes.filter((scene) => sceneVisualLayer(scene, { layered }) === 'footage');
   const generateMissingFrames = () => {
-    const pending = scenes.filter((scene) =>
+    const pending = frameScenes.filter((scene) =>
       !scene.referenceImageId && !genScenes[scene.sceneId] && buildFramePrompt(scene));
     if (pending.length === 0) {
       toast.info('Every scene already has a reference frame');
@@ -260,11 +266,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   };
 
   const generateMissingVideos = () => {
-    const pending = scenes.filter((scene) =>
+    const pending = footageScenes.filter((scene) =>
       scene.referenceImageId && !scene.videoHistoryId && !genVideoScenes[scene.sceneId] && buildShotPrompt(scene));
     if (pending.length === 0) {
-      const referenceFrameCount = scenes.filter((scene) => scene.referenceImageId).length;
-      toast.info(referenceFrameCount < scenes.length
+      const referenceFrameCount = footageScenes.filter((scene) => scene.referenceImageId).length;
+      toast.info(referenceFrameCount < footageScenes.length
         ? 'Generate every reference frame before generating the remaining videos'
         : 'Every scene already has a video');
       return;

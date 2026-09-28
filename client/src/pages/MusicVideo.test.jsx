@@ -783,6 +783,38 @@ describe('MusicVideo typography composition (#8984)', () => {
   });
 });
 
+describe('MusicVideo section layers (#8985)', () => {
+  const scenes = [
+    { sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img1', videoHistoryId: 'h1', startSec: 0, endSec: 4 },
+    { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: null, videoHistoryId: null, startSec: 4, endSec: 6 },
+  ];
+  const composition = (mode) => ({ version: 1, mode, textCues: [], style: { color: '#ffffff', font: 'sans' }, posterSec: null });
+
+  it('makes a footage-less scene a title card so a composed project can render', async () => {
+    updateMusicVideoScene.mockResolvedValue({});
+    await openProject({ ...PROJECT_WITH_CLIP, scenes, composition: composition('composed') });
+    const renderBtn = await screen.findByRole('button', { name: /^Render final$/ });
+    expect(renderBtn).toBeDisabled();
+
+    const layer = document.getElementById('mv-scene-s2-layer');
+    fireEvent.change(layer, { target: { value: 'card' } });
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { visualLayer: 'card' }, { silent: true }));
+    const cardText = await screen.findByLabelText('Card text');
+    fireEvent.change(cardText, { target: { value: 'Chapter two' } });
+    fireEvent.blur(cardText);
+    await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith('mv-1', 's2', { cardText: 'Chapter two' }, { silent: true }));
+    // A card needs no frame or clip, so the board is ready; only the footage scene counts toward Videos.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled());
+    expect(screen.getByRole('button', { name: /Videos 1\/1/ })).toBeTruthy();
+  });
+
+  it('keeps a plain render on footage and says the layer only applies to composed renders', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, scenes: [scenes[0], { ...scenes[1], visualLayer: 'card' }], composition: composition('concat') });
+    expect(await screen.findByText(/Title card sections render in composed mode/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
+  });
+});
+
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };

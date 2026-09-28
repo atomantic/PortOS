@@ -94,6 +94,22 @@ export function renderableCues(composition, durationSec) {
 }
 
 /**
+ * A title card's text (#8985), drawn by the typography layer for exactly its
+ * section on the output timebase (`sections` from buildMusicVideoFfmpegArgs),
+ * clipped to the rendered video.
+ */
+export function sectionCardCues(clips, sections, durationSec) {
+  const textBySceneId = new Map(clips.filter((c) => c.layer === 'card' && c.cardText).map((c) => [c.sceneId, c.cardText]));
+  return sections
+    .filter((section) => textBySceneId.has(section.sceneId) && section.startSec < durationSec)
+    .map((section) => ({
+      id: `card-${section.sceneId}`, text: textBySceneId.get(section.sceneId),
+      startSec: section.startSec, endSec: Math.min(section.endSec, durationSec),
+      template: 'fade', placement: 'center', emphasis: 'hero',
+    }));
+}
+
+/**
  * Pure and self-contained (its source is embedded in the overlay page, so it
  * must not reference anything outside its own body): the visual state of `cue`
  * at time `t`, or null when the cue is not on screen. `offsetY` is a fraction

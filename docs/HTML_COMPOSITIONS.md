@@ -162,6 +162,15 @@ only audio. A cue's state at a time is a pure function of that time
 The scratch directory is removed when the render ends, swept at boot, and
 excluded from backups.
 
+A composed render also honors each scene's visual layer (#8985): its
+generated footage (the default), its selected still frame with a deterministic
+hold, push-in or pan, or a title card — a solid colour whose text is drawn by
+the same typography overlay for exactly that section. Still and card sections
+need an authored start/end instead of a clip, and every section is cut to a
+whole number of frames on the song's timebase, so the edit never drifts from
+the authored timeline. A plain concat render ignores the layer and plays
+footage, exactly as before.
+
 ## Launch-video admission (API foundation)
 
 `POST /api/html-composition/render` accepts `launchVideo: { targetDurationSec: 20 }`.
