@@ -67,7 +67,7 @@ describe('planShotSplit', () => {
     expect(planShotSplit({ startSec: 5, endSec: 15, maxSec: 10 })).toMatchObject({ ok: false, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
     expect(planShotSplit({ startSec: 5, endSec: 15.01, maxSec: 10 }).pieces).toHaveLength(2);
     // Just past an exact multiple still needs the extra piece; float noise at it does not.
-    expect(planShotSplit({ startSec: 0, endSec: 20.00001, maxSec: 10 }).pieces).toHaveLength(3);
+    expect(planShotSplit({ startSec: 0, endSec: 20.000004, maxSec: 10 }).pieces).toHaveLength(3);
     expect(32.2 - 2.2).toBeGreaterThan(30);
     expect(planShotSplit({ startSec: 2.2, endSec: 32.2, maxSec: 10 }).pieces).toHaveLength(3);
   });
