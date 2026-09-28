@@ -158,6 +158,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-runtime-safety', ['Sentinel confusion', 'a failure scenario, not a code shape', 'Not yours']],
     ['better-dependency-freedom', ['Acceptable', 'Suspect', 'Removable', 'Respect documented decisions', 'file no version bumps here']],
     ['better-test-quality', ['Vacuous', 'mutation probe', 'Deletion is a valid outcome', 'Missing coverage is separate work']],
+    ['better-dev-environment', ['Measure, do not only read', 'before and after', 'Prefer a guard to a patch', 'Not yours']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(PROMPT_VERSIONS[key]).toBe(['better-complexity', 'better-runtime-safety'].includes(key) ? 2 : 1);
