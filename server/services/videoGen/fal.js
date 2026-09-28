@@ -424,6 +424,5 @@ const finalizeCanceled = finalizeJobFailure.canceled;
 // Test-only handles.
 export const _internals = {
   buildRequestBody,
-  buildLipSyncRequestBody,
   toDataUri,
 };
