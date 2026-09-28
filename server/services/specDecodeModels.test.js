@@ -334,32 +334,38 @@ describe('downloadSpecDecodeModel', () => {
 
   it('aborts a byte-silent transfer when its idle watchdog expires', async () => {
     vi.useFakeTimers();
-    stubPreset();
-    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
-    let signal;
-    const stream = new Readable({ read() {} });
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
-      signal = options.signal;
-      signal.addEventListener('abort', () => stream.destroy(new Error('aborted')));
-      return {
-        ok: true,
-        status: 200,
-        headers: { get: () => '99' },
-        body: Readable.toWeb(stream),
-      };
-    });
+    try {
+      stubPreset();
+      vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
+      let signalReady;
+      const signalReadyPromise = new Promise((resolve) => { signalReady = resolve; });
+      let signal;
+      const stream = new Readable({ read() {} });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
+        signal = options.signal;
+        signalReady();
+        signal.addEventListener('abort', () => stream.destroy(new Error('aborted')));
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => '99' },
+          body: Readable.toWeb(stream),
+        };
+      });
 
-    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
-    // Attach the rejection assertion before advancing timers — the extra
-    // promise hop the resumable-download refactor added means the real
-    // stream-destroy → pipeline-reject chain can settle a tick after
-    // advanceTimersByTimeAsync returns, so subscribing afterward races an
-    // "unhandled rejection" against Node's own handler-attached check.
-    const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_DOWNLOAD_STALLED' });
-    await vi.waitFor(() => expect(signal).toBeDefined());
-    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
-    await assertion;
-    vi.useRealTimers();
+      const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+      // Attach the rejection assertion before advancing timers — the extra
+      // promise hop the resumable-download refactor added means the real
+      // stream-destroy → pipeline-reject chain can settle a tick after
+      // advanceTimersByTimeAsync returns, so subscribing afterward races an
+      // "unhandled rejection" against Node's own handler-attached check.
+      const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_DOWNLOAD_STALLED' });
+      await signalReadyPromise;
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The slot is claimed before the Hugging Face round trip: a second click
@@ -403,37 +409,42 @@ describe('downloadSpecDecodeModel', () => {
 
   it.each(['headers', 'body'])('times out hanging metadata %s, emits an error, and releases the slot for retry', async (phase) => {
     vi.useFakeTimers();
-    stubPreset();
-    let metadataCalls = 0;
-    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => {
-      metadataCalls += 1;
-      if (metadataCalls > 1) return new Response(JSON.stringify(siblings('Example-Q4_K_M.gguf')));
-      if (phase === 'headers') {
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-        });
-      }
-      return {
-        ok: true,
-        status: 200,
-        text: () => new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-        }),
-      };
-    }));
-    const frames = [];
-    const first = downloadSpecDecodeModel({
-      presetId: 'test-preset', role: 'model', onProgress: (frame) => frames.push(frame),
-    });
-    const assertion = expect(first).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT', status: 504 });
+    try {
+      stubPreset();
+      let metadataCalls = 0;
+      let fetchReady;
+      const fetchReadyPromise = new Promise((resolve) => { fetchReady = resolve; });
+      vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => {
+        metadataCalls += 1;
+        if (metadataCalls === 1) fetchReady();
+        if (metadataCalls > 1) return new Response(JSON.stringify(siblings('Example-Q4_K_M.gguf')));
+        if (phase === 'headers') {
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: () => new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+        };
+      }));
+      const frames = [];
+      const first = downloadSpecDecodeModel({
+        presetId: 'test-preset', role: 'model', onProgress: (frame) => frames.push(frame),
+      });
+      const assertion = expect(first).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT', status: 504 });
 
-    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(10_000);
-    await assertion;
-    expect(frames.at(-1)).toMatchObject({ event: 'error' });
-    expect(frames.at(-1).message).toMatch(/metadata lookup.*timed out.*retry/i);
-
-    vi.useRealTimers();
+      await fetchReadyPromise;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+      expect(frames.at(-1)).toMatchObject({ event: 'error' });
+      expect(frames.at(-1).message).toMatch(/metadata lookup.*timed out.*retry/i);
+    } finally {
+      vi.useRealTimers();
+    }
     vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -447,26 +458,33 @@ describe('downloadSpecDecodeModel', () => {
 
   it('keeps the size-probe fallback inside the metadata deadline', async () => {
     vi.useFakeTimers();
-    stubPreset();
-    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({
-      siblings: [{ rfilename: 'Example-Q4_K_M.gguf' }],
-    });
-    let aborted = false;
-    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, { signal }) => {
-      if (aborted || signal.aborted) return Promise.reject(signal.reason);
-      return new Promise((_resolve, reject) => {
-        signal.addEventListener('abort', () => {
-          aborted = true;
-          reject(signal.reason);
-        }, { once: true });
+    try {
+      stubPreset();
+      vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({
+        siblings: [{ rfilename: 'Example-Q4_K_M.gguf' }],
       });
-    });
-    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
-    const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT' });
-    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+      let aborted = false;
+      let fetchReady;
+      const fetchReadyPromise = new Promise((resolve) => { fetchReady = resolve; });
+      vi.spyOn(globalThis, 'fetch').mockImplementation((_url, { signal }) => {
+        fetchReady();
+        if (aborted || signal.aborted) return Promise.reject(signal.reason);
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            aborted = true;
+            reject(signal.reason);
+          }, { once: true });
+        });
+      });
+      const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+      const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT' });
+      await fetchReadyPromise;
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    await assertion;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves explicit cancellation while metadata headers are pending', async () => {
@@ -487,23 +505,30 @@ describe('downloadSpecDecodeModel', () => {
 
   it('does not apply the metadata deadline to the weight transfer', async () => {
     vi.useFakeTimers();
-    stubPreset();
-    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
-    let transferSignal;
-    let finish;
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, { signal }) => {
-      transferSignal = signal;
-      const body = new Readable({ read() {} });
-      finish = () => body.push(Buffer.from('gg')) && body.push(null);
-      return { ok: true, status: 200, headers: { get: () => '2' }, body: Readable.toWeb(body) };
-    });
-    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
-    await vi.waitFor(() => expect(transferSignal).toBeDefined());
+    try {
+      stubPreset();
+      vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
+      let transferSignal;
+      let finish;
+      let transferReady;
+      const transferReadyPromise = new Promise((resolve) => { transferReady = resolve; });
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, { signal }) => {
+        transferSignal = signal;
+        transferReady();
+        const body = new Readable({ read() {} });
+        finish = () => body.push(Buffer.from('gg')) && body.push(null);
+        return { ok: true, status: 200, headers: { get: () => '2' }, body: Readable.toWeb(body) };
+      });
+      const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+      await transferReadyPromise;
 
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(transferSignal.aborted).toBe(false);
-    finish();
-    await expect(download).resolves.toMatchObject({ success: true });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(transferSignal.aborted).toBe(false);
+      finish();
+      await expect(download).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('short-circuits when the weights are already on disk', async () => {
