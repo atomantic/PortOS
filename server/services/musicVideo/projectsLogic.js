@@ -287,7 +287,10 @@ export function applyProjectPatch(project, patch) {
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
   if (!trackChanged) return touch(project, mergedPatch);
-  const scenes = (project.scenes || []).map((s) => (s.beatAligned ? { ...s, beatAligned: false } : s));
+  // A planned section belongs to the old audio too; clear its provenance so
+  // the renderer does not preserve that plan's timing on the replacement song.
+  const scenes = (project.scenes || []).map((s) => (s.beatAligned || s.sectionIndex != null
+    ? { ...s, beatAligned: false, sectionIndex: null } : s));
   // Clearing audioAnalysis means the project must be re-analyzed before it can be
   // planned/arranged/rendered, so a status that implies analysis existed
   // (`analyzed`/`ready`/`rendering`/`complete`) is now stale. Regress it to `draft` —

@@ -27,6 +27,7 @@ import { findFfmpeg, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject } from './projects.js';
+import { planShots } from './shotPlan.js';
 
 const clip = (over = {}) => ({ videoPath: '/v/a.mp4', width: 768, height: 512, fps: 24, duration: 2, inSec: 0, outSec: 2, ...over });
 
@@ -166,6 +167,20 @@ describe('excerptBoundaryTimes (#8986)', () => {
 });
 
 describe('beatSnapClips', () => {
+  it('keeps a sparse-grid shot plan on its authored timeline when source clips are longer', async () => {
+    const beats = [0, 12];
+    const { shots } = planShots([{ label: 'Verse', startSec: 0, endSec: 12 }], { beats });
+    expect(shots.some((shot) => !shot.beatAligned)).toBe(true);
+    const scenes = shots.map((shot, order) => ({ ...shot, sceneId: `s${order}`, order, videoHistoryId: `v${order}`, loop: false }));
+    loadHistory.mockResolvedValue(scenes.map((scene) => ({ id: scene.videoHistoryId, filename: `${scene.videoHistoryId}.mp4`, numFrames: 240, fps: 24, width: 768, height: 512 })));
+    const clips = beatSnapClips(await resolveSceneClips({ scenes }), beats, { scenes });
+    expect(clips.map((c) => c.duration)).toEqual(shots.map((shot) => shot.endSec - shot.startSec));
+    const { totalDuration, args } = buildMusicVideoFfmpegArgs(clips, '/music/example.wav', '/out.mp4', { audioDurationSec: 20 });
+    expect(totalDuration).toBe(12);
+    const filters = args[args.indexOf('-filter_complex') + 1];
+    for (const shot of shots) expect(filters).toContain(`trim=start=0:end=${shot.endSec - shot.startSec}`);
+  });
+
   it('returns clips unchanged when there is no beat grid', () => {
     const out = beatSnapClips([clip({ duration: 2, outSec: 2 })], null);
     expect(out[0].outSec).toBe(2);

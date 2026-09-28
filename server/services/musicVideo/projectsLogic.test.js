@@ -216,12 +216,12 @@ describe('applyProjectPatch', () => {
       trackId: 't1',
       scenes: [
         { sceneId: 's1', order: 0, startSec: 1, endSec: 2, beatAligned: true },
-        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false },
+        { sceneId: 's2', order: 1, startSec: 3, endSec: 4, beatAligned: false, sectionIndex: 0 },
       ],
     };
     const next = applyProjectPatch(withScenes, { trackId: 't2' });
     expect(next.scenes[0]).toMatchObject({ beatAligned: false, startSec: 1, endSec: 2 });
-    expect(next.scenes[1]).toMatchObject({ beatAligned: false, startSec: 3, endSec: 4 });
+    expect(next.scenes[1]).toMatchObject({ beatAligned: false, sectionIndex: null, startSec: 3, endSec: 4 });
   });
 
   it('regresses status to draft on track change since the cleared analysis must be redone', () => {

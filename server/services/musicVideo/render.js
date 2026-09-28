@@ -282,7 +282,8 @@ export async function resolveSceneClips(project, { layered = false } = {}) {
 // returned unchanged.
 //
 // `scenes` (optional) is the project's scene list — when a clip's matching
-// scene has `beatAligned: true` and a valid `startSec`/`endSec` (persisted by
+// scene has planner section provenance or `beatAligned: true` and valid
+// `startSec`/`endSec` (persisted by
 // the BeatTimeline drag-snap arranger, #1854), that scene's saved duration is
 // honored EXACTLY instead of being re-derived from the live beat grid: the
 // director already snapped and saved it, so the render shouldn't silently
@@ -303,7 +304,11 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
       return { ...clip };
     }
     const scene = scenesById?.get(clip.sceneId);
-    if (scene?.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec) {
+    // A planned shot keeps its bounded span even when a sparse grid cannot
+    // supply an on-beat cut. Beat alignment describes the cut, not ownership
+    // of its timing. Section provenance is cleared when the audio changes.
+    const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
+    if ((scene?.beatAligned || planned) && sceneHasAuthoredSpan(scene)) {
       // inSec stays 0 here deliberately: this only ever trims how much of the
       // clip plays, never which frames — there is no in-point/out-point
       // distinction. A legacy planned scene commonly spans much longer than
