@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -10,15 +10,18 @@ import {
 
 describe('writeStepOutput', () => {
   let outputPath;
+  let tempRoot;
   const previous = process.env.GITHUB_OUTPUT;
 
   beforeEach(() => {
-    outputPath = join(mkdtempSync(join(tmpdir(), 'gh-output-')), 'output.txt');
+    tempRoot = mkdtempSync(join(tmpdir(), 'gh-output-'));
+    outputPath = join(tempRoot, 'output.txt');
     writeFileSync(outputPath, '');
     process.env.GITHUB_OUTPUT = outputPath;
   });
 
   afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
     if (previous === undefined) delete process.env.GITHUB_OUTPUT;
     else process.env.GITHUB_OUTPUT = previous;
   });
@@ -46,15 +49,20 @@ describe('writeStepOutput', () => {
 
 describe('writeStepEnv', () => {
   let envPath;
+  let tempRoot;
   const previous = process.env.GITHUB_ENV;
+  const tempRoots = [];
 
   beforeEach(() => {
-    envPath = join(mkdtempSync(join(tmpdir(), 'gh-env-')), 'env.txt');
+    tempRoot = mkdtempSync(join(tmpdir(), 'gh-env-'));
+    tempRoots.push(tempRoot);
+    envPath = join(tempRoot, 'env.txt');
     writeFileSync(envPath, '');
     process.env.GITHUB_ENV = envPath;
   });
 
   afterEach(() => {
+    for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
     if (previous === undefined) delete process.env.GITHUB_ENV;
     else process.env.GITHUB_ENV = previous;
   });
@@ -72,7 +80,9 @@ describe('writeStepEnv', () => {
   });
 
   it('writes to GITHUB_ENV, not GITHUB_OUTPUT', () => {
-    const outputPath = join(mkdtempSync(join(tmpdir(), 'gh-output-')), 'output.txt');
+    const outputRoot = mkdtempSync(join(tmpdir(), 'gh-output-'));
+    tempRoots.push(outputRoot);
+    const outputPath = join(outputRoot, 'output.txt');
     writeFileSync(outputPath, '');
     const previousOutput = process.env.GITHUB_OUTPUT;
     process.env.GITHUB_OUTPUT = outputPath;
@@ -95,10 +105,16 @@ describe('writeStepEnv', () => {
 
 describe('writeStepSummary', () => {
   let summaryPath;
+  let tempRoot;
 
   beforeEach(() => {
-    summaryPath = join(mkdtempSync(join(tmpdir(), 'gh-summary-')), 'summary.md');
+    tempRoot = mkdtempSync(join(tmpdir(), 'gh-summary-'));
+    summaryPath = join(tempRoot, 'summary.md');
     writeFileSync(summaryPath, '');
+  });
+
+  afterEach(() => {
+    if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it('appends the markdown block verbatim, newlines and all', () => {
