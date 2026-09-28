@@ -77,7 +77,7 @@ const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 //     first place. No longer allowlisted below; a recurrence is a real,
 //     unknown leak again.
 
-const KNOWN_PENDING_LEAKS = new Set([]);
+const KNOWN_PENDING_LEAKS = new Set();
 
 /**
  * Groups a leaked entry's basename by its mkdtemp call site as closely as a
