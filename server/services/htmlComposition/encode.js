@@ -20,10 +20,10 @@ async function frameFormat(page, { width, height, layout }) {
 
 // Stream one frame at a time. The write callback supplies back-pressure and
 // the terminal race releases a pending write on exit, disconnect or cancel.
-export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress } = {}) {
-  const ffmpeg = await findFfmpeg();
+export async function encodeComposition(page, contract, outputPath, { musicPath, audio, signal, onProgress, spawnProcess = spawn, locateFfmpeg = findFfmpeg, tagFilter = bt709TagFilter } = {}) {
+  const ffmpeg = await locateFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
-  const tag = await bt709TagFilter();
+  const tag = await tagFilter();
   signal?.throwIfAborted();
   const { fps, durationSec, width, height, motionBlur } = contract;
   const numFrames = Math.round(durationSec * fps);
@@ -49,7 +49,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   if (exactAudio) args.push('-map', '1:a', ...AAC_ENCODE_ARGS);
   else if (musicPath) args.push('-map', '1:a', '-af', `atrim=duration=${durationSec},asetpts=PTS-STARTPTS,afade=t=out:st=${durationSec - 0.5}:d=0.5`, ...AAC_ENCODE_ARGS);
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
-  const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let stderr = '';
   let exited = false;
   let stopping = false;

@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -61,33 +64,19 @@ describe('encodeComposition music-video audio', () => {
     expect(args).toContain('-frames:v');
   });
 
-  it('does not retain per-frame buffers across a long synthetic job', async () => {
-    // Forced GC is what makes "not retained" observable. Re-exec once under
-    // --expose-gc so a normal vitest run still executes the measurement.
-    if (typeof global.gc !== 'function') {
-      if (process.env.PORTOS_GC_CHILD === '1') throw new Error('forced GC was not available in the vitest worker');
-      const serverRoot = fileURLToPath(new URL('../..', import.meta.url));
-      const vitestBin = fileURLToPath(new URL('../../node_modules/vitest/vitest.mjs', import.meta.url));
-      const result = spawnSync(process.execPath, [vitestBin, 'run', 'services/htmlComposition/encode.musicVideo.test.js', '-t', 'per-frame buffers'], {
-        cwd: serverRoot, encoding: 'utf8', timeout: 180000,
-        env: { ...process.env, PORTOS_GC_CHILD: '1', NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --expose-gc`.trim() },
-      });
-      expect(result.status, result.stderr || result.stdout).toBe(0);
-      return;
-    }
-    spawned.length = 0;
-    const samples = [];
-    await encodeComposition(page, contract(600), '/tmp/long.mp4', {
-      onProgress: (_fraction, detail) => {
-        if (detail.frame === 400 || detail.frame === 7200) {
-          global.gc();
-          samples.push(process.memoryUsage().heapUsed);
-        }
-      },
+  it('does not retain per-frame buffers across a long synthetic job', () => {
+    // A separate node process so its temp directory and forced GC stay out of
+    // this vitest run. A nested vitest shares the suite temp root and deletes
+    // it out from under the other shards.
+    const scratch = mkdtempSync(join(tmpdir(), 'portos-encode-mem-'));
+    const script = fileURLToPath(new URL('./encode.musicVideo.memory-check.mjs', import.meta.url));
+    const result = spawnSync(process.execPath, ['--expose-gc', script], {
+      cwd: fileURLToPath(new URL('../..', import.meta.url)),
+      encoding: 'utf8',
+      timeout: 120000,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: scratch, TEMP: scratch, TMP: scratch },
     });
-    expect(spawned[0].bytes()).toBeGreaterThan(0);
-    expect(samples).toHaveLength(2);
-    // Frames 401–7200 of retained 4 KiB screenshots stay well over 12 MiB after GC.
-    expect(samples[1] - samples[0]).toBeLessThan(12 * 1024 * 1024);
-  }, 200000);
+    rmSync(scratch, { recursive: true, force: true });
+    expect(result.status, `${result.stderr || ''}\n${result.stdout || ''}`).toBe(0);
+  }, 150000);
 });
