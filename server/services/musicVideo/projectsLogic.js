@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   MUSIC_VIDEO_STATUSES,
+  MUSIC_VIDEO_REFERENCE_USES,
   musicVideoAudioAnalysisSchema,
   musicVideoMidiTranscriptionSchema,
   musicVideoSceneCreateSchema,
@@ -31,6 +32,7 @@ import { isStr } from '../../lib/textUtils.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
+import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -76,6 +78,8 @@ function normalizeVisualSpec(patch, base = null) {
     label: typeof ref.label === 'string' ? ref.label : '',
     note: typeof ref.note === 'string' ? ref.note : '',
     condition: ref.condition === true,
+    // #8980 — reference (default) / final-visible / motion-reference.
+    use: MUSIC_VIDEO_REFERENCE_USES.includes(ref.use) ? ref.use : 'reference',
   }));
   return {
     references,
@@ -131,6 +135,9 @@ export function buildProjectRecord(input, { id, now }) {
     pacing: null,
     // #8984 — composition manifest (null = plain concatenation render).
     composition: null,
+    // #8980 — optional pre-production treatment (brief, arc, shot direction,
+    // proof checklist); null until the director starts one. See treatment.js.
+    treatment: null,
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -138,6 +145,12 @@ export function buildProjectRecord(input, { id, now }) {
     deleted: false,
     deletedAt: null,
   };
+}
+
+function mintCloneSceneId(scene, sceneIdMap) {
+  const next = `mvs-${randomUUID()}`;
+  sceneIdMap.set(scene.sceneId, next);
+  return next;
 }
 
 /** Build an independently editable next version while reusing immutable media assets. */
@@ -154,9 +167,10 @@ export function cloneProjectRecord(source, {
     : inferredVersion;
   const version = sourceVersion + 1;
   const baseName = nameMatch?.[1]?.trim() || source.name || 'Music Video';
+  const sceneIdMap = new Map();
   const scenes = (source.scenes || []).map((scene, order) => ({
     ...scene,
-    sceneId: `mvs-${randomUUID()}`,
+    sceneId: mintCloneSceneId(scene, sceneIdMap),
     order,
     referenceImageId: includeGeneratedMedia ? (scene.referenceImageId ?? null) : null,
     videoHistoryId: includeGeneratedMedia ? (scene.videoHistoryId ?? null) : null,
@@ -179,6 +193,14 @@ export function cloneProjectRecord(source, {
     createdAt: now,
     updatedAt: now,
     scenes,
+    // #8980 — the treatment's shot directions and proofs follow the scenes to
+    // their new ids; proof evidence the clone can't back is dropped.
+    treatment: source.treatment ? remapTreatmentForClone(source.treatment, sceneIdMap, {
+      includeGeneratedMedia,
+      sourceRenderId: source.renderHistoryId ?? null,
+      sourceScenesFingerprint: scenesFingerprint(source.scenes || []),
+      cloneScenesFingerprint: scenesFingerprint(scenes),
+    }) : null,
     renderHistoryId: null,
     deleted: false,
     deletedAt: null,

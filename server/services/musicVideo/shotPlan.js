@@ -42,6 +42,27 @@ const sortedGrid = (list) => (Array.isArray(list) ? list : [])
   .filter((t) => typeof t === 'number' && Number.isFinite(t) && t >= 0)
   .sort((a, b) => a - b);
 
+// Mirrors musicVideoSceneCreateSchema's startSec/endSec bounds (musicVideoValidation.js)
+// so a section just outside the downstream scene schema's range is dropped
+// here rather than failing addScenes' atomic batch validation and aborting
+// the whole plan request over one bad section.
+const MAX_SECTION_SEC = 36000;
+
+/**
+ * Keep only sections with a valid forward-time span within the bounds the
+ * downstream scene schema accepts. Defensive against a malformed/legacy
+ * cached analysis — `musicVideoAudioAnalysisSchema` doesn't enforce these
+ * per-section invariants the way `musicVideoSceneCreateSchema` does. Shared
+ * by the planner's scene-input and prompt builders (so their array indices
+ * always agree) and by the treatment compiler (#8980).
+ */
+export function validSections(sections) {
+  return (Array.isArray(sections) ? sections : [])
+    .filter((s) => s
+      && typeof s.startSec === 'number' && s.startSec >= 0
+      && typeof s.endSec === 'number' && s.endSec > s.startSec && s.endSec <= MAX_SECTION_SEC);
+}
+
 /** Seconds of footage one generated clip provides for the project's renderer. */
 export function resolveClipCapacitySec(videoSettings) {
   if (videoSettings?.backend === 'grok') return videoSettings.grokDuration === 6 ? 6 : 10;

@@ -25,6 +25,10 @@ import {
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
   musicVideoHandoffImportSchema,
+  musicVideoTreatmentUpdateSchema,
+  musicVideoTreatmentCompileSchema,
+  musicVideoTreatmentApplySchema,
+  musicVideoTreatmentProofReviewSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -61,6 +65,13 @@ import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
+import {
+  updateTreatment,
+  compileTreatment,
+  previewTreatmentApply,
+  applyTreatment,
+  reviewProof,
+} from '../services/musicVideo/treatmentService.js';
 import { getTrack } from '../services/tracks/index.js';
 
 const router = Router();
@@ -185,6 +196,39 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const { seedPrompts, providerId, model } = validateRequest(musicVideoPlanRequestSchema, req.body || {});
   const result = await planProject(req.params.id, { seedPrompts, providerId, model });
   res.json(result);
+}));
+
+// --- Pre-production treatment (#8980) ---
+// A structured brief, a compiled whole-song arc, per-shot direction keyed to
+// the board's scene ids and a proof checklist (services/musicVideo/treatment.js).
+// Every write names the revision it was made against; a stale one is a 409.
+router.patch('/:id/treatment', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoTreatmentUpdateSchema, req.body);
+  res.json(await updateTreatment(req.params.id, patch));
+}));
+
+// Compile is an explicit user action. `useAi: false` drafts deterministically
+// with no provider call; otherwise the chosen (or active) provider refines the
+// draft, and any failure degrades to the deterministic draft with a reason.
+router.post('/:id/treatment/compile', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentCompileSchema, req.body);
+  res.json(await compileTreatment(req.params.id, options));
+}));
+
+// Read-only: which scenes Apply would change, which hand-edited prompts it
+// keeps, and whether a stale input blocks it.
+router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
+  res.json(await previewTreatmentApply(req.params.id));
+}));
+
+router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentApplySchema, req.body);
+  res.json(await applyTreatment(req.params.id, options));
+}));
+
+router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
+  const review = validateRequest(musicVideoTreatmentProofReviewSchema, req.body);
+  res.json(await reviewProof(req.params.id, req.params.proofId, review));
 }));
 
 // Import timed lyric cues (#8964) from pasted LRC, SRT/WebVTT, or plain lines
@@ -321,12 +365,12 @@ async function takeAssetExists(kind, assetId) {
 // Add one candidate take to a scene: the synchronous image lane's inline
 // render, or an asset the director imports from the gallery.
 router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
-  const { kind, assetId, source = 'imported', provider, originalName } = validateRequest(musicVideoTakeInputSchema, req.body);
+  const { kind, assetId, source = 'imported', provider, originalName, use } = validateRequest(musicVideoTakeInputSchema, req.body);
   if (!(await takeAssetExists(kind, assetId))) {
     throw new ServerError(`${kind === 'image' ? 'Image' : 'Video'} not found in this install's media library`, { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
   const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
-    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName,
+    kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use,
   }]);
   res.status(201).json({ scene, take: appended[0] });
 }));
@@ -380,7 +424,7 @@ router.post('/:id/handoff/import', asyncHandler(async (req, res) => {
     if (!sceneId || !sceneIds.has(sceneId)) { skip('no-matching-scene'); continue; }
     if (!musicVideoTakeInputSchema.safeParse({ kind: item.kind, assetId: item.assetId }).success
       || !(await takeAssetExists(item.kind, item.assetId))) { skip('asset-not-found'); continue; }
-    accepted.push({ sceneId, kind: item.kind, assetId: item.assetId, source: 'imported', provider, originalName: item.originalName });
+    accepted.push({ sceneId, kind: item.kind, assetId: item.assetId, source: 'imported', provider, originalName: item.originalName, use: item.use });
   }
   if (accepted.length === 0) {
     return res.json({ project, imported: [], skipped });

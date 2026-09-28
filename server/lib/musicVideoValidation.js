@@ -95,6 +95,11 @@ const galleryImageName = z.string().min(1).max(256)
 const videoHistoryIdSchema = z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id');
 
 export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'set', 'prop', 'style'];
+// How a reference is meant to be used (#8980): `reference` guides the look
+// (style/character conditioning), `final-visible` is supplied media meant to
+// appear in the finished video as-is, and `motion-reference` is scaffolding
+// footage/stills for a hand-drawn or code-rendered pass — never final picture.
+export const MUSIC_VIDEO_REFERENCE_USES = ['reference', 'final-visible', 'motion-reference'];
 // The image backends accept at most four reference images for most models
 // (imageGen/prepareParams.js referenceCap), so a project conditions each
 // reference frame on at most this many of its flagged references.
@@ -110,6 +115,7 @@ export const musicVideoVisualReferenceSchema = z.object({
   label: z.string().max(120).optional(),
   note: z.string().max(1000).optional(),
   condition: z.boolean().optional(),
+  use: z.enum(MUSIC_VIDEO_REFERENCE_USES).optional(),
 }).strict();
 
 // The project's reusable visual specification. A patch merges per sub-field
@@ -128,6 +134,10 @@ export const musicVideoVisualSpecSchema = z.object({
 
 export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video'];
 export const MUSIC_VIDEO_TAKE_STATUSES = ['candidate', 'rejected'];
+// A take's intended use (#8980). A `motion-reference` take is scaffolding (e.g.
+// generated footage to trace a hand-drawn pass over): it is kept as a candidate
+// but never fills the scene's timeline slot automatically.
+export const MUSIC_VIDEO_TAKE_USES = ['final', 'motion-reference'];
 
 // Provider label for provenance — free text so a new external tool needs no
 // schema change, but bounded to a slug so it can't smuggle a URL or a secret.
@@ -143,6 +153,7 @@ export const musicVideoTakeInputSchema = z.object({
   source: z.enum(['generated', 'imported']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
+  use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'image' ? galleryImageName : videoHistoryIdSchema;
   const parsed = check.safeParse(take.assetId);
@@ -166,6 +177,7 @@ export const musicVideoHandoffImportSchema = z.object({
     assetId: z.string().min(1).max(256),
     sceneId: z.string().min(1).max(64).optional(),
     originalName: z.string().max(255).optional(),
+    use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
   }).strict()).min(1).max(200),
 }).strict();
 
@@ -219,6 +231,121 @@ const sceneLayerFields = {
   cardText: z.string().max(500).nullable().optional(),
   cardColor: z.string().regex(/^#[0-9a-f]{6}$/i, 'card color is #rrggbb').nullable().optional(),
 };
+
+// ---- Pre-production treatment (#8980) --------------------------------------
+
+// The treatment sits between the director's concept/visual spec and the timed
+// shot planner: a structured brief, a compiled whole-song arc, per-shot
+// direction keyed to the board's real scene ids, and a proof checklist. Its own
+// routes edit it (never the generic project PATCH) so every write carries the
+// revision it was based on. See services/musicVideo/treatment.js.
+export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
+export const MUSIC_VIDEO_BEAT_ROLES = ['opening', 'build', 'contrast', 'payoff', 'release'];
+export const MUSIC_VIDEO_SHOT_MODES = ['performance', 'cutaway', 'graphic'];
+export const MUSIC_VIDEO_SHOT_ROUTES = ['generated', 'supplied-asset', 'code-2d'];
+export const MUSIC_VIDEO_NEGATIVE_SPACE = ['none', 'upper', 'center', 'lower'];
+export const MUSIC_VIDEO_TYPOGRAPHY_ROLES = ['none', 'subtitle', 'hero'];
+export const MUSIC_VIDEO_PROOF_CHECKS = ['identity-continuity', 'readable-text', 'cut-continuity', 'audio-alignment', 'continuous-motion', 'lip-sync'];
+export const MUSIC_VIDEO_PROOF_STATUSES = ['proposed', 'passed', 'failed'];
+
+// A manually supplied reference note/URL. The URL is provenance the director
+// typed — PortOS never fetches it, and its text is treated as untrusted data.
+const referenceUrl = z.string().max(2000).regex(/^https?:\/\/\S+$/i, 'reference URLs must be http(s)');
+export const musicVideoTreatmentReferenceNoteSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  note: z.string().max(1000).optional(),
+  url: referenceUrl.nullable().optional(),
+}).strict();
+
+// Every brief field is optional; a patch merges per field.
+export const musicVideoTreatmentBriefSchema = z.object({
+  audience: z.string().max(500).optional(),
+  destination: z.string().max(200).optional(),
+  aspectRatio: z.enum(MUSIC_VIDEO_ASPECT_RATIOS).nullable().optional(),
+  emotion: z.string().max(500).optional(),
+  premise: z.string().max(2000).optional(),
+  hookObjective: z.string().max(1000).optional(),
+  mustHave: z.string().max(2000).optional(),
+  avoid: z.string().max(2000).optional(),
+  referenceNotes: z.array(musicVideoTreatmentReferenceNoteSchema).max(20).optional(),
+}).strict();
+
+const treatmentText = (max) => z.string().max(max).optional();
+
+export const musicVideoTreatmentMotifSchema = z.object({
+  id: z.string().min(1).max(64).optional(),
+  name: z.string().max(120),
+  description: treatmentText(1000),
+  evolution: treatmentText(1000),
+  rationale: treatmentText(1000),
+}).strict();
+
+export const musicVideoShotDirectionPatchSchema = z.object({
+  sceneId: z.string().min(1).max(64),
+  mode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  route: z.enum(MUSIC_VIDEO_SHOT_ROUTES).optional(),
+  focalSubject: treatmentText(500),
+  framing: treatmentText(500),
+  negativeSpace: z.enum(MUSIC_VIDEO_NEGATIVE_SPACE).optional(),
+  typographyRole: z.enum(MUSIC_VIDEO_TYPOGRAPHY_ROLES).optional(),
+  emphasis: treatmentText(500),
+  transitionIn: treatmentText(300),
+  transitionOut: treatmentText(300),
+  rationale: treatmentText(1000),
+  suggestedFramePrompt: treatmentText(2000),
+  suggestedPrompt: treatmentText(2000),
+}).strict();
+
+// PATCH /:id/treatment. `baseRevision` is the treatment revision the edit was
+// made against (0 before a treatment exists); a mismatch is a 409 so a stale tab
+// or a peer's older copy can never overwrite a newer edit. `rebase` accepts the
+// project's CURRENT visual spec / lyrics / scene set as the treatment's basis
+// without recompiling (an audio change still needs a recompile).
+export const musicVideoTreatmentUpdateSchema = z.object({
+  baseRevision: z.number().int().min(0),
+  brief: musicVideoTreatmentBriefSchema.optional(),
+  beats: z.array(z.object({
+    id: z.string().min(1).max(64),
+    objective: treatmentText(1000),
+    rationale: treatmentText(1000),
+  }).strict()).max(200).optional(),
+  motifs: z.array(musicVideoTreatmentMotifSchema).max(12).optional(),
+  shotDirections: z.array(musicVideoShotDirectionPatchSchema).max(500).optional(),
+  rebase: z.boolean().optional(),
+}).strict();
+
+// POST /:id/treatment/compile — an explicit user action. `useAi: false` drafts
+// the deterministic treatment only (no provider call at all).
+export const musicVideoTreatmentCompileSchema = z.object({
+  baseRevision: z.number().int().min(0),
+  useAi: z.boolean().optional(),
+  providerId: z.string().max(64).optional(),
+  model: z.string().max(200).optional(),
+}).strict();
+
+// POST /:id/treatment/apply. Manually edited scene prompts are kept unless the
+// director explicitly lists the scene in `overwrite` with the fingerprint of
+// the prompts they reviewed — a prompt edited after the review stays kept.
+export const musicVideoTreatmentApplySchema = z.object({
+  revision: z.number().int().min(0),
+  overwrite: z.array(z.object({
+    sceneId: z.string().min(1).max(64),
+    promptFingerprint: z.string().min(1).max(64),
+  }).strict()).max(500).optional(),
+  addTextCues: z.boolean().optional(),
+}).strict();
+
+// Record a proof-checklist review. Evidence names a real artifact of this
+// project (a scene's clip or frame take, or the final render).
+export const musicVideoTreatmentProofReviewSchema = z.object({
+  baseRevision: z.number().int().min(0),
+  status: z.enum(MUSIC_VIDEO_PROOF_STATUSES),
+  evidence: z.object({
+    videoHistoryId: z.string().min(1).max(64).regex(/^[A-Za-z0-9._-]+$/, 'must be a video history id').optional(),
+    imageId: galleryImageName.optional(),
+    note: z.string().max(2000).optional(),
+  }).strict().optional(),
+}).strict();
 
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),

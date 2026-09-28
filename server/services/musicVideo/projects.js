@@ -187,6 +187,18 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
   return scene;
 }
 
+/**
+ * Apply a pure record transform under the backend's write serialization (file
+ * write tail / PG row lock). `transform(project)` returns `{ project, ...result }`;
+ * resolves to that outcome with the persisted project. Used by the treatment
+ * service (#8980) so its revision checks run against the freshest record.
+ */
+export async function mutateProjectRecord(id, transform) {
+  const outcome = await (await selectBackend()).mutateProjectRecord(id, transform);
+  emitRecordUpdated('musicVideoProject', id);
+  return outcome;
+}
+
 /** Merge an incoming batch of project records from a peer (LWW, tombstone-aware). */
 export async function mergeProjectsFromSync(remoteProjects, options = {}) {
   return (await selectBackend()).mergeProjectsFromSync(remoteProjects, options);
