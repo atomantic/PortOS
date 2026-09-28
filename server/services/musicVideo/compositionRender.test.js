@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
-import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 import { findFfmpeg, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { _cleanupTestBrowser } from '../htmlComposition/testBrowserCleanup.js';
@@ -65,7 +65,11 @@ describe.skipIf(!chrome || !ffmpeg)('music-video typography overlay with real Ch
     browser = await chromium.connectOverCDP(endpoint);
   }, 30000);
 
-  afterAll(() => _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots }));
+  afterAll(async () => {
+    await _cleanupTestBrowser({ browser, proc, cleanup: cleanupTempDataRoots });
+    // Real ffprobe/ffmpeg subprocess work (#9032) — see sweepStrayTempRoots's doc.
+    await sweepStrayTempRoots('portos-mv-composition-');
+  });
 
   it('lays timed text over the cut on one continuous audio master, covering the edit within a frame', async () => {
     const dir = join(PATHS.data, 'fixture');

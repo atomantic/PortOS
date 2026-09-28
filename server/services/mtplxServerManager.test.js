@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
   getMtplxServerStatus,
   startMtplxServer,
@@ -405,7 +405,10 @@ describe('mtplxServerManager', () => {
   describe('relaunchMtplxServerWithTuning', () => {
     beforeEach(() => {
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
-      resetForTest();
+      resetForTest({ logFiles: {
+        stdout: join(testLogDir, 'portos-mtplx-out.log'),
+        stderr: join(testLogDir, 'portos-mtplx-error.log'),
+      } });
     });
 
     // Readiness is what the caller's `applied: true` means, so most cases need
@@ -853,7 +856,10 @@ describe('mtplxServerManager', () => {
       // A lazy start that never answers waits out the READINESS budget, not the
       // startup one — five real minutes by default. Shorten it here rather than
       // in the shared setup, which the give-up-path tests below depend on.
-      resetForTest();
+      resetForTest({ logFiles: {
+        stdout: join(testLogDir, 'portos-mtplx-out.log'),
+        stderr: join(testLogDir, 'portos-mtplx-error.log'),
+      } });
     });
 
     it('is a no-op when the daemon is already online', async () => {
@@ -1048,4 +1054,18 @@ describe('mtplxServerManager', () => {
     });
   });
 
+  // Every test routes real log writes through testLogDir (cleaned above), but
+  // a `_resetMtplxServerStateForTests()` call with no `logFiles` falls back to
+  // the module's DEFAULT_MTPLX_LOG_FILES (a fixed `tmpdir()` path, not an
+  // mkdtemp root) — including the outer afterEach's own unconditional reset,
+  // and an idle-reaper/watchdog callback that can still be in flight when a
+  // test's assertions finish. Remove the DEFAULT path once here so a race
+  // against that fallback never leaves the fixed-name files behind (#9032).
+  afterAll(async () => {
+    const { rm: rmDefaults } = await import('fs/promises');
+    const { tmpdir: realTmpdir } = await import('os');
+    const { join: joinPath } = await import('path');
+    await rmDefaults(joinPath(realTmpdir(), 'portos-mtplx-out.log'), { force: true });
+    await rmDefaults(joinPath(realTmpdir(), 'portos-mtplx-error.log'), { force: true });
+  });
 });

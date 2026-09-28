@@ -8,7 +8,7 @@
  * handlers run inside a `void (async () => {})` IIFE, so each test waits
  * for the post-emit side effect rather than awaiting the handler.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -106,6 +106,14 @@ beforeEach(() => {
 afterEach(() => {
   seasonHook.__testing.reset();
   comicHook.__testing.reset();
+});
+
+// tempData is minted once (module scope) and reused across every test in
+// this file — beforeEach only wipes-and-recreates it, so the LAST test's
+// contents (and the root itself) are never removed. Clean it once here
+// (#9032).
+afterAll(() => {
+  rmSync(tempData, { recursive: true, force: true });
 });
 
 describe('seasonCoverFilenameHook — universe collection auto-file', () => {

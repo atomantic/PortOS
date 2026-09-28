@@ -22,12 +22,17 @@ const writeDay = async (agentId, date, activities) => {
 
 const entry = (id, timestamp) => ({ id, action: 'example', status: 'completed', timestamp });
 
+// Module-scope, not nested in the first describe below: `cleanup()` removes
+// `tempRoot` itself, and a SECOND describe block (`cleanupOldActivity`)
+// recreates directories under it after that first block's own afterAll
+// would have already fired and removed it — so the root never got a final
+// cleanup that ran after every test in the file (#9032).
+afterAll(cleanup);
+
 describe('getActivityTimeline', () => {
   beforeEach(async () => {
     await rm(activityRoot, { recursive: true, force: true });
   });
-
-  afterAll(cleanup);
 
   it('continues across midnight into older day files', async () => {
     await writeDay('agent-a', '2026-08-23', [entry('new', '2026-08-23T00:01:00.000Z')]);

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,8 +10,9 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'portos-cleantmp-gc-test-'));
 });
 
-afterAll(() => {
-  // beforeEach makes a fresh dir per test; clean the last one.
+afterEach(() => {
+  // beforeEach makes a fresh dir per test; clean each one (#9032 — afterAll
+  // only removed the LAST dir, leaking one per prior test).
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 

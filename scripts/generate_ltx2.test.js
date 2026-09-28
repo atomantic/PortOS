@@ -1122,9 +1122,15 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
     };
 
     const installFakePin = (opts = {}) => [
-      'import sys, tempfile',
+      'import atexit, shutil, sys, tempfile',
       'from pathlib import Path',
       'root = Path(tempfile.mkdtemp())',
+      // The pin dir must outlive this snippet (later snippets in the same
+      // `-c` invocation import from it), so it can't be removed inline —
+      // clean it when the interpreter exits instead (#9032). Each
+      // installFakePin() call spawns its own `python3 -c ...` process
+      // (runPython -> execFileSync), so this fires once per test.
+      'atexit.register(shutil.rmtree, root, ignore_errors=True)',
       'for pkg in ("ltx_core_mlx", "ltx_core_mlx/conditioning", "ltx_core_mlx/conditioning/types",',
       '            "ltx_pipelines_mlx", "ltx_pipelines_mlx/utils"):',
       '    (root / pkg).mkdir(parents=True, exist_ok=True)',

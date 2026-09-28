@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -9,6 +9,7 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 // pulls in modules that read PATHS.data at module-evaluation time, so the
 // proxy's dataRoot getter must already resolve to a string.
 let tempRoot = mkdtempSync(join(tmpdir(), 'portos-mv-assets-boot-'));
+const bootRoot = tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -562,4 +563,12 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
     expect(peerFetch).toHaveBeenCalledTimes(1);
     expect(listAssetFiles('audio')).toEqual(['shared.mp3']);
   });
+});
+
+// bootRoot is the module-scope placeholder mkdtemp'd before any hook runs
+// (needed so the mocked PATHS.data resolves before the dynamic import below
+// evaluates) — once the first describe block's beforeEach reassigns
+// `tempRoot`, nothing else references it. Remove it once here (#9032).
+afterAll(() => {
+  rmSync(bootRoot, { recursive: true, force: true });
 });

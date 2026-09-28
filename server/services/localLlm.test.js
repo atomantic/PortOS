@@ -854,6 +854,20 @@ describe('localLlm', () => {
     const APP = '/Applications/Ollama.app';
     const aside = () => [...appFs.entries.keys()].filter((p) => p.startsWith(`${APP}.portos-old-`));
 
+    // The download + extract steps in upgradeBackend() are real fs/pipeline
+    // code (only `cp.spawn` and `fetch` are stubbed), and a failed mv/install
+    // deliberately KEEPS its `portos-ollama-upgrade-<ts>` dir — the downloaded
+    // bundle is the user's only way to finish the upgrade by hand in
+    // production. This test uses the real `os.tmpdir()`, so sweep any such
+    // dirs this describe block created after each test (#9032).
+    afterEach(() => {
+      for (const name of fs.readdirSync(os.tmpdir())) {
+        if (name.startsWith('portos-ollama-upgrade-')) {
+          fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true });
+        }
+      }
+    });
+
     // Runs the .app path end to end with every shell-out stubbed. `mv` mutates the
     // in-memory /Applications model the way the real one would, so the assertions
     // can read the resulting filesystem shape.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -93,6 +93,13 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(join(TEST_ROOT, 'model-tests'), { recursive: true, force: true });
+});
+
+// TEST_ROOT is a module-scope root (top-level-await mkdtemp, before any
+// per-test hook runs) — remove the root itself once, not just the
+// subdirectories the per-test hooks above clean (#9032).
+afterAll(async () => {
+  await rm(TEST_ROOT, { recursive: true, force: true });
 });
 
 describe('resolveModelCapabilities', () => {

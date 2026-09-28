@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { tmpdir, platform as osPlatform, arch as osArch } from 'os';
 import { join } from 'path';
 import { rm, readdir } from 'fs/promises';
@@ -519,6 +519,13 @@ afterEach(async () => {
   for (const f of await readdir(TEST_DIR).catch(() => [])) {
     await rm(join(TEST_DIR, f), { force: true }).catch(() => {});
   }
+});
+
+// TEST_DIR (h.testDir) is a module-scope mkdtemp root reused across every
+// test in this file — the per-test afterEach above only empties it, so
+// remove the root itself once here (#9032).
+afterAll(async () => {
+  await rm(TEST_DIR, { recursive: true, force: true }).catch(() => {});
 });
 
 describe('generateMusic backend selection', () => {

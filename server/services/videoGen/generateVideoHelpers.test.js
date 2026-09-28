@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -774,6 +774,12 @@ describe('verifyPostCompletionOutputs', () => {
     writeFileSync(outputPath, 'mp4-bytes', { flag: 'w' });
     probeMock.frames.mockResolvedValue(EXPECTED_FRAMES);
     probeMock.duration.mockResolvedValue(EXPECTED_FRAMES / FPS);
+  });
+
+  // beforeEach removes-then-recreates `dir` before each test, so the LAST
+  // test's directory is never removed — clean it once after the suite (#9032).
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('accepts an exact match', async () => {

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 
 // The manager reaches settings through a dynamic `import('./settings.js')` for
 // both the saved launch line and the idle window. Backing it with an in-memory
@@ -383,5 +383,20 @@ describe('slotstreamServerManager', () => {
       vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockResolvedValue({ models: null, error: 'EACCES' });
       expect(await slotstreamCachedModelIds(local)).toBeNull();
     });
+  });
+
+  // Every test routes real log writes through testLogDir (cleaned above), but
+  // a `_resetSlotstreamServerStateForTests()` call with no `logFiles` falls
+  // back to the module's fixed DEFAULT `tmpdir()` path (not an mkdtemp root)
+  // — including a reset that races an idle-reaper/watchdog callback still in
+  // flight when a test's assertions finish. Remove the DEFAULT path once here
+  // so that race never leaves the fixed-name files behind (#9032), mirroring
+  // mtplxServerManager.test.js.
+  afterAll(async () => {
+    const { rm: rmDefaults } = await import('fs/promises');
+    const { tmpdir: realTmpdir } = await import('os');
+    const { join: joinPath } = await import('path');
+    await rmDefaults(joinPath(realTmpdir(), 'portos-slotstream-out.log'), { force: true });
+    await rmDefaults(joinPath(realTmpdir(), 'portos-slotstream-error.log'), { force: true });
   });
 });

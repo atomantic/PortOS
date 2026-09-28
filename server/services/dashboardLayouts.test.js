@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -34,7 +34,12 @@ describe('dashboardLayouts service', () => {
     if (existsSync(STATE_FILE)) unlinkSync(STATE_FILE);
   });
 
-  afterEach(() => {});
+  afterAll(() => {
+    // scratch.dir is minted once (vi.hoisted, before this file's mocked
+    // import resolves) and reused across every test in this file — remove
+    // the root itself once here, rather than per-test (#9032).
+    rmSync(scratch.dir, { recursive: true, force: true });
+  });
 
   it('seeds one Actions preview while preserving saved legacy widget IDs and geometry', async () => {
     const fresh = await svc.getState();

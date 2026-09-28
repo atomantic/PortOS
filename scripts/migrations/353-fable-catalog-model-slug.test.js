@@ -5,10 +5,19 @@ import { join } from 'node:path';
 import migration from './353-fable-catalog-model-slug.js';
 
 let rootDir;
-afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
+// A test can call withCatalog() more than once (the "no-op ... on an install
+// with none" case mints a second root to check the missing-catalog path),
+// which reassigns `rootDir` and orphans the previous one — track every root
+// this file has handed out so afterEach removes all of them, not just the
+// last (#9032).
+const rootDirs = [];
+afterEach(async () => {
+  for (const dir of rootDirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
 
 const withCatalog = async observations => {
   rootDir = await mkdtemp(join(tmpdir(), 'fable-slug-migration-'));
+  rootDirs.push(rootDir);
   await mkdir(join(rootDir, 'data'));
   if (observations) {
     await writeFile(join(rootDir, 'data/model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations }));
