@@ -19,6 +19,7 @@ import {
   splitMusicVideoScene,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
+  alignMusicVideoLyrics,
 } from '../services/apiMusicVideo.js';
 import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
@@ -106,6 +107,7 @@ export default function MusicVideo() {
   const [planning, setPlanning] = useState(false);
   const [cloning, setCloning] = useState(false);
   const [importingLyrics, setImportingLyrics] = useState(false);
+  const [aligningLyrics, setAligningLyrics] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyCreateForm);
@@ -449,6 +451,18 @@ export default function MusicVideo() {
       })
       .catch((err) => toast.error(err?.message || 'Lyric import failed'))
       .finally(() => setImportingLyrics(false));
+  };
+  // Alignment is a click, never an import side effect. The panel shows the
+  // whisper setup error itself, so this request stays silent.
+  const handleAlignLyrics = (cueId) => {
+    const projectId = selected.id;
+    setAligningLyrics(true);
+    return alignMusicVideoLyrics(projectId, cueId ? { cueId } : {}, { silent: true })
+      .then((project) => {
+        patchProject(projectId, { lyricCues: project.lyricCues, updatedAt: project.updatedAt });
+        toast.success(cueId ? 'Re-aligned that line' : 'Aligned words to the vocal');
+      })
+      .finally(() => setAligningLyrics(false));
   };
   // Buffered so a concept/style keystroke doesn't fire a round-trip per character,
   // and a focus-without-edit blur doesn't re-PATCH an unchanged value.
@@ -815,6 +829,8 @@ export default function MusicVideo() {
                 onSave={saveProjectFields}
                 onImport={handleImportLyrics}
                 importing={importingLyrics}
+                onAlign={handleAlignLyrics}
+                aligning={aligningLyrics}
               />
               <TypographyPanel
                 project={selected}

@@ -23,6 +23,7 @@ import {
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
+  musicVideoLyricsAlignSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
   musicVideoHandoffImportSchema,
@@ -85,6 +86,7 @@ import {
 } from '../services/musicVideo/autoReviewService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
+import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import {
   updateTreatment,
   compileTreatment,
@@ -291,6 +293,14 @@ router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   }
   const updated = await updateProject(project.id, { lyricCues });
   res.json({ project: updated, imported: cues.length, format: detected });
+}));
+
+// Word-level alignment (#9074). Nothing here runs until the director clicks
+// Align words or a line's Re-align. An unreachable whisper server is an error,
+// not an empty timing list.
+router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
+  const { cueId } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
+  res.json(await alignProjectLyrics(req.params.id, { cueId }));
 }));
 
 // --- Audio → MIDI transcription (MuScriptor) ---

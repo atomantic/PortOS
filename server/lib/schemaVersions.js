@@ -604,7 +604,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `shotMode` = cutaway; takes without an instruction render as before).
   // v5 = authored universe style and cast/place/object snapshots in concept.
   // Older peers ignore these when generating, losing character continuity.
-  musicVideoProjects: 5,
+  // v6 = word-level lyric timings (`lyricCues[].words`, #9074). A v5 receiver
+  // stores the body verbatim but mis-executes it: an audio-source change clears
+  // startSec/endSec and leaves `words` aligned to the OLD vocal, and that edit
+  // wins LWW onto the upgraded peer. Gating makes a v5 receiver reject the
+  // ahead-version transfer until it upgrades. Records without `words` need no
+  // rewrite.
+  musicVideoProjects: 6,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

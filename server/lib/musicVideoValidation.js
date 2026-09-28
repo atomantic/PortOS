@@ -70,12 +70,23 @@ export const musicVideoVideoSettingsSchema = z.object({
 // null means "not yet timed" (plain pasted lyrics, or timings invalidated by an
 // audio-source change — see projectsLogic.applyProjectPatch). The id is
 // optional on input; the server mints one so edits stay addressable.
+// `words` (#9074) is derived karaoke timing. Absent on older records and on
+// peers that have not aligned; cleared with the line times when the audio changes.
 const timedSec = z.number().min(0).max(36000).nullable().optional();
+const lyricWordSchema = z.object({
+  w: z.string().min(1).max(80),
+  startSec: z.number().min(0).max(36000),
+  endSec: z.number().min(0).max(36000),
+  conf: z.enum(['matched', 'interpolated']),
+}).strict().refine((word) => word.endSec >= word.startSec, {
+  message: 'word endSec must be >= startSec',
+});
 export const musicVideoLyricCueSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   text: z.string().max(500),
   startSec: timedSec,
   endSec: timedSec,
+  words: z.array(lyricWordSchema).max(400).optional(),
 }).strict();
 
 // A musical-phrase annotation: a span of the song with an optional visual
@@ -203,6 +214,12 @@ export const musicVideoLyricsImportSchema = z.object({
   format: z.enum(['auto', 'lrc', 'srt', 'text']).optional(),
   text: z.string().max(200000),
   mode: z.enum(['replace', 'append']).optional(),
+}).strict();
+
+// Word alignment (#9074) runs only when the director clicks. `cueId` re-aligns
+// that line; omitted, every line is aligned.
+export const musicVideoLyricsAlignSchema = z.object({
+  cueId: z.string().min(1).max(64).optional(),
 }).strict();
 
 // ---- Composition manifest (#8984, part of #8966) ---------------------------

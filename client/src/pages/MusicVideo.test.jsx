@@ -53,6 +53,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
+  alignMusicVideoLyrics: vi.fn(),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -159,7 +160,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject,
-  importMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
+  importMusicVideoLyrics, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -979,12 +980,32 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     expect(screen.getByLabelText('Lyrics to import')).toHaveValue('');
 
     fireEvent.change(line, { target: { value: 'second line, retold' } });
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
     fireEvent.blur(line);
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
       'mv-3',
       { lyricCues: [cues[0], { ...cues[1], text: 'second line, retold' }] },
       { silent: true },
     ));
+  });
+
+  it('aligns words only after the button click and shows the returned timings', async () => {
+    const cues = [{
+      id: 'lc-1', text: 'walking home', startSec: 0.5, endSec: 1.5,
+      words: [
+        { w: 'walking', startSec: 0.5, endSec: 1, conf: 'matched' },
+        { w: 'home', startSec: 1, endSec: 1.5, conf: 'interpolated' },
+      ],
+    }];
+    await openProject({ ...PROJECT_ANALYZED, lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: null, endSec: null }] });
+    expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
+    alignMusicVideoLyrics.mockResolvedValue({ id: 'mv-3', lyricCues: cues, updatedAt: 't' });
+    fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
+    await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenCalledWith('mv-3', {}, { silent: true }));
+    expect(await screen.findByText('walking')).toHaveClass('text-port-accent');
+    expect(screen.getByText('home')).toHaveClass('text-port-warning');
+    fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
+    await waitFor(() => expect(alignMusicVideoLyrics).toHaveBeenLastCalledWith('mv-3', { cueId: 'lc-1' }, { silent: true }));
   });
 
   it('flags a non-looping shot longer than its clip and trims it; a legacy scene is left alone', async () => {

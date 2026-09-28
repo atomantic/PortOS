@@ -48,6 +48,13 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Align director lyric lines to the vocal (#9074). Body `{}` aligns every line;
+// `{ cueId }` re-aligns one line. Resolves to the updated project. Runs only
+// when the caller invokes it — there is no boot or import hook.
+export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/align`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 // ---- Director scene board ----
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,

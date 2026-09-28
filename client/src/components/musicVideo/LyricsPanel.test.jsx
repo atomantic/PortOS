@@ -1,0 +1,62 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import LyricsPanel from './LyricsPanel.jsx';
+
+const PROJECT = {
+  id: 'mv-1',
+  trackId: 't1',
+  lyricCues: [{
+    id: 'lc-1',
+    text: 'walking home',
+    startSec: 1,
+    endSec: 2,
+    words: [
+      { w: 'walking', startSec: 1, endSec: 1.4, conf: 'matched' },
+      { w: 'home', startSec: 1.4, endSec: 2, conf: 'interpolated' },
+    ],
+  }],
+};
+
+function renderPanel(overrides = {}) {
+  const props = {
+    project: PROJECT,
+    onEditLocal: vi.fn(),
+    onSave: vi.fn(),
+    onImport: vi.fn(),
+    onAlign: vi.fn(),
+    ...overrides,
+  };
+  render(<LyricsPanel {...props} />);
+  return props;
+}
+
+describe('LyricsPanel word alignment', () => {
+  it('does not align until Align words is clicked, and shows the whisper setup error', async () => {
+    const onAlign = vi.fn().mockRejectedValue(new Error(
+      'Speech-to-text is not running. Enable the local whisper server in Settings → Voice, then try Align words again.',
+    ));
+    renderPanel({ onAlign });
+    expect(onAlign).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
+    expect(onAlign).toHaveBeenCalledWith(undefined);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Settings → Voice/);
+  });
+
+  it('re-aligns one line and nudges a word boundary into the save', () => {
+    const { onAlign, onSave } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-align line 1' }));
+    expect(onAlign).toHaveBeenCalledWith('lc-1');
+    expect(screen.getByText('home').className).toMatch(/text-port-warning/);
+    expect(screen.getByText('walking').className).toMatch(/text-port-accent/);
+    fireEvent.click(screen.getByRole('button', { name: 'Nudge the end of walking later' }));
+    expect(onSave).toHaveBeenCalledWith({
+      lyricCues: [{
+        ...PROJECT.lyricCues[0],
+        words: [
+          { w: 'walking', startSec: 1, endSec: 1.45, conf: 'matched' },
+          { w: 'home', startSec: 1.45, endSec: 2, conf: 'interpolated' },
+        ],
+      }],
+    });
+  });
+});

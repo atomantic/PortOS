@@ -71,6 +71,10 @@ vi.mock('../services/audioMidiTranscription.js', () => ({
   cancelMidiTranscription: vi.fn(() => true),
 }));
 
+vi.mock('../services/musicVideo/lyricAlign.js', () => ({
+  alignProjectLyrics: vi.fn(async (id, opts) => ({ id, lyricCues: [], cueId: opts?.cueId || null })),
+}));
+
 vi.mock('../services/musicVideo/planner.js', () => ({
   planProject: vi.fn(async (id) => ({
     project: { id, scenes: [{ sceneId: 'mvs-1' }] },
@@ -88,6 +92,7 @@ import * as excerptRenderSvc from '../services/musicVideo/excerptRender.js';
 import * as excerptSvc from '../services/musicVideo/excerptService.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
+import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import musicVideoRoutes from './musicVideo.js';
 
 describe('musicVideo routes', () => {
@@ -292,6 +297,48 @@ describe('musicVideo routes', () => {
       const missing = await request(app).post('/api/music-video/mv-x/lyrics/import').send({ text: 'a' });
       expect(missing.status).toBe(404);
       expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/lyrics/align (#9074)', () => {
+    it('aligns only when the route is called, and accepts a single-line re-align', async () => {
+      expect(alignProjectLyrics).not.toHaveBeenCalled();
+      const all = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(all.status).toBe(200);
+      expect(alignProjectLyrics).toHaveBeenCalledWith('mv-1', { cueId: undefined });
+      const one = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: 'lc-1' });
+      expect(one.status).toBe(200);
+      expect(alignProjectLyrics).toHaveBeenLastCalledWith('mv-1', { cueId: 'lc-1' });
+    });
+
+    it('rejects an unknown body and a cue id the schema cannot store', async () => {
+      const extra = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ force: true });
+      expect(extra.status).toBe(400);
+      const blank = await request(app).post('/api/music-video/mv-1/lyrics/align').send({ cueId: '' });
+      expect(blank.status).toBe(400);
+      expect(alignProjectLyrics).not.toHaveBeenCalled();
+    });
+
+    it('accepts a lyric cue with word timings and a cue that has none', async () => {
+      const words = [
+        { w: 'walking', startSec: 0.2, endSec: 0.6, conf: 'matched' },
+        { w: 'home', startSec: 0.6, endSec: 1, conf: 'interpolated' },
+      ];
+      const timed = await request(app).patch('/api/music-video/mv-1').send({
+        lyricCues: [{ id: 'lc-1', text: 'walking home', startSec: 0.2, endSec: 1, words }],
+      });
+      expect(timed.status).toBe(200);
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', expect.objectContaining({
+        lyricCues: [expect.objectContaining({ words })],
+      }));
+      const legacy = await request(app).patch('/api/music-video/mv-1').send({
+        lyricCues: [{ text: 'walking home', startSec: null, endSec: null }],
+      });
+      expect(legacy.status).toBe(200);
+      const bad = await request(app).patch('/api/music-video/mv-1').send({
+        lyricCues: [{ text: 'walking home', words: [{ w: 'walking', startSec: 1, endSec: 0.2, conf: 'guessed' }] }],
+      });
+      expect(bad.status).toBe(400);
     });
   });
 
