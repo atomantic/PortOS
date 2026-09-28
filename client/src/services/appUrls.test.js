@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getLaunchUrls, getPrimaryLaunchUrl } from './appUrls';
+import { PORTOS_APP_ID } from './apiCore';
 
 // The "Open UI" affordance in AppDetailView renders a button per non-null launch
 // URL and hides entirely when there are none. A portless desktop app (a game
@@ -30,6 +31,11 @@ describe('getLaunchUrls — portless vs port-bearing (#2991)', () => {
   it('keeps the http launch URL when uiPort is a distinct plain-HTTP listener', () => {
     const urls = getLaunchUrls({ id: 'web-app', type: 'express', uiPort: 3000, tlsPort: 8443 });
     expect(urls.http).toBe(`http://${window.location.hostname}:3000`);
+  });
+
+  it('does not advertise a Dev UI for the PortOS management entry', () => {
+    const urls = getLaunchUrls({ id: PORTOS_APP_ID, type: 'express', uiPort: 5555, devUiPort: 5554 });
+    expect(urls).toEqual({ https: null, http: window.location.origin, dev: null });
   });
 });
 
