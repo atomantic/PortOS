@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, renderHook, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoProject: vi.fn(),
@@ -123,6 +123,30 @@ describe('TreatmentPanel apply review', () => {
     await waitFor(() => expect(api.updateMusicVideoTreatment).toHaveBeenCalledWith('mv-1', { rebase: true, baseRevision: 3 }, { silent: true }));
     await waitFor(() => expect(screen.getByText('Apply treatment').closest('button').disabled).toBe(false));
     expect(api.applyMusicVideoTreatment).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMusicVideoTreatment across a project switch', () => {
+  it('never hands a write still in flight for one project its revision to the next project', async () => {
+    let resolveA;
+    api.updateMusicVideoTreatment
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveA = resolve; }))
+      .mockResolvedValueOnce({ treatment: { ...TREATMENT, revision: 8 } });
+    const projectA = { ...PROJECT, id: 'mv-a', treatment: { ...TREATMENT, revision: 3 } };
+    const projectB = { ...PROJECT, id: 'mv-b', treatment: { ...TREATMENT, revision: 7 } };
+    const { result, rerender } = renderHook(({ project }) => useMusicVideoTreatment({ project, onProjectPatch: vi.fn(), replaceProject: vi.fn() }), {
+      initialProps: { project: projectA },
+    });
+    let pendingA;
+    act(() => { pendingA = result.current.save({ brief: { audience: 'a' } }); });
+    await waitFor(() => expect(api.updateMusicVideoTreatment).toHaveBeenCalledTimes(1));
+    rerender({ project: projectB });
+    await act(async () => { resolveA({ treatment: { ...TREATMENT, revision: 9 } }); await pendingA; });
+    await act(async () => { await result.current.save({ brief: { audience: 'b' } }); });
+    expect(api.updateMusicVideoTreatment.mock.calls.map(([id, body]) => [id, body.baseRevision])).toEqual([
+      ['mv-a', 3],
+      ['mv-b', 7],
+    ]);
   });
 });
 

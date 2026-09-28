@@ -33,7 +33,9 @@ const AI_SKIP_LABELS = {
 export default function useMusicVideoTreatment({ project, onProjectPatch, replaceProject } = {}) {
   const projectId = project?.id || null;
   const storedRevision = project?.treatment?.revision ?? 0;
-  const revisionRef = useRef(storedRevision);
+  // Known treatment revision PER PROJECT, so a write still in flight for one
+  // project can never hand its revision to the next project's writes.
+  const revisionsRef = useRef(new Map());
   const chainRef = useRef(Promise.resolve());
   const [compiling, setCompiling] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -41,21 +43,19 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   const [applying, setApplying] = useState(false);
 
   const projectRef = useRef(projectId);
+  projectRef.current = projectId;
   // A newer revision can arrive from outside this hook (a peer update, a
-  // reload); within one project never move the ref backwards past a write this
-  // hook already made. A project switch adopts that project's revision.
+  // reload); never move a project's known revision backwards past a write this
+  // hook already made.
   useEffect(() => {
-    if (projectRef.current !== projectId) {
-      projectRef.current = projectId;
-      revisionRef.current = storedRevision;
-    } else {
-      revisionRef.current = Math.max(revisionRef.current, storedRevision);
-    }
+    if (!projectId) return;
+    const known = revisionsRef.current.get(projectId) ?? 0;
+    revisionsRef.current.set(projectId, Math.max(known, storedRevision));
   }, [projectId, storedRevision]);
   useEffect(() => { setPreview(null); }, [projectId]);
 
   const adopt = (id, treatment) => {
-    revisionRef.current = treatment?.revision ?? revisionRef.current;
+    if (typeof treatment?.revision === 'number') revisionsRef.current.set(id, treatment.revision);
     onProjectPatch?.(id, { treatment });
   };
 
@@ -63,7 +63,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
     if (err?.status === 409 && err?.code === 'TREATMENT_REVISION_CONFLICT') {
       toast.error('The treatment changed elsewhere — reloaded the latest version');
       return getMusicVideoProject(id, { silent: true }).then((fresh) => {
-        revisionRef.current = fresh?.treatment?.revision ?? 0;
+        revisionsRef.current.set(id, fresh?.treatment?.revision ?? 0);
         replaceProject?.(fresh);
       }).catch(() => {});
     }
@@ -74,14 +74,14 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   // Serialize treatment writes; each reads the latest known revision when it runs.
   const enqueue = (work, fallback) => {
     const id = projectId;
-    const run = chainRef.current.then(() => work(id, revisionRef.current));
+    const run = chainRef.current.then(() => work(id, revisionsRef.current.get(id) ?? 0));
     chainRef.current = run.catch((err) => handleConflict(id, err, fallback));
     return run.catch(() => null);
   };
 
   const save = (patch) => enqueue(
     (id, baseRevision) => updateMusicVideoTreatment(id, { ...patch, baseRevision }, { silent: true })
-      .then(({ treatment }) => { adopt(id, treatment); setPreview(null); return treatment; }),
+      .then(({ treatment }) => { adopt(id, treatment); if (id === projectRef.current) setPreview(null); return treatment; }),
     'Failed to save the treatment',
   );
 
@@ -95,7 +95,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
         ...(model ? { model } : {}),
       }, { silent: true }).then(({ treatment, aiUsed, aiSkippedReason }) => {
         adopt(id, treatment);
-        setPreview(null);
+        if (id === projectRef.current) setPreview(null);
         const shots = treatment.shotDirections.length;
         if (useAi && !aiUsed) toast.error(`Drafted without AI — ${AI_SKIP_LABELS[aiSkippedReason] || aiSkippedReason}`);
         else toast.success(`Treatment compiled for ${shots} shot${shots === 1 ? '' : 's'}${aiUsed ? ' with AI' : ''}`);
@@ -123,7 +123,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
       .then(() => applyMusicVideoTreatment(id, { revision, overwrite, addTextCues }, { silent: true }))
       .then(({ project: next, result }) => {
         replaceProject?.(next);
-        setPreview(null);
+        if (id === projectRef.current) setPreview(null);
         const kept = result.promptsKept.length + result.conflicted.length;
         toast.success(`Applied direction to ${result.directed} scene${result.directed === 1 ? '' : 's'}${kept ? ` — ${kept} hand-edited prompt${kept === 1 ? '' : 's'} kept` : ''}${result.textCuesAdded ? `, ${result.textCuesAdded} text cues added` : ''}`);
         return result;

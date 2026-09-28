@@ -51,7 +51,7 @@ const ANALYSIS = {
 const LYRICS = [
   { text: 'Streetlights hum a borrowed tune', startSec: 8, endSec: 12 },
   { text: 'We run until the morning', startSec: 12, endSec: 16 },
-  { text: 'Hold on, hold on to the light', startSec: 22, endSec: 26 },
+  { text: 'Hold on, hold on to the light', startSec: 22, endSec: 27 }, // runs past its shot
   { text: 'Never let the city sleep', startSec: 26, endSec: 30 },
 ];
 
@@ -230,6 +230,8 @@ describe('treatment apply', () => {
     seedImage('picked.png');
     await projects.updateScene(project.id, scenes[0].sceneId, { framePrompt: 'my own frame', prompt: 'my own motion' });
     await projects.appendSceneTakes(project.id, scenes[0].sceneId, [{ kind: 'image', assetId: 'picked.png', source: 'imported' }]);
+    // Scene 2 has only its frame prompt written by hand; its motion prompt is empty.
+    await projects.updateScene(project.id, scenes[2].sceneId, { framePrompt: 'hand frame' });
     runPromptThroughProvider.mockResolvedValueOnce({
       text: JSON.stringify({
         beats: [{ sectionIndex: 0, objective: 'Open on the train' }],
@@ -249,10 +251,11 @@ describe('treatment apply', () => {
     const byScene = new Map(preview.body.scenes.map((s) => [s.sceneId, s]));
     expect(byScene.get(scenes[0].sceneId)).toMatchObject({ prompt: 'manual', keepsSelection: true, directionChanged: true });
     expect(byScene.get(scenes[1].sceneId).prompt).toBe('fill');
+    expect(byScene.get(scenes[2].sceneId).fields).toEqual({ framePrompt: 'manual', prompt: 'fill' });
 
     const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: preview.body.revision });
     expect(res.status).toBe(200);
-    expect(res.body.result.promptsKept).toEqual([scenes[0].sceneId]);
+    expect(res.body.result.promptsKept).toEqual([scenes[0].sceneId, scenes[2].sceneId]);
     expect(res.body.result.directed).toBe(scenes.length);
 
     const after = await reload(project.id);
@@ -260,6 +263,8 @@ describe('treatment apply', () => {
     expect(kept).toMatchObject({ framePrompt: 'my own frame', prompt: 'my own motion', referenceImageId: 'picked.png' });
     expect(kept.takes).toHaveLength(1);
     expect(filled).toMatchObject({ framePrompt: 'frame 1', prompt: 'motion 1' });
+    // A hand edit to one prompt never blocks filling the other.
+    expect(after.scenes[2]).toMatchObject({ framePrompt: 'hand frame', prompt: 'motion 2' });
     expect(filled.direction.frameClause).toContain('focal subject: subject 1');
     expect(filled.direction.frameClause).toContain('no text, letters, captions');
     const titled = after.scenes.find((s) => s.direction.typographyRole !== 'none');
@@ -327,6 +332,12 @@ describe('treatment apply', () => {
     expect(composition.mode).toBe('concat');
     expect(composition.textCues.map((c) => c.text)).toEqual(LYRICS.map((c) => c.text));
     expect(composition.textCues.some((c) => c.emphasis === 'hero' && c.placement === 'upper')).toBe(true);
+    // Each cue ends with the shot that directs it, never over the next shot.
+    const { scenes } = await reload(project.id);
+    for (const cue of composition.textCues) {
+      const shot = scenes.find((sc) => cue.startSec >= sc.startSec && cue.startSec < sc.endSec);
+      expect(cue.endSec).toBeLessThanOrEqual(shot.endSec);
+    }
   });
 });
 

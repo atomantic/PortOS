@@ -530,22 +530,28 @@ function sceneDirection(treatment, direction) {
   };
 }
 
-// How Apply treats a scene's prompts: `fill` (empty), `replace` (still exactly
-// what the treatment wrote last time), `unchanged` (already the suggestion),
-// `manual` (edited by hand — kept unless explicitly overwritten), `none` (the
-// direction carries no suggested prompts).
-function promptPlan(scene, direction) {
-  const suggestion = { framePrompt: direction.suggestedFramePrompt, prompt: direction.suggestedPrompt };
-  if (!suggestion.framePrompt && !suggestion.prompt) return 'none';
-  const next = {
-    framePrompt: suggestion.framePrompt || scene.framePrompt || '',
-    prompt: suggestion.prompt || scene.prompt || '',
-  };
-  if (scenePromptFingerprint(next) === scenePromptFingerprint(scene)) return 'unchanged';
-  if (!isNonBlankStr(scene.framePrompt) && !isNonBlankStr(scene.prompt)) return 'fill';
-  if (scene.direction?.appliedPromptFingerprint === scenePromptFingerprint(scene)) return 'replace';
-  return 'manual';
+const PROMPT_FIELDS = [['framePrompt', 'suggestedFramePrompt'], ['prompt', 'suggestedPrompt']];
+const fieldFingerprint = (value) => fingerprint(value || '');
+
+// How Apply treats each of a scene's two prompts, field by field (a hand edit
+// to one never blocks filling the other): `fill` (empty), `replace` (still
+// exactly what the treatment wrote there last time), `unchanged` (already the
+// suggestion), `manual` (edited by hand — kept unless explicitly overwritten),
+// `none` (no suggestion for that field).
+function promptFieldPlans(scene, direction) {
+  const owned = scene.direction?.appliedPrompts || {};
+  return Object.fromEntries(PROMPT_FIELDS.map(([field, key]) => {
+    const suggestion = direction[key];
+    const current = scene[field] || '';
+    if (!suggestion) return [field, 'none'];
+    if (current === suggestion) return [field, 'unchanged'];
+    if (!isNonBlankStr(current)) return [field, 'fill'];
+    return [field, owned[field] === fieldFingerprint(current) ? 'replace' : 'manual'];
+  }));
 }
+// The scene-level summary: the most consequential field plan.
+const PLAN_PRIORITY = ['manual', 'fill', 'replace', 'unchanged', 'none'];
+const summarizePlans = (plans) => PLAN_PRIORITY.find((p) => Object.values(plans).includes(p));
 
 function textCueCandidates(project, treatment) {
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
@@ -561,7 +567,9 @@ function textCueCandidates(project, treatment) {
       const cueText = cue.text.trim().slice(0, 500);
       if (existing.has(`${cueText}@${cue.startSec}`)) continue;
       existing.add(`${cueText}@${cue.startSec}`);
-      const endSec = isTime(cue.endSec) && cue.endSec > cue.startSec ? cue.endSec : scene.endSec;
+      // Clamped to the directing shot: a line that runs on must not keep its
+      // text over a later shot that reserved no (or another) region for it.
+      const endSec = isTime(cue.endSec) && cue.endSec > cue.startSec ? Math.min(cue.endSec, scene.endSec) : scene.endSec;
       out.push({
         text: cueText,
         startSec: cue.startSec,
@@ -596,12 +604,14 @@ export function buildApplyPreview(project) {
     if (!scene) { missingSceneIds.push(direction.sceneId); continue; }
     directed.add(scene.sceneId);
     const next = sceneDirection(treatment, direction);
+    const fields = promptFieldPlans(scene, direction);
     scenes.push({
       sceneId: scene.sceneId,
       label: scene.label || scene.sectionLabel || '',
       directionChanged: directionKey(scene.direction) !== directionKey(next)
         || scene.direction?.frameClause !== next.frameClause || scene.direction?.motionClause !== next.motionClause,
-      prompt: promptPlan(scene, direction),
+      prompt: summarizePlans(fields),
+      fields,
       promptFingerprint: scenePromptFingerprint(scene),
       current: { framePrompt: scene.framePrompt || '', prompt: scene.prompt || '' },
       suggested: { framePrompt: direction.suggestedFramePrompt, prompt: direction.suggestedPrompt },
@@ -648,28 +658,30 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
     if (!plan) return scene;
     const direction = directions.get(scene.sceneId);
     const next = { ...scene };
-    let write = plan.prompt === 'fill' || plan.prompt === 'replace';
-    if (plan.prompt === 'manual' && approved.has(scene.sceneId)) {
-      // The fingerprint pins the exact prompts the director reviewed: an edit
-      // made after that review is newer work and is kept.
-      if (approved.get(scene.sceneId) === plan.promptFingerprint) write = true;
-      else result.conflicted.push(scene.sceneId);
-    } else if (plan.prompt === 'manual') {
-      result.promptsKept.push(scene.sceneId);
+    const hasManual = Object.values(plan.fields).includes('manual');
+    // The fingerprint pins the exact prompts the director reviewed: an edit
+    // made after that review is newer work and is kept.
+    const approvedOverwrite = approved.has(scene.sceneId) && approved.get(scene.sceneId) === plan.promptFingerprint;
+    if (hasManual && approved.has(scene.sceneId) && !approvedOverwrite) result.conflicted.push(scene.sceneId);
+    else if (hasManual && !approvedOverwrite) result.promptsKept.push(scene.sceneId);
+    // Only prompts the treatment wrote (or that already match it) are
+    // treatment-owned; a kept hand edit keeps its previous ownership marker so
+    // it still reads as manual next time.
+    const appliedPrompts = { ...(scene.direction?.appliedPrompts || {}) };
+    let wrote = false;
+    for (const [field, key] of PROMPT_FIELDS) {
+      const fieldPlan = plan.fields[field];
+      if (fieldPlan === 'fill' || fieldPlan === 'replace' || (fieldPlan === 'manual' && approvedOverwrite)) {
+        next[field] = direction[key];
+        wrote = true;
+      }
+      if (fieldPlan !== 'none' && (fieldPlan !== 'manual' || approvedOverwrite)) appliedPrompts[field] = fieldFingerprint(next[field]);
     }
-    if (write) {
-      if (direction.suggestedFramePrompt) next.framePrompt = direction.suggestedFramePrompt;
-      if (direction.suggestedPrompt) next.prompt = direction.suggestedPrompt;
-      result.promptsWritten.push(scene.sceneId);
-    }
-    const owned = write || plan.prompt === 'unchanged';
+    if (wrote) result.promptsWritten.push(scene.sceneId);
     next.direction = {
       ...sceneDirection(treatment, direction),
       treatmentRevision: treatment.revision,
-      // Only prompts the treatment wrote (or that already match it) are
-      // treatment-owned; a kept hand edit keeps its previous ownership marker so
-      // it still reads as manual next time.
-      appliedPromptFingerprint: owned ? scenePromptFingerprint(next) : (scene.direction?.appliedPromptFingerprint ?? null),
+      appliedPrompts,
     };
     result.directed += 1;
     return next;
