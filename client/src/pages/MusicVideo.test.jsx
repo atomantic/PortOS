@@ -753,6 +753,36 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
   });
 });
 
+describe('MusicVideo typography composition (#8984)', () => {
+  it('seeds text cues from the timed lyrics, switches to a composed render, and saves an edited cue whole', async () => {
+    const lyricCues = [
+      { id: 'lc-1', text: 'first line', startSec: 1, endSec: 3 },
+      { id: 'lc-2', text: 'untimed line', startSec: null, endSec: null },
+    ];
+    updateMusicVideoProject.mockResolvedValue({});
+    await openProject({ ...PROJECT_ANALYZED, lyricCues });
+
+    fireEvent.click(screen.getByRole('button', { name: /Copy timed lyrics \(1\)/ }));
+    const text = await screen.findByLabelText('Text cue 1 text');
+    expect(text).toHaveValue('first line');
+    expect(screen.queryByLabelText('Text cue 2 text')).toBeNull();
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-3', {
+      composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
+    }, { silent: true }));
+
+    fireEvent.change(screen.getByLabelText('Final render'), { target: { value: 'composed' } });
+    fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
+    fireEvent.change(text, { target: { value: 'first line, typed' } });
+    fireEvent.blur(text);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-3', {
+      composition: expect.objectContaining({
+        mode: 'composed',
+        textCues: [expect.objectContaining({ text: 'first line, typed', template: 'typewriter' })],
+      }),
+    }, { silent: true }));
+  });
+});
+
 describe('MusicVideo concept & style editor (#3168)', () => {
   it('seeds the fields from the project and persists each on blur', async () => {
     const withConcept = { ...PROJECT_NO_CLIP, concept: { prompt: 'A road trip through neon ruins', style: 'Cyberpunk anime' } };

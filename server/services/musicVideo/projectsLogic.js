@@ -30,6 +30,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
+import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -128,6 +129,8 @@ export function buildProjectRecord(input, { id, now }) {
     lyricCues: [],
     phrases: [],
     pacing: null,
+    // #8984 — composition manifest (null = plain concatenation render).
+    composition: null,
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -200,6 +203,8 @@ export function applyProjectPatch(project, patch) {
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
+    // #8984 — the composition manifest is replaced whole; null clears it.
+    ...('composition' in patch ? { composition: normalizeComposition(patch.composition) } : {}),
   };
   const conceptMergedPatch = ('concept' in timedPatch && timedPatch.concept && project.concept)
     ? { ...timedPatch, concept: { ...project.concept, ...timedPatch.concept } }
@@ -252,6 +257,9 @@ export function applyProjectPatch(project, patch) {
   // fresh lists of its own.
   return touch(project, {
     ...invalidateTimedText(project),
+    // Composition cue times and the poster frame were set against the old
+    // song too: keep the text, clear the timings (#8984).
+    ...(project.composition ? { composition: invalidateCompositionTiming(project.composition) } : {}),
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,

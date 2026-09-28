@@ -29,7 +29,15 @@ const h = vi.hoisted(() => {
     procs.push(p);
     return p;
   };
-  return { procs, spawn };
+  // #8984 — the overlay capture, held open until a test settles it (or the
+  // render's abort signal rejects it, as the real capture does).
+  const overlays = { calls: [], resolve: null };
+  const renderTypographyOverlays = (options) => new Promise((resolve, reject) => {
+    overlays.calls.push(options);
+    overlays.resolve = resolve;
+    options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+  });
+  return { procs, spawn, overlays, renderTypographyOverlays };
 });
 
 vi.mock('../../lib/childProcess.js', () => ({ spawn: h.spawn }));
@@ -59,9 +67,15 @@ vi.mock('../videoGen/local.js', () => ({
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
+vi.mock('./compositionRender.js', () => ({
+  renderTypographyOverlays: h.renderTypographyOverlays,
+  removeCompositionScratch: vi.fn(async () => {}),
+  sweepCompositionScratch: vi.fn(async () => {}),
+}));
 vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})) }));
 
-import { renderMusicVideo, getRenderJobStatus } from './render.js';
+import { renderMusicVideo, getRenderJobStatus, cancelRender } from './render.js';
+import { removeCompositionScratch } from './compositionRender.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
@@ -83,6 +97,7 @@ const prime = (projectId) => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.procs.length = 0;
+  h.overlays.calls.length = 0;
 });
 
 describe('renderMusicVideo terminal handling (#2386)', () => {
@@ -316,5 +331,64 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args).toContain('-stream_loop');
     expect(filterGraph(args)).not.toContain('tpad');
+  });
+});
+
+// #8984 — a composed render captures its typography overlay before ffmpeg
+// exists. The capture phase must be cancelable and terminal on its own, and a
+// project whose manifest has nothing to draw must render exactly as before.
+describe('composed render lifecycle (#8984)', () => {
+  const cue = { id: 'c1', text: 'Hello', startSec: 0.5, endSec: 1.5, template: 'fade', placement: 'lower', emphasis: 'subtitle' };
+  const primeComposed = (projectId, composition) => {
+    prime(projectId);
+    getProject.mockResolvedValue({
+      id: projectId, name: 'P', trackId: 't1', status: 'complete',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+      composition: { version: 1, style: { color: '#ffffff', font: 'sans' }, posterSec: null, ...composition },
+    });
+  };
+
+  it('renders a concat-mode manifest through the plain path', async () => {
+    primeComposed('plain-1', { mode: 'concat', textCues: [cue] });
+    await renderMusicVideo('plain-1');
+    expect(h.overlays.calls).toHaveLength(0);
+    expect(lastProc().args).not.toContain('-itsoffset');
+  });
+
+  it('cancels during overlay capture: no ffmpeg, prior status restored, scratch removed, slot released', async () => {
+    primeComposed('cancel-1', { mode: 'composed', textCues: [cue] });
+    const { jobId } = await renderMusicVideo('cancel-1');
+    expect(h.overlays.calls).toHaveLength(1);
+    expect(h.procs).toHaveLength(0);
+    expect(cancelRender(jobId)).toBe(true);
+    await tick();
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expect(h.procs).toHaveLength(0);
+    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', { status: 'complete' });
+    expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
+    expect(cancelRender(jobId)).toBe(false);
+    const again = await renderMusicVideo('cancel-1');
+    expect(again.jobId).not.toBe(jobId);
+  });
+
+  it('lays the captured overlays over the cut and honors the chosen poster frame', async () => {
+    primeComposed('composed-1', { mode: 'composed', textCues: [cue], posterSec: 1 });
+    const { jobId } = await renderMusicVideo('composed-1');
+    expect(h.overlays.calls[0]).toMatchObject({ jobId, width: 768, height: 512, fps: 24, cues: [expect.objectContaining({ id: 'c1' })] });
+    h.overlays.resolve([{ path: '/data/overlay-0.mov', startSec: 0.5, durationSec: 1 }]);
+    await tick();
+    const { args } = lastProc();
+    expect(args.slice(args.indexOf('-itsoffset'), args.indexOf('-itsoffset') + 4)).toEqual(['-itsoffset', '0.5', '-i', '/data/overlay-0.mov']);
+    expect(args[args.indexOf('-filter_complex') + 1]).toContain('[cut0][2:v]overlay=eof_action=pass:format=auto[outv]');
+    expect(args[args.indexOf('-map') + 1]).toBe('[outv]');
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await tick();
+    expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1 });
+    expect(getRenderJobStatus(jobId).status).toBe('complete');
+    expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
+    // Nothing is left to cancel once the render has finished.
+    expect(cancelRender(jobId)).toBe(false);
   });
 });

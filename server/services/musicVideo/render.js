@@ -35,6 +35,8 @@ import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject } from './projects.js';
+import { renderableCues } from './composition.js';
+import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -99,7 +101,14 @@ export function getRenderJobStatus(jobId) {
 
 export function cancelRender(jobId) {
   const job = jobs.get(jobId);
-  if (!job || !job.process) return false;
+  if (!job) return false;
+  // A composed render spends its first phase capturing the typography overlay
+  // (no ffmpeg yet); abort that capture instead.
+  if (!job.process) {
+    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
+    job.overlayAbort.abort(new Error('Render cancelled'));
+    return true;
+  }
   const proc = job.process;
   killWithEscalation(proc, { label: 'music-video render', stillRunning: () => job.process === proc });
   return true;
@@ -244,7 +253,10 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
 // video-only (each scaled/padded to the canonical dims + fps and trimmed to its
 // snapped out-point) and maps ONE external audio input as the sole output audio.
 // `-shortest` ends the output at the shorter of (concatenated video, track).
-export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null } = {}) {
+// `overlays` (a composed render, #8984) are transparent typography clips, each
+// offset to its song time and laid over the cut footage — the footage passes
+// through untouched outside them, and the master audio is never re-cut.
+export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec = null, overlays = [] } = {}) {
   if (!Array.isArray(clips) || clips.length === 0) throw new Error('buildMusicVideoFfmpegArgs: empty clips');
   const canonW = clips[0].width;
   const canonH = clips[0].height;
@@ -261,8 +273,9 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     if (c.loop !== false) inputs.push('-stream_loop', '-1');
     inputs.push('-i', c.videoPath);
   }
-  const audioIdx = clips.length; // master audio is the last input
+  const audioIdx = clips.length; // master audio follows the clips
   inputs.push('-i', audioPath);
+  for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
   const filters = [];
   const vStreams = [];
@@ -279,7 +292,12 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     );
     vStreams.push(`[v${i}]`);
   }
-  filters.push(`${vStreams.join('')}concat=n=${clips.length}:v=1:a=0[outv]`);
+  const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
+  filters.push(`${vStreams.join('')}concat=n=${clips.length}:v=1:a=0[${cutLabel}]`);
+  overlays.forEach((_, k) => {
+    const out = k === overlays.length - 1 ? 'outv' : `cut${k + 1}`;
+    filters.push(`[cut${k}][${audioIdx + 1 + k}:v]overlay=eof_action=pass:format=auto[${out}]`);
+  });
 
   const videoTotal = clips.reduce((s, c) => s + (c.outSec - c.inSec), 0);
   const totalDuration = audioDurationSec != null ? Math.min(videoTotal, audioDurationSec) : videoTotal;
@@ -346,6 +364,10 @@ export async function renderMusicVideo(projectId) {
     const filename = `music-video-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
     const outputPath = join(PATHS.videos, filename);
     const { args, totalDuration, canonW, canonH, fps } = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec });
+    // #8984: a composed project lays its timed text cues over the cut. No
+    // renderable cue (plain mode, or nothing timed) renders exactly as before.
+    const cues = renderableCues(project.composition, totalDuration);
+    const composition = cues.length > 0 ? project.composition : null;
 
     const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration };
     jobs.set(jobId, job);
@@ -362,127 +384,179 @@ export async function renderMusicVideo(projectId) {
       console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→rendering write failed: ${err.message}`);
     });
 
-    console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} duration=${totalDuration.toFixed(2)}s`);
+    console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} clips=${clips.length} cues=${cues.length} duration=${totalDuration.toFixed(2)}s`);
 
-    const proc = spawn(ffmpeg, args, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
-    job.process = proc;
+    const releaseScratch = () => (composition ? removeCompositionScratch(jobId).catch((err) => {
+      console.warn(`⚠️ Music-video render [${jobId.slice(0, 8)}] could not remove its overlay scratch: ${err.message}`);
+    }) : null);
 
-    let stderrBuf = '';
-    proc.stderr.on('data', (chunk) => {
-      stderrBuf += chunk.toString();
-      const lines = stderrBuf.split('\n');
-      stderrBuf = lines.pop();
-      for (const raw of lines) {
-        const line = raw.trim();
-        const eq = line.indexOf('=');
-        if (eq <= 0) continue;
-        const key = line.slice(0, eq);
-        const val = line.slice(eq + 1);
-        if (key === 'out_time_us') {
-          const us = parseInt(val, 10);
-          if (Number.isFinite(us) && totalDuration > 0) {
-            broadcastSse(job, { type: 'progress', progress: Math.min(1, (us / 1_000_000) / totalDuration) });
+    // A composed render first captures its overlay (progress 0–50%), then
+    // encodes (50–100%); a plain render encodes across the whole bar.
+    const startEncode = (encodeArgs, progressBase = 0) => {
+      const encodeProgress = (fraction) => progressBase + (1 - progressBase) * fraction;
+      const proc = spawn(ffmpeg, encodeArgs, safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'] }));
+      job.process = proc;
+
+      let stderrBuf = '';
+      proc.stderr.on('data', (chunk) => {
+        stderrBuf += chunk.toString();
+        const lines = stderrBuf.split('\n');
+        stderrBuf = lines.pop();
+        for (const raw of lines) {
+          const line = raw.trim();
+          const eq = line.indexOf('=');
+          if (eq <= 0) continue;
+          const key = line.slice(0, eq);
+          const val = line.slice(eq + 1);
+          if (key === 'out_time_us') {
+            const us = parseInt(val, 10);
+            if (Number.isFinite(us) && totalDuration > 0) {
+              broadcastSse(job, { type: 'progress', progress: encodeProgress(Math.min(1, (us / 1_000_000) / totalDuration)) });
+            }
+          } else if (key === 'progress' && val === 'end') {
+            broadcastSse(job, { type: 'progress', progress: 1 });
           }
-        } else if (key === 'progress' && val === 'end') {
-          broadcastSse(job, { type: 'progress', progress: 1 });
         }
-      }
-    });
+      });
 
-    // Spawn-state tracking + exactly-once terminal guard + pre-vs-post-spawn
-    // dispatch live in the shared helper; only the finalize bodies below are
-    // service-specific (music-video mutates the project's render status).
-    attachFfmpegRenderGuard(proc, {
-      label: `Music-video render [${jobId.slice(0, 8)}]`,
-      onProcessError: (err) => {
-        // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
-        // still live — do NOT release the project mutex or null job.process
-        // here, or a replacement render could spawn and overlap it. Record
-        // the reason; the pending 'close' runs the sole terminal finalization.
-        job.lastError = `ffmpeg process error: ${err.message}`;
-        console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
-      },
-      onSpawnError: async (err) => {
-        // Pre-spawn failure: the child never started, so 'close' won't follow.
-        job.process = null;
-        job.status = 'error';
-        const reason = `Failed to spawn ffmpeg: ${err.message}`;
-        job.lastError = reason;
-        console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-        broadcastSse(job, { type: 'error', error: reason });
-        projectRenders.delete(projectId);
-        await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
-          console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
-        });
-        closeJobAfterDelay(jobs, jobId);
-      },
-      onClose: async (code, signal) => {
-        job.process = null;
-        if (code !== 0) {
-          const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
-          job.status = canceled ? 'canceled' : 'error';
-          const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-          job.lastError = reason;
-          // A cancel is a user action (stdout); a non-zero exit is a failure (#7945).
-          const logClose = canceled ? console.log : console.error;
-          logClose(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-          await unlink(outputPath).catch(() => {});
-          broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-          projectRenders.delete(projectId);
-          // A cancel restores the pre-render status (so a cancelled re-render of a
-          // 'complete' project stays 'complete'); a real failure marks it 'failed'.
-          const targetStatus = canceled ? priorStatus : 'failed';
-          await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
-            console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
-          });
-          closeJobAfterDelay(jobs, jobId);
-          return;
-        }
-        // Success finalization runs in an event callback (no request to bubble
-        // to) — a throw in thumbnailing/history I/O would otherwise leave the
-        // project stuck 'rendering' and projectRenders un-cleared (every later
-        // render 409s). Wrap it so any failure still emits a terminal frame and
-        // releases the slot.
-        try {
-          job.status = 'complete';
-          const section = (project.audioAnalysis?.sections || [])
-            .filter(section => Number.isFinite(section.energy) && section.startSec >= 0 && section.endSec > section.startSec && section.startSec < totalDuration)
-            .sort((a, b) => b.energy - a.energy || a.startSec - b.startSec)[0];
-          const atSec = section ? (section.startSec + Math.min(section.endSec, totalDuration)) / 2 : undefined;
-          const thumb = await generateThumbnail(outputPath, jobId, { atSec });
-          const meta = {
-            id: jobId,
-            prompt: `Music Video: ${project.name}`,
-            modelId: 'music-video',
-            seed: 0,
-            width: canonW,
-            height: canonH,
-            numFrames: Math.round(totalDuration * (fps || 24)),
-            fps: fps || 24,
-            filename,
-            thumbnail: thumb,
-            createdAt: new Date().toISOString(),
-            musicVideoProjectId: projectId,
-          };
-          await appendToVideoHistory(meta);
-          await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch((updateErr) => {
-            console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
-          });
-          console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
-          broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
-        } catch (err) {
+      // Spawn-state tracking + exactly-once terminal guard + pre-vs-post-spawn
+      // dispatch live in the shared helper; only the finalize bodies below are
+      // service-specific (music-video mutates the project's render status).
+      attachFfmpegRenderGuard(proc, {
+        label: `Music-video render [${jobId.slice(0, 8)}]`,
+        onProcessError: (err) => {
+          // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
+          // still live — do NOT release the project mutex or null job.process
+          // here, or a replacement render could spawn and overlap it. Record
+          // the reason; the pending 'close' runs the sole terminal finalization.
+          job.lastError = `ffmpeg process error: ${err.message}`;
+          console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
+        },
+        onSpawnError: async (err) => {
+          // Pre-spawn failure: the child never started, so 'close' won't follow.
+          job.process = null;
           job.status = 'error';
-          job.lastError = `Finalize failed: ${err.message}`;
-          console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
-          broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
+          const reason = `Failed to spawn ffmpeg: ${err.message}`;
+          job.lastError = reason;
+          console.error(`❌ Music-video render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+          broadcastSse(job, { type: 'error', error: reason });
+          projectRenders.delete(projectId);
           await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
             console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
           });
-        } finally {
-          projectRenders.delete(projectId);
+          await releaseScratch();
           closeJobAfterDelay(jobs, jobId);
-        }
-      },
+        },
+        onClose: async (code, signal) => {
+          job.process = null;
+          if (code !== 0) {
+            const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+            job.status = canceled ? 'canceled' : 'error';
+            const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
+            job.lastError = reason;
+            // A cancel is a user action (stdout); a non-zero exit is a failure (#7945).
+            const logClose = canceled ? console.log : console.error;
+            logClose(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+            await unlink(outputPath).catch(() => {});
+            broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+            projectRenders.delete(projectId);
+            // A cancel restores the pre-render status (so a cancelled re-render of a
+            // 'complete' project stays 'complete'); a real failure marks it 'failed'.
+            const targetStatus = canceled ? priorStatus : 'failed';
+            await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
+              console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
+            });
+            await releaseScratch();
+            closeJobAfterDelay(jobs, jobId);
+            return;
+          }
+          // Success finalization runs in an event callback (no request to bubble
+          // to) — a throw in thumbnailing/history I/O would otherwise leave the
+          // project stuck 'rendering' and projectRenders un-cleared (every later
+          // render 409s). Wrap it so any failure still emits a terminal frame and
+          // releases the slot.
+          try {
+            job.status = 'complete';
+            const section = (project.audioAnalysis?.sections || [])
+              .filter(section => Number.isFinite(section.energy) && section.startSec >= 0 && section.endSec > section.startSec && section.startSec < totalDuration)
+              .sort((a, b) => b.energy - a.energy || a.startSec - b.startSec)[0];
+            // An explicitly chosen poster frame (#8984) wins over the loudest-section guess.
+            const posterSec = project.composition?.posterSec;
+            const atSec = typeof posterSec === 'number' && posterSec < totalDuration ? posterSec
+              : section ? (section.startSec + Math.min(section.endSec, totalDuration)) / 2 : undefined;
+            const thumb = await generateThumbnail(outputPath, jobId, { atSec });
+            const meta = {
+              id: jobId,
+              prompt: `Music Video: ${project.name}`,
+              modelId: 'music-video',
+              seed: 0,
+              width: canonW,
+              height: canonH,
+              numFrames: Math.round(totalDuration * (fps || 24)),
+              fps: fps || 24,
+              filename,
+              thumbnail: thumb,
+              createdAt: new Date().toISOString(),
+              musicVideoProjectId: projectId,
+            };
+            await appendToVideoHistory(meta);
+            await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch((updateErr) => {
+              console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→complete write failed: ${updateErr.message}`);
+            });
+            console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
+            broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
+          } catch (err) {
+            job.status = 'error';
+            job.lastError = `Finalize failed: ${err.message}`;
+            console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
+            broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
+            await updateProject(projectId, { status: 'failed' }).catch((updateErr) => {
+              console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→failed write failed: ${updateErr.message}`);
+            });
+          } finally {
+            projectRenders.delete(projectId);
+            await releaseScratch();
+            closeJobAfterDelay(jobs, jobId);
+          }
+        },
+      });
+    };
+
+    if (!composition) {
+      startEncode(args);
+      return { jobId };
+    }
+
+    // Composed: capture the overlay in the background (the route returns the
+    // jobId at once; progress/cancel flow through the job like the encode's).
+    // A capture failure or cancel is terminal here, since no ffmpeg exists yet
+    // for the render guard to finalize.
+    job.overlayAbort = new AbortController();
+    const { signal } = job.overlayAbort;
+    renderTypographyOverlays({
+      jobId, cues, style: composition.style, width: canonW, height: canonH, fps, durationSec: totalDuration, signal,
+      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
+    }).then((overlays) => {
+      signal.throwIfAborted();
+      // Capture is over: from here a cancel kills the encode (job.process).
+      job.overlayAbort = null;
+      const composed = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays });
+      startEncode(composed.args, 0.5);
+    }).catch(async (err) => {
+      const canceled = signal.aborted;
+      job.status = canceled ? 'canceled' : 'error';
+      const reason = canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`;
+      job.lastError = reason;
+      const log = canceled ? console.log : console.error;
+      log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+      projectRenders.delete(projectId);
+      const targetStatus = canceled ? priorStatus : 'failed';
+      await updateProject(projectId, { status: targetStatus }).catch((updateErr) => {
+        console.error(`❌ Music-video render [${jobId.slice(0, 8)}] project ${projectId.slice(0, 8)} status→${targetStatus} write failed: ${updateErr.message}`);
+      });
+      await releaseScratch();
+      closeJobAfterDelay(jobs, jobId);
     });
 
     return { jobId };
@@ -499,6 +573,10 @@ export async function renderMusicVideo(projectId) {
 // propagates to the bootstrap caller's logBootstrapFailure rather than
 // reporting zero recovered.
 export async function recoverStuckMusicVideoRenders() {
+  // No overlay capture survives a restart either; drop any scratch it left.
+  await sweepCompositionScratch().catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove stale overlay scratch: ${err.message}`);
+  });
   const stuck = (await listProjects()).filter((p) => p?.status === 'rendering' && !projectRenders.has(p.id));
   let recovered = 0;
   for (const project of stuck) {

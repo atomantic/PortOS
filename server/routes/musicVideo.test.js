@@ -196,6 +196,17 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).not.toHaveBeenCalled();
   });
 
+  it('PATCH /:id accepts a composition manifest and refuses an unknown motion template (#8984)', async () => {
+    const bad = await request(app).patch('/api/music-video/mv-1')
+      .send({ composition: { mode: 'composed', textCues: [{ text: 'hi', startSec: 1, endSec: 2, template: 'explode' }] } });
+    expect(bad.status).toBe(400);
+    expect(svc.updateProject).not.toHaveBeenCalled();
+    const composition = { mode: 'composed', textCues: [{ text: 'hi', startSec: 1, endSec: 2, template: 'pop', placement: 'upper' }], posterSec: 1.5 };
+    const ok = await request(app).patch('/api/music-video/mv-1').send({ composition });
+    expect(ok.status).toBe(200);
+    expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { composition });
+  });
+
   describe('POST /:id/lyrics/import (#8964)', () => {
     it('replaces the cue list with the parsed LRC and reports the detected format', async () => {
       svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'lc-old', text: 'old', startSec: 1, endSec: 2 }] });
