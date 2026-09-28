@@ -367,6 +367,9 @@ export function initSocket(io) {
 
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
+    // Each registrar hangs its own per-socket cleanup on 'disconnect' (13+
+    // today), past Node's default cap of 10 — which warned on every connect.
+    socket.setMaxListeners(50);
     for (const registerHandlers of SOCKET_HANDLER_REGISTRARS) {
       registerHandlers(socket, io);
     }
