@@ -12,8 +12,9 @@
  * requestAnimationFrame clock, and hides everything but the film canvas.
  */
 
+import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { mkdir, rm } from 'fs/promises';
+import { mkdir } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { atomicWrite } from '../../lib/fileUtils.js';
@@ -89,7 +90,8 @@ function injectExportShim(html, shim) {
 // job stored for it.
 function musicTrackOf(job) {
   const match = /^\/data\/music\/([^/]+)$/.exec(job.audioUrl || '');
-  return match ? decodeURIComponent(match[1]) : null;
+  const name = match ? decodeURIComponent(match[1]) : null;
+  return name && !/[/\\]/.test(name) && name !== '..' && name !== '.' ? name : null;
 }
 
 /**
@@ -119,10 +121,10 @@ export async function startCodeAnimationExport(id, deps = {}) {
   if (job.audioUrl && !musicTrack) notes.push('Uploaded audio is not muxed; the export is silent. Attach a Music-library track to include it.');
   if (durationSeconds > EXPORT_MAX_DURATION_SEC) notes.push(`The export is capped at ${EXPORT_MAX_DURATION_SEC}s; this animation runs ${durationSeconds}s.`);
   const song = musicTrack ? await beatGrid(musicTrack) : null;
-  const directory = `${EXPORT_DIRECTORY_ROOT}/${id}`;
+  // One staging directory per export: a queued render snapshots its directory
+  // only when it starts, so a later export must never rewrite an earlier one's.
+  const directory = `${EXPORT_DIRECTORY_ROOT}/${id}/${randomUUID()}`;
   const dir = join(PATHS.data, directory);
-  // Re-stage from scratch so a stale asset from an earlier export never rides along.
-  await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   await atomicWrite(join(dir, 'index.html'), injectExportShim(html, buildExportShim({ song })));
   const queued = await enqueueJob({ kind: 'html-composition', params: { directory, ...(musicTrack ? { musicTrack } : {}) } });

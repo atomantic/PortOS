@@ -18,14 +18,16 @@ vi.mock('./jobStore.js', () => ({
 
 const { startCodeAnimationExport } = await import('./export.js');
 
+let lastDirectory;
+const enqueueDirectory = () => lastDirectory;
 const JOB_ID = '11111111-2222-4333-8444-555555555555';
 
 // Stage an export of `pageScript` and run the staged document's scripts, in
 // order, in a minimal browser-like realm.
 async function runPage(pageScript, { song = null } = {}) {
   state.html = `<html><head></head><body><script>${pageScript}</script></body></html>`;
-  await startCodeAnimationExport(JOB_ID, { enqueueJob: async () => ({ jobId: 'm' }), beatGrid: async () => song });
-  const staged = await readFile(join(state.dataRoot, 'code-animation-exports', JOB_ID, 'index.html'), 'utf8');
+  await startCodeAnimationExport(JOB_ID, { enqueueJob: async ({ params }) => { lastDirectory = params.directory; return { jobId: 'm' }; }, beatGrid: async () => song });
+  const staged = await readFile(join(state.dataRoot, enqueueDirectory(), 'index.html'), 'utf8');
   const scripts = [...staged.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
   const listeners = {};
   const canvas = { width: 1920, height: 1080, setAttribute: vi.fn() };
@@ -85,7 +87,7 @@ describe('startCodeAnimationExport', () => {
     state.dataRoot = await mkdtemp(join(tmpdir(), 'code-animation-export-'));
     state.html = '<!DOCTYPE html><html><head><title>x</title></head><body><script>window.renderFrame=()=>{}</script></body></html>';
     state.job = { id: JOB_ID, status: 'completed', frame: { width: 1920, height: 1080, fps: 30, durationSeconds: 20 }, audioUrl: '/data/music/Song%20A.mp3' };
-    enqueueJob = vi.fn(async () => ({ jobId: 'media-1', position: 1, status: 'queued' }));
+    enqueueJob = vi.fn(async ({ params }) => { lastDirectory = params.directory; return { jobId: 'media-1', position: 1, status: 'queued' }; });
   });
   afterEach(async () => {
     await rm(state.dataRoot, { recursive: true, force: true });
@@ -97,8 +99,8 @@ describe('startCodeAnimationExport', () => {
     expect(result).toMatchObject({ jobId: 'media-1', notes: [] });
     expect(beatGrid).toHaveBeenCalledWith('Song A.mp3');
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'html-composition',
-      params: { directory: `code-animation-exports/${JOB_ID}`, musicTrack: 'Song A.mp3' } });
-    const staged = await readFile(join(state.dataRoot, 'code-animation-exports', JOB_ID, 'index.html'), 'utf8');
+      params: { directory: expect.stringMatching(new RegExp(`^code-animation-exports/${JOB_ID}/[0-9a-f-]{36}$`)), musicTrack: 'Song A.mp3' } });
+    const staged = await readFile(join(state.dataRoot, enqueueDirectory(), 'index.html'), 'utf8');
     expect(staged.indexOf('portosComposition')).toBeLessThan(staged.indexOf('window.renderFrame=()=>{}'));
     expect(staged).toContain('"bpm":100');
   });
@@ -107,7 +109,7 @@ describe('startCodeAnimationExport', () => {
     state.job = { ...state.job, audioUrl: '/api/uploads/take.wav', frame: { ...state.job.frame, durationSeconds: 180 } };
     const result = await startCodeAnimationExport(JOB_ID, { enqueueJob, beatGrid: vi.fn() });
     expect(result.notes).toHaveLength(2);
-    expect(enqueueJob.mock.calls[0][0].params).toEqual({ directory: `code-animation-exports/${JOB_ID}` });
+    expect(Object.keys(enqueueJob.mock.calls[0][0].params)).toEqual(['directory']);
   });
 
   it('refuses frame sizes the composition renderer cannot encode and unfinished jobs', async () => {

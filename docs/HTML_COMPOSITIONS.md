@@ -119,7 +119,7 @@ launch-video artifacts are delivered. The completed job's result carries
 relative to the data directory (never an absolute host path) and `url` serves
 it under `/data/`; tile *n* shows `times[n]`.
 Launch runs write `proofs/contact-<jobId>.png` beside the run; other
-compositions write `data/composition-proofs/`. Both are excluded from backups. Code Animation exports stage `data/code-animation-exports/<job-id>/` (also excluded): the stored HTML with a shim that maps `ANIMATION_META`/`renderFrame(t)` onto `portosComposition`, stops the page's own `requestAnimationFrame` clock, and hides everything but the film canvas.
+compositions write `data/composition-proofs/`. Both are excluded from backups. Code Animation exports stage `data/code-animation-exports/<job-id>/<export-id>/` (also excluded): the stored HTML with a shim that maps `ANIMATION_META`/`renderFrame(t)` onto `portosComposition`, stops the page's own `requestAnimationFrame` clock, and hides everything but the film canvas.
 
 The 202 response contains the media queue's `jobId`. Subscribe to
 `GET /api/html-composition/:jobId/events` for the usual queued, started, progress,
