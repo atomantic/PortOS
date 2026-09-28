@@ -445,10 +445,18 @@ export function reorderScenes(project, orderedIds) {
 // Label suffix budget: the scene label schema caps at 120 characters.
 const SCENE_LABEL_MAX = 120;
 
-/** The timed lyric lines sung inside `[startSec, endSec]`, joined, or null. */
+/**
+ * The timed lyric lines sung during `[startSec, endSec]`, joined, or null. A
+ * line held across a cut belongs to both pieces.
+ */
 function lyricTextWithin(cues, startSec, endSec) {
   const lines = (Array.isArray(cues) ? cues : [])
-    .filter((cue) => typeof cue?.startSec === 'number' && cue.startSec >= startSec - 1e-6 && cue.startSec < endSec - 1e-6)
+    .filter((cue) => {
+      if (typeof cue?.startSec !== 'number') return false;
+      const cueEnd = typeof cue.endSec === 'number' ? cue.endSec : cue.startSec;
+      // Starts before the piece ends, and is still sounding (or starts) inside it.
+      return cue.startSec < endSec - 1e-6 && (cueEnd > startSec + 1e-6 || cue.startSec >= startSec - 1e-6);
+    })
     .map((cue) => (typeof cue.text === 'string' ? cue.text.trim() : ''))
     .filter(Boolean);
   return lines.length ? lines.join(' / ').slice(0, 2000) : null;

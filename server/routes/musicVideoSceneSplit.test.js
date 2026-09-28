@@ -91,6 +91,13 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(pieces.at(-1).endSec).toBe(55);
   });
 
+  it('gives a sung line held across an unavoidable cut to both pieces', async () => {
+    await projects.updateProject(project.id, { lyricCues: [{ text: 'held note', startSec: 30, endSec: 50 }] });
+    const shot = await projects.addProjectScene(project.id, { startSec: 30, endSec: 50 });
+    const res = await split(shot.sceneId, { backend: 'grok' });
+    expect(res.body.scenes.map((p) => [p.startSec, p.endSec, p.lyricText])).toEqual([[30, 40, 'held note'], [40, 50, 'held note']]);
+  });
+
   it('refuses a shot that fits one take, a lane with no per-take limit, a bad backend and an unknown scene', async () => {
     const fits = await projects.addProjectScene(project.id, { startSec: 30, endSec: 40, shotMode: 'performance' });
     expect((await split(fits.sceneId)).body.code).toBe('MUSIC_VIDEO_SPLIT_NOT_NEEDED');
