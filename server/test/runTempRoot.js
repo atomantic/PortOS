@@ -61,7 +61,16 @@ const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['kilo', 'opencode', 'escape', 'no
 // which names the fix (the same `sweepStrayTempRoots()` helper that already
 // closed the identical symptom in two other real-ffmpeg/real-browser
 // suites). Remove this entry once #9044 lands.
-const KNOWN_PENDING_LEAKS = new Set(['portos-html-composition-preflight-']);
+//
+// `mv-vocal-stem-route-test-` (server/routes/musicVideoVocalStem.test.js)
+// already uses that same sweepStrayTempRoots() helper, and it reliably
+// closes the leak on macOS and on CI's Linux server-test shards — but NOT
+// on Windows CI, where a still-terminating ffprobe/ffmpeg child evidently
+// holds its file handle past the helper's ~300ms retry window. Tracked in
+// #9045 (make the retry window platform-aware, or find and directly await
+// the still-running background work instead of retrying blind). Remove
+// this entry once #9045 lands.
+const KNOWN_PENDING_LEAKS = new Set(['portos-html-composition-preflight-', 'mv-vocal-stem-route-test-']);
 
 /**
  * Groups a leaked entry's basename by its mkdtemp call site as closely as a
@@ -140,7 +149,7 @@ export function teardown() {
       const knownPending = KNOWN_PENDING_LEAKS.has(prefix);
       if (!knownThirdParty && !knownPending) hasUnknownLeak = true;
       const note = knownThirdParty ? ' (known third-party CLI scratch, see #9039)'
-        : knownPending ? ' (known pending leak, see #9044)' : '';
+        : knownPending ? ' (known pending leak, see KNOWN_PENDING_LEAKS above)' : '';
       console.warn(`⚠️ test temp leak: ${prefix} ×${count}${note}`);
     }
     // Strict mode (#9032): a leftover entry means some suite wrote outside
