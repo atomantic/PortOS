@@ -171,6 +171,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
   { path: '/composition-proofs/', reason: 'HTML-composition contact-sheet proofs — review stills, re-rendered from the composition source', overridable: true },
+  { path: '/code-animation-exports/', reason: 'Code Animation frame-exact export staging — the stored HTML plus render shim, rebuilt on every export', overridable: true },
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
   { path: '/launch-videos/*/*/proofs/', reason: 'Launch-video critique-loop contact sheets — re-rendered from the run composition', overridable: true },
   { path: '/cache/', reason: 'Remote-API metadata and licensed reading caches — regenerable on demand, and stale on restore anyway', overridable: false },

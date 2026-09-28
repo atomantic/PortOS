@@ -41,6 +41,11 @@ export const CODE_ANIMATION_MESSAGES = Object.freeze({
 // URL. Absent when the user supplied no audio or opened the file standalone.
 export const CODE_ANIMATION_AUDIO_GLOBAL = 'ANIMATION_AUDIO_URL';
 
+// The global the frame-exact exporter sets to the soundtrack's measured beat
+// grid ({ bpm, beats, downbeats, hits } — seconds), so audio-reactive motion
+// can be a pure function of t with no live playback (#9078).
+export const CODE_ANIMATION_SONG_GLOBAL = 'ANIMATION_SONG';
+
 export const CODE_ANIMATION_ASPECT_RATIOS = Object.freeze({
   '16:9': { width: 16, height: 9 },
   '9:16': { width: 9, height: 16 },
@@ -138,7 +143,8 @@ function audioSection({ audio, soundtrack, durationSeconds }) {
     if (isNonBlankStr(audio.notes)) lines.push(`What the artist says about the track (tempo, sections, cues): ${trimTo(audio.notes, CODE_ANIMATION_LIMITS.audioNotesMax)}`);
     lines.push(
       `- Read the track URL from \`window.${CODE_ANIMATION_AUDIO_GLOBAL}\` (set by the host before your script runs). Play it through an <audio> element routed into Web Audio (createMediaElementSource → AnalyserNode → destination).`,
-      '- While audio plays, the timeline clock IS `audio.currentTime` so picture and sound never drift. Map the analyser\'s bass / mid / treble energy and detected onsets onto motion, scale, color, and cuts so the picture visibly dances to the music.',
+      '- While audio plays, the timeline clock IS `audio.currentTime` so picture and sound never drift.',
+      `- Make the picture dance from PRECOMPUTED song data as a function of t: when \`window.${CODE_ANIMATION_SONG_GLOBAL}\` is set (\`{ bpm, beats, downbeats, hits }\`, every entry a time in seconds; bpm may be null) derive pulses, cuts, scale, and color from the nearest beats/downbeats/hits before and after t. The frame-exact MP4 export renders renderFrame(t) with NO audio playing, so a live analyser reads silence there. Use the AnalyserNode's bass / mid / treble energy only as a preview fallback when \`window.${CODE_ANIMATION_SONG_GLOBAL}\` is absent.`,
       `- If \`window.${CODE_ANIMATION_AUDIO_GLOBAL}\` is unset (the file was opened on its own), show a small "Load audio" file input in the controls overlay and fall back to a silent clock until a file is chosen.`,
       `- The video lasts ${durationSeconds}s; if the track is longer, fade the audio out over the final second.`,
     );
@@ -206,7 +212,7 @@ function runtimeContract({ width, height, fps, durationSeconds, interactive, has
   return `RUNTIME CONTRACT (required — the PortOS preview host depends on every item):
 1. One <canvas> with an internal resolution of exactly ${width}×${height}px, CSS-scaled to fit the viewport with letterboxing on a black background. Every visible pixel of the film is drawn onto this canvas.
 2. \`window.ANIMATION_META = { title, duration: ${durationSeconds}, fps: ${fps}, width: ${width}, height: ${height} }\`.
-3. \`window.renderFrame(t)\` draws the frame at time t (seconds, 0 ≤ t ≤ ${durationSeconds}) DETERMINISTICALLY: use a seeded PRNG, never Math.random/Date.now/performance.now inside drawing, and derive all motion from t (plus audio analysis while audio plays). Scrubbing to the same t twice must look the same.
+3. \`window.renderFrame(t)\` draws the frame at time t (seconds, 0 ≤ t ≤ ${durationSeconds}) DETERMINISTICALLY: use a seeded PRNG, never Math.random/Date.now/performance.now inside drawing, and derive all motion from t (audio-reactive values from the precomputed song data, never only from live playback). Scrubbing to the same t twice must look the same. PortOS exports the film frame-exactly by calling renderFrame(t) once per frame with its own clock, so renderFrame must fully draw frame t on its own, even when called out of order or slower than real time.
 4. A requestAnimationFrame loop advances a clock and calls renderFrame(clock). The film loops back to 0 at the end unless it is recording.
 5. A minimal controls overlay OUTSIDE the canvas (so it never appears in a recording): play/pause, restart, a scrub bar with the current time, and a Record button. Autoplay on load when the browser allows it; otherwise show a clear play prompt.
 6. \`window.recordAnimation()\` returns a Promise<Blob>: restart at t=0, capture \`canvas.captureStream(${fps})\` with MediaRecorder (prefer "video/webm;codecs=vp9", fall back to "video/webm"), play exactly ${durationSeconds}s, stop, and resolve the Blob.${audioTrack} The Record button calls it; when embedded (window.parent !== window) it posts the result to the host exactly as item 7 does, otherwise it downloads the result as a .webm file.
