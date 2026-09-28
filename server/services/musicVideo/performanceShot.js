@@ -90,7 +90,8 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (!musicVideo?.projectId || !musicVideo?.sceneId) return null;
   const project = await getProject(musicVideo.projectId);
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
-  if (!project || !scene) throw refuse('Music-video project or scene not found', 'NOT_FOUND', 404);
+  // An unknown project/scene is not a performance shot; the render proceeds as
+  // before and the completion hook refuses to attach it to a deleted scene.
   if (!isPerformanceScene(scene)) return null;
 
   const capability = performanceCapability(backend);
