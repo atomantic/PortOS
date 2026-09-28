@@ -115,8 +115,9 @@ function replaceScene(project, idx, scene) {
  * or a re-import is a no-op for the list). A slot is filled only while it is
  * empty, by the first appended take of that kind; an existing selection is
  * never replaced, and a motion-reference take (#8980) never fills a slot — it
- * becomes final picture only by an explicit select. Returns `{ scene, appended }` — `appended` lists the take
- * for every input, whether newly created or already present.
+ * becomes final picture only by an explicit select. Returns
+ * `{ scene, appended }` — `appended` lists the take for every input, whether
+ * newly created or already present.
  */
 function appendToScene(scene, inputs, now) {
   let takes = ensureSceneTakes(scene, now);

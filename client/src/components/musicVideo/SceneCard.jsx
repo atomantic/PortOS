@@ -123,10 +123,17 @@ export default function SceneCard({
         placeholder="Shot prompt — what this scene's video should show"
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
-      {(scene.lyricText || scene.visualIntent) && (
+      {(scene.lyricText || scene.visualIntent || scene.direction) && (
         <div className="text-[11px] text-port-text-muted space-y-0.5">
           {scene.lyricText && <p className="italic break-words">♪ {scene.lyricText}</p>}
           {scene.visualIntent && <p className="break-words">Intent: {scene.visualIntent}</p>}
+          {/* Applied treatment direction (#8980) — appended to both generated prompts. */}
+          {scene.direction && (
+            <p className="break-words" title={scene.direction.frameClause}>
+              Direction: {scene.direction.mode}{scene.direction.focalSubject ? ` · ${scene.direction.focalSubject}` : ''}
+              {scene.direction.typographyRole !== 'none' ? ` · ${scene.direction.typographyRole} text, ${scene.direction.negativeSpace} region kept clear` : ' · no text'}
+            </p>
+          )}
         </div>
       )}
       <div className="flex flex-wrap gap-2 items-center text-xs">
