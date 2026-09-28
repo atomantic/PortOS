@@ -29,6 +29,7 @@ import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
+import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
@@ -439,6 +440,112 @@ export function reorderScenes(project, orderedIds) {
   }
   const nextScenes = orderedIds.map((id, i) => ({ ...byId.get(id), order: i }));
   return touch(project, { scenes: nextScenes });
+}
+
+// Label suffix budget: the scene label schema caps at 120 characters.
+const SCENE_LABEL_MAX = 120;
+
+/**
+ * The timed lyric lines sung during `[startSec, endSec]`, joined, or null. A
+ * line held across a cut belongs to both pieces.
+ */
+function lyricTextWithin(cues, startSec, endSec) {
+  const lines = (Array.isArray(cues) ? cues : [])
+    .filter((cue) => {
+      if (typeof cue?.startSec !== 'number') return false;
+      const cueEnd = typeof cue.endSec === 'number' ? cue.endSec : cue.startSec;
+      // Starts before the piece ends, and is still sounding (or starts) inside it.
+      return cue.startSec < endSec - 1e-6 && (cueEnd > startSec + 1e-6 || cue.startSec >= startSec - 1e-6);
+    })
+    .map((cue) => (typeof cue.text === 'string' ? cue.text.trim() : ''))
+    .filter(Boolean);
+  return lines.length ? lines.join(' / ').slice(0, 2000) : null;
+}
+
+/**
+ * Split a shot longer than its backend can render in one take (#8977) into
+ * contiguous scenes on musical boundaries (lib/musicVideoShotTiming.js
+ * `planShotSplit`): a performance shot at its lip-sync provider's audio
+ * window, a Grok cutaway at the longest Grok clip. `backend` is the lane the
+ * director will render with ('' / null = the project's pinned backend).
+ *
+ * The original scene keeps its id and takes and becomes the first piece (a
+ * performance's lip-synced clip selection is cleared — see below). Each later
+ * piece is a new scene placed right after it, carrying the shot's direction
+ * and the selected reference frame (as a take, so the frame is ready to
+ * animate) but no clip — the old clip was generated for the whole span. Each
+ * piece's `lyricText` is the timed lines sung inside it. Returns `{ project, scenes }` (all pieces, in
+ * order); throws 400 when the shot is untimed or already fits one take.
+ */
+export function splitScene(project, sceneId, { backend = null } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  const scene = scenes[idx];
+  const lane = backend || project.videoSettings?.backend || null;
+  const maxSec = shotSplitLimit(scene, lane);
+  if (maxSec == null) {
+    throw new ServerError('This backend renders the shot at any length — there is nothing to split.', { status: 400, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED' });
+  }
+  const plan = planShotSplit({
+    startSec: scene.startSec,
+    endSec: scene.endSec,
+    maxSec,
+    lyricCues: project.lyricCues,
+    phrases: project.phrases,
+    beats: project.audioAnalysis?.beats,
+  });
+  if (!plan.ok) throw new ServerError(plan.message, { status: 400, code: plan.code });
+
+  const now = new Date().toISOString();
+  const count = plan.pieces.length;
+  // Re-splitting a piece numbers it afresh rather than stacking suffixes.
+  const baseLabel = (scene.label || scene.sectionLabel || `Scene ${idx + 1}`).replace(/ · \d+\/\d+$/, '');
+  const pieceLabel = (i) => {
+    const suffix = ` · ${i + 1}/${count}`;
+    return `${baseLabel.slice(0, SCENE_LABEL_MAX - suffix.length)}${suffix}`;
+  };
+  const hasTimedCues = (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
+  const pieceLyrics = (piece) => (hasTimedCues ? lyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
+
+  const pieces = plan.pieces.map((piece, i) => {
+    const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece) };
+    if (i === 0) {
+      const takes = ensureSceneTakes(scene, now);
+      // A lip-synced take was generated for the old interval and the render
+      // refuses it as re-timed, so the selection is cleared (the take stays a
+      // candidate) and "Generate missing" fills it. A cutaway clip still starts
+      // where the first piece does, so it stays selected and is trimmed.
+      return isPerformanceScene(scene)
+        ? { ...scene, ...timing, takes, videoHistoryId: null }
+        : { ...scene, ...timing, takes };
+    }
+    const fresh = buildScene({
+      ...parseSceneOrThrow(musicVideoSceneCreateSchema, {
+        sectionLabel: scene.sectionLabel ?? null,
+        prompt: scene.prompt ?? '',
+        framePrompt: scene.framePrompt ?? null,
+        beatAligned: scene.beatAligned ?? false,
+        loop: scene.loop ?? false,
+        sectionIndex: scene.sectionIndex ?? null,
+        visualIntent: scene.visualIntent ?? null,
+        visualLayer: scene.visualLayer ?? 'footage',
+        shotMode: scene.shotMode ?? 'cutaway',
+        ...timing,
+      }),
+    }, { order: 0 });
+    const seeded = {
+      ...fresh,
+      ...(scene.direction ? { direction: structuredClone(scene.direction) } : {}),
+      referenceImageId: scene.referenceImageId ?? null,
+    };
+    return { ...seeded, takes: ensureSceneTakes(seeded, now, 'manual') };
+  });
+
+  const nextScenes = [...scenes.slice(0, idx), ...pieces, ...scenes.slice(idx + 1)]
+    .map((s, i) => ({ ...s, order: i }));
+  const next = touch(project, { scenes: nextScenes });
+  return { project: next, scenes: nextScenes.slice(idx, idx + count) };
 }
 
 // ---- peer-sync federation (#1770) -----------------------------------------

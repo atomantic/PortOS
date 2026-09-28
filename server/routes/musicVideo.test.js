@@ -17,6 +17,8 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateScene: vi.fn(async (id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+  // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
+  splitProjectScene: vi.fn(),
   setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
   // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
   appendSceneTakes: vi.fn(),

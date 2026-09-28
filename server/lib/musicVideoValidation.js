@@ -480,6 +480,12 @@ export const musicVideoSceneReorderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500),
 }).strict();
 
+// Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
+// the lane the director will render with; omitted/null = the project's pin.
+export const musicVideoSceneSplitSchema = z.object({
+  backend: z.enum(['local', 'grok', 'fal']).nullable().optional(),
+}).strict();
+
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider
 // for a first-pass framePrompt/prompt per scene — best-effort, never fails the

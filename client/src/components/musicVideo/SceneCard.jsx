@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, Image as ImageIcon, Video, Maximize2, AlertTriangle, ImagePlus, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
@@ -9,7 +9,7 @@ import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan } from '../../lib/music
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card' };
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 import {
-  grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow,
+  grokCoverage, isPerformanceScene, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from '../../lib/musicVideoShotTiming.js';
 
 // The two timeline-bound scene fields rendered as identical number inputs.
@@ -43,6 +43,9 @@ const COVERAGE_TOLERANCE_SEC = 0.25;
  * verified source-audio conditioning is blocked here with the reason, and a
  * capable one names the provider, model, song window and cost before the
  * director spends anything. `songDurationSec` bounds the planned window.
+ * A shot longer than that lane renders in one take (the lip-sync audio window,
+ * or Grok's longest clip) offers `onSplit(sceneId, backend)`, which cuts it
+ * into contiguous scenes at lyric pauses / phrase boundaries server-side.
  */
 export default function SceneCard({
   scene, index, isLast, generatingFrame, generatingVideo,
@@ -50,7 +53,7 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   onGenerateFrame, onGenerateVideo, onContinueVideo,
   onOpenPreview, onSelectTake, onReviewTake, onImportTake, onImportClipTake, takeBusy = false, layered = false,
-  lipSyncBackend = '', songDurationSec = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit,
 }) {
   // Pause the inline clip before opening the lightbox so the user can't hear
   // two desynced copies — MediaLightbox autoplays unmuted, and the thumb's
@@ -91,6 +94,8 @@ export default function SceneCard({
     ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
     : null;
   const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
+  const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend) : null;
+  const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
@@ -228,6 +233,13 @@ export default function SceneCard({
           Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
           {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
         </p>
+      )}
+      {canSplit && onSplit && (
+        <button type="button" onClick={() => onSplit(scene.sceneId, lipSyncBackend || null)}
+          className="inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 px-2 py-1 text-xs min-h-[44px] sm:min-h-0"
+          title={`Cut this ${timedSpan.toFixed(1)}s shot into scenes of at most ${splitLimit.toFixed(2)}s at lyric pauses or phrase boundaries — nothing is looped or stretched`}>
+          <Scissors size={13} /> Split on lyric boundaries
+        </button>
       )}
       {underCovered && (
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">

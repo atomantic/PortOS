@@ -18,6 +18,7 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoSceneSplitSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
@@ -52,6 +53,7 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  splitProjectScene,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -416,6 +418,13 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const updated = await reorderProjectScenes(req.params.id, sceneIds);
   res.json(updated);
+}));
+
+// Split a shot its backend cannot render in one take (#8977): a performance
+// longer than the lip-sync window, a Grok cutaway longer than its longest clip.
+router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
+  const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
+  res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
 // --- Scene takes (#8965) ---

@@ -157,6 +157,16 @@ export async function reorderProjectScenes(id, orderedIds) {
   return next;
 }
 
+/**
+ * Split a shot longer than its backend renders in one take into contiguous
+ * scenes on lyric/phrase boundaries (#8977, projectsLogic.splitScene).
+ * Returns `{ project, scenes }` — the persisted project and the pieces.
+ */
+export async function splitProjectScene(id, sceneId, options = {}) {
+  const { splitScene } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => splitScene(current, sceneId, options));
+}
+
 // ---- scene takes (#8965) ----
 // Append candidate takes to one scene: `{ scene, appended }`. A take fills its
 // slot only while the slot is empty — never replaces a selection (takes.js).

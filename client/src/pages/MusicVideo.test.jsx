@@ -51,6 +51,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   updateMusicVideoScene: vi.fn(),
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
+  splitMusicVideoScene: vi.fn(),
   importMusicVideoLyrics: vi.fn(),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
@@ -158,7 +159,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
-  importMusicVideoLyrics, updateMusicVideoScene,
+  importMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -759,6 +760,24 @@ describe('MusicVideo project video renderer', () => {
       await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith(
         'mv-2', 's1', { shotMode: 'performance' }, expect.anything(),
       ));
+    });
+
+    it('offers a lyric-boundary split for a shot longer than one lip-sync take and applies the split board', async () => {
+      const longShot = { ...PERFORMANCE_SCENE, startSec: 2, endSec: 26 };
+      const project = { ...performanceProject({ backend: 'fal' }), scenes: [longShot] };
+      const pieces = [
+        { ...longShot, label: 'Verse · 1/2', endSec: 14 },
+        { ...longShot, sceneId: 's1b', order: 1, label: 'Verse · 2/2', startSec: 14, videoHistoryId: null },
+      ];
+      splitMusicVideoScene.mockResolvedValue({ project: { ...project, scenes: pieces }, scenes: pieces });
+      await openProject(project);
+
+      // The too-long refusal stays, now with a way out that never loops or stretches.
+      expect(await screen.findByText(/Split the scene on a lyric or phrase boundary/)).toBeTruthy();
+      fireEvent.click(await screen.findByRole('button', { name: /Split on lyric boundaries/ }));
+      await waitFor(() => expect(splitMusicVideoScene).toHaveBeenCalledWith('mv-2', 's1', 'fal', expect.anything()));
+      expect(await screen.findByText('Verse · 2/2')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Split on lyric boundaries/ })).toBeNull();
     });
 
     it('requests the Grok clip that covers a cutaway and adds approximate motion timing', async () => {
