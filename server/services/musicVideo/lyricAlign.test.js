@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ServerError } from '../../lib/errorHandler.js';
+import { alignProjectLyrics } from './lyricAlign.js';
 import {
   alignDirectorWords,
-  alignProjectLyrics,
   encodePcm16Wav,
   explainSttFailure,
   lyricAlignChunkSec,
@@ -12,7 +12,7 @@ import {
   planAudioChunks,
   sliceWav,
   wavDurationSec,
-} from './lyricAlign.js';
+} from './lyricAlignCore.js';
 import { STT_TIMEOUT_MS } from '../voice/stt.js';
 
 const round3 = (n) => Math.round(n * 1000) / 1000;

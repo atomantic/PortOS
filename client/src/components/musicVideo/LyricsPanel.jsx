@@ -19,7 +19,7 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
 
 /** Move the boundary after `index` by deltaSec. The next word's start follows. */
-export function nudgeWordBoundary(words, index, deltaSec) {
+function nudgeWordBoundary(words, index, deltaSec) {
   const next = words.map((word) => ({ ...word }));
   const word = next[index];
   if (!word || !Number.isFinite(deltaSec)) return words;

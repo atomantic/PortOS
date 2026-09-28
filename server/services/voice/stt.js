@@ -78,7 +78,7 @@ export const transcribe = async (audio, opts = {}) => {
 const SPECIAL_TOKEN = /^(?:\[.*?\]|<\|.*?\|>)$/;
 
 /** Parse a whisper timestamp: seconds, or `hh:mm:ss,mmm` / `mm:ss.mmm`. */
-export function asSeconds(value) {
+function asSeconds(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
   const text = value.trim();
@@ -140,7 +140,7 @@ function wordsFromTokens(tokens) {
  * array (word-split tokens) and falls back to grouping subword tokens.
  * @returns {Array<{ text: string, startSec: number, endSec: number }>}
  */
-export function extractVerboseWords(data) {
+function extractVerboseWords(data) {
   const segments = Array.isArray(data?.segments) ? data.segments : [];
   const segmented = segments.some((segment) => Array.isArray(segment?.words) && segment.words.length);
   if (segmented) return segments.flatMap((segment) => wordsFromList(segment.words));

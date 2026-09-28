@@ -11,7 +11,7 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({
 }));
 
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { extractVerboseWords, transcribe } from './stt.js';
+import { transcribe } from './stt.js';
 
 const ok = (data) => ({
   ok: true,
@@ -59,8 +59,8 @@ describe('transcribe verbose word timings', () => {
 });
 
 describe('extractVerboseWords', () => {
-  it('groups subword tokens on whisper word boundaries and drops special tokens', () => {
-    expect(extractVerboseWords({
+  it('groups subword tokens on whisper word boundaries and drops special tokens', async () => {
+    fetchWithTimeout.mockResolvedValue(ok({
       segments: [{
         tokens: [
           { text: '[_BEG_]', timestamps: { from: '00:00:00,000', to: '00:00:00,000' } },
@@ -69,7 +69,9 @@ describe('extractVerboseWords', () => {
           { text: ' there', timestamps: { from: '00:00:01,500', to: '00:00:01,900' } },
         ],
       }],
-    })).toEqual([
+    }));
+    const result = await transcribe(Buffer.from('x'), { verbose: true, prompt: '' });
+    expect(result.words).toEqual([
       { text: 'Hello', startSec: 1, endSec: 1.45 },
       { text: 'there', startSec: 1.5, endSec: 1.9 },
     ]);
