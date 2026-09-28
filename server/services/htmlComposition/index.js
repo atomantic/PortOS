@@ -89,6 +89,9 @@ export function cancel(jobId) {
 }
 
 // The frame fields a render publishes; `formats`/`layout` describe the source only.
+// Render-time motion-blur presets (#9080), in the contract's own motionBlur shape.
+const MOTION_BLUR_PRESETS = { off: 1, light: { shutter: 0.25, samples: 'auto', tolerance: 2 }, film: { shutter: 0.5, samples: 'auto', tolerance: 2 } };
+
 const frameOf = ({ durationSec, fps, width, height, motionBlur }) => ({ durationSec, fps, width, height, motionBlur });
 
 /**
@@ -146,7 +149,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
     const parsedInput = validateRequest(htmlCompositionRenderSchema, input);
     let { directory } = parsedInput;
     const sourceDirectory = directory;
-    const { musicTrack, launchVideo, synthesizeMusic, proof, formats } = parsedInput;
+    const { musicTrack, launchVideo, synthesizeMusic, proof, formats, motionBlur: blurChoice } = parsedInput;
     if (musicVideo && (launchVideo || synthesizeMusic || musicTrack || proof || formats)) {
       throw new Error('A music-video composition render cannot use launch-video, proof, or library-music options');
     }
@@ -186,7 +189,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
       : htmlCompositionContractSchema;
     const parsed = contractSchema.safeParse(metadata);
     if (!parsed.success) throw new Error(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; '));
-    const contract = parsed.data;
+    const contract = blurChoice ? { ...parsed.data, motionBlur: MOTION_BLUR_PRESETS[blurChoice] } : parsed.data;
     if (launchPlan && Math.abs(contract.durationSec - launchPlan.durationSec) > 1e-8) {
       throw new Error('Composition durationSec must match storyboard.json');
     }
@@ -310,6 +313,7 @@ export async function renderComposition({ jobId, owner, audio, maxDurationSec, s
         id: video.id, prompt: `HTML composition: ${sourceDirectory}`, modelId: 'html-composition', seed: 0,
         ...frameOf(video.contract), numFrames: Math.round(contract.durationSec * contract.fps),
         ...(launchMetadata ? { launchVideo: launchMetadata, appId: launchMetadata.appId, posterSec: launchPlan.posterSec } : {}),
+        ...(video.sampleHistogram ? { sampleHistogram: video.sampleHistogram } : {}),
         filename: video.filename, thumbnail: video.thumbnail, createdAt,
       }));
       await mutateVideoHistory(history => { history.unshift(...metas); return history; });

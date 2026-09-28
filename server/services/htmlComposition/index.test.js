@@ -154,6 +154,14 @@ globalThis.portosComposition = { durationSec:1, fps:12, width:1280, height:720, 
     expect(result.sampleHistogram).toEqual({ 1: 12 });
   }, 60000);
 
+  it('applies a render-time motionBlur choice over a page that declares none, and omitting it keeps the page value (#9080)', async () => {
+    const still = contract => fixture('', contract).replace("(40 + t * 480) + 'px'", "'40px'");
+    const film = await renderComposition({ ...(await composition(still())), motionBlur: 'film' });
+    expect(film.sampleHistogram).toEqual({ 1: 12 });
+    const kept = await renderComposition(await composition(still('motionBlur:1')));
+    expect(kept.sampleHistogram).toBeUndefined();
+  }, 60000);
+
   it('renders a gated launch composition and uses its declared poster beat', async () => {
     const html = `<!doctype html><html><body><script>
       globalThis.portosComposition = { durationSec:15, fps:12, width:1280, height:720,

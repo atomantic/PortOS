@@ -2471,6 +2471,9 @@ export const launchVideoStyleReferenceSchema = z.object({
   filename: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'filename must not contain a path separator'),
 }).strict();
 
+// Off / Light / Film shutter presets; the mapping lives in services/htmlComposition.
+export const htmlCompositionMotionBlurChoiceSchema = z.enum(['off', 'light', 'film']);
+
 export const appLaunchVideoRequestSchema = z.object({
   sourceVideoId: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/).optional(),
   feedback: z.string().trim().min(1).max(4000).optional(),
@@ -2488,6 +2491,8 @@ export const appLaunchVideoRequestSchema = z.object({
   motionStyle: z.enum(LAUNCH_VIDEO_MOTION_STYLES).optional(),
   // Contact-sheet proof → critique → fix passes before the final render.
   critiqueRounds: z.number().int().min(0).max(4).default(2),
+  // Render-time motion blur (#9080); omitted, the composition's own setting stands.
+  motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   // Ask the agent to consult installed motion-design skills (npm run setup:motion).
   motionSkills: z.boolean().default(false),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/).optional(),
@@ -2517,6 +2522,8 @@ export const launchVideoStoryboardSchema = z.object({
 export const htmlCompositionRenderSchema = z.object({
   launchVideo: launchVideoOptionsSchema.optional(),
   synthesizeMusic: z.boolean().optional(),
+  // Overrides the page's own portosComposition.motionBlur when present (#9080).
+  motionBlur: htmlCompositionMotionBlurChoiceSchema.optional(),
   directory: z.string().min(1).max(1024).refine(value => !value.startsWith('/') && !value.includes('\\') && !value.includes(':') && !value.split('/').some(part => part === '..' || part === '.' || !part), 'directory must be a relative path inside data'),
   musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename').optional(),
   // Several aspect ratios of one timeline, rendered in sequence on one page.

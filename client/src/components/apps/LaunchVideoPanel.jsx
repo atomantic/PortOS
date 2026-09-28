@@ -51,6 +51,7 @@ function LaunchVideoForm({ appId, onQueued }) {
   const [duration, setDuration] = useState(20);
   const [motionStyle, setMotionStyle] = useState('walkthrough');
   const [critiqueRounds, setCritiqueRounds] = useState(2);
+  const [motionBlur, setMotionBlur] = useState('');
   const [motionSkills, setMotionSkills] = useState(false);
   const [skillPacks, setSkillPacks] = useState(null);
   const [music, setMusic] = useState(false);
@@ -108,6 +109,7 @@ function LaunchVideoForm({ appId, onQueued }) {
     await createAppLaunchVideo(appId, {
       // A single frame keeps the original `format` request shape.
       tone, direction, ...(formats.length === 1 ? { format: formats[0] } : { formats }), targetDurationSec: duration, motionStyle, critiqueRounds,
+      ...(motionBlur ? { motionBlur } : {}),
       ...(consultSkills ? { motionSkills: true } : {}),
       ...(music ? (generateMusic ? { generateMusic: true, musicMethod } : { musicTrack }) : {}),
       ...(reference ? { styleReference: { kind: reference.kind, source: reference.source, filename: reference.filename } } : {}),
@@ -172,6 +174,16 @@ function LaunchVideoForm({ appId, onQueued }) {
         {[0, 1, 2, 3, 4].map(value => <option key={value} value={value}>{value === 0 ? 'None (render directly)' : value}</option>)}
       </select>
       <p className="text-sm text-port-text-muted">The agent renders a contact sheet, scores its own frames and fixes the worst problems before the final render.</p>
+    </div>
+    <div>
+      <label htmlFor="launch-motion-blur">Motion blur</label>
+      <select id="launch-motion-blur" className={inputClass} value={motionBlur} onChange={event => setMotionBlur(event.target.value)}>
+        <option value="">Composition default</option>
+        <option value="off">Off</option>
+        <option value="light">Light</option>
+        <option value="film">Film</option>
+      </select>
+      <p className="text-sm text-port-text-muted">Overrides the composition's own blur at render time. Film uses a 180° shutter.</p>
     </div>
     <div>
       <label htmlFor="launch-motion-skills"><input id="launch-motion-skills" type="checkbox" disabled={!installedSkills.length} checked={consultSkills} onChange={event => setMotionSkills(event.target.checked)} /> Consult motion skills</label>
@@ -325,6 +337,7 @@ export default function LaunchVideoPanel({ app }) {
         <Link className="text-port-accent" to="/media/history">Media History</Link>
       </div>
       <p className="whitespace-pre-wrap">{selected.caption}</p>
+      {selected.sampleHistogram && <p className="text-sm text-port-text-muted">Motion blur samples per frame: {Object.entries(selected.sampleHistogram).map(([samples, frames]) => `${samples}× → ${frames} frames`).join(', ')}</p>}
       {selected.sourceVideoId && <p className="text-sm text-port-text-muted">Revised from version {selected.sourceVideoId}</p>}
       <ReviseLaunchVideo key={`revision:${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
       <PublishLaunchVideo key={`${app.id}:${selected.id}`} appId={app.id} videoId={selected.id} />
