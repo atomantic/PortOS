@@ -1,8 +1,9 @@
 /**
- * Single source of truth for how large an uploaded file may be.
+ * JSON transport limits for legacy base64 uploads.
  *
- * PortOS ships files to the server base64-encoded inside a JSON body, so the
- * Express body-parser limit — not any per-route rule — is the real ceiling.
+ * Legacy callers send files base64-encoded inside a JSON body, where the
+ * Express body-parser limit sets the transport ceiling. Multipart uploads
+ * stream files separately and are not constrained by this JSON limit.
  * Base64 inflates bytes by 4/3, so a route advertising a cap above
  * `JSON_BODY_LIMIT × 3/4` is advertising something unreachable: the parser
  * 413s before the route's own size check ever runs, and the user sees an
@@ -10,8 +11,8 @@
  *
  * Keeping the parser limit and the derived file cap in one module is the same
  * pattern `server/lib/ports.js` uses for the port map — change the limit here
- * and every route follows. The client mirrors `MAX_BASE64_UPLOAD_BYTES` as
- * `JSON_UPLOAD_MAX_FILE_SIZE` in `client/src/utils/fileUpload.js` (it can't
+ * and every JSON upload consumer follows. The client mirrors
+ * `MAX_BASE64_UPLOAD_BYTES` as `JSON_UPLOAD_MAX_FILE_SIZE` in `client/src/utils/fileUpload.js` (it can't
  * import server modules); `uploadLimits.test.js` is what keeps the two honest.
  */
 
