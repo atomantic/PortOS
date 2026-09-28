@@ -33,7 +33,7 @@ const IMAGE_HEADERS = { 'User-Agent': UA, Accept: 'image/*' };
  * non-image body). The filename is keyed on the URL so repeats are idempotent;
  * the format is sniffed from bytes, never trusted from Content-Type.
  */
-export async function downloadExternalImage(url) {
+async function downloadExternalImage(url) {
   const res = await fetchPublicBinary(url.trim(), { timeoutMs: IMAGE_TIMEOUT_MS, headers: IMAGE_HEADERS, maxBytes: MAX_IMAGE_BYTES, throwOnUnsafe: false }).catch(() => null);
   if (!res?.buffer?.length) return null;
   const fmt = detectImageFormat(res.buffer);
