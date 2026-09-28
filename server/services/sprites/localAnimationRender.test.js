@@ -9,13 +9,17 @@
  * without being mistaken for a dead one.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync } from 'fs';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-local-render-test-'));
+
+afterAll(() => {
+  rmSync(TEST_ROOT, { recursive: true, force: true });
+});
 
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();

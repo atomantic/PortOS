@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { resolveTestPython, PY_TEST_TIMEOUT_MS, PY_SUBPROCESS_TIMEOUT_MS } from '../server/lib/testHelper.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -49,6 +49,16 @@ const REFERENCE = join(scratch, 'source.mp4');
 const ADAPTER = join(scratch, 'adapter.safetensors');
 writeFileSync(REFERENCE, 'not really a video');
 
+// Every mkdtempSync root this file creates (the module-level scratch plus one
+// per writePack() call) so a single afterAll sweeps them all.
+const tempRoots = [scratch];
+
+afterAll(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // A real safetensors file: 8-byte little-endian header length, then the JSON
 // header. Written rather than mocked because the header parse IS the thing
 // under test — the runner reads both the declared downscale factor and every
@@ -71,6 +81,7 @@ writeSafetensors(ADAPTER, { __metadata__: { reference_downscale_factor: '2' } })
 const MODEL_FILES = JSON.parse(call('__import__("json").dumps(runner.MODEL_FILES)'));
 const writePack = (files = Object.values(MODEL_FILES)) => {
   const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-cuda-pack-'));
+  tempRoots.push(pack);
   for (const relative of files) {
     const target = join(pack, ...relative.split('/'));
     mkdirSync(dirname(target), { recursive: true });

@@ -50,6 +50,7 @@
  *   suites (Option B) for working examples.
  */
 
+import { rmSync } from 'fs';
 import { mockNoPeers } from './lib/mockPathsDataRoot.js';
 
 // The server intentionally logs expected error paths, lifecycle transitions,
@@ -70,4 +71,19 @@ if (process.env.PORTOS_TEST_QUIET === '1') {
 vi.mock('./services/instances.js', async (importOriginal) => {
   const actual = await importOriginal();
   return mockNoPeers(actual);
+});
+
+// Wipe the shared git fixture templates (`lib/gitTestRepo.js`) after each
+// test file (#9000). Vitest isolates the module graph per file, so every file
+// that uses the helper builds its own template, and the helper's
+// `process.on('exit')` hook never fires when the pool tears a worker down.
+// Without this, one `portos-git-template-*` dir leaked per file per run.
+// Read from globalThis rather than importing the helper, so files that never
+// touch git don't pay for its import graph.
+afterAll(() => {
+  const dirs = globalThis.__portosGitTemplateDirs;
+  if (!Array.isArray(dirs)) return;
+  for (const dir of dirs.splice(0)) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* already gone */ }
+  }
 });

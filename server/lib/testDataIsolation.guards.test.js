@@ -197,6 +197,7 @@ describe('test-data isolation guard', () => {
       'dies before afterEach leaves an untracked directory in the repo. Allocate a',
       'temp directory instead:',
       '',
+      // SKIP: mkdtemp cleanup — error-message string literal, not a real call.
       "  const dir = await mkdtemp(join(tmpdir(), 'portos-<suite>-'));",
       '',
       'Reading cwd as a value (workspacePath: process.cwd()) is fine — see #3823.',
@@ -226,6 +227,8 @@ describe('test-data isolation guard', () => {
     expect(scanCwdFixture('workspacePath: process.cwd(),')).toBe(false);
     expect(scanCwdFixture('const TEST_WORKSPACE = process.cwd();')).toBe(false);
     expect(scanCwdFixture('getAppWorkspace.mockResolvedValue(process.cwd());')).toBe(false);
+    // SKIP: mkdtemp cleanup — probe input for scanCwdFixture (a string literal
+    // fed to the cwd-fixture scanner, not a real mkdtemp call the test creates).
     expect(scanCwdFixture("const dir = await mkdtemp(join(tmpdir(), 'portos-x-'));")).toBe(false);
     // An ordinary two-argument call that happens to take cwd first is not a
     // path build — requiring the join/resolve name is what keeps these out.

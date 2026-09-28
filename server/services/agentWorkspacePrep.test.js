@@ -289,16 +289,21 @@ describe('prepareAgentWorkspace — workspace validation (#3180)', () => {
   });
 
   it('blocks when the resolved workspace is a file, not a directory', async () => {
-    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { mkdtempSync, rmSync, writeFileSync } = await import('fs');
     const { tmpdir } = await import('os');
     const { join } = await import('path');
-    const file = join(mkdtempSync(join(tmpdir(), 'prep-')), 'a-file.txt');
-    writeFileSync(file, 'x');
-    getAppWorkspace.mockResolvedValue(file);
-    const task = { id: 't-file', taskType: 'user', metadata: { app: 'primes' } };
-    const r = await prepareAgentWorkspace({ agentId: 'agent-f', task });
-    expect(r.outcome).toBe('blocked');
-    expect(r.reason).toContain('not a directory');
+    const root = mkdtempSync(join(tmpdir(), 'prep-'));
+    try {
+      const file = join(root, 'a-file.txt');
+      writeFileSync(file, 'x');
+      getAppWorkspace.mockResolvedValue(file);
+      const task = { id: 't-file', taskType: 'user', metadata: { app: 'primes' } };
+      const r = await prepareAgentWorkspace({ agentId: 'agent-f', task });
+      expect(r.outcome).toBe('blocked');
+      expect(r.reason).toContain('not a directory');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // The repoPath field accepts a literal '~/...' — the CoS path must expand it

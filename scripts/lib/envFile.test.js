@@ -1,14 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { parseEnvFile, upsertEnvKey } from './envFile.js';
+
+const tempDirs = [];
+
+beforeEach(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'envFile-test-'));
+  tempDirs.push(dir);
+});
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 let dir;
 let envPath;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'envFile-test-'));
+  dir = tempDirs[tempDirs.length - 1];
   envPath = join(dir, '.env');
 });
 

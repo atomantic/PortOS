@@ -1,11 +1,13 @@
 import { mkdtemp, readdir, utimes, writeFile } from 'fs/promises';
+import { rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { sweepStaleDoneSentinels, STALE_SENTINEL_MIN_AGE_MS } from './agentSentinelSweep.js';
 
+const tempRoots = [];
 let dir;
 
 /** Write a file and back-date it so the sweep's age floor is satisfied. */
@@ -21,6 +23,11 @@ const OLD = STALE_SENTINEL_MIN_AGE_MS * 2;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'sentinel-sweep-'));
+  tempRoots.push(dir);
+});
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe('sweepStaleDoneSentinels', () => {
