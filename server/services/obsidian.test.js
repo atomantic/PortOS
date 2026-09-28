@@ -23,7 +23,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-const { addVault, upsertNote, getNote } = await import('./obsidian.js');
+const { addVault, upsertNote, getNote, createNote, updateNote, deleteNote } = await import('./obsidian.js');
 
 const VAULT_DIR = join(tempRoot, 'vault');
 let vaultId;
@@ -73,5 +73,33 @@ describe('obsidian.upsertNote', () => {
     writeFileSync(join(VAULT_DIR, 'keep.md'), 'original');
     await upsertNote(vaultId, '../escaped.md', 'x');
     expect(readFileSync(join(VAULT_DIR, 'keep.md'), 'utf-8')).toBe('original');
+  });
+});
+
+// #9007: a remote caller that had already registered an existing host
+// directory as a vault (e.g. the home directory) must not be able to use note
+// CRUD to read/overwrite/delete anything outside the `.md` notes the scanner
+// itself recognizes.
+describe('obsidian note CRUD extension enforcement (#9007)', () => {
+  it('createNote rejects a fully out-of-vault path and creates no directories', async () => {
+    const result = await createNote(vaultId, '../newdir/escaped.md', 'x');
+    expect(result).toMatchObject({ error: 'INVALID_PATH' });
+    expect(existsSync(join(tempRoot, 'newdir'))).toBe(false);
+  });
+
+  it('getNote/updateNote/deleteNote refuse a non-.md path even when the file exists', async () => {
+    writeFileSync(join(VAULT_DIR, 'secret.env'), 'API_KEY=x');
+
+    expect(await getNote(vaultId, 'secret.env')).toMatchObject({ error: 'INVALID_PATH' });
+    expect(await updateNote(vaultId, 'secret.env', 'y')).toMatchObject({ error: 'INVALID_PATH' });
+    expect(await deleteNote(vaultId, 'secret.env')).toMatchObject({ error: 'INVALID_PATH' });
+
+    // Untouched: neither the read nor the write/delete attempt changed it.
+    expect(readFileSync(join(VAULT_DIR, 'secret.env'), 'utf-8')).toBe('API_KEY=x');
+  });
+
+  it('still serves ordinary .md notes after the extension check is added', async () => {
+    writeFileSync(join(VAULT_DIR, 'ok.md'), 'hello');
+    expect(await getNote(vaultId, 'ok.md')).toMatchObject({ content: 'hello' });
   });
 });

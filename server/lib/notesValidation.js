@@ -5,6 +5,11 @@ import { isAbsolute } from 'path';
 // Rejects:
 //   - any path segment equal to `..` or `.` (traversal) while still allowing
 //     filenames like `notes..md` or `v1..v2.md`
+//   - any segment that STARTS with `.` (dot-directories/dotfiles such as
+//     `.ssh`, `.claude`, `.git`, `.obsidian` — vault notes never live there,
+//     and every note operation resolves relative to a caller-chosen vault
+//     root, so this is the only thing standing between a registered vault and
+//     the host's dotfiles) (#9007)
 //   - leading `/` (posix absolute)
 //   - Windows drive letters (e.g. `C:\foo`) and UNC paths (e.g. `\\host\share`)
 //   - backslashes anywhere (only forward slashes are valid separators)
@@ -16,10 +21,11 @@ const safeRelativePath = z.string().min(1).max(1000).refine(
     if (/^[A-Za-z]:/.test(p)) return false; // blocks drive-letter prefixes
     if (isAbsolute(p)) return false;
     const segments = p.split('/');
-    if (segments.some(seg => seg === '..' || seg === '.')) return false;
+    // `.startsWith('.')` alone already covers `.` and `..` traversal segments.
+    if (segments.some(seg => seg.startsWith('.'))) return false;
     return true;
   },
-  { message: 'Path must be relative, forward-slash separated, and cannot contain .. segments' }
+  { message: 'Path must be relative, forward-slash separated, and cannot contain .. or dot-prefixed segments' }
 );
 
 export const vaultInputSchema = z.object({
