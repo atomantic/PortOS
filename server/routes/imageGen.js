@@ -669,6 +669,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       model: selectedModel?.id || params.modelId || 'dev',
     }));
   }
+  // Selective section revision (#9011): the external/agy lane renders
+  // synchronously and never touches enqueueLoggedImage's guard above, so it
+  // gets its own check right before the (paid) render call. A no-op when the
+  // tag carries no revisionId.
+  if (params.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId);
+  }
   const result = await imageGen.generateImage(params);
   if (params.fableLoom && result?.filename) {
     await attachNodeImage(
