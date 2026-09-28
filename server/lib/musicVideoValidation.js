@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
+import { MUSIC_VIDEO_SHOT_MODES } from './musicVideoShotTiming.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -275,6 +276,10 @@ export const musicVideoSceneCreateSchema = z.object({
   lyricText: z.string().max(2000).nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
+  // #8977: `performance` = a lip-synced singer that must follow the master
+  // recording (only a verified source-audio provider can render it); absent or
+  // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
+  shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -300,6 +305,10 @@ export const musicVideoSceneUpdateSchema = z.object({
   lyricText: z.string().max(2000).nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
+  // #8977: `performance` = a lip-synced singer that must follow the master
+  // recording (only a verified source-audio provider can render it); absent or
+  // `cutaway` = the ordinary image-to-video shot. See lib/musicVideoShotTiming.js.
+  shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
 }).strict();

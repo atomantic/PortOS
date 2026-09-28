@@ -536,6 +536,76 @@ describe('MusicVideo project video renderer', () => {
     expect(generateVideo).not.toHaveBeenCalled();
   });
 
+  describe('performance shots (#8977)', () => {
+    const PERFORMANCE_SCENE = {
+      sceneId: 's1', order: 0, prompt: 'singer at the mic', referenceImageId: 'img1', videoHistoryId: null,
+      shotMode: 'performance', startSec: 20, endSec: 21.5,
+    };
+    const performanceProject = (videoSettings) => ({
+      ...PROJECT_NO_CLIP,
+      audioAnalysis: { bpm: 120, beats: [], downbeats: [], sections: [], durationSec: 30 },
+      videoSettings,
+      scenes: [PERFORMANCE_SCENE],
+    });
+
+    it('labels Grok cutaway-only and blocks a performance shot on it without calling the provider', async () => {
+      await openProject(performanceProject({ backend: 'grok', grokDuration: 6 }));
+
+      expect(await screen.findByRole('option', { name: 'Grok video (cutaway only)' })).toBeTruthy();
+      expect(await screen.findByText(/Grok video is cutaway-only/)).toBeTruthy();
+      const generate = await screen.findByRole('button', { name: /^Generate video$/ });
+      expect(generate).toBeDisabled();
+      fireEvent.click(generate);
+      expect(generateVideo).not.toHaveBeenCalled();
+    });
+
+    it('names the lip-sync provider, model, song window and cost, then renders on fal.ai without a clip-length pin', async () => {
+      getVideoGenStatus.mockResolvedValueOnce({
+        connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+        models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }],
+      });
+      generateVideo.mockResolvedValue({ jobId: 'fal-lipsync-job' });
+      await openProject(performanceProject({ backend: 'fal', falDuration: 6 }));
+
+      const plan = await screen.findByTestId('performance-plan');
+      expect(plan.textContent).toContain('minimax/h3-max/lip-sync/image-to-video');
+      expect(plan.textContent).toMatch(/shot starts 1\.7[78]s into the take/);
+      expect(plan.textContent).toContain('cost unknown');
+      fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+      await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+        backend: 'fal', mode: 'image', sourceImageFile: 'img1',
+      })));
+      expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falDuration');
+    });
+
+    it('persists a scene switched to a performance shot', async () => {
+      updateMusicVideoScene.mockResolvedValue({ ...PROJECT_NO_CLIP.scenes[0], shotMode: 'performance' });
+      await openProject(PROJECT_NO_CLIP);
+
+      fireEvent.change(await screen.findByLabelText('Shot'), { target: { value: 'performance' } });
+      await waitFor(() => expect(updateMusicVideoScene).toHaveBeenCalledWith(
+        'mv-2', 's1', { shotMode: 'performance' }, expect.anything(),
+      ));
+    });
+
+    it('requests the Grok clip that covers a cutaway and adds approximate motion timing', async () => {
+      generateVideo.mockResolvedValue({ jobId: 'grok-job' });
+      await openProject({
+        ...PROJECT_NO_CLIP,
+        videoSettings: { backend: 'grok', grokDuration: 6 },
+        phrases: [{ id: 'p1', startSec: 12, endSec: 15, intent: 'camera pushes in' }],
+        scenes: [{ ...PROJECT_NO_CLIP.scenes[0], startSec: 10, endSec: 17.2 }],
+      });
+
+      expect(await screen.findByText(/Grok renders a 10s clip for this 7\.2s cutaway/)).toBeTruthy();
+      fireEvent.click(await findEnabledByRole('button', { name: /^Generate video$/ }));
+      await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({
+        backend: 'grok', grokDuration: 10,
+        prompt: expect.stringContaining('around 2.0s: camera pushes in'),
+      })));
+    });
+  });
+
   it('warns when ready scenes reuse the same frames and clips', async () => {
     await openProject({
       ...PROJECT_WITH_CLIP,

@@ -28,7 +28,7 @@ import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration } from '../../lib/ffmpeg.js';
+import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
@@ -38,6 +38,8 @@ import { getProject, listProjects, updateProject } from './projects.js';
 import { sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch, sweepCompositionScratch } from './compositionRender.js';
+import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { findStalePerformanceTakes } from './performanceShot.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).
@@ -70,6 +72,11 @@ export const attachRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res)
 const sceneLoops = (scene) => scene?.loop !== false;
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
+// #8977: a performance take is placed by the immutable shot instruction it was
+// generated with — its footage starts `edit.inSec` into the clip (the audio
+// window was padded to the provider minimum) and ends at `edit.outSec`. It
+// never loops: repeating a sung take would desync the mouth from the song.
+const performanceEdit = (scene) => selectedPerformanceInstruction(scene)?.edit ?? null;
 
 // A non-looping shot may run this much past its source clip; the gap holds the
 // final frame (tpad) rather than repeating footage. Longer shortfalls block the
@@ -185,25 +192,34 @@ export async function resolveSceneClips(project, { layered = false } = {}) {
     const entry = historyMap.get(scene.videoHistoryId);
     const videoPath = entry && entry.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     if (!entry || !videoPath || !existsSync(videoPath)) { missing.push(scene.videoHistoryId); continue; }
-    const duration = entry.numFrames && entry.fps ? entry.numFrames / entry.fps : null;
+    // Hosted renders (Grok/fal/reactor) record no frame count or dimensions;
+    // measure the file itself rather than reject a clip that exists (#8977).
+    const measured = entry.numFrames && entry.fps && entry.width && entry.height
+      ? entry
+      : { ...entry, ...(await probeVideoGeometry(videoPath)) };
+    const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
     if (!duration || duration <= 0) { missing.push(scene.videoHistoryId); continue; }
     // A dimensionless history entry would make buildMusicVideoFfmpegArgs emit
     // `scale=undefined:undefined` (opaque ffmpeg failure); treat it as a missing
     // clip so the caller gets the clean MISSING_CLIPS 4xx, matching the duration guard.
-    if (!entry.width || entry.width <= 0 || !entry.height || entry.height <= 0) { missing.push(scene.videoHistoryId); continue; }
+    if (!measured.width || measured.width <= 0 || !measured.height || measured.height <= 0) { missing.push(scene.videoHistoryId); continue; }
+    const edit = performanceEdit(scene);
+    const inSec = edit ? Math.min(edit.inSec, duration) : 0;
+    const outSec = edit ? Math.min(edit.outSec, duration) : duration;
     clips.push({
       sceneId: scene.sceneId,
       videoPath,
-      width: entry.width,
-      height: entry.height,
-      fps: entry.fps || 24,
-      duration,
-      // The native source length survives the snap below (which rewrites
-      // `duration` to the rendered span) so coverage can be judged against it.
-      sourceSec: duration,
-      loop: sceneLoops(scene),
-      inSec: 0,
-      outSec: duration,
+      width: measured.width,
+      height: measured.height,
+      fps: measured.fps || 24,
+      duration: outSec - inSec,
+      // The playable source length (from the in-point on) survives the snap
+      // below (which rewrites `duration` to the rendered span) so coverage can
+      // be judged against it.
+      sourceSec: duration - inSec,
+      loop: edit ? false : sceneLoops(scene),
+      inSec,
+      outSec,
     });
   }
   if (missing.length > 0) {
@@ -264,9 +280,12 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
       // looping input, so the authored timeline duration is allowed to exceed
       // the source duration instead of silently truncating the final song. A
       // non-looping shot that does so is refused before render (#8964).
-      const outSec = Math.max(minClipSec, scene.endSec - scene.startSec);
-      running += outSec;
-      return { ...clip, inSec: 0, outSec, duration: outSec };
+      // A performance clip (#8977) keeps its edit in-point; every other clip
+      // starts at 0 as before.
+      const inSec = clip.inSec || 0;
+      const spanSec = Math.max(minClipSec, scene.endSec - scene.startSec);
+      running += spanSec;
+      return { ...clip, inSec, outSec: inSec + spanSec, duration: spanSec };
     }
     if (grid.length === 0) {
       running += clip.duration;
@@ -279,16 +298,17 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
       if (beat > naturalEnd) break;
       best = beat;
     }
+    const inSec = clip.inSec || 0;
     let outSec = clip.outSec;
     if (best != null
       && (naturalEnd - best) <= toleranceSec
       && (best - running) >= minClipSec) {
-      outSec = best - running; // trim relative to the clip's own start (inSec=0)
+      outSec = inSec + (best - running); // trim relative to the clip's in-point
       running = best;
     } else {
       running = naturalEnd;
     }
-    return { ...clip, inSec: 0, outSec, duration: outSec };
+    return { ...clip, inSec, outSec, duration: outSec - inSec };
   });
 }
 
@@ -447,6 +467,16 @@ export async function renderMusicVideo(projectId) {
     if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
     const audioPath = await resolveMasterAudioPath(project);
+    // #8977: a performance take sings one stretch of one recording. If the
+    // scene was re-timed or the song replaced since, its mouth motion no longer
+    // matches the audio under it — refuse rather than render it out of sync.
+    const stale = await findStalePerformanceTakes(project, audioPath);
+    if (stale.length > 0) {
+      throw new ServerError(
+        `${stale.length} performance shot${stale.length === 1 ? ' has' : 's have'} no lip-synced take of the current song interval and recording — regenerate ${stale.length === 1 ? 'it' : 'them'}, or switch to Cutaway, before rendering`,
+        { status: 422, code: 'STALE_PERFORMANCE_TAKES', context: { stale } },
+      );
+    }
     // #8985: a composed render cuts still and card sections into the same
     // timebase as the footage; plain concat renders footage only, as before.
     const composed = project.composition?.mode === 'composed';

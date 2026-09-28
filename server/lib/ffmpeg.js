@@ -302,6 +302,22 @@ export const probeVideoStreamInfo = async (videoPath) => {
   };
 };
 
+// The playable geometry of a finished clip — `{ width, height, fps, numFrames,
+// durationSec }` — or null when any axis cannot be measured. For entries whose
+// producer never recorded a frame count (hosted Grok/fal/reactor renders), so a
+// consumer that trims by numFrames/fps measures the file instead of guessing.
+export const probeVideoGeometry = async (videoPath) => {
+  const [stream, durationSec] = await Promise.all([probeVideoStreamInfo(videoPath), probeDurationSeconds(videoPath)]);
+  if (!stream.width || !stream.height || !stream.fps || !durationSec) return null;
+  return {
+    width: stream.width,
+    height: stream.height,
+    fps: stream.fps,
+    numFrames: stream.frameCount || Math.round(durationSec * stream.fps),
+    durationSec,
+  };
+};
+
 // Sanity-check that a rendered video file is actually playable: the file
 // exists on disk, has non-zero bytes, and ffprobe can decode at least one
 // video frame from it. Returns `{ ok: true }` on success and
