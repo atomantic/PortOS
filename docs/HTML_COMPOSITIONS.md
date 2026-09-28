@@ -180,6 +180,11 @@ low-detail negative space and asks the image/video model for no lettering, so
 the generated picture leaves room for the composited text rather than baking
 text into pixels. Apply can also add text cues from the timed lyrics, placed
 in each shot's reserved region; it never switches the render to `composed`.
+Apply also maps direction onto the scene's own render fields, but only while
+they are still at their defaults: a shot routed to 2D/code motion becomes a
+title card carrying its first sung line (or a pushed-in still when it has no
+line), and a performance shot becomes a `performance` shot mode only when the
+project's video backend has a source-audio lip-sync lane (fal.ai today).
 The treatment's proof checklist treats readable text and audio alignment as
 judgeable only in the final render.
 

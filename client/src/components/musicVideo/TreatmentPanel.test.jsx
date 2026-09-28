@@ -62,7 +62,7 @@ const PREVIEW = {
   blocked: false,
   scenes: [
     { sceneId: 's1', label: 'Intro · 1/2', directionChanged: true, prompt: 'manual', fields: { framePrompt: 'manual', prompt: 'manual' }, promptFingerprint: 'fp-s1', current: { framePrompt: 'my own frame', prompt: 'my own motion' }, suggested: { framePrompt: 'train window', prompt: 'push in' }, keepsSelection: true },
-    { sceneId: 's2', label: 'Intro · 2/2', directionChanged: true, prompt: 'fill', fields: { framePrompt: 'fill', prompt: 'fill' }, promptFingerprint: 'fp-s2', current: { framePrompt: '', prompt: '' }, suggested: { framePrompt: 'rain', prompt: 'drift' }, keepsSelection: false },
+    { sceneId: 's2', label: 'Intro · 2/2', directionChanged: true, prompt: 'fill', fields: { framePrompt: 'fill', prompt: 'fill' }, promptFingerprint: 'fp-s2', current: { framePrompt: '', prompt: '' }, suggested: { framePrompt: 'rain', prompt: 'drift' }, keepsSelection: false, renderFields: { shotMode: 'performance' } },
   ],
   missingSceneIds: [],
   unmappedSceneIds: [],
@@ -98,6 +98,7 @@ describe('TreatmentPanel apply review', () => {
     expect(await screen.findByText(/2 of 2 scenes would change/)).toBeTruthy();
     expect(screen.getByText(/your edited prompts are kept/)).toBeTruthy();
     expect(screen.getByText(/selected takes kept/)).toBeTruthy();
+    expect(screen.getByText(/becomes a lip-synced performance shot/)).toBeTruthy();
     // Both hand-edited fields the tick would replace are shown, not just one.
     expect(screen.getByText('Frame prompt — yours: my own frame')).toBeTruthy();
     expect(screen.getByText('Motion prompt — treatment: push in')).toBeTruthy();

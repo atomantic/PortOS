@@ -66,8 +66,12 @@ function seedVideoHistory(rows) {
 const base = (id) => `/api/music-video/${id}`;
 const reload = (id) => projects.getProject(id);
 
-async function plannedProject({ lyrics = LYRICS } = {}) {
-  const project = await projects.createProject({ name: 'Example Video', concept: { prompt: 'a night run through Example City' } });
+async function plannedProject({ lyrics = LYRICS, backend } = {}) {
+  const project = await projects.createProject({
+    name: 'Example Video',
+    concept: { prompt: 'a night run through Example City' },
+    ...(backend ? { videoSettings: { backend } } : {}),
+  });
   await projects.setProjectAnalysis(project.id, ANALYSIS);
   if (lyrics.length) await projects.updateProject(project.id, { lyricCues: lyrics });
   const plan = await request(app).post(`${base(project.id)}/plan`).send({ seedPrompts: false });
@@ -338,6 +342,69 @@ describe('treatment apply', () => {
       const shot = scenes.find((sc) => cue.startSec >= sc.startSec && cue.startSec < sc.endSec);
       expect(cue.endSec).toBeLessThanOrEqual(shot.endSec);
     }
+  });
+});
+
+describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer)', () => {
+  it('states the lip-sync gap for a backend without it and never marks scenes as performances there', async () => {
+    const project = await plannedProject();
+    const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
+    const gap = body.treatment.capabilityGaps.find((g) => g.id === 'lip-sync');
+    expect(gap.detail).toMatch(/fal\.ai/);
+    const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision });
+    expect(res.body.result.renderFieldsSet).toEqual([]);
+    expect((await reload(project.id)).scenes.every((s) => s.shotMode === 'cutaway')).toBe(true);
+  });
+
+  it('maps performance direction onto shotMode on a lip-sync backend and proves sync in the render', async () => {
+    const project = await plannedProject({ backend: 'fal' });
+    const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
+    expect(body.treatment.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
+    const riskShot = body.treatment.proofs.find((p) => p.kind === 'risk-shot');
+    expect(riskShot.checks).toContain('lip-sync');
+    const performing = body.treatment.shotDirections.filter((d) => d.mode === 'performance').map((d) => d.sceneId);
+    expect(performing.length).toBeGreaterThan(0);
+    const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision });
+    expect(res.body.result.renderFieldsSet.sort()).toEqual([...performing].sort());
+    const after = await reload(project.id);
+    for (const scene of after.scenes) expect(scene.shotMode).toBe(performing.includes(scene.sceneId) ? 'performance' : 'cutaway');
+    // The motion clause no longer tells the singer not to sing.
+    expect(after.scenes.find((sc) => performing.includes(sc.sceneId)).direction.motionClause).not.toMatch(/does not sing/);
+  });
+
+  it('turns code-2d shots into a lyric title card or a pushed still, additively and without switching the render mode', async () => {
+    const project = await plannedProject();
+    const scenes = (await reload(project.id)).scenes;
+    const sung = scenes.findIndex((sc) => sc.lyricText);
+    const instrumental = scenes.findLastIndex((sc) => !sc.lyricText);
+    const chosen = scenes.findIndex((sc, i) => i !== sung && sc.lyricText);
+    // A director's own layer choice on another code-2d shot is left alone.
+    await projects.updateScene(project.id, scenes[chosen].sceneId, { visualLayer: 'still', stillMove: 'pan' });
+    runPromptThroughProvider.mockResolvedValueOnce({
+      text: JSON.stringify({
+        beats: [{ sectionIndex: 0, objective: 'Open' }],
+        shots: [
+          { index: sung, route: 'code-2d', mode: 'graphic', typographyRole: 'subtitle', focalSubject: 'type' },
+          { index: instrumental, route: 'code-2d', mode: 'graphic', focalSubject: 'rain' },
+          { index: chosen, route: 'code-2d', mode: 'graphic', typographyRole: 'subtitle', focalSubject: 'type' },
+        ],
+      }),
+    });
+    const { body } = await compile(project.id, { baseRevision: 0 });
+    expect(body.aiUsed).toBe(true);
+    const gap = body.treatment.capabilityGaps.find((g) => g.id === 'code-2d');
+    expect(gap.detail).toMatch(/title card/);
+    expect(gap.detail).toMatch(/composed/);
+    const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision, addTextCues: true });
+    expect(res.status).toBe(200);
+    const after = await reload(project.id);
+    expect(after.scenes[sung]).toMatchObject({ visualLayer: 'card', cardText: scenes[sung].lyricText.split(' / ')[0] });
+    expect(after.scenes[instrumental]).toMatchObject({ visualLayer: 'still', stillMove: 'push' });
+    expect(after.scenes[chosen]).toMatchObject({ visualLayer: 'still', stillMove: 'pan' });
+    expect(after.composition.mode).toBe('concat');
+    // The card draws its own line, so no lyric cue is stacked over it.
+    const card = after.scenes[sung];
+    expect(after.composition.textCues.some((c) => c.startSec >= card.startSec && c.startSec < card.endSec)).toBe(false);
   });
 });
 

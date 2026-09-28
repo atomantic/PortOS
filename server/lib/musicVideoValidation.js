@@ -241,7 +241,10 @@ const sceneLayerFields = {
 // revision it was based on. See services/musicVideo/treatment.js.
 export const MUSIC_VIDEO_ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'];
 export const MUSIC_VIDEO_BEAT_ROLES = ['opening', 'build', 'contrast', 'payoff', 'release'];
-export const MUSIC_VIDEO_SHOT_MODES = ['performance', 'cutaway', 'graphic'];
+// Treatment shot categories (the arc's balance axis). Distinct from the scene's
+// render-facing `shotMode` (#8977: cutaway | performance) — Apply maps a
+// performance direction onto it when the backend can lip-sync.
+export const MUSIC_VIDEO_TREATMENT_SHOT_MODES = ['performance', 'cutaway', 'graphic'];
 export const MUSIC_VIDEO_SHOT_ROUTES = ['generated', 'supplied-asset', 'code-2d'];
 export const MUSIC_VIDEO_NEGATIVE_SPACE = ['none', 'upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_ROLES = ['none', 'subtitle', 'hero'];
@@ -282,7 +285,7 @@ export const musicVideoTreatmentMotifSchema = z.object({
 
 export const musicVideoShotDirectionPatchSchema = z.object({
   sceneId: z.string().min(1).max(64),
-  mode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
+  mode: z.enum(MUSIC_VIDEO_TREATMENT_SHOT_MODES).optional(),
   route: z.enum(MUSIC_VIDEO_SHOT_ROUTES).optional(),
   focalSubject: treatmentText(500),
   framing: treatmentText(500),

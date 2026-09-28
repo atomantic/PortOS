@@ -2,7 +2,7 @@ import useFieldDraft from '../../hooks/useFieldDraft.js';
 import { formatTimecode } from '../../utils/formatters.js';
 
 const MODES = ['performance', 'cutaway', 'graphic'];
-const ROUTES = [['generated', 'Generated'], ['supplied-asset', 'Supplied asset'], ['code-2d', '2D / code motion']];
+const ROUTES = [['generated', 'Generated'], ['supplied-asset', 'Supplied asset'], ['code-2d', 'Title card / still']];
 const REGIONS = [['none', 'No text region'], ['upper', 'Upper third'], ['center', 'Center'], ['lower', 'Lower third']];
 const TYPE_ROLES = [['none', 'No text'], ['subtitle', 'Subtitle'], ['hero', 'Hero title']];
 const cellCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs';

@@ -10,6 +10,15 @@ const PROMPT_LABELS = {
 };
 
 const PROMPT_FIELDS = [['framePrompt', 'Frame prompt'], ['prompt', 'Motion prompt']];
+// The scene render fields Apply sets (#8977 shot mode, #8985 visual layer).
+function renderFieldLabel(fields) {
+  if (!fields) return null;
+  if (fields.shotMode === 'performance') return 'becomes a lip-synced performance shot';
+  if (fields.visualLayer === 'card') return 'becomes a title card (composed render only)';
+  if (fields.visualLayer === 'still') return 'becomes a moving still (composed render only)';
+  return null;
+}
+
 const snippet = (text) => (text && text.length > 90 ? `${text.slice(0, 89)}…` : text || '—');
 
 /**
@@ -80,6 +89,7 @@ export default function TreatmentApplyReview({ project, api }) {
                   <span className="font-medium">{labels.get(s.sceneId) || s.label}</span>
                   <span className="text-port-text-muted">{s.directionChanged ? 'direction updated' : 'direction unchanged'} · {PROMPT_LABELS[s.prompt]}</span>
                   {s.keepsSelection && <span className="text-port-text-muted">· selected takes kept</span>}
+                  {renderFieldLabel(s.renderFields) && <span className="text-port-accent">· {renderFieldLabel(s.renderFields)}</span>}
                 </div>
                 {s.prompt === 'manual' && (
                   <div className="mt-1 space-y-0.5">

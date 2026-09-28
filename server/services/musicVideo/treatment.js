@@ -47,13 +47,14 @@ import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 import {
   MUSIC_VIDEO_ASPECT_RATIOS as ASPECT_RATIOS,
   MUSIC_VIDEO_BEAT_ROLES as BEAT_ROLES,
-  MUSIC_VIDEO_SHOT_MODES as SHOT_MODES,
+  MUSIC_VIDEO_TREATMENT_SHOT_MODES as SHOT_MODES,
   MUSIC_VIDEO_SHOT_ROUTES as SHOT_ROUTES,
   MUSIC_VIDEO_NEGATIVE_SPACE as NEGATIVE_SPACE,
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
   MUSIC_VIDEO_PROOF_CHECKS as PROOF_CHECKS,
   MUSIC_VIDEO_PROOF_STATUSES as PROOF_STATUSES,
 } from '../../lib/musicVideoValidation.js';
+import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeComposition } from './composition.js';
 
 const TREATMENT_VERSION = 1;
@@ -556,6 +557,37 @@ function promptFieldPlans(scene, direction) {
 const PLAN_PRIORITY = ['manual', 'fill', 'replace', 'unchanged', 'none'];
 const summarizePlans = (plans) => PLAN_PRIORITY.find((p) => Object.values(plans).includes(p));
 
+/**
+ * The scene render fields a direction maps onto (#8977 `shotMode`, #8985
+ * visual layer), as a patch. Additive only: a field is set only while the scene
+ * still has its default (cutaway, footage), so a director's own choice is never
+ * overridden or downgraded, and the project's render mode is never switched —
+ * a still/card layer shows only in a composed render.
+ *   - a performance direction becomes `shotMode: 'performance'` only when the
+ *     project's backend has a verified source-audio lip-sync lane;
+ *   - a code-2d route becomes a title card carrying the shot's first sung line
+ *     (never invented text), or a pushed-in still when there is no line to set.
+ */
+function renderFieldPatch(scene, direction, { lipSyncAvailable }) {
+  const defaultLayer = (scene.visualLayer ?? 'footage') === 'footage';
+  const defaultMode = (scene.shotMode ?? 'cutaway') === 'cutaway';
+  if (!defaultLayer || !defaultMode) return {};
+  if (direction.mode === 'performance' && direction.route !== 'code-2d') {
+    return lipSyncAvailable ? { shotMode: 'performance' } : {};
+  }
+  if (direction.route !== 'code-2d') return {};
+  const line = direction.typographyRole !== 'none' && isNonBlankStr(scene.lyricText)
+    ? scene.lyricText.split(' / ')[0].trim().slice(0, 500)
+    : '';
+  if (line) return { visualLayer: 'card', ...(isNonBlankStr(scene.cardText) ? {} : { cardText: line }) };
+  return { visualLayer: 'still', ...((scene.stillMove ?? 'hold') === 'hold' ? { stillMove: 'push' } : {}) };
+}
+
+const withPlannedScenes = (project, planned) => {
+  const byId = new Map(planned.map((s) => [s.sceneId, s]));
+  return { ...project, scenes: (project.scenes || []).map((s) => byId.get(s.sceneId) || s) };
+};
+
 function textCueCandidates(project, treatment) {
   const scenes = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   const cues = (project.lyricCues || []).filter((c) => isNonBlankStr(c?.text) && isTime(c.startSec));
@@ -565,6 +597,8 @@ function textCueCandidates(project, treatment) {
     if (direction.typographyRole === 'none') continue;
     const scene = scenes.get(direction.sceneId);
     if (!scene || !isTime(scene.startSec) || !isTime(scene.endSec)) continue;
+    // A title card draws its own text; a lyric cue over it would double it.
+    if (scene.visualLayer === 'card') continue;
     for (const cue of cues) {
       if (cue.startSec < scene.startSec || cue.startSec >= scene.endSec) continue;
       const cueText = cue.text.trim().slice(0, 500);
@@ -599,6 +633,8 @@ export function buildApplyPreview(project) {
   }
   const stale = treatmentStaleness(project, treatment);
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
+  const lipSyncAvailable = !!performanceCapability(project.videoSettings?.backend || null);
+  const planned = [];
   const directed = new Set();
   const scenes = [];
   const missingSceneIds = [];
@@ -608,6 +644,8 @@ export function buildApplyPreview(project) {
     directed.add(scene.sceneId);
     const next = sceneDirection(treatment, direction);
     const fields = promptFieldPlans(scene, direction);
+    const renderFields = renderFieldPatch(scene, direction, { lipSyncAvailable });
+    planned.push({ ...scene, ...renderFields });
     scenes.push({
       sceneId: scene.sceneId,
       label: scene.label || scene.sectionLabel || '',
@@ -619,6 +657,7 @@ export function buildApplyPreview(project) {
       current: { framePrompt: scene.framePrompt || '', prompt: scene.prompt || '' },
       suggested: { framePrompt: direction.suggestedFramePrompt, prompt: direction.suggestedPrompt },
       keepsSelection: isNonBlankStr(scene.referenceImageId) || isNonBlankStr(scene.videoHistoryId),
+      renderFields,
     });
   }
   return {
@@ -628,7 +667,7 @@ export function buildApplyPreview(project) {
     scenes,
     missingSceneIds,
     unmappedSceneIds: (project.scenes || []).map((s) => s.sceneId).filter((id) => !directed.has(id)),
-    textCueCandidates: textCueCandidates(project, treatment).length,
+    textCueCandidates: textCueCandidates(withPlannedScenes(project, planned), treatment).length,
   };
 }
 
@@ -654,13 +693,14 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
   const approved = new Map(overwrite.map((o) => [o.sceneId, o.promptFingerprint]));
   const plans = new Map(preview.scenes.map((p) => [p.sceneId, p]));
   const directions = new Map(treatment.shotDirections.map((d) => [d.sceneId, d]));
-  const result = { directed: 0, promptsWritten: [], promptsKept: [], conflicted: [], textCuesAdded: 0 };
+  const result = { directed: 0, promptsWritten: [], promptsKept: [], conflicted: [], renderFieldsSet: [], textCuesAdded: 0 };
 
   const scenes = (project.scenes || []).map((scene) => {
     const plan = plans.get(scene.sceneId);
     if (!plan) return scene;
     const direction = directions.get(scene.sceneId);
-    const next = { ...scene };
+    const next = { ...scene, ...plan.renderFields };
+    if (Object.keys(plan.renderFields).length > 0) result.renderFieldsSet.push(scene.sceneId);
     const hasManual = Object.values(plan.fields).includes('manual');
     // The fingerprint pins the exact prompts the director reviewed: an edit
     // made after that review is newer work and is kept.
@@ -692,7 +732,7 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
 
   let composition = project.composition ?? null;
   if (addTextCues) {
-    const added = textCueCandidates(project, treatment);
+    const added = textCueCandidates({ ...project, scenes }, treatment);
     if (added.length > 0) {
       const base = normalizeComposition(composition || {});
       composition = normalizeComposition({ ...base, textCues: [...base.textCues, ...added].sort((a, b) => (a.startSec ?? 0) - (b.startSec ?? 0)) });

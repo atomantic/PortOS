@@ -25,11 +25,12 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import {
-  MUSIC_VIDEO_SHOT_MODES as SHOT_MODES,
+  MUSIC_VIDEO_TREATMENT_SHOT_MODES as SHOT_MODES,
   MUSIC_VIDEO_SHOT_ROUTES as SHOT_ROUTES,
   MUSIC_VIDEO_NEGATIVE_SPACE as NEGATIVE_SPACE,
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
 } from '../../lib/musicVideoValidation.js';
+import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { validSections } from './shotPlan.js';
 import { normalizeBrief } from './treatment.js';
 
@@ -231,6 +232,8 @@ function draftProofs(directions, scenes, beatsById, gaps) {
   }
   const checks = ['identity-continuity', 'continuous-motion'];
   if (best.d.typographyRole !== 'none') checks.push('readable-text');
+  // A lip-sync lane (#8977) makes sync a real, provable requirement.
+  if (best.d.mode === 'performance' && !lipSyncGap) checks.push('lip-sync');
   const riskShot = {
     kind: 'risk-shot',
     sceneIds: [best.d.sceneId],
@@ -238,7 +241,7 @@ function draftProofs(directions, scenes, beatsById, gaps) {
     risk: best.risk.reasons.join('; ') || 'the highest-energy shot in the song',
     route: best.d.mode === 'performance' && lipSyncGap
       ? `${best.d.route} — performance framed as non-sync (wide, silhouette, hands, backs); cut away on sung lines if mouth motion reads wrong`
-      : best.d.route === 'code-2d' ? 'code-2d — simple 2D motion over the motion reference' : best.d.route,
+      : best.d.route === 'code-2d' ? 'code-2d — a code-rendered title card or moved still in a composed render' : best.d.route,
     checks,
     passCriteria: checks.map((c) => PASS_CRITERIA[c]),
     status: 'proposed',
@@ -270,8 +273,11 @@ function draftProofs(directions, scenes, beatsById, gaps) {
 /** What the treatment asks for that this install cannot do (yet). */
 function deriveCapabilityGaps(project, brief, directions) {
   const gaps = [];
-  if (directions.some((d) => d.mode === 'performance')) {
-    gaps.push({ id: 'lip-sync', detail: 'No source-audio lip-sync is available: performance shots render without mouth movement synced to the song. Frame them as non-sync (wide, silhouette, hands, backs) or cut away on sung lines.' });
+  // Source-audio lip-sync exists only on a verified lane (#8977, fal.ai today);
+  // judged against the project's pinned video backend at compile time.
+  const backend = project.videoSettings?.backend || null;
+  if (directions.some((d) => d.mode === 'performance') && !performanceCapability(backend)) {
+    gaps.push({ id: 'lip-sync', detail: `This project's video backend (${backend || 'install default'}) cannot lip-sync to the song — source-audio lip-sync is only available on fal.ai MiniMax H3. Pin fal.ai for performance shots, or frame them as non-sync (wide, silhouette, hands, backs) and cut away on sung lines.` });
   }
   const motionRefs = (project.visualSpec?.references || []).some((r) => r.use === 'motion-reference')
     || (project.scenes || []).some((s) => (s.takes || []).some((t) => t?.use === 'motion-reference'));
@@ -279,7 +285,10 @@ function deriveCapabilityGaps(project, brief, directions) {
     gaps.push({ id: 'rotoscope', detail: 'Motion-reference media is scaffolding only: turning footage into hand-drawn or vector animation is not automated, and it is never selected into the timeline automatically.' });
   }
   if (directions.some((d) => d.route === 'code-2d')) {
-    gaps.push({ id: 'code-2d', detail: 'Shots routed to simple 2D/code motion need a code-rendered composition section; until one is authored, the shot falls back to a generated clip.' });
+    // #8985 supplies title cards and moved stills — but only a composed render
+    // draws them, and richer 2D animation is not available.
+    const composed = project.composition?.mode === 'composed';
+    gaps.push({ id: 'code-2d', detail: `Shots routed to 2D/code motion become a code-rendered title card (sung text) or a moved still on Apply — no richer 2D animation is available${composed ? '.' : ', and these layers only show when the final render is set to composed; a plain render plays footage instead.'}` });
   }
   if (brief.aspectRatio && brief.aspectRatio !== '16:9') {
     gaps.push({ id: 'aspect-ratio', detail: `The brief targets ${brief.aspectRatio}: prompts are composed for it, but clips render at the video model's native frame size — confirm the model outputs ${brief.aspectRatio} or reframe in the edit.` });
@@ -335,6 +344,7 @@ export function buildTreatmentDraft(project) {
 /** Build the provider prompt that refines a deterministic draft. */
 export function buildTreatmentPrompt(project, draft) {
   const brief = normalizeBrief(project.treatment?.brief);
+  const lipSync = performanceCapability(project.videoSettings?.backend || null);
   const concept = project.concept || {};
   const spec = project.visualSpec || {};
   const hasLyrics = draft.arc.lyricInterpretation !== null;
@@ -379,9 +389,9 @@ Write the treatment:
 - For each section, an "objective" (what the picture must achieve there) and a "rationale" tied to the audience, the lyrics or the emotion. Keep the roles as given.
 - Two or three recurring "motifs" (an image, object, color or gesture) with how each changes across the arc.
 - The balance of "performance", "cutaway" and "graphic" shots as percentages, with a rationale.
-${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — prefer code-2d simple 2D motion where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and a "framePrompt" (the opening still) and "prompt" (the motion) for the image/video model.
+${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — code-2d becomes a code-rendered title card for a sung line or a moved still; prefer it where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and a "framePrompt" (the opening still) and "prompt" (the motion) for the image/video model.
 - Never ask the image or video model to render the lyrics or any text: typography is composited separately into the reserved region.
-- No shot can rely on lip-sync to the song.
+${lipSync ? `- Performance shots are lip-synced to the song on ${lipSync.label} (each shot a ${lipSync.minAudioSec}–${lipSync.maxAudioSec}s song window); use them for sung lines where a visible singer matters.` : '- This project\'s video backend cannot lip-sync: no shot can rely on a singer synced to the song.'}
 
 Respond with ONLY a JSON object (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
 { "rationale": "<why this arc serves the brief>", "lyricInterpretation": ${hasLyrics ? '"<interpretation>"' : 'null'},
