@@ -22,9 +22,11 @@
 import { getProject, mutateProjectRecord } from './projects.js';
 import { cancelExcerptRender, startExcerptRender } from './excerptRender.js';
 import {
+  assertRevisionOpenForGeneration,
   cancelRevisionOnProject,
   claimRevisionGeneration,
   projectRevisions,
+  releaseRevisionClaim,
   revisionGenerationJobs,
   revisionSectionStates,
   startRevisionOnProject,
@@ -33,6 +35,29 @@ import {
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {
   return mutateProjectRecord(projectId, (current) => startRevisionOnProject(current, excerptId, input));
+}
+
+/**
+ * Enqueue-time guard (#9011): a video/image request tagged with a revision
+ * refuses BEFORE the job reaches the queue when that revision is no longer
+ * open — the generation route calls this ahead of `enqueueJob` so a closed
+ * revision's cancel/kickoff race is closed server-side rather than raced.
+ * Throws 404/409 (ServerError, code REVISION_CLOSED); a no-op when the tag
+ * carries no revisionId.
+ */
+export async function assertRevisionOpen(projectId, revisionId) {
+  if (!revisionId) return;
+  const project = await getProject(projectId);
+  assertRevisionOpenForGeneration(project, revisionId);
+}
+
+/**
+ * Clear a claimed section's `claimedAt` after its generation kickoff failed to
+ * reach the queue, so the very next resume hands it out again immediately
+ * instead of waiting out the claim lease. Returns `{ project, revision }`.
+ */
+export async function releaseRevisionSection(projectId, revisionId, sceneId) {
+  return mutateProjectRecord(projectId, (current) => releaseRevisionClaim(current, revisionId, sceneId));
 }
 
 /**

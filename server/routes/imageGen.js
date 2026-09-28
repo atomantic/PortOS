@@ -220,6 +220,9 @@ const generateSchema = z.object({
   musicVideo: z.object({
     projectId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    // Selective section revision (#9011): see the matching comment on the
+    // video route's musicVideo schema (server/routes/videoGen.js).
+    revisionId: z.string().min(1).max(200).optional(),
   }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
@@ -540,6 +543,17 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
     });
   }
+
+  // Selective section revision (#9011): a kickoff tagged for a revision that
+  // has since closed is refused before any provider dispatch, closing the
+  // cancel/kickoff race server-side. No-op when the tag carries no
+  // revisionId; `res.on('close')` above already covers any staged uploads.
+  // Deferred import since only this rare path needs the revision service.
+  if (params.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId);
+  }
+
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
   // call with no local single-flight constraint to absorb. `settings` and

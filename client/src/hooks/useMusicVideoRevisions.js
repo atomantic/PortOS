@@ -4,6 +4,7 @@ import {
   startMusicVideoRevision,
   resumeMusicVideoRevision,
   cancelMusicVideoRevision,
+  releaseMusicVideoRevisionSection,
 } from '../services/apiMusicVideo.js';
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -25,6 +26,15 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
  *
  * `revise(excerptId, sceneIds?)` opens a revision and immediately resumes it.
  *
+ * Each submission rides tagged with the revision's id (#9011), so the server
+ * can cancel or refuse exactly this revision's own generation and never a
+ * board render started by hand for the same scene. `resume` awaits every
+ * kickoff's confirmed-submission promise (`generateFrame`/`generateSceneVideo`
+ * now return one) before counting it as "generating" — a request that never
+ * reached the queue also releases its claim (`release`) so the very next
+ * resume can hand that section out again immediately instead of waiting out
+ * the server's claim lease.
+ *
  * `replaceProject(project)` swaps the local record whole; `sceneMedia` is the
  * `useMusicVideoSceneMedia` result; `attachRender(jobId, projectId)` is
  * `useMusicVideoExcerpts().attachRender`.
@@ -40,33 +50,38 @@ export default function useMusicVideoRevisions({ project, replaceProject, sceneM
       .finally(() => setBusy(false));
   };
 
-  const generateSections = (next, refs) => {
+  const generateSections = async (next, refs, revisionId) => {
     const scenes = new Map((next.scenes || []).map((s) => [s.sceneId, s]));
-    let submitted = 0;
+    const kicks = [];
     for (const { sceneId, kind } of refs) {
       const scene = scenes.get(sceneId);
       if (!scene) continue;
       if (kind === 'image') {
         if (sceneMedia?.genScenes?.[sceneId]) continue;
-        sceneMedia?.generateFrame(scene);
+        kicks.push(sceneMedia.generateFrame(scene, { revisionId }).then((r) => ({ sceneId, ok: r?.ok !== false })));
       } else {
         if (sceneMedia?.genVideoScenes?.[sceneId]) continue;
-        sceneMedia?.generateSceneVideo(scene);
+        kicks.push(sceneMedia.generateSceneVideo(scene, { revisionId }).then((r) => ({ sceneId, ok: r?.ok !== false })));
       }
-      submitted += 1;
     }
-    return submitted;
+    const results = await Promise.all(kicks);
+    const failed = results.filter((r) => !r.ok);
+    // Best-effort: a release that itself fails just leaves the section claimed
+    // for the rest of the lease — the next resume after it lapses still works.
+    await Promise.all(failed.map(({ sceneId }) =>
+      releaseMusicVideoRevisionSection(projectId, revisionId, sceneId, { silent: true }).catch(() => {})));
+    return results.length - failed.length;
   };
 
   const resume = (revisionId) => run(() => resumeMusicVideoRevision(projectId, revisionId, { silent: true })
-    .then((res) => {
+    .then(async (res) => {
       replaceProject(res.project);
       if (res.render?.jobId) {
         attachRender?.(res.render.jobId, res.project.id);
         toast.info('Every revised section has a new take — rendering the revised draft');
         return res;
       }
-      const submitted = generateSections(res.project, res.needsGeneration || []);
+      const submitted = await generateSections(res.project, res.needsGeneration || [], revisionId);
       const waiting = (res.generating || []).length;
       const parts = [
         submitted ? `generating ${plural(submitted, 'section')}` : '',

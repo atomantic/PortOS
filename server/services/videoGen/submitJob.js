@@ -32,6 +32,16 @@ import {
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 
 const submitValidatedVideoGenJob = async (body, uploads) => {
+  // Selective section revision (#9011): a kickoff tagged for a revision that
+  // has since closed (cancelled, or already resolved by another resume) is
+  // refused before any staging happens, closing the cancel/kickoff race
+  // server-side rather than relying on the client to have seen the cancel in
+  // time. A no-op when the tag carries no revisionId — deferred import since
+  // only this rare path needs the revision service's closure.
+  if (body.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
+    await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId);
+  }
   let fableLoomRenderSettings = null;
   if (body.fableLoom) {
     const taggedLoom = await getLoom(body.fableLoom.loomId);

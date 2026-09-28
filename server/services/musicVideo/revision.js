@@ -182,8 +182,20 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
   };
 }
 
-const tagMatches = (job, projectId, sceneId) =>
-  job?.params?.musicVideo?.projectId === projectId && job.params.musicVideo.sceneId === sceneId;
+// A job's music-video tag matches this revision's section EXACTLY when it
+// carries `revisionId` (#9011) — added by the revision hook at kickoff time,
+// so a job another surface tagged with a different (or no) revisionId can
+// never be mistaken for this revision's own generation. A job with no
+// `revisionId` at all (submitted before this field existed, or a board
+// generation never told which revision, if any, is open) falls back to the
+// pre-#9011 scene+time heuristic so an in-flight legacy job is still tracked
+// through a rolling deploy.
+const tagMatches = (job, projectId, sceneId, revision) => {
+  const tag = job?.params?.musicVideo;
+  if (tag?.projectId !== projectId || tag?.sceneId !== sceneId) return false;
+  if (isNonBlankStr(tag.revisionId)) return tag.revisionId === revision.id;
+  return typeof job.queuedAt === 'string' && job.queuedAt >= revision.createdAt;
+};
 
 const within = (iso, windowMs, nowMs) => {
   const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
@@ -210,7 +222,7 @@ export function revisionSectionStates(project, revision, jobs = [], nowMs = Date
     if (!scene) return { ...section, state: 'removed' };
     if (isNonBlankStr(scene[TAKE_SLOT[section.kind]])) return { ...section, state: 'ready' };
     const takes = Array.isArray(scene.takes) ? scene.takes : [];
-    const pending = jobs.some((job) => job?.kind === section.kind && tagMatches(job, project.id, section.sceneId) && (
+    const pending = jobs.some((job) => job?.kind === section.kind && tagMatches(job, project.id, section.sceneId, revision) && (
       job.status === 'queued' || job.status === 'running'
       // Completed after the revision opened, but its take isn't on the scene
       // yet: the attach hook is still writing it. Asking again would pay twice.
@@ -239,8 +251,7 @@ function resumableRevision(project, revisionId) {
 export function revisionGenerationJobs(project, revision, jobs = []) {
   const rejected = (revision.sections || []).filter((s) => s.verdict === 'rejected');
   return jobs.filter((job) => (job?.status === 'queued' || job?.status === 'running')
-    && typeof job.queuedAt === 'string' && job.queuedAt >= revision.createdAt
-    && rejected.some((s) => job.kind === s.kind && tagMatches(job, project.id, s.sceneId)));
+    && rejected.some((s) => job.kind === s.kind && tagMatches(job, project.id, s.sceneId, revision)));
 }
 
 /**
@@ -312,4 +323,37 @@ export function cancelRevisionOnProject(project, revisionId, now = new Date().to
   const revision = resumableRevision(project, revisionId);
   const next = { ...revision, status: 'canceled', updatedAt: now };
   return { project: replaceRevision(project, next), revision: next, renderExcerptId: revision.status === 'rendering' ? revision.renderExcerptId : null };
+}
+
+/**
+ * Guard for a generation route's enqueue step (#9011): a video/image request
+ * tagged with a `revisionId` that no longer names an open (or rendering)
+ * revision is refused BEFORE it reaches the queue, rather than being cancelled
+ * moments later by whatever closed the revision. Throws 404/409; a project or
+ * revision that no longer exists is treated the same as one that closed —
+ * there is nothing left to hand this generation's output to. No-op when the
+ * project itself is gone (the route's own lookup reports that separately).
+ */
+export function assertRevisionOpenForGeneration(project, revisionId) {
+  if (!project) return;
+  resumableRevision(project, revisionId);
+}
+
+/**
+ * A resume that claimed a section for generation (`claimRevisionGeneration`)
+ * but whose kickoff never reached the queue (submission failed client-side or
+ * the route refused it) leaves that section claimed for the full lease
+ * (`GENERATION_CLAIM_LEASE_MS`) with nothing actually running. Clearing the
+ * claim here lets the very next resume hand the section out again immediately
+ * instead of waiting out the lease. A no-op if the section isn't found or
+ * isn't rejected — best-effort cleanup, never a reason to fail the caller.
+ */
+export function releaseRevisionClaim(project, revisionId, sceneId, now = new Date().toISOString()) {
+  const revision = resumableRevision(project, revisionId);
+  const next = {
+    ...revision,
+    sections: revision.sections.map((s) => (s.sceneId === sceneId && s.verdict === 'rejected' ? { ...s, claimedAt: null } : s)),
+    updatedAt: now,
+  };
+  return { project: replaceRevision(project, next), revision: next };
 }

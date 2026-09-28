@@ -135,16 +135,23 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * conditioning inputs (`referenceImageFiles`). A backend that can't consume
    * them refuses the render, and the toast names that capability gap instead of
    * quietly rendering without the references.
+   *
+   * Returns a promise that always RESOLVES (never rejects) to `{ ok }` — `ok`
+   * is false when the kickoff request itself failed (refused, network error),
+   * true once it reaches the queue or finishes synchronously. The revision
+   * hook (#9011) passes `revisionId` and awaits this to release a claimed
+   * section whose kickoff never made it to the queue, and to count only
+   * confirmed submissions rather than every call it fired.
    */
-  const generateFrame = (scene) => {
+  const generateFrame = (scene, { revisionId } = {}) => {
     const prompt = buildFramePrompt(scene);
-    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return; }
+    if (!prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
-    generateImage({
+    return generateImage({
       prompt,
       ...(conditioning.length ? { referenceImageFiles: conditioning.map((ref) => ref.imageId) } : {}),
-      musicVideo: { projectId, sceneId: scene.sceneId },
+      musicVideo: { projectId, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) },
     }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
@@ -153,9 +160,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           // (and the durable scene-image event lands the generated frame). trackJob
           // reconciles a terminal event that raced ahead of this .then (fast fail).
           const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { frameLane.clearScene(scene.sceneId); return; } // no id to track → don't strand the button
+          if (!jobId) { frameLane.clearScene(scene.sceneId); return { ok: false }; } // no id to track → don't strand the button
           frameLane.trackJob(jobId, scene.sceneId);
-          return;
+          return { ok: true };
         }
         const filename = res?.filename;
         if (filename) {
@@ -166,6 +173,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
         }
         frameLane.clearScene(scene.sceneId);
+        return { ok: true };
       })
       .catch((err) => {
         if (conditioning.length && REFERENCE_CAPABILITY_CODES.has(err?.code)) {
@@ -174,21 +182,25 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           toast.error(err?.message || 'Frame generation failed');
         }
         frameLane.clearScene(scene.sceneId);
+        return { ok: false };
       });
   };
 
   // Correlate a kicked-off video job with its scene, or clear the spinner when
   // the response carried no id to track. trackJob reconciles a terminal event
-  // that raced ahead of this .then.
+  // that raced ahead of this .then. Resolves `{ ok }` — see generateFrame's
+  // doc comment for why the caller never sees a rejection.
   const trackVideoJob = (res, sceneId) => {
     const jobId = res?.jobId || res?.generationId;
-    if (!jobId) { videoLane.clearScene(sceneId); return; }
+    if (!jobId) { videoLane.clearScene(sceneId); return { ok: false }; }
     videoLane.trackJob(jobId, sceneId);
+    return { ok: true };
   };
 
   const handleVideoError = (err, sceneId, fallbackMessage) => {
     toast.error(err?.message || fallbackMessage);
     videoLane.clearScene(sceneId);
+    return { ok: false };
   };
 
   /**
@@ -198,13 +210,16 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * event clear the spinner; the finished clip's history id lands durably via
    * music-video:scene-video (musicVideoSceneVideoHook). generateVideo() throws on
    * a non-OK response, so the catch owns the only error toast (no double-toast).
+   *
+   * Returns a promise that always resolves to `{ ok }` — see generateFrame's
+   * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene) => {
-    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return; }
+  const generateSceneVideo = (scene, { revisionId } = {}) => {
+    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const basePrompt = buildShotPrompt(scene);
-    if (!basePrompt) { toast.error('Add a shot prompt first'); return; }
+    if (!basePrompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
     const { settings, audioReactiveSelected, detectedAudioReactiveLora, videoBlockedReason } = videoSettings;
-    if (videoBlockedReason) { toast.error(videoBlockedReason); return; }
+    if (videoBlockedReason) { toast.error(videoBlockedReason); return Promise.resolve({ ok: false }); }
     // #8977: a performance shot lip-syncs to the master recording, which only a
     // verified source-audio provider can do — never a cutaway lane with an
     // invented voice. The server slices the song and re-checks the capability.
@@ -212,7 +227,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const performanceBlocked = performance
       ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
       : null;
-    if (performanceBlocked) { toast.error(performanceBlocked); return; }
+    if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
     const spanSec = sceneSpanSec(scene);
     // Grok's CLI lane takes no timed controls: phrase intents ride as prose
     // whose timing is explicitly approximate. The environmental-motion guard
@@ -222,7 +237,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? `${basePrompt}. ${AUDIO_REACTIVE_PERFORMANCE_GUARD}`
       : [basePrompt, motionCues].filter(Boolean).join('. ');
     videoLane.startScene(scene.sceneId);
-    generateVideo({
+    return generateVideo({
       prompt,
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
@@ -248,7 +263,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         loraFilenames: [detectedAudioReactiveLora.filename],
         loraScales: [settings.audioReactiveScale],
       } : {}),
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId }),
+      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}) }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Scene video generation failed'));
@@ -297,7 +312,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       toast.info('Every scene already has a reference frame');
       return;
     }
-    pending.forEach(generateFrame);
+    pending.forEach((scene) => generateFrame(scene));
   };
 
   const generateMissingVideos = () => {
@@ -318,7 +333,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         : 'Every scene already has a video');
       return;
     }
-    pending.forEach(generateSceneVideo);
+    pending.forEach((scene) => generateSceneVideo(scene));
   };
 
   return {

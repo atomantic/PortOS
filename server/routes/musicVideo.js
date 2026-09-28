@@ -34,6 +34,7 @@ import {
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
   musicVideoRevisionStartSchema,
+  musicVideoRevisionReleaseSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -71,7 +72,9 @@ import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
-import { startRevision, resumeRevision, cancelRevision } from '../services/musicVideo/revisionService.js';
+import {
+  startRevision, resumeRevision, cancelRevision, releaseRevisionSection,
+} from '../services/musicVideo/revisionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import {
@@ -393,6 +396,15 @@ router.post('/:id/revisions/:revisionId/resume', asyncHandler(async (req, res) =
 
 router.post('/:id/revisions/:revisionId/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelRevision(req.params.id, req.params.revisionId));
+}));
+
+// A generation kickoff that failed client-side before reaching the queue
+// (network error, a refused request) leaves its section claimed for the
+// full lease with nothing running — clear the claim so the very next resume
+// hands the section out again immediately (#9011).
+router.post('/:id/revisions/:revisionId/release', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoRevisionReleaseSchema, req.body || {});
+  res.json(await releaseRevisionSection(req.params.id, req.params.revisionId, input.sceneId));
 }));
 
 // --- Director scene board ---

@@ -174,6 +174,13 @@ export const resumeMusicVideoRevision = (id, revisionId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/resume`, { method: 'POST', ...options });
 export const cancelMusicVideoRevision = (id, revisionId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/cancel`, { method: 'POST', ...options });
+// A generation kickoff that failed before reaching the queue (#9011): clears
+// the section's claim so the next resume hands it out again immediately
+// instead of waiting out the lease. Body: { sceneId } → { project, revision }.
+export const releaseMusicVideoRevisionSection = (id, revisionId, sceneId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}/release`, {
+    method: 'POST', body: JSON.stringify({ sceneId }), ...options,
+  });
 
 // ---- Pre-production treatment (#8980) ----
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to the

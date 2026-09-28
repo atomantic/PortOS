@@ -63,6 +63,7 @@ vi.mock('../services/musicVideo/render.js', async (importOriginal) => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { recoverStuckMusicVideoExcerpts } = await import('../services/musicVideo/excerptRender.js');
+const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
 
 const app = express();
 app.use(express.json());
@@ -293,6 +294,52 @@ describe('selective section revision (#8987)', () => {
     expect(r.status).toBe(200);
     expect(r.body.canceledJobIds).toEqual(['job-s2']);
     expect(h.cancelJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelling an open revision leaves a same-scene job tagged for a different revision running (#9011)', async () => {
+    const project = await reviewedProject();
+    const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
+    const now = new Date().toISOString();
+    h.jobs.push(
+      { id: 'job-this-revision', kind: 'video', status: 'running', queuedAt: now, params: { musicVideo: { projectId: project.id, sceneId: 's2', revisionId: revision.id } } },
+      // A hand-started board render tagged with a DIFFERENT (e.g. superseded) revision for the
+      // same scene: cancelling THIS revision must never touch it, exact revisionId match or not.
+      { id: 'job-other-revision', kind: 'video', status: 'running', queuedAt: now, params: { musicVideo: { projectId: project.id, sceneId: 's2', revisionId: 'mvr-some-other-revision' } } },
+    );
+    const r = await request(app).post(`${base(project.id)}/revisions/${revision.id}/cancel`);
+    expect(r.status).toBe(200);
+    expect(r.body.canceledJobIds).toEqual(['job-this-revision']);
+    expect(h.cancelJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('release clears a claimed section so the very next resume hands it out again immediately (#9011)', async () => {
+    const project = await reviewedProject();
+    const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
+    const first = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+    expect(first.body.needsGeneration).toEqual([{ sceneId: 's2', kind: 'video' }]);
+
+    // A resume right away sees s2 claimed — nothing left to hand out, since the
+    // kickoff is presumed already on its way to the queue.
+    const claimed = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+    expect(claimed.body.needsGeneration).toEqual([]);
+    expect(claimed.body.generating).toEqual([{ sceneId: 's2', kind: 'video' }]);
+
+    // The kickoff never reached the queue (e.g. a network error): release the
+    // claim, and the very next resume offers s2 again without waiting out the lease.
+    const released = await request(app).post(`${base(project.id)}/revisions/${revision.id}/release`).send({ sceneId: 's2' });
+    expect(released.status).toBe(200);
+    const again = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+    expect(again.body.needsGeneration).toEqual([{ sceneId: 's2', kind: 'video' }]);
+  });
+
+  it('refuses a generation kickoff tagged for a revision that is no longer open (#9011)', async () => {
+    const project = await reviewedProject();
+    const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
+    await expect(assertRevisionOpen(project.id, revision.id)).resolves.toBeUndefined();
+    await expect(assertRevisionOpen(project.id, undefined)).resolves.toBeUndefined(); // no tag → no-op
+
+    await request(app).post(`${base(project.id)}/revisions/${revision.id}/cancel`);
+    await expect(assertRevisionOpen(project.id, revision.id)).rejects.toMatchObject({ status: 409, code: 'REVISION_CLOSED' });
   });
 
   it('refuses a second open revision, a section outside the draft, and a draft without a section map', async () => {
