@@ -210,6 +210,20 @@ describe('planShots', () => {
 });
 
 describe('buildScenePlanPrompt', () => {
+  it('bounds a maximal production bible without dropping cast identities', () => {
+    const subjects = Array.from({ length: 24 }, (_, index) => ({
+      id: `subject-${index}`, kind: 'character', role: 'protagonist',
+      name: `Subject ${index} ${'n'.repeat(105)}`, description: 'd'.repeat(1000),
+    }));
+    const base = makeProject({ concept: {} });
+    const prompt = buildScenePlanPrompt({ ...base, concept: {
+      universeStyle: 'u'.repeat(4000), moodBoardStyle: 'm'.repeat(4000), subjects,
+    } }, []);
+    expect(prompt.length - buildScenePlanPrompt(base, []).length).toBeLessThanOrEqual(6000);
+    for (const subject of subjects) expect(prompt).toContain(subject.name);
+    expect(prompt).toContain('descriptions may be abbreviated');
+  });
+
   it('includes the concept, style, and per-shot section/duration/energy/lyrics/intent', () => {
     const { shots } = planShots(SECTIONS, {
       beats: BEATS,

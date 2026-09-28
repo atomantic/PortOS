@@ -25,7 +25,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
-  const subjects = draft?.subjects || project.concept?.subjects || [];
+  const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
   const idFor = (name) => `mv-creative-${project.id}-${name}`;
 
   useEffect(() => {

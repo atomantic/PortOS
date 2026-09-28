@@ -45,6 +45,17 @@ describe('creative setup', () => {
       ] }, visualSpec: { moodBoardId: 'b1' },
     });
   });
+  it('discards an unsaved cast when the director cancels setup', () => {
+    const onSave = open();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Unsaved singer' } });
+    fireEvent.click(screen.getByText('Add to production'));
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(screen.queryByText(/Unsaved singer/)).toBeNull();
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Set up creative direction'));
+    expect(screen.queryByText(/Unsaved singer/)).toBeNull();
+  });
+
   it('ignores stale universe responses and retains the draft when saving fails', async () => {
     let resolveOld;
     getUniverse.mockImplementation((id) => id === 'u1' ? new Promise((resolve) => { resolveOld = resolve; }) : Promise.resolve({ id: 'u2', name: 'Other universe', characters: [] }));
