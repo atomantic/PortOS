@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
-import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { uuidv4 } from '../../lib/uuid.js';
-import { pullUniverseCanonReferences, universeStyleSnapshot, moodBoardStyleSnapshot } from '../../lib/musicVideoUniverseRefs.js';
+import { pullUniverseCanonReferences } from '../../lib/musicVideoUniverseRefs.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const kinds = [['character', 'Cast'], ['place', 'Places'], ['object', 'Objects']];
@@ -73,9 +72,6 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     setSaving(true);
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null };
-    if (draft.universeId !== (project.concept?.universeId || '') || project.concept?.universeStyle == null) {
-      concept.universeStyle = draft.universeId && universe?.id === draft.universeId ? universeStyleSnapshot(universe) : '';
-    }
     const visualSpec = { moodBoardId: draft.moodBoardId || null };
     const canon = { characters: [], places: [], objects: [] };
     for (const item of selectedCanon) {
@@ -83,13 +79,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange })
     }
     const pulled = pullUniverseCanonReferences(canon, project.visualSpec?.references || []);
     if (pulled.added) visualSpec.references = pulled.next;
-    const refreshBoard = draft.moodBoardId !== (project.visualSpec?.moodBoardId || '') || project.concept?.moodBoardStyle == null;
-    const boardRequest = draft.moodBoardId && refreshBoard
-      ? getMoodBoard(draft.moodBoardId, { silent: true }) : Promise.resolve(null);
-    return boardRequest.then((board) => {
-      if (refreshBoard) concept.moodBoardStyle = moodBoardStyleSnapshot(board);
-      return onSave({ concept, visualSpec });
-    }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
+    return onSave({ concept, visualSpec }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">

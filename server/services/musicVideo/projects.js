@@ -26,6 +26,7 @@ import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } f
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { VIDEO_GEN_MODE, resolveVideoMode } from '../videoGen/modes.js';
 import { getSettings } from '../settings.js';
+import { withStyleSnapshots } from './styleSnapshots.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -85,7 +86,7 @@ async function seedVideoBackendDefault(input) {
 }
 
 export async function createProject(input) {
-  const project = await (await selectBackend()).createProject(await seedVideoBackendDefault(input));
+  const project = await (await selectBackend()).createProject(await withStyleSnapshots(await seedVideoBackendDefault(input)));
   announceNewProject(project.id);
   return project;
 }
@@ -97,7 +98,10 @@ export async function cloneProject(id, options = {}) {
 }
 
 export async function updateProject(id, patch) {
-  const next = await (await selectBackend()).updateProject(id, patch);
+  const backend = await selectBackend();
+  const needsSnapshot = patch?.concept?.universeId !== undefined || patch?.visualSpec?.moodBoardId !== undefined;
+  const resolved = needsSnapshot ? await withStyleSnapshots(patch, await backend.getProject(id)) : patch;
+  const next = await backend.updateProject(id, resolved);
   emitRecordUpdated('musicVideoProject', id);
   return next;
 }
