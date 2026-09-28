@@ -19,18 +19,15 @@
  * against the freshest record under the backend's write serialization.
  */
 
-import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { cancelExcerptRender, startExcerptRender } from './excerptRender.js';
 import {
   cancelRevisionOnProject,
+  claimRevisionGeneration,
   projectRevisions,
-  resumableRevision,
   revisionSectionStates,
   startRevisionOnProject,
 } from './revision.js';
-
-const sceneRef = ({ sceneId, kind }) => ({ sceneId, kind });
 
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {
@@ -44,24 +41,19 @@ export async function startRevision(projectId, excerptId, input = {}) {
  * holds a take, otherwise null.
  */
 export async function resumeRevision(projectId, revisionId) {
-  const project = await getProject(projectId);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const revision = resumableRevision(project, revisionId);
   // Deferred: the queue module's closure is large and only this path needs it.
   const { listJobs } = await import('../mediaJobQueue/index.js');
   const jobs = [...listJobs({ kind: 'video' }), ...listJobs({ kind: 'image' })];
-  const sections = revisionSectionStates(project, revision, jobs);
-  const needsGeneration = sections.filter((s) => s.state === 'needs-generation').map(sceneRef);
-  const generating = sections.filter((s) => s.state === 'generating').map(sceneRef);
-  if (needsGeneration.length || generating.length) {
-    return { project, revision: { ...revision, sections }, needsGeneration, generating, render: null };
-  }
+  // Derive + claim under the record's write serialization, so two overlapping
+  // resumes can never both hand the same section out for (paid) generation.
+  const claim = await mutateProjectRecord(projectId, (current) => claimRevisionGeneration(current, revisionId, jobs));
+  if (claim.needsGeneration.length || claim.generating.length) return { ...claim, render: null };
   // Every rejected section holds a take: re-render the draft window. The
   // excerpt render links itself to the revision in its creation write (and
   // refuses one that closed or is already rendering meanwhile).
-  const render = await startExcerptRender(projectId, { startSec: revision.startSec, endSec: revision.endSec }, { revisionId });
+  const render = await startExcerptRender(projectId, { startSec: claim.revision.startSec, endSec: claim.revision.endSec }, { revisionId });
   const fresh = await getProject(projectId);
-  const current = projectRevisions(fresh).find((r) => r.id === revisionId) || revision;
+  const current = projectRevisions(fresh).find((r) => r.id === revisionId) || claim.revision;
   return { project: fresh, revision: { ...current, sections: revisionSectionStates(fresh, current, jobs) }, needsGeneration: [], generating: [], render };
 }
 

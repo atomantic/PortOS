@@ -132,23 +132,47 @@ describe('selective section revision (#8987)', () => {
     expect(s3).toEqual(project.scenes[2]);
   });
 
-  it('resumes to generate only the rejected section, never a section already holding a take', async () => {
+  it('resumes to generate only the rejected section, and never hands a section out twice', async () => {
     const project = await reviewedProject();
     const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
 
-    const first = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
-    expect(first.status).toBe(200);
-    expect(first.body.needsGeneration).toEqual([{ sceneId: 's2', kind: 'video' }]);
-    expect(first.body.render).toBeNull();
-
-    // The board submitted s2's clip; while that job is live a second resume
-    // (a double click, or a resume after a restart) asks for nothing new.
-    h.jobs.push({ id: 'job-live', kind: 'video', status: 'running', queuedAt: new Date().toISOString(), params: { musicVideo: { projectId: project.id, sceneId: 's2' } } });
-    const again = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
-    expect(again.body.needsGeneration).toEqual([]);
-    expect(again.body.generating).toEqual([{ sceneId: 's2', kind: 'video' }]);
+    // Two overlapping resumes (two tabs, a double submit): exactly one hands
+    // s2 out for generation; the other sees it claimed.
+    const [a, b] = await Promise.all([
+      request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`),
+      request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`),
+    ]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect([a.body.needsGeneration, b.body.needsGeneration]).toContainEqual([{ sceneId: 's2', kind: 'video' }]);
+    expect([a.body.needsGeneration, b.body.needsGeneration]).toContainEqual([]);
+    expect(a.body.render).toBeNull();
+    expect(b.body.render).toBeNull();
     expect(h.procs).toHaveLength(0); // nothing renders until every rejected section has a take
     expect(h.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('re-offers a claimed section only once its lease lapses with no job in the queue', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const project = await reviewedProject();
+      const { body: { revision } } = await request(app).post(`${base(project.id)}/excerpt/mve-draft/revisions`).send({});
+      await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+
+      // The board submitted s2; while its job is live, a resume long after the
+      // lease (e.g. after a restart) still asks for nothing new.
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+      h.jobs.push({ id: 'job-live', kind: 'video', status: 'running', queuedAt: new Date().toISOString(), params: { musicVideo: { projectId: project.id, sceneId: 's2' } } });
+      const live = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+      expect(live.body.needsGeneration).toEqual([]);
+      expect(live.body.generating).toEqual([{ sceneId: 's2', kind: 'video' }]);
+
+      // That job failed and produced nothing: s2 is offered again.
+      h.jobs[0].status = 'failed';
+      const failed = await request(app).post(`${base(project.id)}/revisions/${revision.id}/resume`);
+      expect(failed.body.needsGeneration).toEqual([{ sceneId: 's2', kind: 'video' }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('retries a failed render without re-submitting any generation, then completes', async () => {

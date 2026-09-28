@@ -37,6 +37,15 @@ export const REVISION_STATUSES = Object.freeze(['open', 'rendering', 'complete',
 // A project row carries its recent revisions; the oldest SETTLED ones are
 // dropped past this so a long review loop can't grow one record without bound.
 export const MAX_PROJECT_REVISIONS = 20;
+// A resume that hands a section out for generation CLAIMS it for this long, so
+// a second resume (another tab, a double submit) in the window between the
+// hand-out and the job reaching the queue can't hand it out again. After the
+// lease a section with no job and no take is handed out again — the earlier
+// submission evidently never reached the queue.
+export const GENERATION_CLAIM_LEASE_MS = 90_000;
+// A job that completed but whose take never attached (a failed attach write)
+// counts as in flight only this long, so it can't wedge the revision forever.
+export const TAKE_ATTACH_GRACE_MS = 120_000;
 
 const revisionError = (status, code, message, context) =>
   new ServerError(message, { status, code, ...(context ? { context } : {}) });
@@ -177,18 +186,24 @@ export function startRevisionOnProject(project, excerptId, { sceneIds } = {}, no
 const tagMatches = (job, projectId, sceneId) =>
   job?.params?.musicVideo?.projectId === projectId && job.params.musicVideo.sceneId === sceneId;
 
+const within = (iso, windowMs, nowMs) => {
+  const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) && nowMs - t < windowMs;
+};
+
 /**
  * Pure: each section of a revision with its current `state`:
  *   - `kept`             — approved; its selection is untouched;
  *   - `removed`          — the scene was deleted since;
  *   - `ready`            — the slot holds a take (a new one landed, or the
  *                          director selected one) — never generated again;
- *   - `generating`       — a generation job for the scene is queued/running, or
- *                          finished but its take hasn't attached yet;
+ *   - `generating`       — a generation job for the scene is queued/running,
+ *                          finished moments ago but its take hasn't attached
+ *                          yet, or a resume claimed it within the lease;
  *   - `needs-generation` — nothing selected and nothing in flight.
  * `jobs` is the media-job queue's list (queued, running and recent archive).
  */
-export function revisionSectionStates(project, revision, jobs = []) {
+export function revisionSectionStates(project, revision, jobs = [], nowMs = Date.now()) {
   const scenesById = new Map((project.scenes || []).map((s) => [s.sceneId, s]));
   return (revision.sections || []).map((section) => {
     if (section.verdict !== 'rejected') return { ...section, state: 'kept' };
@@ -201,9 +216,10 @@ export function revisionSectionStates(project, revision, jobs = []) {
       // Completed after the revision opened, but its take isn't on the scene
       // yet: the attach hook is still writing it. Asking again would pay twice.
       || (job.status === 'completed' && typeof job.queuedAt === 'string' && job.queuedAt >= revision.createdAt
-        && !takes.some((t) => t.jobId === job.id))
+        && within(job.completedAt, TAKE_ATTACH_GRACE_MS, nowMs) && !takes.some((t) => t.jobId === job.id))
     ));
-    return { ...section, state: pending ? 'generating' : 'needs-generation' };
+    const claimed = within(section.claimedAt, GENERATION_CLAIM_LEASE_MS, nowMs);
+    return { ...section, state: pending || claimed ? 'generating' : 'needs-generation' };
   });
 }
 
@@ -214,6 +230,31 @@ export function resumableRevision(project, revisionId) {
     throw revisionError(409, 'REVISION_CLOSED', `This revision is already ${revision.status}`);
   }
   return revision;
+}
+
+/**
+ * Resume's atomic step (run under the record's write serialization): derive
+ * every section's state and CLAIM the ones about to be handed out for
+ * generation, so two overlapping resumes can never both hand out the same
+ * section. Returns `{ project, revision, needsGeneration, generating }` —
+ * `revision.sections` carry their derived `state`.
+ */
+export function claimRevisionGeneration(project, revisionId, jobs = [], nowMs = Date.now()) {
+  const revision = resumableRevision(project, revisionId);
+  const states = revisionSectionStates(project, revision, jobs, nowMs);
+  const ref = ({ sceneId, kind }) => ({ sceneId, kind });
+  const needsGeneration = states.filter((s) => s.state === 'needs-generation').map(ref);
+  const generating = states.filter((s) => s.state === 'generating').map(ref);
+  if (!needsGeneration.length) return { project, revision: { ...revision, sections: states }, needsGeneration, generating };
+  const claimedAt = new Date(nowMs).toISOString();
+  const claimIds = new Set(needsGeneration.map((s) => s.sceneId));
+  const next = { ...revision, sections: revision.sections.map((s) => (claimIds.has(s.sceneId) ? { ...s, claimedAt } : s)), updatedAt: claimedAt };
+  return {
+    project: replaceRevision(project, next),
+    revision: { ...next, sections: states.map((s) => (claimIds.has(s.sceneId) ? { ...s, claimedAt } : s)) },
+    needsGeneration,
+    generating,
+  };
 }
 
 /**
