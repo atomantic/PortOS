@@ -26,6 +26,7 @@ import {
   getSettings, updateSettings, getImageGenStatus, getVideoGenModelContext, generateImage,
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
+  getCredentialInventory, saveCredential,
 } from '../../services/api';
 import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
@@ -112,12 +113,6 @@ export function ImageGenTab() {
   // (defaultModelId) survive the settings PUT's wholesale slice replace.
   const [videoGenMode, setVideoGenMode] = useState('');
   const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(false);
-  // fal.ai queue REST API key (#6213) — usability-gated on this being set
-  // (settings, or the FAL_KEY env var server-side). No enabled toggle: the
-  // key's presence IS the opt-in, same shape as loras.js's Civitai key.
-  const [falApiKey, setFalApiKey] = useState('');
-  // reactor.inc fast-h3 API key (#6214) — same usability-gate shape as fal above.
-  const [reactorApiKey, setReactorApiKey] = useState('');
   const videoGenSliceRef = useRef({});
   // Same round-trip guard as videoGenSliceRef, for the same reason: the PUT
   // replaces `imageGen` wholesale, and `imageGen.local` carries hand-edit-only
@@ -220,8 +215,6 @@ export function ImageGenTab() {
     videoGenMode: '',
     localVideoModelId: '',
     videoGenDisplaySleep: false,
-    falApiKey: '',
-    reactorApiKey: '',
   });
 
   const [status, setStatus] = useState(null);
@@ -277,6 +270,55 @@ export function ImageGenTab() {
     toast.success(result.hfTokenPresent ? 'Stored token cleared (env / CLI token still active)' : 'HuggingFace token cleared');
   };
 
+  // fal.ai / reactor.inc video keys (#6213/#6214) — write-only since #8997:
+  // the raw key never appears in a settings GET (privateKeyStore.js hydrates
+  // it server-side, but redactExternalTokens strips it back out). The client
+  // reads only presence + source from the shared credential inventory
+  // (GET /api/settings/credentials, same one CredentialsTab renders) and
+  // saves/clears through the write-only PUT /api/settings/credentials/:id
+  // setter — never through the general settings PUT this tab otherwise uses.
+  const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null });
+  const [falKeyInput, setFalKeyInput] = useState('');
+  const [reactorKeyInput, setReactorKeyInput] = useState('');
+  // One busy flag for both keys since only one save/clear can be in flight
+  // from this panel at a time; the value names which button is spinning.
+  const [videoCredentialBusy, setVideoCredentialBusy] = useState(null);
+
+  const refreshCredentialRows = useCallback(() => {
+    getCredentialInventory({ silent: true })
+      .then((data) => {
+        const rows = data?.credentials || [];
+        setCredentialRows({
+          fal: rows.find((row) => row.id === 'fal') || null,
+          reactor: rows.find((row) => row.id === 'reactor') || null,
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { refreshCredentialRows(); }, [refreshCredentialRows]);
+
+  const handleSaveVideoCredential = async (id, value, setInput) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setVideoCredentialBusy(`${id}-saving`);
+    const row = await saveCredential(id, trimmed, { silent: true }).catch(() => null);
+    setVideoCredentialBusy(null);
+    if (!row) { toast.error('Failed to save key'); return; }
+    setCredentialRows((previous) => ({ ...previous, [id]: row }));
+    setInput('');
+    toast.success('Key saved privately.');
+  };
+
+  const handleClearVideoCredential = async (id) => {
+    setVideoCredentialBusy(`${id}-clearing`);
+    const row = await saveCredential(id, '', { silent: true }).catch(() => null);
+    setVideoCredentialBusy(null);
+    if (!row) { toast.error('Failed to clear key'); return; }
+    setCredentialRows((previous) => ({ ...previous, [id]: row }));
+    toast.success('Saved key cleared. External credentials may still apply.');
+  };
+
   // Close any in-flight test-render SSE on unmount so we don't fire setState
   // on a torn-down component if the user navigates away mid-render.
   useEffect(() => () => closeRenderSse(), [closeRenderSse]);
@@ -295,8 +337,6 @@ export function ImageGenTab() {
         const vgMode = normalizeRenderPinValue(vg.mode) || '';
         const vgModelId = vg.defaultModelId || '';
         const vgDisplaySleep = vg.displaySleep === true;
-        const vgFalApiKey = vg.fal?.apiKey || '';
-        const vgReactorApiKey = vg.reactor?.apiKey || '';
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
@@ -334,8 +374,6 @@ export function ImageGenTab() {
         setVideoGenMode(vgMode);
         setLocalVideoModelId(vgModelId);
         setVideoGenDisplaySleep(vgDisplaySleep);
-        setFalApiKey(vgFalApiKey);
-        setReactorApiKey(vgReactorApiKey);
         localSliceRef.current = (ig.local && typeof ig.local === 'object') ? ig.local : {};
         videoGenSliceRef.current = vg;
         setSdapiUrl(url);
@@ -367,8 +405,6 @@ export function ImageGenTab() {
           videoGenMode: vgMode,
           localVideoModelId: vgModelId,
           videoGenDisplaySleep: vgDisplaySleep,
-          falApiKey: vgFalApiKey,
-          reactorApiKey: vgReactorApiKey,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -492,9 +528,7 @@ export function ImageGenTab() {
     || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson
     || videoGenMode !== saved.videoGenMode
     || localVideoModelId !== saved.localVideoModelId
-    || videoGenDisplaySleep !== saved.videoGenDisplaySleep
-    || falApiKey !== saved.falApiKey
-    || reactorApiKey !== saved.reactorApiKey;
+    || videoGenDisplaySleep !== saved.videoGenDisplaySleep;
 
   const handleSave = async () => {
     setSaving(true);
@@ -554,8 +588,6 @@ export function ImageGenTab() {
         mode: videoGenMode || null,
         defaultModelId: localVideoModelId || null,
         displaySleep: videoGenDisplaySleep,
-        fal: { ...videoGenSliceRef.current.fal, apiKey: falApiKey.trim() || undefined },
-        reactor: { ...videoGenSliceRef.current.reactor, apiKey: reactorApiKey.trim() || undefined },
       },
     };
     try {
@@ -575,8 +607,6 @@ export function ImageGenTab() {
         videoGenMode,
         localVideoModelId,
         videoGenDisplaySleep,
-        falApiKey: falApiKey.trim(),
-        reactorApiKey: reactorApiKey.trim(),
       });
       // Reflect the pruned no-op entries back into the editor state so the
       // dirty check compares like against like after a save.
@@ -881,34 +911,85 @@ export function ImageGenTab() {
             <span className="block text-xs text-gray-500 mt-0.5">Off by default. Keeps the system awake while putting the screen to sleep, which reduces WindowServer GPU contention on affected Apple silicon. Turn on only if you hit the GPU-watchdog crash during a render — this is also settable per-render on the Video Gen page.</span>
           </span>
         </label>
-        <FormField
-          label={<>fal.ai API key<span className="block text-xs text-gray-500 mt-0.5">Enables the fal.ai queue video backend on the Video Gen page and in FableLoom. Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.</span></>}
-          labelClassName="text-sm text-gray-300"
-        >
-          <input
-            id="fal-api-key"
-            type="password"
-            autoComplete="off"
-            value={falApiKey}
-            onChange={(e) => setFalApiKey(e.target.value)}
-            placeholder="fal-key-..."
-            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-          />
-        </FormField>
-        <FormField
-          label={<>reactor.inc API key<span className="block text-xs text-gray-500 mt-0.5">Enables the reactor.inc fast-h3 video backend on the Video Gen page and in FableLoom, or set the REACTOR_API_KEY environment variable instead.</span></>}
-          labelClassName="text-sm text-gray-300"
-        >
-          <input
-            id="reactor-api-key"
-            type="password"
-            autoComplete="off"
-            value={reactorApiKey}
-            onChange={(e) => setReactorApiKey(e.target.value)}
-            placeholder="reactor-key-..."
-            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-          />
-        </FormField>
+        {/* fal.ai / reactor.inc keys are write-only (#8997): presence + source
+            only, read from the shared credential inventory, saved/cleared
+            through their own PUT — never part of the Media save above. */}
+        {[
+          {
+            id: 'fal', label: 'fal.ai API key', input: falKeyInput, setInput: setFalKeyInput,
+            placeholder: 'fal-key-...', envLabel: 'FAL_KEY',
+            hint: 'Enables the fal.ai queue video backend on the Video Gen page and in FableLoom. Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.',
+            missing: 'No fal.ai key configured — the fal.ai video backend will be unavailable.',
+          },
+          {
+            id: 'reactor', label: 'reactor.inc API key', input: reactorKeyInput, setInput: setReactorKeyInput,
+            placeholder: 'reactor-key-...', envLabel: 'REACTOR_API_KEY',
+            hint: 'Enables the reactor.inc fast-h3 video backend on the Video Gen page and in FableLoom, or set the REACTOR_API_KEY environment variable instead.',
+            missing: 'No reactor.inc key configured — the reactor.inc video backend will be unavailable.',
+          },
+        ].map(({ id, label, input, setInput, placeholder, envLabel, hint, missing }) => {
+          const row = credentialRows[id];
+          return (
+            <div key={id} className="space-y-2 border border-port-border rounded-lg p-3">
+              <div className="text-sm text-gray-300">
+                {label}
+                <span className="block text-xs text-gray-500 mt-0.5">{hint}</span>
+              </div>
+              {row == null ? (
+                <div className="text-xs text-gray-500"><BrailleSpinner text="Checking key status" /></div>
+              ) : row.configured ? (
+                <div className="flex items-center gap-2 text-xs text-port-success">
+                  <Check size={14} />
+                  <span>
+                    Key configured
+                    {row.source === 'env' && ` (from ${envLabel} environment variable)`}
+                    {row.source === 'settings' && ' (stored privately on this install)'}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-port-warning">
+                  <AlertTriangle size={14} />
+                  <span>{missing}</span>
+                </div>
+              )}
+              <div className="flex flex-col sm:flex-row gap-2 items-end">
+                <FormField label={row?.source === 'settings' ? 'Replace stored key' : 'Paste a key'} labelClassName="block text-xs font-medium text-gray-400 mb-1" className="flex-1 w-full">
+                  <input
+                    id={`${id}-api-key`}
+                    type="password"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveVideoCredential(id, input, setInput); }}
+                    disabled={videoCredentialBusy !== null}
+                    placeholder={placeholder}
+                    autoComplete="off"
+                    className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                  />
+                </FormField>
+                <button
+                  type="button"
+                  onClick={() => handleSaveVideoCredential(id, input, setInput)}
+                  disabled={videoCredentialBusy !== null || !input.trim()}
+                  className="whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-port-accent text-white text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]"
+                >
+                  {videoCredentialBusy === `${id}-saving` ? <BrailleSpinner /> : <Save size={14} />}
+                  Save key
+                </button>
+              </div>
+              {row?.source === 'settings' && (
+                <button
+                  type="button"
+                  onClick={() => handleClearVideoCredential(id)}
+                  disabled={videoCredentialBusy !== null}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
+                >
+                  {videoCredentialBusy === `${id}-clearing` ? <BrailleSpinner /> : <Trash2 size={12} />}
+                  Clear stored key
+                </button>
+              )}
+            </div>
+          );
+        })}
         <div className="space-y-3">
           {RENDER_TARGET_OPTIONS.map(({ id, label, video }) => {
             const entry = renderDefaults[id] || {};

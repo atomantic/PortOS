@@ -13,6 +13,8 @@ vi.mock('../../services/api', () => ({
   getToolsList: vi.fn(),
   saveHfToken: vi.fn(),
   clearHfToken: vi.fn(),
+  getCredentialInventory: vi.fn(),
+  saveCredential: vi.fn(),
   listAgyImageModels: vi.fn(),
   listImageModels: vi.fn(),
 }));
@@ -37,7 +39,7 @@ vi.mock('../../hooks/useMediaJobSse', () => ({
 
 import {
   getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus,
-  getVideoGenModelContext, generateImage,
+  getVideoGenModelContext, generateImage, getCredentialInventory,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -74,6 +76,12 @@ beforeEach(() => {
     defaultModel: 'fastmetal_5b_qad',
   });
   useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
+  getCredentialInventory.mockResolvedValue({
+    headline: '', credentials: [
+      { id: 'fal', label: 'fal.ai', configured: false, source: 'none', editable: true },
+      { id: 'reactor', label: 'reactor.inc', configured: false, source: 'none', editable: true },
+    ],
+  });
   updateSettings.mockResolvedValue({});
   listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
   listImageModels.mockResolvedValue([
@@ -378,8 +386,10 @@ describe('ImageGenTab grouped tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
     const patch = updateSettings.mock.calls[0][0];
+    // fal/reactor keys are no longer part of this save body (#8997) — they
+    // move through the write-only credential setter instead.
     expect(patch.videoGen).toEqual({
-      mode: 'local', defaultModelId: 'ltx23_distilled_q4', displaySleep: false, fal: {}, reactor: {},
+      mode: 'local', defaultModelId: 'ltx23_distilled_q4', displaySleep: false,
     });
   });
 });
