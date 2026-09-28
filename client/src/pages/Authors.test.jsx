@@ -156,8 +156,8 @@ describe('Authors headshot generation', () => {
 
     expect(pickerProps.open).toBe(true);
     expect(pickerProps.allowUpload).toBe(true);
-    // The page's own product cap still applies, rather than the wider wire limit.
-    expect(pickerProps.maxBytes).toBe(12 * 1024 * 1024);
+    // Headshots use the same uncapped file upload as the rest of the gallery.
+    expect(pickerProps.maxBytes).toBeUndefined();
 
     // An uploaded image comes back through the same onSelect as a gallery pick.
     act(() => pickerProps.onSelect({ filename: 'up.png', previewUrl: '/data/images/up.png' }));
