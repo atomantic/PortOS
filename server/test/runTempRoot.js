@@ -77,13 +77,7 @@ const VITEST_INTERNAL_SCRATCH_DIR = /^[A-Za-z0-9_-]{21}$/;
 //     first place. No longer allowlisted below; a recurrence is a real,
 //     unknown leak again.
 
-// A leak this file is NOT the right place to fix: `server/services/
-// mediaJobQueue/index.test.js` is a different work area, out of scope for
-// #9032 — seen leaking on a Windows CI shard. Tracked in #9046. Remove
-// this entry once #9046 lands.
-const KNOWN_PENDING_LEAKS = new Set([
-  'mediaJobQueue-test-',
-]);
+const KNOWN_PENDING_LEAKS = new Set();
 
 /**
  * Groups a leaked entry's basename by its mkdtemp call site as closely as a

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { sweepStrayTempRoots } from '../../lib/mockPathsDataRoot.js';
 
 // The queue persists to data/media-jobs.json. Steer it at a temp dir so each
 // test gets a clean slate without scribbling over the real data dir.
@@ -219,6 +220,13 @@ afterEach(async () => {
   if (tempDataDir && existsSync(tempDataDir)) {
     rmSync(tempDataDir, { recursive: true, force: true });
   }
+});
+
+// Late work (a debounced persist, a still-terminating child on Windows) can
+// recreate or pin a per-test temp dir after afterEach removed it (#9046) —
+// see sweepStrayTempRoots's doc.
+afterAll(async () => {
+  await sweepStrayTempRoots('mediaJobQueue-test-');
 });
 
 describe('mediaJobQueue', () => {
