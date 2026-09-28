@@ -25,6 +25,11 @@ const defaultReadPercent = (frame) => frame.percent;
  * - `onErrorFrame(frame, context)` → return true to suppress the error toast.
  * - `onKickoffError(err, startArg)` → return true to suppress the kickoff toast.
  * - `onKickoffSuccess(jobId, startArg)` — fires when the kickoff resolves.
+ *
+ * `attach(jobId, context)` adopts a job some OTHER request already started
+ * (e.g. a workflow step whose response carried the jobId) into the idle slot,
+ * so it gets the same progress, terminal and cancel handling. Returns false
+ * when the slot is busy.
  */
 export default function useSseJobSlot({
   startRequest,
@@ -120,6 +125,15 @@ export default function useSseJobSlot({
       });
   };
 
+  const attach = (jobId, context) => {
+    if (!jobId || !mounted.current || slotRef.current) return false;
+    const slot = { jobId, context: context ?? null };
+    slotRef.current = slot;
+    setJob(slot);
+    setProgress({ percent: 0, stage: null });
+    return true;
+  };
+
   const cancel = () => {
     if (!mounted.current || !job?.jobId) return;
     cancelRequest(job.jobId, { silent: true }).catch(() => {});
@@ -133,6 +147,7 @@ export default function useSseJobSlot({
     stage: progress.stage,
     context: job?.context ?? null,
     start,
+    attach,
     cancel,
   };
 }

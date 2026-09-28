@@ -32,6 +32,7 @@ import {
   musicVideoExcerptRequestSchema,
   musicVideoExcerptNoteSchema,
   musicVideoExcerptNoteUpdateSchema,
+  musicVideoRevisionStartSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -68,6 +69,7 @@ import { analyzeAudioFile, analyzeAudioFileManual, buildManualAnalysisFromCached
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';
+import { startRevision, resumeRevision, cancelRevision } from '../services/musicVideo/revisionService.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { parseLyricCues } from '../services/musicVideo/timedText.js';
 import {
@@ -369,6 +371,26 @@ router.patch('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, r
 
 router.delete('/:id/excerpt/:excerptId/notes/:noteId', asyncHandler(async (req, res) => {
   res.json(await deleteReviewNote(req.params.id, req.params.excerptId, req.params.noteId));
+}));
+
+// --- Selective section revision (#8987) ---
+// Reject the flagged sections of a reviewed draft (their selected takes clear)
+// while every other section keeps its selection. Resume continues from the
+// persisted checkpoint: sections still without a take come back as
+// `needsGeneration` for the board to generate; once all hold one, the draft
+// window re-renders. A section holding a take is never asked to generate again,
+// so a render retry never re-submits paid generation.
+router.post('/:id/excerpt/:excerptId/revisions', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoRevisionStartSchema, req.body || {});
+  res.status(201).json(await startRevision(req.params.id, req.params.excerptId, input));
+}));
+
+router.post('/:id/revisions/:revisionId/resume', asyncHandler(async (req, res) => {
+  res.json(await resumeRevision(req.params.id, req.params.revisionId));
+}));
+
+router.post('/:id/revisions/:revisionId/cancel', asyncHandler(async (req, res) => {
+  res.json(await cancelRevision(req.params.id, req.params.revisionId));
 }));
 
 // --- Director scene board ---

@@ -53,7 +53,7 @@ function findExcerpt(project, excerptId) {
  * project; the render job fills in `filename`/`contactSheetFilename` (or
  * `error`) once the encode finishes.
  */
-export function startExcerptOnProject(project, { startSec, endSec }, now = new Date().toISOString()) {
+export function startExcerptOnProject(project, { startSec, endSec, sections = null, partialFilename = null }, now = new Date().toISOString()) {
   if (!(startSec >= 0) || !(endSec > startSec) || endSec > MAX_EXCERPT_SEC) {
     throw excerptError(422, 'INVALID_EXCERPT_RANGE', 'endSec must be greater than startSec, and both within range');
   }
@@ -66,6 +66,13 @@ export function startExcerptOnProject(project, { startSec, endSec }, now = new D
     jobId: id,
     filename: null,
     contactSheetFilename: null,
+    // #8987: the output file an in-flight encode is writing, so boot recovery
+    // can delete a partial file a restart left behind (cleared on every
+    // terminal patch).
+    partialFilename,
+    // #8987: the sections the draft cuts, in ABSOLUTE song time — what a
+    // flagged note maps onto when the director asks for a selective revision.
+    sections: Array.isArray(sections) ? sections : null,
     error: null,
     notes: [],
     createdAt: now,

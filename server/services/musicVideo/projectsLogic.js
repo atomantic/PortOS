@@ -201,6 +201,16 @@ export function cloneProjectRecord(source, {
       sourceScenesFingerprint: scenesFingerprint(source.scenes || []),
       cloneScenesFingerprint: scenesFingerprint(scenes),
     }) : null,
+    // #8987 — a draft's section map follows the scenes to their new ids, so a
+    // clone can still revise from the review notes it carried over (#8986).
+    ...(Array.isArray(source.excerpts) ? {
+      excerpts: source.excerpts.map((excerpt) => (Array.isArray(excerpt?.sections)
+        ? { ...excerpt, sections: excerpt.sections.map((s) => ({ ...s, sceneId: sceneIdMap.get(s.sceneId) ?? s.sceneId })) }
+        : excerpt)),
+    } : {}),
+    // A revision is in-progress work against the SOURCE's takes; the clone
+    // starts with none (its carried-over notes can open a fresh one).
+    revisions: [],
     renderHistoryId: null,
     deleted: false,
     deletedAt: null,

@@ -77,6 +77,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   addMusicVideoExcerptNote: vi.fn(),
   updateMusicVideoExcerptNote: vi.fn(),
   deleteMusicVideoExcerptNote: vi.fn(),
+  startMusicVideoRevision: vi.fn(),
+  resumeMusicVideoRevision: vi.fn(),
+  cancelMusicVideoRevision: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
@@ -160,6 +163,7 @@ import {
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
+  startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -454,6 +458,75 @@ describe('MusicVideo draft excerpt render (#8986)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
     await waitFor(() => expect(deleteMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1', { silent: true }));
     await waitFor(() => expect(screen.queryByLabelText(/Play excerpt/i)).not.toBeInTheDocument());
+  });
+});
+
+describe('MusicVideo selective section revision (#8987)', () => {
+  // A reviewed draft: s1 approved, s2 flagged (song time 10 + 7 = 17s).
+  const REVIEWED = {
+    ...PROJECT_WITH_CLIP,
+    scenes: [
+      { sceneId: 's1', order: 0, prompt: 'a', referenceImageId: 'img1', videoHistoryId: 'h1' },
+      { sceneId: 's2', order: 1, prompt: 'b', referenceImageId: 'img2', videoHistoryId: 'h2' },
+    ],
+    excerpts: [{
+      id: 'mve-1', startSec: 10, endSec: 20, status: 'complete', filename: 'excerpt-1.mp4', contactSheetFilename: null, error: null,
+      sections: [{ sceneId: 's1', layer: 'footage', startSec: 10, endSec: 15 }, { sceneId: 's2', layer: 'footage', startSec: 15, endSec: 20 }],
+      notes: [{ id: 'mvn-1', atSec: 7, note: 'the jump cut stutters', verdict: 'flagged' }],
+    }],
+  };
+  const revisionOf = (status = 'open') => ({
+    id: 'mvr-1', excerptId: 'mve-1', startSec: 10, endSec: 20, status, renderExcerptId: null, renderAttempts: 0, error: null,
+    sections: [
+      { sceneId: 's1', layer: 'footage', kind: 'video', verdict: 'approved', rejectedAssetId: null, keptAssetId: 'h1', noteIds: [] },
+      { sceneId: 's2', layer: 'footage', kind: 'video', verdict: 'rejected', rejectedAssetId: 'h2', keptAssetId: null, noteIds: ['mvn-1'] },
+    ],
+  });
+  const withRevision = (s2Clip, status) => ({
+    ...REVIEWED,
+    scenes: [REVIEWED.scenes[0], { ...REVIEWED.scenes[1], videoHistoryId: s2Clip }],
+    revisions: [revisionOf(status)],
+  });
+
+  it('revising a flagged draft generates only the rejected section', async () => {
+    const opened = withRevision(null);
+    startMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], skippedSceneIds: [] });
+    resumeMusicVideoRevision.mockResolvedValue({ project: opened, revision: opened.revisions[0], needsGeneration: [{ sceneId: 's2', kind: 'video' }], generating: [], render: null });
+    generateVideo.mockResolvedValue({ jobId: 'video-job-s2' });
+    await openProject(REVIEWED);
+
+    fireEvent.click(await findEnabledByRole('button', { name: /Revise flagged/i }));
+    await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
+    expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2' });
+    const panel = screen.getByLabelText('Section revision');
+    expect(within(panel).getByText('Kept')).toBeInTheDocument();
+  });
+
+  it('resuming once every revised section has a take re-renders the draft without any paid generation', async () => {
+    const ready = withRevision('h2-new');
+    resumeMusicVideoRevision.mockResolvedValue({
+      project: { ...ready, revisions: [{ ...ready.revisions[0], status: 'rendering', renderExcerptId: 'mve-2' }] },
+      revision: { ...ready.revisions[0], status: 'rendering' }, needsGeneration: [], generating: [], render: { jobId: 'mve-2', excerptId: 'mve-2' },
+    });
+    await openProject(ready);
+
+    fireEvent.click(await findEnabledByRole('button', { name: /Render revised draft/i }));
+    await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
+    await screen.findByText(/Rendering excerpt/);
+    expect(generateVideo).not.toHaveBeenCalled();
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it('cancels an open revision', async () => {
+    const open = withRevision(null);
+    cancelMusicVideoRevision.mockResolvedValue({ project: { ...open, revisions: [{ ...open.revisions[0], status: 'canceled' }] }, revision: { ...open.revisions[0], status: 'canceled' } });
+    await openProject(open);
+    fireEvent.click(await findEnabledByRole('button', { name: /Cancel revision/i }));
+    await waitFor(() => expect(cancelMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
+    await screen.findByText(/Revision — Cancelled/);
+    expect(generateVideo).not.toHaveBeenCalled();
   });
 });
 
