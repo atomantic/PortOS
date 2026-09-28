@@ -34,6 +34,14 @@ const loops = vi.hoisted(() => ({
 }));
 vi.mock('../services/loops.js', () => loops);
 
+const github = vi.hoisted(() => ({
+  updateRepoFlags: vi.fn(),
+  setRepoArchived: vi.fn(),
+  setSecret: vi.fn(),
+  syncSecretToRepos: vi.fn(),
+}));
+vi.mock('../services/github.js', () => github);
+
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
@@ -50,6 +58,7 @@ import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services
 import featureAgentsRoutes from './featureAgents.js';
 import loopsRoutes from './loops.js';
 import { createPortOSProviderRoutes } from './providers.js';
+import githubRoutes from './github.js';
 
 // Stand-ins for the two policy-store handlers: the gate, not the store, is
 // under test, and a handler that never runs is the proof nothing was written.
@@ -72,6 +81,7 @@ const buildGatedApp = (remoteAddress) => {
   app.use('/api/feature-agents', featureAgentsRoutes);
   app.use('/api/loops', loopsRoutes);
   app.use('/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } }));
+  app.use('/api/github', githubRoutes);
   app.put('/api/settings', settingsWrite);
   app.put('/api/cos/config', cosConfigWrite);
   app.post('/api/voice/studio/setup', mediaHostAction);
@@ -105,6 +115,11 @@ const REFUSED_WRITES = [
   ['post', '/api/providers/runtimes/install?runtime=codex', {}],
   ['post', '/api/voice/studio/setup', {}],
   ['post', '/api/apps/example-app/launch-videos/publish', {}],
+  ['put', '/api/github/repos/example.com%2Fexample', { flags: ['archived'] }],
+  ['post', '/api/github/repos/example.com%2Fexample/archive', {}],
+  ['post', '/api/github/repos/example.com%2Fexample/unarchive', {}],
+  ['put', '/api/github/secrets/EXAMPLE_SECRET', { value: 'secret-value' }],
+  ['post', '/api/github/secrets/EXAMPLE_SECRET/sync', {}],
   ['put', '/api/settings', { harnesses: { claude: { enabled: true } } }],
   ['put', '/api/cos/config', { avatarStyle: 'svg', maxConcurrentAgents: 9 }],
 ];
@@ -116,6 +131,10 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     featureAgents.stopFeatureAgent.mockResolvedValue({ id: 'agent-1', status: 'stopped' });
     loops.triggerLoop.mockResolvedValue({ id: 'loop-1' });
     loops.stopLoop.mockResolvedValue({ id: 'loop-1', status: 'stopped' });
+    github.updateRepoFlags.mockResolvedValue({ archived: false });
+    github.setRepoArchived.mockResolvedValue({ archived: true });
+    github.setSecret.mockResolvedValue({ success: true });
+    github.syncSecretToRepos.mockResolvedValue({ synced: true });
   });
 
   it('refuses a remote password-free caller, direct or proxied, before anything runs or is written', async () => {
@@ -130,6 +149,10 @@ describe('host-control gate on agent, loop, provider and policy writes (#8721)',
     expect(loops.triggerLoop).not.toHaveBeenCalled();
     expect(installer.getProviderRuntimeStatus).not.toHaveBeenCalled();
     expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+    expect(github.updateRepoFlags).not.toHaveBeenCalled();
+    expect(github.setRepoArchived).not.toHaveBeenCalled();
+    expect(github.setSecret).not.toHaveBeenCalled();
+    expect(github.syncSecretToRepos).not.toHaveBeenCalled();
     expect(settingsWrite).not.toHaveBeenCalled();
     expect(cosConfigWrite).not.toHaveBeenCalled();
     expect(mediaHostAction).not.toHaveBeenCalled();

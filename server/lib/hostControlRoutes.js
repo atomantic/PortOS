@@ -77,7 +77,12 @@
  * `*name` (the rest of the path). Matching is case-insensitive and ignores one
  * trailing slash, exactly as Express routing does, so a request cannot reach a
  * listed handler by a spelling this list does not match.
- */
+ *
+ * GitHub routes (#9013): `POST /api/github/repos/sync` is left open — it runs
+ * a read-only `gh repo list`, caching the result locally the same as every
+ * other read-only GET route. Mutable routes (`PUT` flags/secrets, `POST`
+ * archive/unarchive, `POST` secret sync) execute `gh` with the user's GitHub
+ * account and change external state; they require operator authority.
 
 import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
@@ -271,6 +276,14 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Eidoverse: clone and install a caller-named repo, or repoint it.
   'POST /api/settings/features/eidoverse/install',
   'PUT /api/settings/features/eidoverse/source',
+
+  // GitHub actions (#9013): mutating routes run `gh` with the user's GitHub
+  // account and change external state. Syncing repos is read-only.
+  'PUT /api/github/repos/:fullName',
+  'POST /api/github/repos/:fullName/archive',
+  'POST /api/github/repos/:fullName/unarchive',
+  'PUT /api/github/secrets/:name',
+  'POST /api/github/secrets/:name/sync',
 
   // Self-update (#8742): runs git + npm and restarts the process, or `gh repo
   // sync` against the fork. `check` and `ignore`/DELETE-`ignore` only read or
