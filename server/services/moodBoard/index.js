@@ -95,13 +95,60 @@ export async function deleteBoard(id) {
 // Pinned/added remote image URLs are downloaded first so the item is born local
 // (falls back to the URL when the host is unreachable — localizeBoardMedia can
 // retry later).
+import { localImageFilename, assetBasename } from '../../lib/localImageFilename.js';
+
+// Auto-populate item.caption from gallery sidecar / video history prompt when
+// no caption was explicitly supplied.
+async function resolveGalleryItemCaption(input) {
+  if (!input || (input.type !== 'image' && input.type !== 'video')) return input;
+  if (typeof input.caption === 'string' && input.caption.trim()) return input;
+
+  try {
+    if (input.type === 'image') {
+      let filename = null;
+      if (typeof input.mediaKey === 'string' && input.mediaKey.startsWith('image:')) {
+        filename = assetBasename(input.mediaKey.slice('image:'.length));
+      }
+      if (!filename && input.imageUrl) {
+        filename = localImageFilename(input.imageUrl);
+      }
+      if (filename) {
+        const { readImageSidecar } = await import('../imageGen/local.js');
+        const { metadata } = await readImageSidecar(filename).catch(() => ({}));
+        const prompt = typeof metadata?.prompt === 'string' ? metadata.prompt.trim() : '';
+        if (prompt && prompt !== '(no prompt)') {
+          return { ...input, caption: prompt };
+        }
+      }
+    } else if (input.type === 'video') {
+      let ref = null;
+      if (typeof input.mediaKey === 'string' && input.mediaKey.startsWith('video:')) {
+        ref = input.mediaKey.slice('video:'.length);
+      }
+      if (ref) {
+        const { loadHistory } = await import('../videoGen/history.js');
+        const history = await loadHistory().catch(() => []);
+        const entry = (history || []).find((row) => row && (row.id === ref || row.filename === ref || row.thumbnail === ref));
+        const prompt = typeof entry?.prompt === 'string' ? entry.prompt.trim() : '';
+        if (prompt && prompt !== '(no prompt)') {
+          return { ...input, caption: prompt };
+        }
+      }
+    }
+  } catch (_err) {
+    // Silently fall back to input if lookup fails
+  }
+  return input;
+}
+
 async function withLocalImage(input) {
   if (!input || (input.type !== 'image' && input.type !== 'video')) return input;
   return input.imageUrl ? { ...input, imageUrl: await localizeImageUrl(input.imageUrl) } : input;
 }
 
 export async function addBoardItem(id, itemInput) {
-  const item = await store.addBoardItem(id, await withLocalImage(itemInput));
+  const resolved = await resolveGalleryItemCaption(itemInput);
+  const item = await store.addBoardItem(id, await withLocalImage(resolved));
   emitRecordUpdated('moodBoard', id);
   return item;
 }

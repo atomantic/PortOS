@@ -19,17 +19,20 @@ const REASON_MAX = 1200;
 
 function analyzedItems(board) {
   const items = Array.isArray(board?.items) ? board.items : [];
-  return items.filter((it) => it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim());
+  return items.filter((it) => (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
+    || (typeof it?.caption === 'string' && it.caption.trim()));
 }
 
-// Analyses first so the context budget spends itself on decomposed prompts
-// before captions and notes. The stored board order is not rewritten.
+// Analyses/captions first so the context budget spends itself on decomposed prompts
+// and item captions before notes. The stored board order is not rewritten.
 function withAnalysesFirst(board) {
   const items = Array.isArray(board?.items) ? board.items : [];
   const analyzed = [];
   const rest = [];
   for (const it of items) {
-    if (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim()) analyzed.push(it);
+    const hasPrompt = (it?.analysis && typeof it.analysis.prompt === 'string' && it.analysis.prompt.trim())
+      || (typeof it?.caption === 'string' && it.caption.trim());
+    if (hasPrompt) analyzed.push(it);
     else rest.push(it);
   }
   return { ...board, items: [...analyzed, ...rest] };
@@ -43,7 +46,7 @@ function buildCompositeStylePrompt({ context, analyzedItemCount }) {
   const payload = JSON.stringify({ board: context, analyzedItemCount });
   return `You are a senior prompt engineer. Compose ONE ready-to-render still-image prompt that captures the shared visual style of a mood board.
 
-The board's items have already been decomposed: each "analyzedPrompt" is a render prompt reverse-engineered from that pin. Treat those prompts as the source of truth. Captions and notes are supporting context only. Find the through-line — medium, mark-making, palette, light, texture, lens, composition, mood — and write a single prompt for a canonical reference image of that style. The image is a poster for the board itself: an editorial style reference a viewer would recognize as this board's look, not a collage that restates every item's subject, and not a description of one pin.
+The board's items have already been decomposed: each "analyzedPrompt" or "caption" is a render prompt reverse-engineered or carried by that pin. Treat those prompts and captions as the source of truth. Captions and notes are supporting context only. Find the through-line — medium, mark-making, palette, light, texture, lens, composition, mood — and write a single prompt for a canonical reference image of that style. The image is a poster for the board itself: an editorial style reference a viewer would recognize as this board's look, not a collage that restates every item's subject, and not a description of one pin.
 
 Do not invent named characters, brands, logos, or copyrighted-artist attribution that the analyses do not already state.
 
@@ -68,16 +71,16 @@ export async function composeBoardPrompt({ board, providerId, model } = {}) {
   const analyzed = analyzedItems(board);
   if (!analyzed.length) {
     throw new ServerError(
-      'Analyze at least one item with prompt-from-media before composing a board style. The composite is built from those prompts.',
+      'Analyze at least one item with prompt-from-media or add captions before composing a board style. The composite is built from those prompts.',
       { status: 400, code: 'NOTHING_ANALYZED' },
     );
   }
 
   const context = collectBoardStyleContext(withAnalysesFirst(board));
-  const fed = context.items.filter((it) => it.analyzedPrompt).length;
+  const fed = context.items.filter((it) => it.analyzedPrompt || it.caption).length;
   if (!fed) {
     throw new ServerError(
-      'The item analyses did not fit the style context. Remove some notes and compose again.',
+      'The item analyses or captions did not fit the style context. Remove some notes and compose again.',
       { status: 400, code: 'NOTHING_ANALYZED' },
     );
   }

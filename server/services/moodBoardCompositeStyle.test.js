@@ -33,11 +33,21 @@ beforeEach(() => {
 });
 
 describe('composeBoardPrompt', () => {
-  it('refuses a board whose items have not been decomposed into prompts', async () => {
+  it('refuses a board whose items carry neither an analysis nor a caption', async () => {
     await expect(composeBoardPrompt({
-      board: { id: 'mb-1', name: 'Empty', items: [{ id: 'i1', type: 'image', mediaKey: 'image:a.png', caption: 'a caption' }] },
+      board: { id: 'mb-1', name: 'Empty', items: [{ id: 'i1', type: 'image', mediaKey: 'image:a.png', caption: null }] },
     })).rejects.toMatchObject({ code: 'NOTHING_ANALYZED', status: 400 });
     expect(promptRunner.runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('accepts items with prompt captions for style composition', async () => {
+    const style = await composeBoardPrompt({
+      board: { id: 'mb-1', name: 'Captioned', items: [{ id: 'i1', type: 'image', mediaKey: 'image:a.png', caption: 'granular ink wash' }] },
+      providerId: 'ollama',
+      model: 'qwen',
+    });
+    expect(style.prompt.startsWith('a weathered foundry')).toBe(true);
+    expect(style.analyzedItemCount).toBe(1);
   });
 
   it('distills stored item prompts into one still-image style and strips an imperative prefix', async () => {

@@ -50,6 +50,23 @@ describe('PinToMoodBoardMenu', () => {
     await waitFor(() => expect(row).toHaveAttribute('aria-pressed', 'true'));
   });
 
+  it('includes prompt as caption when pinning gallery media with a prompt', async () => {
+    api.listMoodBoards.mockResolvedValue([{ id: 'b1', name: 'Refs', items: [] }]);
+    api.addMoodBoardItem.mockResolvedValue({ id: 'mbi-1', type: 'image', mediaKey: 'image:hero.png' });
+
+    render(<PinToMoodBoardMenu item={{ ...imageItem, prompt: 'A cinematic cyberpunk alleyway' }} />);
+    fireEvent.click(screen.getByTitle('Pin to mood board'));
+
+    const row = await screen.findByRole('button', { name: /Refs/ });
+    await act(async () => { fireEvent.click(row); });
+
+    expect(api.addMoodBoardItem).toHaveBeenCalledWith(
+      'b1',
+      { type: 'image', mediaKey: 'image:hero.png', imageUrl: '/data/images/hero.png', caption: 'A cinematic cyberpunk alleyway' },
+      { silent: true },
+    );
+  });
+
   it('unpins when the board already contains the media-key (toggle)', async () => {
     api.listMoodBoards.mockResolvedValue([
       { id: 'b1', name: 'Refs', items: [{ id: 'mbi-9', type: 'image', mediaKey: 'image:hero.png' }] },
