@@ -10,6 +10,7 @@ import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
   isAuthEnabled: vi.fn().mockResolvedValue(false),
+  verifyRequestSession: vi.fn(async req => req.headers.authorization === 'Bearer example-session'),
 }));
 
 // The stored settings the executable-path gate compares a body against.
@@ -43,6 +44,17 @@ const github = vi.hoisted(() => ({
 }));
 vi.mock('../services/github.js', () => github);
 
+const tools = vi.hoisted(() => ({
+  getTools: vi.fn(),
+  getEnabledTools: vi.fn(),
+  getToolsSummaryForPrompt: vi.fn(),
+  getTool: vi.fn(),
+  registerTool: vi.fn(),
+  updateTool: vi.fn(),
+  deleteTool: vi.fn(),
+}));
+vi.mock('../services/tools.js', () => tools);
+
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
@@ -60,6 +72,8 @@ import featureAgentsRoutes from './featureAgents.js';
 import loopsRoutes from './loops.js';
 import { createPortOSProviderRoutes } from './providers.js';
 import githubRoutes from './github.js';
+import toolsRoutes from './tools.js';
+import { isAuthEnabled } from '../services/auth.js';
 
 // Stand-ins for the two policy-store handlers: the gate, not the store, is
 // under test, and a handler that never runs is the proof nothing was written.
@@ -83,6 +97,7 @@ const buildGatedApp = (remoteAddress) => {
   app.use('/api/loops', loopsRoutes);
   app.use('/api/providers', createPortOSProviderRoutes({ services: { providers: {} }, routes: { providers: Router() } }));
   app.use('/api/github', githubRoutes);
+  app.use('/api/tools', toolsRoutes);
   app.put('/api/settings', settingsWrite);
   app.put('/api/cos/config', cosConfigWrite);
   app.post('/api/voice/studio/setup', mediaHostAction);
@@ -242,5 +257,61 @@ describe('host-control gate on settings keys that pick an executable (#8751)', (
     const statuses = [];
     for (const body of CHANGES) statuses.push((await call(local(), ['put', '/api/settings', body])).status);
     expect(statuses).toEqual(CHANGES.map(() => 200));
+  });
+});
+
+describe('tool registry prompt writes require operator authority (#9014)', () => {
+  const tool = { id: 'example-tool', name: 'Example tool', category: 'cli', enabled: true };
+  const writes = [
+    ['post', '/api/tools', { ...tool, promptHints: 'Use the example tool' }],
+    ['put', '/api/tools/example-tool', { description: 'Updated example tool' }],
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isAuthEnabled.mockResolvedValue(false);
+    tools.registerTool.mockResolvedValue(tool);
+    tools.updateTool.mockResolvedValue({ ...tool, description: 'Updated example tool' });
+    tools.getTools.mockResolvedValue([tool]);
+    tools.getEnabledTools.mockResolvedValue([tool]);
+    tools.getToolsSummaryForPrompt.mockResolvedValue('Example tool');
+    tools.getTool.mockResolvedValue(tool);
+  });
+
+  it('refuses direct and proxied remote writes before the registry can change', async () => {
+    for (const write of writes) {
+      expectRefused(await call(remote(), write));
+      expectRefused(await call(local(), write, '192.0.2.10'));
+    }
+    expect(tools.registerTool).not.toHaveBeenCalled();
+    expect(tools.updateTool).not.toHaveBeenCalled();
+  });
+
+  it('keeps all reads and deletion available to remote password-free callers', async () => {
+    for (const path of ['/api/tools', '/api/tools/enabled', '/api/tools/summary', '/api/tools/example-tool']) {
+      expect((await request(remote()).get(path)).status).toBe(200);
+    }
+    expect((await request(remote()).delete('/api/tools/example-tool')).status).toBe(204);
+    expect(tools.deleteTool).toHaveBeenCalledWith('example-tool');
+  });
+
+  it('preserves local writes and remote operator-session writes', async () => {
+    for (const [enabled, app, proxyClient] of [
+      [false, local(), undefined],
+      [false, local(), '::ffff:127.0.0.1'],
+      [true, remote(), undefined],
+    ]) {
+      isAuthEnabled.mockResolvedValue(enabled);
+      for (const [method, path, body] of writes) {
+        const pending = request(app)[method](path);
+        if (enabled) pending.set('Authorization', 'Bearer example-session');
+        if (proxyClient) pending.set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyClient);
+        expect((await pending.send(body)).status).toBe(method === 'post' ? 201 : 200);
+      }
+    }
+    expect(tools.registerTool).toHaveBeenCalledTimes(3);
+    expect(tools.updateTool).toHaveBeenCalledTimes(3);
+    expect(tools.updateTool).toHaveBeenCalledWith('example-tool', { description: 'Updated example tool' });
+    isAuthEnabled.mockResolvedValue(false);
   });
 });
