@@ -500,7 +500,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
     await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2' });
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1' });
     const panel = screen.getByLabelText('Section revision');
     expect(within(panel).getByText('Kept')).toBeInTheDocument();
   });

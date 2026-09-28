@@ -193,7 +193,19 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       if (performance) await unlink(performance.audioFilePath).catch(() => {});
       await cleanupStaged();
     },
-    () => enqueueJob({ kind: 'video', params }),
+    async () => {
+      // Selective section revision (#9011): checked as the LAST step before the
+      // actual queue write (staging, FableLoom compilation and the performance-
+      // shot audio slice above can all take real time), so a revision closed
+      // mid-submission is caught as close to the cancel/kickoff race as this
+      // request can get. A no-op when the tag carries no revisionId; deferred
+      // import since only this rare path needs the revision service's closure.
+      if (body.musicVideo?.revisionId) {
+        const { assertRevisionOpen } = await import('../musicVideo/revisionService.js');
+        await assertRevisionOpen(body.musicVideo.projectId, body.musicVideo.revisionId);
+      }
+      return enqueueJob({ kind: 'video', params });
+    },
   );
 
   const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];

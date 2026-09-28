@@ -461,6 +461,13 @@ const generateBodySchema = z.object({
     z.object({
       projectId: z.string().min(1).max(200),
       sceneId: z.string().min(1).max(200),
+      // Selective section revision (#9011): names the open revision this
+      // generation was submitted for. The completion hook rides it along
+      // unused; the submit service refuses the kickoff (409 REVISION_CLOSED)
+      // when this revision has since closed, and cancel/state matching in
+      // revisionGenerationJobs/revisionSectionStates uses it for an exact
+      // match instead of the pre-#9011 scene+time heuristic.
+      revisionId: z.string().min(1).max(200).optional(),
     }).optional(),
   ),
   // FableLoom scene-video render. The media-job completion hook files the

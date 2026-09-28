@@ -60,6 +60,16 @@ const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`,
 
 // Event-only pointer: job id in `target`, never the generation prompt (#5596).
 async function enqueueLoggedImage(req, job) {
+  // Selective section revision (#9011): checked as the LAST step before the
+  // actual queue write — every branch that reaches this helper has already
+  // done its own staging/provider resolution, so this is as close to the
+  // cancel/kickoff race as a request can get. A no-op when the tag carries no
+  // revisionId; deferred import since only this rare path needs the revision
+  // service's closure.
+  if (job.params?.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(job.params.musicVideo.projectId, job.params.musicVideo.revisionId);
+  }
   const queued = await enqueueJob(job);
   try {
     const happenedAt = new Date().toISOString();
@@ -220,6 +230,9 @@ const generateSchema = z.object({
   musicVideo: z.object({
     projectId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    // Selective section revision (#9011): see the matching comment on the
+    // video route's musicVideo schema (server/routes/videoGen.js).
+    revisionId: z.string().min(1).max(200).optional(),
   }).optional(),
   // Durable catalog attach (#1359). When present, the mediaJobQueue completion
   // hook (catalogImageAttachHook) files the finished render onto this catalog
@@ -540,6 +553,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
     });
   }
+
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
   // call with no local single-flight constraint to absorb. `settings` and
@@ -654,6 +668,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || params.modelId || 'dev',
     }));
+  }
+  // Selective section revision (#9011): the external/agy lane renders
+  // synchronously and never touches enqueueLoggedImage's guard above, so it
+  // gets its own check right before the (paid) render call. A no-op when the
+  // tag carries no revisionId.
+  if (params.musicVideo?.revisionId) {
+    const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
+    await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId);
   }
   const result = await imageGen.generateImage(params);
   if (params.fableLoom && result?.filename) {

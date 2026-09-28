@@ -382,6 +382,13 @@ export const musicVideoRevisionStartSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500).optional(),
 }).strict();
 
+// A generation kickoff that failed before reaching the queue (#9011) — names
+// the rejected section whose claim should clear so the next resume can hand
+// it out again immediately instead of waiting out GENERATION_CLAIM_LEASE_MS.
+export const musicVideoRevisionReleaseSchema = z.object({
+  sceneId: z.string().min(1).max(200),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),

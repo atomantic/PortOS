@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   prepareRemoteMediaJob: vi.fn(),
   prepareVideoGenParams: vi.fn(),
   preparePerformanceShot: vi.fn(async () => null),
+  assertRevisionOpen: vi.fn(async () => {}),
 }));
 
 vi.mock('../../lib/federatedMediaRequest.js', () => ({
@@ -29,6 +30,7 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
+vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
 vi.mock('./prepareParams.js', async (importOriginal) => ({
   ...await importOriginal(),
   cleanupMultipartTemp: mocks.cleanupMultipartTemp,
@@ -226,6 +228,29 @@ describe('submitVideoGenJob', () => {
       await expect(submitVideoGenJob({ prompt: 'singer', backend: 'grok', musicVideo }, {})).rejects.toBe(refusal);
       expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses a kickoff tagged for a revision that has since closed, as the last step before the queue write (#9011)', async () => {
+      const closed = Object.assign(new Error('This revision is already canceled'), { status: 409, code: 'REVISION_CLOSED' });
+      mocks.assertRevisionOpen.mockRejectedValueOnce(closed);
+      const tagged = { ...musicVideo, revisionId: 'mvr-1' };
+      const prepared = falPrepared();
+      mocks.prepareVideoGenParams.mockResolvedValue(prepared);
+
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo: tagged }, {})).rejects.toBe(closed);
+      expect(mocks.assertRevisionOpen).toHaveBeenCalledWith('mv-1', 'mvr-1');
+      // The check runs immediately before enqueueJob — after staging, not before
+      // it — so the race window against a concurrent cancel is as small as this
+      // request can make it; a refusal there still rolls back what was staged.
+      expect(mocks.prepareVideoGenParams).toHaveBeenCalledTimes(1);
+      expect(prepared.cleanupStaged).toHaveBeenCalledTimes(1);
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('does not check for a revision when the tag carries no revisionId', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', musicVideo }, {});
+      expect(mocks.assertRevisionOpen).not.toHaveBeenCalled();
     });
   });
 });
