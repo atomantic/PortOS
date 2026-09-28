@@ -16,12 +16,17 @@ vi.mock('./jobStore.js', () => ({
   readCodeAnimationHtml: async () => state.html,
 }));
 
-const { buildExportShim, startCodeAnimationExport } = await import('./export.js');
+const { startCodeAnimationExport } = await import('./export.js');
 
 const JOB_ID = '11111111-2222-4333-8444-555555555555';
 
-// Run the shim, then a page script, in a minimal browser-like realm.
-function runPage(pageScript, { song } = {}) {
+// Stage an export of `pageScript` and run the staged document's scripts, in
+// order, in a minimal browser-like realm.
+async function runPage(pageScript, { song = null } = {}) {
+  state.html = `<html><head></head><body><script>${pageScript}</script></body></html>`;
+  await startCodeAnimationExport(JOB_ID, { enqueueJob: async () => ({ jobId: 'm' }), beatGrid: async () => song });
+  const staged = await readFile(join(state.dataRoot, 'code-animation-exports', JOB_ID, 'index.html'), 'utf8');
+  const scripts = [...staged.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
   const listeners = {};
   const canvas = { width: 1920, height: 1080, setAttribute: vi.fn() };
   const ctx = {
@@ -37,15 +42,22 @@ function runPage(pageScript, { song } = {}) {
   ctx.window = ctx;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(buildExportShim({ song }), ctx);
-  vm.runInContext(pageScript, ctx);
+  for (const script of scripts) vm.runInContext(script, ctx);
   listeners.load?.();
   return { ctx, canvas };
 }
 
-describe('buildExportShim', () => {
+describe('export shim', () => {
+  beforeEach(async () => {
+    state.dataRoot = await mkdtemp(join(tmpdir(), 'code-animation-shim-'));
+    state.job = { id: JOB_ID, status: 'completed', frame: { width: 1920, height: 1080, fps: 30, durationSeconds: 20 }, audioUrl: '/data/music/a.mp3' };
+  });
+  afterEach(async () => {
+    await rm(state.dataRoot, { recursive: true, force: true });
+  });
+
   it('stops the page clock and exposes renderFrame as a clamped composition seek', async () => {
-    const { ctx, canvas } = runPage(`
+    const { ctx, canvas } = await runPage(`
       window.drawn = [];
       window.ticks = 0;
       window.ANIMATION_META = { duration: 180, fps: 30, width: 1920, height: 1080 };
@@ -61,8 +73,8 @@ describe('buildExportShim', () => {
     expect(ctx.drawn).toEqual([2.5]);
   });
 
-  it('names the reason when the animation has no renderFrame', () => {
-    const { ctx } = runPage('window.ANIMATION_META = { duration: 5, fps: 30, width: 1920, height: 1080 };');
+  it('names the reason when the animation has no renderFrame', async () => {
+    const { ctx } = await runPage('window.ANIMATION_META = { duration: 5, fps: 30, width: 1920, height: 1080 };');
     expect(() => ctx.portosComposition).toThrow(/does not define window\.renderFrame\(t\).*Record \(real-time\)/);
   });
 });
