@@ -19,6 +19,8 @@
  *     annotate execution, never start it; task reorder/refresh/enhance,
  *     templates and challenge — records and LLM text only. Goal-fidelity false-
  *     positive reports are gated because they can queue investigation agents.
+ *   - tools (#9014): create/edit set trusted agent prompt text; DELETE only
+ *     removes a tool from that context and stays open.
  *   - standardize/analyze — reads the repo; `apply` and `backup` are gated.
  *   - feature agents and loops: pause/stop/delete — they reduce execution.
  *   - code-review/cli-outcome — records a reviewer verdict; nothing runs.
@@ -183,6 +185,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/jobs/:id/trigger',
   // A job skill template IS the prompt a scheduled job's agent runs (#8762).
   'PUT /api/prompts/skills/jobs/:name',
+  // Tool descriptions and hints become trusted context for CoS agents (#9014).
+  'POST /api/tools',
+  'PUT /api/tools/:id',
   'PUT /api/cos/schedule/task/:taskType',
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/maintenance-runs',
