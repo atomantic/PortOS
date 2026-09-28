@@ -144,7 +144,10 @@ describe.skipIf(!chrome || !ffmpeg)('HTML composition with real Chrome and ffmpe
     expect(await readFile(join(runRoot, 'video.mp4'))).toEqual(await readFile(join(PATHS.videos, result.filename)));
     expect((await readdir(PATHS.videos)).some(name => name.includes(retryId))).toBe(false);
     expect(await loadHistory()).not.toContainEqual(expect.objectContaining({ id: retryId }));
-  }, 60000);
+    // One capture (180 frames) plus a refused, capture-free retry: about a
+    // third of the three-format test's budget below, which renders three
+    // 180-frame targets from one timeline.
+  }, 40000);
 
   it('renders one launch timeline in three declared formats, each reframed by layout, as one take', async () => {
     // layout() recolors the frame per orientation, so each poster proves the

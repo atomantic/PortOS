@@ -114,6 +114,11 @@ export default defineConfig({
         'services/sprites/atlas.test.js',
         'services/sprites/walk.test.js',
         'lib/gitTestRepo.test.js',
+        // Real-Chrome-and-ffmpeg gated renders (#9033): each spends minutes on
+        // headless capture/encode even when only their pure-logic cases would
+        // otherwise run under --fast.
+        'services/htmlComposition/index.test.js',
+        'services/musicVideo/compositionRender.test.js',
       ] : []),
     ],
     coverage: {

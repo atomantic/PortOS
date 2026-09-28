@@ -1,5 +1,5 @@
 import { dirname, join, resolve } from 'node:path';
-import { mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -43,6 +43,17 @@ function renderTargets(contract, jobId, formats) {
     const [width, height] = size.split('x').map(Number);
     return { id: `${jobId}-${format}`, format, contract: { ...contract, width, height } };
   });
+}
+
+// Every name deliver() will exclusively create for this run, single- and
+// multi-format alike, in the same write order as the delivery loop below.
+function deliveryNames(targets) {
+  const names = ['plan.md', 'storyboard.json', 'caption.txt'];
+  for (const target of targets) {
+    const suffix = target.format ? `-${target.format}` : '';
+    names.push(`video${suffix}.mp4`, `poster${suffix}.jpg`);
+  }
+  return names;
 }
 
 export async function renderComposition({ jobId, ...input }) {
@@ -118,6 +129,22 @@ export async function renderComposition({ jobId, ...input }) {
         ...(target.format ? { format: target.format } : {}), ...frameOf(target.contract) } };
     } else {
       const targets = renderTargets(contract, jobId, formats);
+      if (deliveryRoot) {
+        // Refuse before spending a capture. deliver()'s exclusive open('wx')
+        // below is still the race-safe authority; this only saves the retry
+        // a full render before it learns what that open would have told it.
+        // lstat also refuses a symlinked delivery name.
+        for (const name of deliveryNames(targets)) {
+          const target = join(deliveryRoot, name);
+          let exists = true;
+          try { await lstat(target); } catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
+          if (exists) {
+            const error = new Error(`EEXIST: file already exists, open '${target}'`);
+            error.code = 'EEXIST';
+            throw error;
+          }
+        }
+      }
       if (synthesizeMusic) {
         // One score for every format: they share the timeline and duration.
         const wav = await synthesizeCompositionMusic(page, contract.durationSec);
