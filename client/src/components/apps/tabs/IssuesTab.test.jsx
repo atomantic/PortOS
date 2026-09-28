@@ -594,6 +594,54 @@ describe('IssuesTab', () => {
     expect(chip).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('hides needs-input issues by default and lists them once the chip is toggled on', async () => {
+    api.getAppIssues.mockResolvedValue(okPayload([
+      ISSUE,
+      {
+        ...ISSUE,
+        number: 43,
+        title: 'Needs feedback from user',
+        labels: [{ name: 'needs-input', color: '#d4c5f9', description: '' }],
+      },
+    ]));
+    await renderTab();
+
+    await screen.findByText('Crash on save');
+    expect(screen.queryByText('Needs feedback from user')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 2 open')).toBeInTheDocument();
+
+    const chip = screen.getByRole('button', { name: 'needs-input (1)' });
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(chip);
+    expect(await screen.findByText('Needs feedback from user')).toBeInTheDocument();
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('hides needs-decision issues by default and lists them once the chip is toggled on', async () => {
+    api.getAppIssues.mockResolvedValue(okPayload([
+      ISSUE,
+      {
+        ...ISSUE,
+        number: 43,
+        title: 'Needs architecture decision',
+        labels: [{ name: 'needs-decision', color: '#d4c5f9', description: '' }],
+      },
+    ]));
+    await renderTab();
+
+    await screen.findByText('Crash on save');
+    expect(screen.queryByText('Needs architecture decision')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 2 open')).toBeInTheDocument();
+
+    const chip = screen.getByRole('button', { name: 'needs-decision (1)' });
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(chip);
+    expect(await screen.findByText('Needs architecture decision')).toBeInTheDocument();
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('tints the issue card background for in-progress and blocked labels, blocked winning when both are present', async () => {
     // The tint is theme-aware (port-warning / port-error tokens), so the row
     // stays readable in every theme instead of shipping a hardcoded color.
