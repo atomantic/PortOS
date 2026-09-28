@@ -325,7 +325,9 @@ export default function MusicVideo() {
 
   // Autopilot kickoff: analyze the song when it has no beat map yet, then plan
   // every shot against the brief (the planner reads automation.guidance).
-  const autopilotBlockedReason = autopilotBlocker(selected);
+  const autopilotBlockedReason = creativeSetupPending
+    ? 'Save or cancel the creative setup before starting autopilot.'
+    : autopilotBlocker(selected);
   const handleKickoff = () => {
     if (!selected || analyzing || planning || autopilotBlockedReason) return;
     (selected.audioAnalysis ? Promise.resolve(selected) : handleAnalyze())

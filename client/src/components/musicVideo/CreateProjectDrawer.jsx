@@ -84,6 +84,7 @@ export default function CreateProjectDrawer({ open, onClose, form, onFormChange,
           )}
         </div>
         <MoodBoardReferenceStrip
+          storageKey="mv-create"
           value={form.moodBoardId}
           onChange={(id) => onFormChange({ moodBoardId: id || '' })}
           newBoardName={form.name.trim()}

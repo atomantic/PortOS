@@ -43,6 +43,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
             </div>
           ))}
         </div>
+        <p className="text-xs text-port-text-muted mt-1">Analyze &amp; plan uses the guidance today. The tool list and budget are saved now and will limit the automated generation run.</p>
       </fieldset>
       <div>
         <label htmlFor={`${idPrefix}-guidance`} className="block text-xs text-port-text-muted mb-1">Guidance</label>
