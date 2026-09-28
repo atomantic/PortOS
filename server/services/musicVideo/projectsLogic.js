@@ -213,6 +213,9 @@ export function cloneProjectRecord(source, {
     // starts with none (its carried-over notes can open a fresh one).
     revisions: [],
     renderHistoryId: null,
+    // #9010: the source's in-flight render mark is not the clone's.
+    renderingOn: null,
+    renderPartialFilename: null,
     deleted: false,
     deletedAt: null,
   };

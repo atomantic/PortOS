@@ -72,17 +72,21 @@ vi.mock('./compositionRender.js', () => ({
   removeCompositionScratch: vi.fn(async () => {}),
   sweepCompositionScratch: vi.fn(async () => {}),
 }));
-vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})) }));
+vi.mock('./projects.js', () => ({ getProject: vi.fn(), listProjects: vi.fn(async () => []), updateProject: vi.fn(async () => ({})), mutateProjectRecord: vi.fn() }));
+vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
 
 import { renderMusicVideo, getRenderJobStatus, cancelRender } from './render.js';
 import { removeCompositionScratch } from './compositionRender.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject, listProjects, updateProject } from './projects.js';
+import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
+import { unlink } from 'fs/promises';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
+// A terminal project write: the status plus the cleared in-flight mark (#9010).
+const settled = (status, extra = {}) => ({ status, ...extra, renderingOn: null, renderPartialFilename: null });
 
 const prime = (projectId) => {
   getProject.mockResolvedValue({
@@ -113,7 +117,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
     expect(getRenderJobStatus(jobId).status).toBe('error');
     expect(getRenderJobStatus(jobId).error).toMatch(/Failed to spawn ffmpeg/);
-    expect(updateProject).toHaveBeenCalledWith(pid, { status: 'failed' });
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
 
     // Slot released — a re-render reaches spawn again instead of 409ing.
     const again = await renderMusicVideo(pid);
@@ -133,7 +137,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
     // NOT finalized: status stays running, project not marked failed, slot held.
     expect(getRenderJobStatus(jobId).status).toBe('running');
-    expect(updateProject).not.toHaveBeenCalledWith(pid, { status: 'failed' });
+    expect(updateProject).not.toHaveBeenCalledWith(pid, settled('failed'));
     await expect(renderMusicVideo(pid)).rejects.toMatchObject({
       status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId },
     });
@@ -142,7 +146,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     proc.emit('close', 1, null);
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('error');
-    expect(updateProject).toHaveBeenCalledWith(pid, { status: 'failed' });
+    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed'));
 
     // Slot now released.
     const again = await renderMusicVideo(pid);
@@ -212,14 +216,27 @@ describe('status write failures are logged, not swallowed (#8430)', () => {
   });
 });
 
+// Recovery re-checks each record under the store's write lock (#9010): back
+// both the list and the transform with one in-memory store.
+const seedStore = (records) => {
+  const store = new Map(records.map((r) => [r.id, r]));
+  listProjects.mockResolvedValueOnce(records);
+  mutateProjectRecord.mockImplementation(async (id, transform) => {
+    const outcome = transform(store.get(id));
+    store.set(id, outcome.project);
+    return outcome;
+  });
+  return store;
+};
+const statusOf = (store) => Object.fromEntries([...store].map(([id, p]) => [id, p.status]));
+
 describe('recoverStuckMusicVideoRenders (#8430)', () => {
   it('demotes stale renders by history, skips live jobs and other statuses', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     prime('live-1');
     await renderMusicVideo('live-1');
-    updateProject.mockClear();
-    listProjects.mockResolvedValueOnce([
+    const store = seedStore([
       { id: 'done-1', status: 'rendering', renderHistoryId: 'hist-1' },
       { id: 'fresh-1', status: 'rendering' },
       { id: 'live-1', status: 'rendering' },
@@ -228,11 +245,66 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject.mock.calls).toEqual([
-      ['done-1', { status: 'complete' }],
-      ['fresh-1', { status: 'ready' }],
-    ]);
+    expect(statusOf(store)).toEqual({ 'done-1': 'complete', 'fresh-1': 'ready', 'live-1': 'rendering', 'idle-1': 'ready' });
+    expect(store.get('fresh-1')).toMatchObject({ renderingOn: null, renderPartialFilename: null });
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 2/2'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('stamps the in-flight mark with this instance and the output file it is writing (#9010)', async () => {
+    prime('stamp-1');
+    await renderMusicVideo('stamp-1');
+    expect(updateProject).toHaveBeenCalledWith('stamp-1', {
+      status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
+    });
+  });
+
+  it('leaves a peer-owned render alone, and deletes only its own partial output (#9010)', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    loadHistory.mockResolvedValue([{ id: 'r-done', filename: 'music-video-finished.mp4' }]);
+    const store = seedStore([
+      { id: 'mine-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-mine.mp4' },
+      { id: 'peer-1', status: 'rendering', renderingOn: 'inst-peer', renderPartialFilename: 'music-video-peer.mp4' },
+      { id: 'legacy-1', status: 'rendering' },
+      // Its history append landed but the 'complete' write did not: the file is a finished render.
+      { id: 'late-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-finished.mp4' },
+      // Listed as ours, but a peer sync handed the mark over before the demotion write.
+      { id: 'moved-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-moved.mp4' },
+    ]);
+    const listed = mutateProjectRecord.getMockImplementation();
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      if (id === 'moved-1') store.set(id, { ...store.get(id), renderingOn: 'inst-peer' });
+      return listed(id, transform);
+    });
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(statusOf(store)).toEqual({ 'mine-1': 'ready', 'peer-1': 'rendering', 'legacy-1': 'ready', 'late-1': 'ready', 'moved-1': 'rendering' });
+    expect(store.get('peer-1')).toMatchObject({ renderingOn: 'inst-peer', renderPartialFilename: 'music-video-peer.mp4' });
+    expect(unlink.mock.calls).toEqual([['/data/videos/music-video-mine.mp4']]);
+    expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 3/4'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('excerpt recovery demotes its own and legacy drafts but not a peer\'s (#9010)', async () => {
+    const { recoverStuckMusicVideoExcerpts } = await import('./excerptRender.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const draft = (id, extra) => ({ id, status: 'rendering', jobId: id, partialFilename: `${id}.mp4`, notes: [], ...extra });
+    const store = seedStore([{
+      id: 'mv-x', status: 'complete', revisions: [],
+      excerpts: [draft('mve-mine', { renderingOn: 'inst-self' }), draft('mve-peer', { renderingOn: 'inst-peer' }), draft('mve-legacy')],
+    }]);
+
+    await recoverStuckMusicVideoExcerpts();
+
+    const byId = Object.fromEntries(store.get('mv-x').excerpts.map((e) => [e.id, e]));
+    expect(byId['mve-mine']).toMatchObject({ status: 'error', renderingOn: null, partialFilename: null });
+    expect(byId['mve-legacy']).toMatchObject({ status: 'error', partialFilename: null });
+    expect(byId['mve-peer']).toMatchObject({ status: 'rendering', renderingOn: 'inst-peer', partialFilename: 'mve-peer.mp4' });
+    const unlinked = unlink.mock.calls.map(([p]) => p);
+    expect(unlinked).toContain('/data/videos/mve-mine.mp4');
+    expect(unlinked).not.toContain('/data/videos/mve-peer.mp4');
     logSpy.mockRestore();
   });
 
@@ -240,22 +312,26 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     listProjects.mockRejectedValueOnce(new Error('DB unavailable'));
     await expect(recoverStuckMusicVideoRenders()).rejects.toThrow('DB unavailable');
-    expect(updateProject).not.toHaveBeenCalled();
+    expect(mutateProjectRecord).not.toHaveBeenCalled();
   });
 
   it('logs a failed demotion and keeps recovering the rest', async () => {
     const { recoverStuckMusicVideoRenders } = await import('./render.js');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    listProjects.mockResolvedValueOnce([
+    const store = seedStore([
       { id: 'bad-1', status: 'rendering' },
       { id: 'good-1', status: 'rendering' },
     ]);
-    updateProject.mockRejectedValueOnce(new Error('write failed'));
+    const listed = mutateProjectRecord.getMockImplementation();
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      if (id === 'bad-1') throw new Error('write failed');
+      return listed(id, transform);
+    });
 
     await recoverStuckMusicVideoRenders();
 
-    expect(updateProject).toHaveBeenCalledWith('good-1', { status: 'ready' });
+    expect(statusOf(store)).toEqual({ 'bad-1': 'rendering', 'good-1': 'ready' });
     expect(errorSpy.mock.calls.some(([line]) => line.includes('bad-1'))).toBe(true);
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 1/2'))).toBe(true);
     errorSpy.mockRestore();
@@ -365,7 +441,7 @@ describe('composed render lifecycle (#8984)', () => {
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('canceled');
     expect(h.procs).toHaveLength(0);
-    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', { status: 'complete' });
+    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', settled('complete'));
     expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
     expect(cancelRender(jobId)).toBe(false);
     const again = await renderMusicVideo('cancel-1');

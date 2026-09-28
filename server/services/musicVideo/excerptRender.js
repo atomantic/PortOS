@@ -29,11 +29,12 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { getProject, listProjects, mutateProjectRecord } from './projects.js';
-import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes } from './render.js';
+import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, isLocalRenderMark } from './render.js';
 import { renderableCues, sectionCardCues } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
+import { ensureInstanceId } from '../instanceIdentity.js';
 
 const jobs = new Map();
 const projectExcerptRenders = new Map();
@@ -114,9 +115,12 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     // Persist the new `status: 'rendering'` excerpt against the FRESHEST
     // record (not the `project` snapshot planning read above), so a
     // concurrent note/edit on another excerpt can't be clobbered. The output
-    // filename is recorded now so a restart mid-encode can delete the partial.
+    // filename is recorded now so a restart mid-encode can delete the partial,
+    // and the mark names this instance so a synced peer's boot recovery can't
+    // demote it (#9010).
+    const renderingOn = await ensureInstanceId();
     const { excerpt } = await mutateProjectRecord(projectId, (current) => {
-      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename });
+      const started = startExcerptOnProject(current, { startSec, endSec: endClamped, sections, partialFilename: filename, renderingOn });
       return revisionId ? { ...started, project: markRevisionRendering(started.project, revisionId, started.excerpt.id) } : started;
     });
     const excerptId = excerpt.id;
@@ -149,7 +153,7 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
     const finalize = async (patch) => {
       projectExcerptRenders.delete(projectId);
       const persisted = await mutateProjectRecord(projectId, (current) => ({
-        project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null }), excerptId, patch),
+        project: settleRevisionRender(applyExcerptPatch(current, excerptId, { ...patch, partialFilename: null, renderingOn: null }), excerptId, patch),
       }))
         .then(() => true, (err) => {
           console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
@@ -308,28 +312,39 @@ export async function startExcerptRender(projectId, { startSec, endSec }, { revi
 // on that project). #8987: delete the partial video/contact sheet the
 // interrupted encode was writing, and return a selective revision that was
 // rendering that draft to `open` — resumable from its checkpoint, re-rendering
-// without generating anything its sections already hold.
+// without generating anything its sections already hold. #9010: an excerpt
+// whose `renderingOn` names another instance is that peer's live render, not
+// ours to demote.
 export async function recoverStuckMusicVideoExcerpts() {
+  const instanceId = await ensureInstanceId();
   const projects = await listProjects();
   let recovered = 0;
   for (const project of projects) {
-    const stuck = (project.excerpts || []).filter((e) => e.status === 'rendering' && !projectExcerptRenders.has(project.id));
+    const stuck = (project.excerpts || []).filter((e) => e.status === 'rendering'
+      && !projectExcerptRenders.has(project.id) && isLocalRenderMark(e.renderingOn, instanceId));
     if (stuck.length === 0) continue;
-    const ok = await mutateProjectRecord(project.id, (current) => {
+    // Re-checked against the FRESHEST record under the write lock: a peer sync
+    // landing after the list may have finished the draft or handed it to
+    // another instance, and only a still-stuck local mark is demoted.
+    const stuckIds = new Set(stuck.map((e) => e.id));
+    const outcome = await mutateProjectRecord(project.id, (current) => {
+      const demoted = (current.excerpts || []).filter((e) => stuckIds.has(e.id) && e.status === 'rendering'
+        && !projectExcerptRenders.has(project.id) && isLocalRenderMark(e.renderingOn, instanceId));
       let next = current;
-      for (const excerpt of stuck) {
-        next = { ...next, excerpts: (next.excerpts || []).map((e) => (e.id === excerpt.id ? { ...e, status: 'error', error: 'Interrupted by a server restart', jobId: null, partialFilename: null } : e)) };
+      for (const excerpt of demoted) {
+        next = { ...next, excerpts: (next.excerpts || []).map((e) => (e.id === excerpt.id ? { ...e, status: 'error', error: 'Interrupted by a server restart', jobId: null, partialFilename: null, renderingOn: null } : e)) };
         next = settleRevisionRender(next, excerpt.id, { status: 'error', error: 'The draft render was interrupted by a server restart' });
       }
-      return { project: next };
-    }).then(() => { recovered += stuck.length; return true; }, (err) => {
+      return { project: next, demoted };
+    }).catch((err) => {
       console.error(`❌ Music Video excerpt recovery: project ${project.id.slice(0, 8)} write failed: ${err.message}`);
-      return false;
+      return null;
     });
     // Only once the record no longer points at them, so a failed write can't
     // leave a record naming a file that is gone.
-    if (!ok) continue;
-    for (const { partialFilename } of stuck) {
+    if (!outcome) continue;
+    recovered += outcome.demoted.length;
+    for (const { partialFilename } of outcome.demoted) {
       if (typeof partialFilename !== 'string' || !partialFilename) continue;
       await unlinkUnder(PATHS.videos, partialFilename);
       await unlinkUnder(PATHS.videoThumbnails, sheetFilenameFor(partialFilename));

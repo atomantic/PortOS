@@ -40,6 +40,8 @@ const h = vi.hoisted(() => {
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: h.spawn }));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
+// The draft render stamps this install's id on its in-flight mark (#9010).
+vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-test') }));
 vi.mock('../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn((proc) => proc.emit('close', null, 'SIGTERM')) }));
 vi.mock('../services/htmlComposition/encode.js', () => ({ encodeFileContactSheetAtTimes: vi.fn(async () => {}) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
