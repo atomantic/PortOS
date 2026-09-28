@@ -225,10 +225,19 @@ export const musicVideoLyricsAlignSchema = z.object({
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
 
 // A composed render lays timed text cues over the cut footage; `concat` (and a
-// project with no manifest) is the plain clip concatenation. Cue text is the
-// director's own, rendered as an independent typography layer — never baked
-// into generated pixels. See services/musicVideo/composition.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed'];
+// project with no manifest) is the plain clip concatenation. `code` draws the
+// whole song as a seekable composition instead of generated footage. Cue text
+// is the director's own, rendered as an independent typography layer — never
+// baked into generated pixels. See services/musicVideo/composition.js.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code'];
+// One section function. Reject the calls that would make a frame depend on
+// the clock, entropy, or the network — the preview and the render both seek.
+export const MUSIC_VIDEO_CODE_SOURCE_MAX = 20000;
+export const MUSIC_VIDEO_CODE_NONDETERMINISTIC = /\bMath\s*\.\s*random\b|\bDate\s*\.\s*now\b|\bperformance\s*\.\s*now\b|\bgetRandomValues\b|\bfetch\s*\(|\bXMLHttpRequest\b|\bWebSocket\b|\bimport\s*\(|\brequire\s*\(/;
+export const isDeterministicCodeSource = (source) => typeof source === 'string'
+  && source.length > 0
+  && source.length <= MUSIC_VIDEO_CODE_SOURCE_MAX
+  && !MUSIC_VIDEO_CODE_NONDETERMINISTIC.test(source);
 export const MUSIC_VIDEO_TYPOGRAPHY_TEMPLATES = ['fade', 'rise', 'typewriter', 'pop'];
 export const MUSIC_VIDEO_TYPOGRAPHY_PLACEMENTS = ['upper', 'center', 'lower'];
 export const MUSIC_VIDEO_TYPOGRAPHY_EMPHASES = ['subtitle', 'hero'];
@@ -244,6 +253,24 @@ export const musicVideoTextCueSchema = z.object({
   emphasis: z.enum(MUSIC_VIDEO_TYPOGRAPHY_EMPHASES).optional(),
 }).strict();
 
+const codeSectionSource = z.string().min(1).max(MUSIC_VIDEO_CODE_SOURCE_MAX)
+  .refine(isDeterministicCodeSource, 'section source must be deterministic and offline');
+
+export const musicVideoCodeVideoSchema = z.object({
+  providerId: z.string().max(120).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+  generatedAt: z.string().max(40).nullable().optional(),
+  sections: z.array(z.object({
+    id: z.string().min(1).max(64),
+    source: codeSectionSource,
+  }).strict()).max(40),
+}).strict();
+
+export const musicVideoCodeGenerateSchema = z.object({
+  providerId: z.string().max(120).optional(),
+  model: z.string().max(200).optional(),
+}).strict();
+
 // Replaced whole by a project PATCH (the editor sends the full manifest).
 export const musicVideoCompositionSchema = z.object({
   version: z.literal(1).optional(),
@@ -254,6 +281,7 @@ export const musicVideoCompositionSchema = z.object({
     font: z.enum(MUSIC_VIDEO_TYPOGRAPHY_FONTS).optional(),
   }).strict().optional(),
   posterSec: timedSec,
+  codeVideo: musicVideoCodeVideoSchema.nullable().optional(),
 }).strict();
 
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;

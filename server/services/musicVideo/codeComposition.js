@@ -1,0 +1,63 @@
+/**
+ * The HTML page a code-rendered music video seeks (#9076).
+ *
+ * song.json is written beside index.html for the composition renderer and for
+ * a later full-song mux (#9075). The same document is inlined: seek() has to
+ * be ready at load, and the preview sandbox cannot fetch. Section code runs
+ * after fetch/WebSocket are disabled.
+ */
+
+import { codeRuntimeSource } from './codeFrame.js';
+
+const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
+
+/**
+ * @param {object} input
+ * @param {object} input.song song.json document
+ * @param {object} input.palette
+ * @param {Record<string, string>} input.sources section id → render function source
+ * @param {number} [input.windowStart] song time the page's t=0 corresponds to
+ * @param {number} [input.windowDuration] page duration; defaults to the song
+ */
+export function buildCodeDocument({ song, palette, sources, width, height, fps, windowStart = 0, windowDuration = null }) {
+  const durationSec = windowDuration == null ? song.durationSec : windowDuration;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+html, body { margin: 0; background: #000; overflow: hidden; }
+canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; background: #000; }
+</style></head><body><canvas id="portos-code" width="${width}" height="${height}"></canvas><script>
+${codeRuntimeSource()}
+const SONG = ${scriptJson(song)};
+const PALETTE = ${scriptJson(palette)};
+const SOURCES = ${scriptJson(sources || {})};
+const WINDOW_START = ${Number(windowStart) || 0};
+function disableNetwork() {
+  const block = (name) => function blocked() { throw new Error(name + ' is disabled in a code-rendered video'); };
+  for (const key of ['fetch', 'WebSocket', 'XMLHttpRequest', 'EventSource']) {
+    try { Object.defineProperty(globalThis, key, { configurable: true, value: block(key) }); } catch { /* already sealed */ }
+  }
+}
+disableNetwork();
+const canvas = document.getElementById('portos-code');
+const ctx = canvas.getContext('2d');
+globalThis.portosComposition = {
+  durationSec: ${durationSec},
+  fps: ${fps},
+  width: ${width},
+  height: ${height},
+  song: SONG,
+  seek(t) {
+    const time = WINDOW_START + (Number(t) || 0);
+    drawCodeFrame({ ctx, song: SONG, palette: PALETTE, sources: SOURCES, t: time, width: ${width}, height: ${height}, fps: ${fps} });
+  }
+};
+addEventListener('message', (event) => {
+  const data = event.data;
+  if (!data || data.type !== 'mv-code:seek' || !Number.isFinite(data.t)) return;
+  globalThis.portosComposition.seek(data.t);
+});
+globalThis.portosComposition.seek(0);
+try { parent.postMessage({ type: 'mv-code:ready', durationSec: ${durationSec} }, '*'); } catch { /* opened as a file */ }
+</script></body></html>`;
+  return { html, song, durationSec, fps, width, height, windowStart: Number(windowStart) || 0 };
+}
+

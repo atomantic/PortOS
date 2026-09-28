@@ -610,7 +610,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // wins LWW onto the upgraded peer. Gating makes a v5 receiver reject the
   // ahead-version transfer until it upgrades. Records without `words` need no
   // rewrite.
-  musicVideoProjects: 6,
+  // v7 = composition mode `code` (#9076). A v6 peer's normalizeComposition
+  // collapses an unknown mode to `concat` and would last-writer-wins that
+  // loss back, so the gate rejects the ahead transfer. The older peer is
+  // never handed `mode: "code"` (an enum value it cannot store). It keeps
+  // the concat/composed project it already understands.
+  musicVideoProjects: 7,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

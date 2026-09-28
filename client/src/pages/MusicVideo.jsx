@@ -39,7 +39,7 @@ import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
 import MediaPreview from '../components/media/MediaPreview.jsx';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
-import { listTracks } from '../services/apiTracks.js';
+import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
 import BeatTimeline from '../components/musicVideo/BeatTimeline.jsx';
 import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.jsx';
 import AutomationPanel from '../components/musicVideo/AutomationPanel.jsx';
@@ -55,6 +55,8 @@ import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
 import TypographyPanel from '../components/musicVideo/TypographyPanel.jsx';
+import CodeVideoPanel from '../components/musicVideo/CodeVideoPanel.jsx';
+import { compositionDraft } from '../components/musicVideo/compositionDraft.js';
 import VisualSpecPanel from '../components/musicVideo/VisualSpecPanel.jsx';
 import TreatmentPanel from '../components/musicVideo/TreatmentPanel.jsx';
 import HandoffControls from '../components/musicVideo/HandoffControls.jsx';
@@ -727,6 +729,11 @@ export default function MusicVideo() {
             <div className="bg-port-card border border-port-border rounded-lg p-3">
               <ProjectToolbar
                 project={selected}
+                onRenderStyle={(mode) => {
+                  const composition = compositionDraft(selected, { mode });
+                  editProjectLocal({ composition });
+                  saveProjectFields({ composition });
+                }}
                 midi={midi}
                 midiBound={midiTargetsSelected}
                 videoSettings={videoSettings}
@@ -837,6 +844,13 @@ export default function MusicVideo() {
                 onEditLocal={editProjectLocal}
                 onSave={saveProjectFields}
               />
+              {selected.composition?.mode === 'code' && (
+                <CodeVideoPanel
+                  project={selected}
+                  audioUrl={projectAudioFilename(selected) ? trackAudioUrl(projectAudioFilename(selected)) : null}
+                  onProject={replaceProject}
+                />
+              )}
               <AnalysisPanel
                 audioAnalysis={selected.audioAnalysis}
                 scenes={selected.scenes || []}
