@@ -96,6 +96,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 
 vi.mock('../lib/multipart.js', () => ({
+  optionalUpload: () => (_req, _res, next) => next(),
   uploadFields: () => (_req, _res, next) => next(),
 }));
 
