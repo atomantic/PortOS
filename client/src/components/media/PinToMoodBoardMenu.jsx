@@ -81,8 +81,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   // toggle + create-and-pin paths can't drift. Null when there's nothing to pin.
   const pinPayload = useMemo(() => {
     if (!mediaKey && !thumbUrl) return null;
-    const isVideo = mediaKey?.startsWith('video:');
-    const payload = { type: isVideo ? 'video' : 'image' };
+    const payload = { type: 'image' };
     if (mediaKey) payload.mediaKey = mediaKey;
     if (thumbUrl) payload.imageUrl = thumbUrl;
     const promptText = typeof item?.prompt === 'string' && item.prompt !== '(no prompt)' ? item.prompt.trim() : '';
