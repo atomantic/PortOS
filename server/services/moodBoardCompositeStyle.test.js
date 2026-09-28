@@ -11,7 +11,7 @@ vi.mock('./promptRunner.js', async (importActual) => {
 
 const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('./promptRunner.js');
-const { buildCompositeStylePrompt, composeBoardPrompt } = await import('./moodBoardCompositeStyle.js');
+const { composeBoardPrompt } = await import('./moodBoardCompositeStyle.js');
 
 const apiProvider = { id: 'ollama', type: 'api', defaultModel: 'qwen' };
 const composedText = JSON.stringify({
@@ -53,8 +53,8 @@ describe('composeBoardPrompt', () => {
     });
     const sent = promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt;
     expect(sent).toContain('granular ink wash');
+    expect(sent).toContain('analyzedPrompt');
     expect(sent).toContain('Dusty painted sci-fi.');
-    expect(buildCompositeStylePrompt({ context: { items: [] }, analyzedItemCount: 1 })).toContain('analyzedPrompt');
     expect(style.prompt.startsWith('a weathered foundry')).toBe(true);
     expect(style.negativePrompt).toBe('gloss, neon, plastic');
     expect(style.analyzedItemCount).toBe(1);

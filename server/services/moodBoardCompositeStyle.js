@@ -39,7 +39,7 @@ const contentPrompt = (text) => trimTo(text, PROMPT_MAX)
   .replace(/^(?:please\s+)?(?:create|generate|render|make)\s+(?:(?:an?|the)\s+(?:image|picture|poster)\s+(?:of|showing|depicting)\s+)?/i, '')
   .trim();
 
-export function buildCompositeStylePrompt({ context, analyzedItemCount }) {
+function buildCompositeStylePrompt({ context, analyzedItemCount }) {
   const payload = JSON.stringify({ board: context, analyzedItemCount });
   return `You are a senior prompt engineer. Compose ONE ready-to-render still-image prompt that captures the shared visual style of a mood board.
 

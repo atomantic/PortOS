@@ -151,7 +151,7 @@ export function boardItemLocalImage(item) {
 // Stored shape of the board's composite style prompt. Absent optionals become
 // explicit nulls; `composedAt` is stamped when the writer didn't send one.
 // `null` clears the style (the poster render has nothing to pin to).
-export function normalizeBoardStyle(style, now = nowIso()) {
+function normalizeBoardStyle(style, now = nowIso()) {
   if (!style) return null;
   return {
     prompt: style.prompt,

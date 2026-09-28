@@ -9,7 +9,6 @@ import {
   buildBoardRecord,
   applyBoardPatch,
   applyBoardRestore,
-  normalizeBoardStyle,
   addItem,
   updateItem,
   removeItem,
@@ -70,7 +69,19 @@ describe('applyBoardPatch', () => {
     expect(cleared.posterImageRef).toBeNull();
   });
   it('leaves style and poster in place when the patch omits them', () => {
-    const styled = { ...base, style: normalizeBoardStyle({ prompt: 'keep' }, 't1'), posterImageRef: 'poster.png' };
+    const styled = {
+      ...base,
+      style: {
+        prompt: 'keep',
+        negativePrompt: null,
+        rationale: null,
+        analyzedItemCount: 0,
+        providerId: null,
+        model: null,
+        composedAt: 't1',
+      },
+      posterImageRef: 'poster.png',
+    };
     const next = applyBoardPatch(styled, { name: 'B' });
     expect(next.style.prompt).toBe('keep');
     expect(next.posterImageRef).toBe('poster.png');
