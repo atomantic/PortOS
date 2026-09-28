@@ -118,6 +118,16 @@ describe('cloneProjectRecord', () => {
     ]);
   });
 
+  it('starts a clone with no auto-review runs, and adds no field when the source has none', () => {
+    const withRuns = cloneProjectRecord({
+      ...baseProject(),
+      autoReviews: [{ id: 'ar-1', status: 'running', attempts: [{ revisionId: 'rev-1' }] }, { id: 'ar-2', status: 'complete' }],
+    }, { id: 'mv-2', now: '2026-01-02T00:00:00.000Z' });
+    expect(withRuns.autoReviews).toEqual([]);
+    const without = cloneProjectRecord(baseProject(), { id: 'mv-3', now: '2026-01-02T00:00:00.000Z' });
+    expect(without).not.toHaveProperty('autoReviews');
+  });
+
   it('can fork the board without carrying generated media', () => {
     const source = {
       ...baseProject(),
