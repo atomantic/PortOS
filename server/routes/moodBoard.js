@@ -37,6 +37,7 @@ import {
   linkPinterestBoard,
   unlinkPinterestBoard,
   syncPinterestBoard,
+  importPrivatePinterestBoard,
   importXPost,
 } from '../services/moodBoard/index.js';
 
@@ -133,6 +134,14 @@ router.delete('/:id/pinterest', asyncHandler(async (req, res) => {
 // Manual "Sync now" — pull new pins from the linked feed into the board.
 router.post('/:id/pinterest/sync', asyncHandler(async (req, res) => {
   const result = await syncPinterestBoard(req.params.id);
+  res.json(result);
+}));
+
+// One-shot import through the signed-in PortOS CDP browser. No Pinterest
+// credentials are stored and this does not create a background sync.
+router.post('/:id/pinterest/import', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardPinterestLinkSchema, req.body);
+  const result = await importPrivatePinterestBoard(req.params.id, data);
   res.json(result);
 }));
 
