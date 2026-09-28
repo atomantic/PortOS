@@ -23,6 +23,10 @@ const chrome = [process.env.CHROME_PATH, chromium.executablePath(),
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
 ].find(path => path && existsSync(path));
 const ffmpeg = await findFfmpeg();
+// Vitest runs no hooks for a file whose every test is skipped, so on a runner
+// without Chrome or ffmpeg the afterAll below never fires — yet importing
+// compositionRender.js above already minted the lazy root (#9045).
+if (!chrome || !ffmpeg) cleanupTempDataRoots();
 let proc;
 let browser;
 
