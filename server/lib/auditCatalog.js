@@ -475,8 +475,8 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     }),
   },
   // The host the code is developed on. Every lens above reads source or runs
-  // the product; none measures what running the test suite, dev server, or
-  // setup does to the developer's machine — the gap that let test suites leak
+  // the product; none measures what running the test suites or dev server
+  // does to the developer's machine — the gap that let test suites leak
   // tens of thousands of temp directories unnoticed (#9000). Ungated: any
   // repository has a development loop.
   'better-dev-environment': {

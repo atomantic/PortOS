@@ -1665,9 +1665,8 @@ cover, and the probe result.`,
   'better-dev-environment': `[Improvement: {appName}] Development environment audit
 
 Audit what {appName}'s development loop does to the machine it runs on: the test
-suites, dev server, watchers and pre-push checks. The product can
-be correct and every test meaningful while each run quietly leaves something
-behind. On a machine where agents run the suites many times a day, one leaked
+suites, dev server, watchers and pre-push checks. The product can be correct and
+every test meaningful while each run quietly leaves something behind. On a machine where agents run the suites many times a day, one leaked
 directory per run becomes tens of thousands.
 
 Repository: {repoPath}
@@ -1724,8 +1723,7 @@ suite cannot reintroduce it. Fixing the one instance you measured is not enough.
 
 Whether a test's assertions prove anything, and order-dependent tests, belong to
 the test-quality work; documented setup that no longer works to the
-documentation work;
-missing coverage to the test-coverage work; leaks in the running product to
+documentation work; missing coverage to the test-coverage work; leaks in the running product to
 the runtime-safety work; CI and deployment configuration to the infrastructure
 work; dependency versions to the dependency-update work.
 
