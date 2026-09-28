@@ -109,12 +109,14 @@ export function cleanupTempDataRoots() {
  * `server/services/musicVideo/compositionRender.test.js` and
  * `server/routes/musicVideoVocalStem.test.js` are the worked examples.
  *
- * Runs the sweep twice, ~300ms apart: a single pass right after
- * `cleanupTempDataRoots()` can still race a background job that has not
+ * On macOS and Linux, runs the sweep twice, ~300ms apart: a single pass right
+ * after `cleanupTempDataRoots()` can still race a background job that has not
  * started writing yet (observed on CI's slower/more contended runners, not
  * reproduced in ~10 local runs) — the second pass catches what the first
- * one was too early for. `await` this call as the LAST statement of the
- * suite's `afterAll`.
+ * one was too early for. On Windows, where process teardown is slower and
+ * file handles persist longer, runs additional sweeps with longer delays
+ * to accommodate lingering ffprobe/ffmpeg handles (#9045).
+ * `await` this call as the LAST statement of the suite's `afterAll`.
  */
 export async function sweepStrayTempRoots(prefix) {
   const sweepOnce = () => {
@@ -129,9 +131,13 @@ export async function sweepStrayTempRoots(prefix) {
       if (name.startsWith(prefix)) rmSync(join(root, name), { recursive: true, force: true });
     }
   };
+  const isWindows = process.platform === 'win32';
+  const delays = isWindows ? [300, 500, 800] : [300];
   sweepOnce();
-  await new Promise((resolve) => { setTimeout(resolve, 300); });
-  sweepOnce();
+  for (const delayMs of delays) {
+    await new Promise((resolve) => { setTimeout(resolve, delayMs); });
+    sweepOnce();
+  }
 }
 
 /**
