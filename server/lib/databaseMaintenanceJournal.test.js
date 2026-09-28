@@ -72,6 +72,31 @@ describe('persistent database maintenance boundary', () => {
     expect(journal.read()).toEqual(record);
   });
 
+  it('adopts a successor published between recovery owner and worker-status reads', () => {
+    const operation = journal.begin({ source, target });
+    const token = journal.acquireCoordinator(operation.id);
+    const directory = journal.reserveCoordinatorWorker(operation.id, token);
+    writeFileSync(join(directory, 'exit'), '1\n');
+    let ownerReads = 0;
+    let successor;
+    const interleave = path => {
+      if (path.endsWith('cancel-' + operation.id + '.claim') && ++ownerReads === 2) {
+        successor = journal.prepareRecovery(operation.id);
+      } else {
+        fsHook.beforeRead = interleave;
+      }
+    };
+    fsHook.beforeRead = interleave;
+    const recovered = journal.prepareRecovery(operation.id);
+    fsHook.beforeRead = null;
+    expect(successor).toBeTruthy();
+    expect(recovered).toBe(successor);
+    expect(recovered).not.toBe(token);
+    expect(() => journal.reserveCoordinatorWorker(operation.id, recovered)).not.toThrow();
+    expect(journal.prepareRecovery(operation.id)).toBeNull();
+    expect(() => journal.assertAdmission()).toThrow();
+  });
+
   it('fences cancellation and competing coordinators through every durable stage', () => {
     const operation = journal.begin({ source, target });
     const token = journal.acquireCoordinator(operation.id);

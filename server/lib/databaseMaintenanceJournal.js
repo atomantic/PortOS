@@ -272,8 +272,7 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     return directory;
   };
 
-  const coordinatorStatus = (id) => {
-    const owner = readCoordinator(id);
+  const coordinatorStatusForOwner = (id, owner) => {
     if (!owner) return { state: 'unclaimed' };
     const directory = workerDirectory(owner.token);
     try { lstatSync(directory); } catch (err) {
@@ -297,6 +296,8 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (!Number.isSafeInteger(exitCode) || exitCode < -2147483648 || exitCode > 4294967295) throw databaseMaintenanceError();
     return { state: 'exited', exitCode };
   };
+
+  const coordinatorStatus = id => coordinatorStatusForOwner(id, readCoordinator(id));
 
   // The fixed maintenance worker checks both ownership and the supervisor's
   // one-use reservation. This grants no ordinary database/spawn admission.
@@ -656,7 +657,10 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     if (!current || current.id !== id) throw databaseMaintenanceError();
     const owner = readCoordinator(id);
     if (!owner) throw databaseMaintenanceError();
-    const status = coordinatorStatus(id);
+    // Bind the receipt to the owner we read. A concurrent recovery may publish
+    // a successor before this read; its unregistered state must never authorize
+    // launching our stale predecessor token. Its persisted intent is adopted below.
+    const status = coordinatorStatusForOwner(id, owner);
     if (status.state === 'unregistered') return owner.token;
     if (status.state !== 'exited') return null;
     const intentPath = join(activeDir, 'recovery-after-' + owner.token + '.json');
