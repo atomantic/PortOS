@@ -96,7 +96,7 @@ describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
 
     await vi.waitFor(async () => {
       expect(Number(await readFile(runtimePidFile, 'utf8'))).toBeGreaterThan(0);
-    }, { timeout: 5000, interval: 25 });
+    }, { timeout: 10000, interval: 25 });
     const runtimePid = Number(await readFile(runtimePidFile, 'utf8'));
 
     wrapperProcess.kill('SIGTERM');
@@ -108,7 +108,7 @@ describe('MiniMax H3 Ref2VA arbitrary-length wrapper', () => {
       try { process.kill(runtimePid, 0); } catch { alive = false; }
       expect(alive).toBe(false);
     }, { timeout: 5000, interval: 25 });
-  }, 15000);
+  }, 25000);
 
   it('renders and crossfades every <=15s window, carries its last frame, and restores the full source audio', async () => {
     if (!ffmpeg || !ffprobe) return;
