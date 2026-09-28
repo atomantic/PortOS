@@ -105,7 +105,7 @@ export function cancelRender(jobId) {
   // A composed render spends its first phase capturing the typography overlay
   // (no ffmpeg yet); abort that capture instead.
   if (!job.process) {
-    if (!job.overlayAbort || job.overlayAbort.signal.aborted) return false;
+    if (job.status !== 'running' || !job.overlayAbort || job.overlayAbort.signal.aborted) return false;
     job.overlayAbort.abort(new Error('Render cancelled'));
     return true;
   }
@@ -538,6 +538,8 @@ export async function renderMusicVideo(projectId) {
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then((overlays) => {
       signal.throwIfAborted();
+      // Capture is over: from here a cancel kills the encode (job.process).
+      job.overlayAbort = null;
       const composed = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays });
       startEncode(composed.args, 0.5);
     }).catch(async (err) => {

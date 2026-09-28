@@ -388,5 +388,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(generateThumbnail).toHaveBeenCalledWith(expect.any(String), jobId, { atSec: 1 });
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(removeCompositionScratch).toHaveBeenCalledWith(jobId);
+    // Nothing is left to cancel once the render has finished.
+    expect(cancelRender(jobId)).toBe(false);
   });
 });
