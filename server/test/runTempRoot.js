@@ -63,14 +63,26 @@ const KNOWN_THIRD_PARTY_CLI_SCRATCH = new Set(['kilo', 'opencode', 'escape', 'no
 // suites). Remove this entry once #9044 lands.
 //
 // `mv-vocal-stem-route-test-` (server/routes/musicVideoVocalStem.test.js)
-// already uses that same sweepStrayTempRoots() helper, and it reliably
-// closes the leak on macOS and on CI's Linux server-test shards — but NOT
-// on Windows CI, where a still-terminating ffprobe/ffmpeg child evidently
-// holds its file handle past the helper's ~300ms retry window. Tracked in
-// #9045 (make the retry window platform-aware, or find and directly await
-// the still-running background work instead of retrying blind). Remove
-// this entry once #9045 lands.
-const KNOWN_PENDING_LEAKS = new Set(['portos-html-composition-preflight-', 'mv-vocal-stem-route-test-']);
+// and `portos-mv-composition-` (server/services/musicVideo/compositionRender
+// .test.js) both already use that same sweepStrayTempRoots() helper, and it
+// reliably closes the leak on macOS and on CI's Linux server-test shards —
+// but NOT on Windows CI, where a still-terminating ffprobe/ffmpeg child
+// evidently holds its file handle past the helper's ~300ms retry window.
+// Tracked in #9045 (make the retry window platform-aware, or find and
+// directly await the still-running background work instead of retrying
+// blind). Remove these two entries once #9045 lands.
+//
+// `mediaJobQueue-test-` (server/services/mediaJobQueue/index.test.js) is
+// the same "not the right place to fix" case as the htmlComposition entry
+// above — that tree is a different work area, out of scope for #9032 —
+// seen leaking on a Windows CI shard. Tracked in #9046. Remove this entry
+// once #9046 lands.
+const KNOWN_PENDING_LEAKS = new Set([
+  'portos-html-composition-preflight-',
+  'mv-vocal-stem-route-test-',
+  'portos-mv-composition-',
+  'mediaJobQueue-test-',
+]);
 
 /**
  * Groups a leaked entry's basename by its mkdtemp call site as closely as a
