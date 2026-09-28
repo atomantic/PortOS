@@ -214,7 +214,13 @@ export function formatForPrompt(memories, maxTokens = DEFAULT_MEMORY_CONFIG.maxC
     lines.push('');
   }
 
-  return `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock('Memory reference data', lines.join('\n'), maxTokens * 4)}`;
+  const label = 'Memory reference data';
+  // Include the notice, delimiters and possible truncation marker in the same
+  // budget used for retrieval; an oversized preference cannot crowd them out.
+  const overhead = UNTRUSTED_REFERENCE_NOTICE.length + 2
+    + fenceBlock(label, 'x', 1).length - 1 + '\n… [truncated]'.length;
+  const block = fenceBlock(label, lines.join('\n'), Math.max(0, maxTokens * 4 - overhead));
+  return block ? `${UNTRUSTED_REFERENCE_NOTICE}\n\n${block}` : '';
 }
 
 /**

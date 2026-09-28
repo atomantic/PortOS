@@ -90,6 +90,17 @@ describe('prompt store operator authority (#9040)', () => {
     }
     expect(persisted).toHaveLength(writes.length * 2);
   });
+  it('does not overwrite a concurrent operator change when a remote form resends unchanged protected values', async () => {
+    twin.updateSettings.mockImplementationOnce(async data => {
+      // Operator update lands after the route compared the form snapshot.
+      twin.current.includePrivacyContext = true;
+      return Object.assign(twin.current, data);
+    });
+    const response = await call('192.0.2.10', ['put', '/api/digital-twin/settings'],
+      { ...twin.current, maxContextTokens: 5000 });
+    expect(response.status).toBe(200);
+    expect(twin.current).toMatchObject({ includePrivacyContext: true, maxContextTokens: 5000 });
+  });
   it('gates changed twin instruction settings, including the alternate active-persona path', async () => {
     const original = { ...twin.current };
     for (const data of [
