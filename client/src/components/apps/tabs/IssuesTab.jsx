@@ -119,10 +119,11 @@ function parseRunKey(key) {
 
 // `in-progress` is the forge label a `/do:next` claim stamps on an issue it is
 // actively working (server/services/issueReconcile.js#IN_PROGRESS_LABEL), and
-// `blocked` marks work that should not be picked up by default. Those rows
-// aren't useful claim candidates, so the tab hides them until the user toggles
-// the chip back on.
-const DEFAULT_HIDDEN_LABELS = ['blocked', 'in-progress'];
+// `blocked` marks work that should not be picked up by default. `needs-input`
+// and `needs-decision` park issues awaiting human choices. Those rows aren't
+// useful claim candidates, so the tab hides them until the user toggles the
+// chip back on.
+const DEFAULT_HIDDEN_LABELS = ['blocked', 'in-progress', 'needs-decision', 'needs-input'];
 
 // Row background tint for the two claim-state labels. Uses the theme's
 // warning/error tokens (alpha-tinted so every theme keeps its own palette
