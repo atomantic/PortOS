@@ -64,6 +64,12 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/reorder`, {
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
+// Split a shot its backend cannot render in one take on lyric/phrase
+// boundaries (#8977) → { project, scenes }. `backend` omitted = project pin.
+export const splitMusicVideoScene = (id, sceneId, backend, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
+    method: 'POST', body: JSON.stringify(backend ? { backend } : {}), ...options,
+  });
 
 // ---- Scene takes (#8965) ----
 // Every render/import for a scene slot is an immutable take; the scene's

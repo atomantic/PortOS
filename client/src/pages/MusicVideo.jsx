@@ -15,6 +15,7 @@ import {
   addMusicVideoScene,
   updateMusicVideoScene,
   deleteMusicVideoScene,
+  splitMusicVideoScene,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
 } from '../services/apiMusicVideo.js';
@@ -440,6 +441,17 @@ export default function MusicVideo() {
       .catch((err) => toast.error(err?.message || 'Failed to delete scene'));
   };
 
+  // #8977: split a shot its backend cannot render in one take on lyric/phrase
+  // boundaries. `backend` is the lane the card measured against.
+  const handleSplitScene = (sceneId, backend) => {
+    splitMusicVideoScene(selected.id, sceneId, backend, { silent: true })
+      .then(({ project, scenes }) => {
+        replaceProject(project);
+        toast.success(`Split into ${scenes.length} shots`);
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to split scene'));
+  };
+
   const moveScene = (idx, dir) => {
     const scenes = selected.scenes || [];
     const target = idx + dir;
@@ -753,6 +765,7 @@ export default function MusicVideo() {
                   canContinueShot={canContinueShot}
                   onMove={moveScene}
                   onDelete={handleDeleteScene}
+                  onSplit={handleSplitScene}
                   onEditLocal={editSceneLocal}
                   onSave={saveScene}
                   onGenerateFrame={sceneMedia.generateFrame}

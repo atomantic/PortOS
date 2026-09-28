@@ -22,6 +22,9 @@
  *     boundary. Nothing is looped or time-stretched to fill a slot.
  *   - `grokCoverage` — the 6/10-second Grok request that COVERS a cutaway shot
  *     (reusing `nearestGrokDuration`), flagging spans a single clip cannot cover.
+ *   - `shotSplitLimit` / `planShotSplit` — how such an over-long shot is split:
+ *     contiguous pieces within the lane's per-take limit, cut at a pause between
+ *     sung lines, a lyric/phrase boundary or a beat (in that order).
  *
  * Dependency-free (only grokVideoClip.js, itself dependency-free) so the client
  * re-exports it from `client/src/lib/musicVideoShotTiming.js` and the two sides
@@ -208,4 +211,125 @@ export function approximateMotionCues(phrases, startSec, endSec) {
     beats.push(`around ${Math.max(0, phrase.startSec - startSec).toFixed(1)}s: ${intent}`);
   }
   return beats.length ? `Approximate motion timing within the clip — ${beats.join('; ')}.` : '';
+}
+
+/**
+ * The longest single shot `backend` can render for `scene` without losing song
+ * coverage, or null when no per-take limit applies: a performance shot is bound
+ * by its lip-sync provider's audio window (inside the safety margin), a Grok
+ * footage cutaway by the longest clip Grok delivers. Other lanes — and a
+ * performance shot on a lane that cannot lip-sync at all, which is blocked
+ * outright rather than split — have no limit here.
+ */
+export function shotSplitLimit(scene, backend) {
+  if (isPerformanceScene(scene)) {
+    const capability = performanceCapability(backend);
+    return capability ? round6(capability.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC) : null;
+  }
+  const footage = scene?.visualLayer == null || scene.visualLayer === 'footage';
+  return backend === 'grok' && footage ? GROK_VIDEO_DURATIONS[GROK_VIDEO_DURATIONS.length - 1] : null;
+}
+
+// Shortest piece a split may produce, so a cut never strands a sliver shot.
+export const SHOT_SPLIT_MIN_PIECE_SEC = 1;
+
+// Cut-point preference, best first: a pause between sung lines, a lyric line
+// or phrase boundary, a beat; the even-split fallback ranks below all three.
+const CUT_RANK = Object.freeze({ pause: 0, line: 1, beat: 2 });
+const CUT_KIND = Object.freeze(['pause', 'line', 'beat']);
+
+const timedNumber = (v) => typeof v === 'number' && Number.isFinite(v);
+
+function splitCandidates({ lyricCues, phrases, beats }) {
+  const out = [];
+  const timedCues = (Array.isArray(lyricCues) ? lyricCues : [])
+    .filter((cue) => timedNumber(cue?.startSec))
+    .map((cue) => ({ startSec: cue.startSec, endSec: timedNumber(cue.endSec) ? cue.endSec : cue.startSec }))
+    .sort((a, b) => a.startSec - b.startSec);
+  let sungUntil = -Infinity;
+  for (const cue of timedCues) {
+    // The middle of the silence between one line and the next is the cleanest
+    // cut: neither take has to start or stop mid-word.
+    if (cue.startSec > sungUntil && Number.isFinite(sungUntil)) out.push({ t: (sungUntil + cue.startSec) / 2, rank: CUT_RANK.pause });
+    out.push({ t: cue.startSec, rank: CUT_RANK.line });
+    sungUntil = Math.max(sungUntil, cue.endSec);
+  }
+  for (const phrase of Array.isArray(phrases) ? phrases : []) {
+    if (timedNumber(phrase?.startSec)) out.push({ t: phrase.startSec, rank: CUT_RANK.line });
+    if (timedNumber(phrase?.endSec)) out.push({ t: phrase.endSec, rank: CUT_RANK.line });
+  }
+  for (const beat of Array.isArray(beats) ? beats : []) {
+    if (timedNumber(beat)) out.push({ t: beat, rank: CUT_RANK.beat });
+  }
+  // A point strictly inside a sung line is never a lyric/phrase boundary; a
+  // beat may still land there, but that cut is not clean (it splits a word).
+  const insideLine = (t) => timedCues.some((cue) => t > cue.startSec + 1e-6 && t < cue.endSec - 1e-6);
+  return out
+    .map((c) => ({ ...c, clean: !insideLine(c.t) }))
+    .filter((c) => c.rank === CUT_RANK.beat || c.clean);
+}
+
+// Cut `[startSec, endSec]` into exactly `count` pieces of at most `maxSec`,
+// or null when that count cannot keep every piece at least `minPieceSec`.
+function cutPieces({ startSec, endSec, maxSec, minPieceSec, count, candidates }) {
+  if ((endSec - startSec) / count < minPieceSec) return null;
+  const pieces = [];
+  let clean = true;
+  let cursor = startSec;
+  for (let remaining = count; remaining > 1; remaining -= 1) {
+    // Any cut in [lo, hi] leaves the rest coverable by `remaining - 1` pieces
+    // and keeps both sides at least `minPieceSec` long.
+    const lo = Math.max(cursor + minPieceSec, endSec - (remaining - 1) * maxSec);
+    const hi = Math.min(cursor + maxSec, endSec - minPieceSec);
+    const target = cursor + (endSec - cursor) / remaining;
+    let best = null;
+    for (const c of candidates) {
+      if (c.t < lo - 1e-6 || c.t > hi + 1e-6) continue;
+      if (!best || c.rank < best.rank || (c.rank === best.rank && Math.abs(c.t - target) < Math.abs(best.t - target))) best = c;
+    }
+    clean = clean && Boolean(best?.clean);
+    const at = round6(Math.min(hi, Math.max(lo, best ? best.t : target)));
+    pieces.push({ startSec: round6(cursor), endSec: at, cut: best ? CUT_KIND[best.rank] : 'even' });
+    cursor = at;
+  }
+  pieces.push({ startSec: round6(cursor), endSec: round6(endSec), cut: null });
+  return { pieces, clean };
+}
+
+// How many pieces beyond the minimum a split may add to avoid cutting a sung
+// line mid-word. Each piece is a separate (possibly paid) take, so the search
+// stays tight: one extra take for a clean cut, never more.
+export const SHOT_SPLIT_MAX_EXTRA_PIECES = 1;
+
+/**
+ * Split a shot spanning `[startSec, endSec]` into contiguous pieces of at most
+ * `maxSec` each, cutting on musical boundaries: the pause between two timed
+ * lyric lines first, then a line or phrase boundary, then a beat, and only
+ * when none lies in reach an even cut. It uses the fewest pieces unless one
+ * more (`SHOT_SPLIT_MAX_EXTRA_PIECES`) is what lets every cut avoid splitting
+ * a sung line. Pieces cover the span exactly — no gap, no overlap — so nothing
+ * is looped, stretched or dropped.
+ *
+ * Returns `{ ok: true, pieces: [{ startSec, endSec, cut }] }` — `cut` names what
+ * the piece's END was cut on (`pause` | `line` | `beat` | `even`; null for
+ * the last piece, which ends where the shot did) — or `{ ok: false, code,
+ * message }` when the shot is untimed or already fits.
+ */
+export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, beats, minPieceSec = SHOT_SPLIT_MIN_PIECE_SEC }) {
+  if (!timedNumber(startSec) || !timedNumber(endSec) || !(endSec > startSec)) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_UNTIMED', message: 'Set a start and end before splitting a shot.' };
+  }
+  if (!(maxSec > 0) || endSec - startSec <= maxSec + 1e-6) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_NOT_NEEDED', message: 'This shot already fits in a single take.' };
+  }
+  const candidates = splitCandidates({ lyricCues, phrases, beats });
+  const fewest = Math.ceil(round6((endSec - startSec) / maxSec));
+  const base = { startSec, endSec, maxSec, minPieceSec, candidates };
+  const first = cutPieces({ ...base, count: fewest });
+  let chosen = first;
+  for (let extra = 1; !chosen.clean && extra <= SHOT_SPLIT_MAX_EXTRA_PIECES; extra += 1) {
+    const more = cutPieces({ ...base, count: fewest + extra });
+    if (more?.clean) chosen = more;
+  }
+  return { ok: true, pieces: chosen.pieces };
 }
