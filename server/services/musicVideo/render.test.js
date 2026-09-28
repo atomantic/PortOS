@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import {
   beatSnapClips,
   buildMusicVideoFfmpegArgs,
+  excerptBoundaryTimes,
   resolveSceneClips,
   resolveMasterAudioPath,
   renderMusicVideo,
@@ -61,6 +62,57 @@ describe('buildMusicVideoFfmpegArgs', () => {
 
   it('throws on empty clips', () => {
     expect(() => buildMusicVideoFfmpegArgs([], '/a.wav', '/o.mp4')).toThrow(/empty clips/);
+  });
+
+  // #8986 — a draft excerpt render windows the full-song plan down to
+  // [startSec, endSec) with one extra trim/atrim stage, instead of building a
+  // separate concat graph over just the overlapping clips.
+  describe('excerpt option (#8986)', () => {
+    it('trims the finished video+audio to the window and re-zeros totalDuration/sections', () => {
+      // Three 2s clips: [0,2) [2,4) [4,6). Window [1,5) crosses all three.
+      const clips = [clip({ videoPath: '/v/a.mp4', sceneId: 'a' }), clip({ videoPath: '/v/b.mp4', sceneId: 'b' }), clip({ videoPath: '/v/c.mp4', sceneId: 'c' })];
+      const { args, totalDuration, sections } = buildMusicVideoFfmpegArgs(clips, '/music/track.wav', '/out.mp4', { audioDurationSec: 30, excerpt: { startSec: 1, endSec: 5 } });
+      const fc = args[args.indexOf('-filter_complex') + 1];
+      expect(fc).toContain('[outv]trim=start=1:end=5,setpts=PTS-STARTPTS[outvx]');
+      expect(fc).toMatch(/:a\]atrim=start=1:end=5,asetpts=PTS-STARTPTS\[outax\]/);
+      const maps = args.reduce((acc, a, i) => (a === '-map' ? [...acc, args[i + 1]] : acc), []);
+      expect(maps).toEqual(['[outvx]', '[outax]']);
+      expect(totalDuration).toBe(4); // 5 - 1
+      // Re-based to the excerpt's own timeline (0 = startSec=1), clipped to it.
+      expect(sections).toEqual([
+        { sceneId: 'a', layer: 'footage', startSec: 0, endSec: 1 },
+        { sceneId: 'b', layer: 'footage', startSec: 1, endSec: 3 },
+        { sceneId: 'c', layer: 'footage', startSec: 3, endSec: 4 },
+      ]);
+    });
+
+    it('clamps a window past the full render to the actual video/audio length', () => {
+      const clips = [clip({ duration: 2, outSec: 2 }), clip({ duration: 2, outSec: 2 })]; // 4s video
+      const { totalDuration } = buildMusicVideoFfmpegArgs(clips, '/a.wav', '/o.mp4', { audioDurationSec: 30, excerpt: { startSec: 1, endSec: 10 } });
+      expect(totalDuration).toBe(3); // clamped to the 4s video, minus the 1s start
+    });
+  });
+});
+
+describe('excerptBoundaryTimes (#8986)', () => {
+  it('re-bases cut and cue boundaries inside the window to the excerpt timeline and dedupes', () => {
+    const sections = [
+      { sceneId: 'a', startSec: 0, endSec: 2 },
+      { sceneId: 'b', startSec: 2, endSec: 4 },
+      { sceneId: 'c', startSec: 4, endSec: 6 },
+    ];
+    const cues = [{ startSec: 2, endSec: 3 }]; // lands exactly on a cut — deduped
+    expect(excerptBoundaryTimes(sections, cues, 1, 5)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('always includes both ends of the window even with no cut/cue on them', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 10 }];
+    expect(excerptBoundaryTimes(sections, [], 2, 7)).toEqual([0, 5]);
+  });
+
+  it('drops boundaries outside the window', () => {
+    const sections = [{ sceneId: 'a', startSec: 0, endSec: 1 }, { sceneId: 'b', startSec: 1, endSec: 20 }];
+    expect(excerptBoundaryTimes(sections, [], 5, 8)).toEqual([0, 3]);
   });
 });
 

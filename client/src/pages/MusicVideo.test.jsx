@@ -70,6 +70,13 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
   reviewMusicVideoTreatmentProof: vi.fn(),
+  renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
+  musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,
+  cancelMusicVideoExcerptRender: vi.fn(async () => ({ ok: true })),
+  deleteMusicVideoExcerpt: vi.fn(),
+  addMusicVideoExcerptNote: vi.fn(),
+  updateMusicVideoExcerptNote: vi.fn(),
+  deleteMusicVideoExcerptNote: vi.fn(),
 }));
 vi.mock('../services/apiUniverseBuilder.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
@@ -151,6 +158,8 @@ import {
   importMusicVideoLyrics, updateMusicVideoScene,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle,
+  renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
+  updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -360,6 +369,91 @@ describe('MusicVideo render control (#1760)', () => {
     const link = await screen.findByText(/Open in Media History/i);
     // Media History matches video items by their `video:<id>` key via ?preview=.
     expect(link.closest('a').getAttribute('href')).toContain('preview=video%3Arh-9');
+  });
+});
+
+describe('MusicVideo draft excerpt render (#8986)', () => {
+  it('kicks off an excerpt render with the typed range and shows progress', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.change(screen.getByLabelText('Start (sec)'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('End (sec)'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: /Render excerpt/i }));
+    await waitFor(() => expect(renderMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', { startSec: 10, endSec: 20 }, { silent: true }));
+    await settle(); // let the resolved kickoff's jobId land before feeding the SSE frame
+
+    sseState.latest = { type: 'progress', progress: 0.5 };
+    // The mocked useSseProgress hook returns the shared, directly-mutated
+    // `sseState` object rather than its own React state, so nothing re-renders
+    // the component until something else does — force one (mirrors the
+    // existing render-job tests' use of this same mock).
+    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    await screen.findByText(/Rendering excerpt — 50%/);
+  });
+
+  it('reloads the project on a completed excerpt render and shows the player + contact sheet + notes', async () => {
+    getMusicVideoProject.mockResolvedValue({
+      ...PROJECT_WITH_CLIP,
+      excerpts: [{
+        id: 'mve-1', startSec: 10, endSec: 20, status: 'complete',
+        filename: 'excerpt-1.mp4', contactSheetFilename: 'excerpt-1-sheet.png', error: null,
+        notes: [{ id: 'mvn-1', atSec: 3, note: 'lip-sync drifts here', verdict: null }],
+      }],
+    });
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.click(screen.getByRole('button', { name: /Render excerpt/i }));
+    await waitFor(() => expect(renderMusicVideoExcerpt).toHaveBeenCalled());
+    await settle();
+    sseState.latest = { type: 'complete', result: { excerptId: 'mve-1', filename: 'excerpt-1.mp4' } };
+    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+
+    await screen.findByLabelText(/Play excerpt/i);
+    expect(screen.getByText('lip-sync drifts here')).toBeInTheDocument();
+    const contactSheet = await screen.findByAltText(/contact sheet/i);
+    expect(contactSheet.getAttribute('src')).toBe('/data/video-thumbnails/excerpt-1-sheet.png');
+  });
+
+  it('adds, edits and removes a review note against the excerpt', async () => {
+    const project = {
+      ...PROJECT_WITH_CLIP,
+      excerpts: [{
+        id: 'mve-1', startSec: 10, endSec: 20, status: 'complete',
+        filename: 'excerpt-1.mp4', contactSheetFilename: null, error: null, notes: [],
+      }],
+    };
+    addMusicVideoExcerptNote.mockResolvedValue({
+      project: { ...project, excerpts: [{ ...project.excerpts[0], notes: [{ id: 'mvn-1', atSec: 0, note: 'looks great', verdict: null }] }] },
+      note: { id: 'mvn-1', atSec: 0, note: 'looks great', verdict: null },
+    });
+    await openProject(project);
+
+    fireEvent.change(screen.getByLabelText('New review note'), { target: { value: 'looks great' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(addMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', { atSec: 0, note: 'looks great' }, { silent: true }));
+    await screen.findByText('looks great');
+
+    updateMusicVideoExcerptNote.mockResolvedValue({
+      project: { ...project, excerpts: [{ ...project.excerpts[0], notes: [{ id: 'mvn-1', atSec: 0, note: 'looks great', verdict: 'approved' }] }] },
+      note: { id: 'mvn-1', atSec: 0, note: 'looks great', verdict: 'approved' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(updateMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { verdict: 'approved' }, { silent: true }));
+
+    deleteMusicVideoExcerptNote.mockResolvedValue({ ...project, excerpts: [{ ...project.excerpts[0], notes: [] }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    await waitFor(() => expect(deleteMusicVideoExcerptNote).toHaveBeenCalledWith('mv-1', 'mve-1', 'mvn-1', { silent: true }));
+    await waitFor(() => expect(screen.queryByText('looks great')).not.toBeInTheDocument());
+  });
+
+  it('deletes a completed excerpt', async () => {
+    const project = {
+      ...PROJECT_WITH_CLIP,
+      excerpts: [{ id: 'mve-1', startSec: 10, endSec: 20, status: 'complete', filename: 'excerpt-1.mp4', contactSheetFilename: null, error: null, notes: [] }],
+    };
+    deleteMusicVideoExcerpt.mockResolvedValue({ ...project, excerpts: [] });
+    await openProject(project);
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+    await waitFor(() => expect(deleteMusicVideoExcerpt).toHaveBeenCalledWith('mv-1', 'mve-1', { silent: true }));
+    await waitFor(() => expect(screen.queryByLabelText(/Play excerpt/i)).not.toBeInTheDocument());
   });
 });
 

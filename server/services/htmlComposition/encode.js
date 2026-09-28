@@ -176,6 +176,32 @@ export async function encodeReferenceContactSheet(videoPath, outputPath, { every
   return { columns, rows, times };
 }
 
+// Same phone-sized, six-across contact sheet as `encodeContactSheet`, but
+// sampling a REAL rendered video file at explicit `times` (seconds, relative
+// to the file's own start) rather than a browser composition or a uniform
+// step (#8986 — the excerpt render's cut/cue contact sheet from
+// `excerptBoundaryTimes` in services/musicVideo/render.js). `between(t,…)`
+// selects a small window around each target time rather than an exact frame
+// timestamp match, which floating-point frame times almost never hit exactly.
+export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times, { width, height } = {}) {
+  const ffmpeg = await findFfmpeg();
+  if (!ffmpeg) throw new Error('ffmpeg not found on PATH');
+  if (!Array.isArray(times) || times.length === 0) throw new Error('encodeFileContactSheetAtTimes: no sample times');
+  const tileWidth = width && height && width < height ? 240 : 360;
+  const columns = Math.min(PROOF_COLUMNS, times.length);
+  const rows = Math.ceil(times.length / columns);
+  const eps = 0.05;
+  const selectExpr = times.map((t) => `between(t,${Math.max(0, t).toFixed(3)},${(t + eps).toFixed(3)})`).join('+');
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',
+      `select='${selectExpr}',scale=${tileWidth}:-2,tile=${columns}x${rows}:padding=4:color=black`,
+      '-vsync', 'vfr', '-frames:v', '1', '-y', outputPath],
+  });
+  if (!result.ok) throw new Error(`Excerpt contact sheet failed: ${result.reason}`);
+  return { columns, rows };
+}
+
 // Source remains subject to the composition sandbox and launch privacy gate;
 // only bounded PCM leaves the browser, never arbitrary paths or encoded files.
 export async function synthesizeCompositionMusic(page, durationSec) {

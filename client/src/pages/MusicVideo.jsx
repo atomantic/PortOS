@@ -22,6 +22,7 @@ import useFieldDraft from '../hooks/useFieldDraft.js';
 import useMusicVideoYoutubeImport from '../hooks/useMusicVideoYoutubeImport.js';
 import useMusicVideoMidiJob from '../hooks/useMusicVideoMidiJob.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
+import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
@@ -39,6 +40,7 @@ import CreateProjectDrawer from '../components/musicVideo/CreateProjectDrawer.js
 import ProjectToolbar from '../components/musicVideo/ProjectToolbar.jsx';
 import TrackPanel from '../components/musicVideo/TrackPanel.jsx';
 import RenderStatusPanel from '../components/musicVideo/RenderStatusPanel.jsx';
+import ExcerptPanel from '../components/musicVideo/ExcerptPanel.jsx';
 import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import LyricsPanel from '../components/musicVideo/LyricsPanel.jsx';
@@ -115,6 +117,10 @@ export default function MusicVideo() {
     })),
     onFailed: (projectId) => patchProject(projectId, { status: 'failed' }),
   });
+  // Draft excerpt render (#8986): a fast cue/cut preview of a chosen window,
+  // separate from the full-render job/mutex above so a director can preview a
+  // change without waiting on (or blocking) a full render.
+  const excerpts = useMusicVideoExcerpts({ project: selected, replaceProject });
   const videoSettings = useMusicVideoModelSettings({ project: selected, onProjectPatch: patchProject });
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
   const sceneMedia = useMusicVideoSceneMedia({
@@ -680,6 +686,20 @@ export default function MusicVideo() {
                 renderHistoryId={selected.renderHistoryId}
                 finalVideo={finalVideo}
                 onOpenPreview={openPreview}
+              />
+              <ExcerptPanel
+                project={selected}
+                rendering={excerpts.rendering}
+                progress={excerpts.progress}
+                excerpts={selected.excerpts || []}
+                deletingId={excerpts.deletingId}
+                noteBusyId={excerpts.noteBusyId}
+                startExcerpt={excerpts.startExcerpt}
+                cancelExcerpt={excerpts.cancelExcerpt}
+                deleteExcerpt={excerpts.deleteExcerpt}
+                addNote={excerpts.addNote}
+                editNote={excerpts.editNote}
+                deleteNote={excerpts.deleteNote}
               />
               <LyricsPanel
                 project={selected}
