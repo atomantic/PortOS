@@ -49,6 +49,8 @@ const SCENE_TEXT_MAX = 2000;
 // Lyric text per shot quoted into the LLM prompt (the full text persists on
 // the scene); keeps a lyric-dense plan inside the prompt budget.
 const PROMPT_LYRIC_MAX = 240;
+// The automation brief's standing guidance is prose, not a lyric line.
+const PROMPT_GUIDANCE_MAX = 2000;
 // A plan with more shots than this would blow the LLM prompt budget for
 // marginal value (a 4-minute song at ~5s shots is ~50) — scenes are still
 // seeded deterministically above the cap, just without the optional
@@ -109,6 +111,9 @@ export function buildScenePlanPrompt(project, shots) {
     brief.hookObjective && `Opening hook objective: ${quote(brief.hookObjective, PROMPT_LYRIC_MAX)}`,
     brief.avoid && `Avoid: ${quote(brief.avoid, PROMPT_LYRIC_MAX)}`,
   ].filter(Boolean).join('\n');
+  // Automation-first projects carry the director's standing guidance.
+  const guidance = project.automation?.guidance?.trim();
+  const guidanceLine = guidance ? `Director guidance: ${quote(guidance, PROMPT_GUIDANCE_MAX)}` : '';
   const hasLyrics = shots.some((s) => s.lyricText);
   const shotLines = shots.map((s, i) => {
     const duration = (s.endSec - s.startSec).toFixed(1);
@@ -126,6 +131,7 @@ ${conceptLine}
 ${styleLine}
 ${musicVideoCreativeContext(concept)}
 ${briefLines}
+${guidanceLine}
 
 The song has been cut into these shots (index; musical section and the shot's position inside it; duration; normalized 0..1 section energy — higher is louder/more intense; the lyric lines sung during the shot, or "instrumental"; optional director intent):
 ${shotLines}

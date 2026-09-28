@@ -11,6 +11,11 @@
 import { z } from 'zod';
 import { MUSIC_VIDEO_STILL_MOVES, MUSIC_VIDEO_VISUAL_LAYERS } from './musicVideoLayers.js';
 import { MUSIC_VIDEO_SHOT_MODES } from './musicVideoShotTiming.js';
+import {
+  MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
+  MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
+  MUSIC_VIDEO_AUTOMATION_TOOL_IDS,
+} from './musicVideoAutomation.js';
 
 // A project is authored hands-on (director) or seeded by the AI planner
 // (autonomous); both share the same record + scene board.
@@ -430,6 +435,15 @@ export const musicVideoSoundBedSchema = z.object({
   volume: z.number().min(0.05).max(1).optional(),
 }).strict();
 
+// Automation-first brief: which render tools the agent may use, the director's
+// free-text guidance, and a spend cap (null = no cap). A patch merges per
+// sub-field; `tools` replaces its list whole. See musicVideoAutomation.js.
+export const musicVideoAutomationSchema = z.object({
+  tools: z.array(z.enum(MUSIC_VIDEO_AUTOMATION_TOOL_IDS)).max(MUSIC_VIDEO_AUTOMATION_TOOL_IDS.length).optional(),
+  guidance: z.string().max(MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX).optional(),
+  budgetUsd: z.number().min(0).max(MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD).nullable().optional(),
+}).strict();
+
 export const musicVideoProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   mode: z.enum(MUSIC_VIDEO_MODES).optional(),
@@ -441,6 +455,7 @@ export const musicVideoProjectCreateSchema = z.object({
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
+  automation: musicVideoAutomationSchema.nullable().optional(),
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
@@ -452,6 +467,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   concept: musicVideoConceptSchema.nullable().optional(),
   visualSpec: musicVideoVisualSpecSchema.optional(),
   videoSettings: musicVideoVideoSettingsSchema.optional(),
+  automation: musicVideoAutomationSchema.nullable().optional(),
   renderHistoryId: z.string().max(64).nullable().optional(),
   lyricCues: lyricCueList.optional(),
   phrases: phraseList.optional(),

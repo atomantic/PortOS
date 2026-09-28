@@ -288,6 +288,20 @@ describe('applyProjectPatch', () => {
     expect(second.visualSpec.references[0].id).toBe(ref.id);
   });
 
+  it('stores the automation brief only when set, merges patches per sub-field, and clears with null', () => {
+    expect('automation' in baseProject()).toBe(false);
+    const created = buildProjectRecord({
+      name: 'Auto', mode: 'autonomous',
+      automation: { tools: ['video:fal', 'image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 },
+    }, { id: 'mv-a', now: 'n' });
+    // De-duplicated, in catalog order (image before video).
+    expect(created.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'surreal', budgetUsd: 25 });
+    const edited = applyProjectPatch(created, { automation: { guidance: 'darker' } });
+    expect(edited.automation).toEqual({ tools: ['image:codex', 'video:fal'], guidance: 'darker', budgetUsd: 25 });
+    expect(applyProjectPatch(edited, { automation: { budgetUsd: null } }).automation.budgetUsd).toBeNull();
+    expect(applyProjectPatch(edited, { automation: null }).automation).toBeNull();
+  });
+
   it('persists explicit renderer settings and merges later partial changes', () => {
     const project = buildProjectRecord({
       name: 'A',

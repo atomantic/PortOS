@@ -35,6 +35,7 @@ import { ensureSceneTakes, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -128,6 +129,9 @@ export function buildProjectRecord(input, { id, now }) {
     // renders (the shared universe/series/sprite field pair). Present only
     // when set, so existing records keep their on-disk shape byte-stable.
     ...persistedRenderPinFields(input),
+    // Automation-first brief (tools, guidance, budget). Present only when set,
+    // so director-authored records keep their on-disk shape byte-stable.
+    ...(input.automation ? { automation: normalizeMusicVideoAutomation(input.automation) } : {}),
     audioAnalysis: null,
     midiTranscription: null,
     // #8964 — editable timed lyric cues + phrase annotations (timed against
@@ -240,6 +244,10 @@ export function applyProjectPatch(project, patch) {
   const timedPatch = {
     ...patch,
     ...(patch.visualSpec ? { visualSpec: normalizeVisualSpec(patch.visualSpec, project.visualSpec) } : {}),
+    // Automation brief merges per sub-field; null clears it.
+    ...('automation' in patch ? {
+      automation: patch.automation ? normalizeMusicVideoAutomation(patch.automation, project.automation) : null,
+    } : {}),
     ...(Array.isArray(patch.lyricCues) ? { lyricCues: normalizeLyricCues(patch.lyricCues) } : {}),
     ...(Array.isArray(patch.phrases) ? { phrases: normalizePhrases(patch.phrases) } : {}),
     // #8984 — the composition manifest is replaced whole; null clears it.

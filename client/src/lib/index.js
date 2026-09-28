@@ -70,6 +70,7 @@ export * from './musicVideoLayers.js';
 export * from './musicVideoTakes.js';
 export * from './musicVideoShotTiming.js';
 export * from './musicVideoUniverseRefs.js';
+export * from './musicVideoAutomation.js';
 export * from './pipelineImageDefaults.js';
 export * from './reverseOutlineGrid.js';
 export * from './reviewerModels.js';
